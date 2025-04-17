@@ -3,7 +3,7 @@
 import Icon from "../Icon/Icon";
 import { usePathname } from "next/navigation";
 
-export default function ArticleSection({
+export function ArticleSection({
   name,
   id,
 }: {
@@ -29,3 +29,5 @@ export default function ArticleSection({
     </h3>
   );
 }
+
+export default ArticleSection;

@@ -2,7 +2,7 @@
 
 import Icon from "../Icon/Icon";
 
-export default function Codeblock({
+export function Codeblock({
   children,
   lang,
 }: {
@@ -54,3 +54,5 @@ export default function Codeblock({
     </div>
   );
 }
+
+export default Codeblock;

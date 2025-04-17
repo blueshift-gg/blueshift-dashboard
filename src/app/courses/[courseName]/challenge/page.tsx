@@ -1,4 +1,4 @@
-export const runtime = "nodejs";
+export const runtime = "edge";
 
 import BackToCourseButton from "@/app/components/Challenges/BackToCourseButton";
 import Divider from "@/app/components/Divider/Divider";
