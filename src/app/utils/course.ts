@@ -49,6 +49,7 @@ export type CourseMetadata = {
 export type LessonMetadata = {
   title: string;
   lessonNumber: number;
+  slug: string;
 };
 
 export type RewardsStatus = keyof typeof rewardsStatus;

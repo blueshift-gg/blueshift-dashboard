@@ -13,12 +13,14 @@ export const mdxData = {
       },
       "lessons": [
         {
-          "title": "Getting Started with Anchor",
-          "lessonNumber": 1
+          "title": "Chapter 1 The Vault",
+          "lessonNumber": 1,
+          "slug": "getting-started-with-anchor"
         },
         {
           "title": "Getting Cracked at Anchor",
-          "lessonNumber": 2
+          "lessonNumber": 2,
+          "slug": "getting-cracked-at-anchor"
         }
       ]
     },
@@ -35,7 +37,8 @@ export const mdxData = {
       "lessons": [
         {
           "title": "Introduction to Quantum Vault",
-          "lessonNumber": 1
+          "lessonNumber": 1,
+          "slug": "introduction-to-quantum-vault"
         }
       ]
     },
@@ -52,7 +55,8 @@ export const mdxData = {
       "lessons": [
         {
           "title": "Understanding SPL Tokens",
-          "lessonNumber": 1
+          "lessonNumber": 1,
+          "slug": "understanding-spl-tokens"
         }
       ]
     }
@@ -62,13 +66,15 @@ export const mdxData = {
       "getting-cracked-at-anchor": {
         "metadata": {
           "title": "Getting Cracked at Anchor",
-          "lessonNumber": 2
+          "lessonNumber": 2,
+          "slug": "getting-cracked-at-anchor"
         }
       },
       "getting-started-with-anchor": {
         "metadata": {
-          "title": "Getting Started with Anchor",
-          "lessonNumber": 1
+          "title": "Chapter 1 The Vault",
+          "lessonNumber": 1,
+          "slug": "getting-started-with-anchor"
         }
       }
     },
@@ -76,7 +82,8 @@ export const mdxData = {
       "introduction-to-quantum-vault": {
         "metadata": {
           "title": "Introduction to Quantum Vault",
-          "lessonNumber": 1
+          "lessonNumber": 1,
+          "slug": "introduction-to-quantum-vault"
         }
       }
     },
@@ -84,7 +91,8 @@ export const mdxData = {
       "understanding-spl-tokens": {
         "metadata": {
           "title": "Understanding SPL Tokens",
-          "lessonNumber": 1
+          "lessonNumber": 1,
+          "slug": "understanding-spl-tokens"
         }
       }
     }

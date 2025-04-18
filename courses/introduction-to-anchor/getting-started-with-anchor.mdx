@@ -1,55 +1,275 @@
 ---
-title: Getting Started with Anchor
+title: "Chapter 1 The Vault"
 lessonNumber: 1
 ---
 
 import { ArticleSection } from "@/app/components/ArticleSection/ArticleSection";
 import { Codeblock } from "@/app/components/Codeblock/Codeblock";
 
-# Getting Started with Anchor
-
-<ArticleSection name="Heading1" id="nice" />
-
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
+# Chapter 1: The Vault
 
 ![Image Test](/graphics/article-img.webp)
 
 In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
 
-<ArticleSection name="Heading2" id="nice2" />
+<ArticleSection name="Anchor 101" id="anchor-101" />
 
+Anchor is the leading development framework for building Solana programs (smart contracts) and simplifies the process of writing, testing, deploying, and interacting with Solana programs. 
 
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
+By using Anchor, developers can reduce boilerplate code, focus on implementing the specific logic of their application, and leverage a structured environment that includes security checks by default like ensuring accounts are owned by the correct program and validating account data before your code runs.
 
+Anchor uses **Declarative Macros** to simplify the boilerplate of dealing with accounts, instruction data, and error handling that are associated with building Solana Programs (or Smart Contracts). Some of the most important macros are:
 
-<ArticleSection name="Heading3" id="nice3" />
+- `declare_id!()`: Specifies the program's on-chain address.
+- `#[program]`: Specifies the module containing the program's instruction logic.
+- `#[derive(Accounts)]`: Specifies which accounts are required by the instructions and how they should be checked.
+- `#[error_code]`: Defines custom error types, that helps by making debugging more straightforward.
 
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
+Let's look at how the barebone version of our Vault programs looks like, and then let's talk about what each macro does more specifically:
 
-<Codeblock lang="javascript">
-    ```js {1,3}
-    const hello = "world";
-    console.log(hello);
-    const goodbye = "world";
+<Codeblock lang="rust">
+    ```rust
+    declare_id!("22222222222222222222222222222222222222222222");
+
+    #[program]
+    pub mod blueshift_anchor_vault {
+        use super::*;
+
+        pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+            // ...
+            Ok(())
+        }
+
+        pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+            // ...
+            Ok(())
+        }
+    }
+
+    #[derive(Accounts)]
+    pub struct VaultAction<'info> {
+        // ...
+    }
+
+    #[error_code]
+    pub enum VaultError {
+        // ...
+    }
     ```
 </Codeblock>
 
-> Warning Blockquote
+Let's start from the basics:
 
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
-In this lesson, we'll cover the basics of setting up your Anchor development environment and creating your first program.
+#### `declare_id!()`
+
+The `declare_id!()` macro is used to specify the program onchain address. This is a unique pubkey that comes from the keypair stored in the `target` folder of your anchor project that will be used to deploy the `.so` file that represents the logic and all the data of the smart contract itself.
+
+**Note**: It will not be `22222222222222222222222222222222222222222222`, we use this convention in our Blueshift smart contracts examples just because of the way our testing framework works. In a real-world scenario, your onchain program ID will be the one generated for you when you run the Anchor commands to create and build your program.
+
+#### `#[program]` & `#[derive(Accounts)]`
+
+For each instruction, there is a `context` that tells the smart contract which accounts are going to be used in this instruction. Additionally, there is the possibility of passing custom data inside of it to use within the logic of the instruction.
+
+In this example, the accounts needed for both the `deposit` and `withdraw` instructions are the same, so we're going to reference the same `#[derive(Accounts)]` struct. We're giving it a more "general" name, `VaultAction`, to show that these accounts will be used for all the actions of a vault.
+
+Let's now look a little more in depth at the `#[derive(Accounts)]` macro:
+
+This is how the `VaultAction` account will look:
+
+```rust
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+  #[account(mut)]
+  pub signer: Signer<'info>,
+
+  #[account(
+    mut,
+    seeds = [b"vault", signer.key().as_ref()],
+    bump,
+  )]
+  pub vault: SystemAccount<'info>,
+
+  pub system_program: Program<'info, System>,
+}
+```
+
+As mentioned before, this macro defines the accounts that must be present for a particular instruction and adds security checks and helper functions that help you interact with them. This also removes a lot of boilerplate that would otherwise clutter your instructions.
+
+In this occasion, we're going to use the following types:
+
+- `Signer<'info>`: Checks that this account is marked as the signer of the current transaction. This is usually required because certain CPI (Cross Program Invocation) calls need the account to be signed to work but it also works as security measure to ensure that only the owner of the pubkey can invoke this instruction.
+
+- `SystemAccount<'info>`: Checks that this account is owned by the System Program, which is the basic program on Solana that can hold lamports (the smallest unit of SOL). This helps verify that the account is a regular system-owned account rather than one owned by another program.
+
+- `Program<'info, System>`: Checks that this account is a program, by verifying that the `executable` flag is set to true, and also verifies that the publickey corresponds to the System Program. Programs are always needed as accounts for CPI because you need to reference the correct on-chain program when making cross-program calls (e.g., creating accounts, transferring lamports, ...).
+
+Additionally, as you can see, some accounts leverage the `#[account(...)]` macro, which creates helpers and additional checks that can be used to declutter the code execution. Here are some examples:
+
+- `mut`: Checks that the account is set to be **mutable** that is required if we want to change some data inside the account itself. For example, whenever we transfer lamports from one account to another, we need to set the account as mutable since the `lamports` field will be updated to reflect the new balance.
+
+- `seeds` & `bump`: Checks that the account pubkey is a **Program Derived Address (PDA)** derived deterministically from the inputs in the `seeds` field. PDAs are controlled by the program rather than by an externally owned keypair, and they are generated on the Ed25519 curve with an offset (the **bump**), a single byte that ensures the derived address does not lie on a valid Ed25519 curve point makeing it impossible for a real user to own the private key corresponding to that PDA.  
+  - **PDA Signatures**: Because PDAs are controlled by the program, they can sign actions on behalf of the program during CPI calls if needed.  
+  - **Storing Data**: PDAs can also be used to store data in a programmatically derived address, making it easier to locate and verify them during instructions.
+
+#### `#[error_code]`
+
+The `#[error_code]` macro, which is used to create custom errors inside the program.
+
+This is how the `VaultError` errors will look:
+
+```rust
+#[error_code]
+pub enum VaultError {
+    #[msg("Vault already exists")]
+    VaultAlreadyExists,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+```
+
+We can see that for each error, a custom enum variant is declared, and a `#[msg(...)]` macro is added to represent the message that will be logged once that error is triggered. This makes debugging easier because it provides a clear, descriptive message rather than a generic error code.
+
+<ArticleSection name="The Vault Code" id="the-vault-code" />
+
+Now that we have discussed all the essential information needed to start creating our first Anchor smart contract, it's time we get into the different instruction logic and realization.
+
+The basic idea behind a vault is the possibility to deposit something (in this case, lamports) that only the “owner” (the one who deposited) can withdraw later. This is exactly what the `deposit` and `withdraw` functions do.
+
+Before we start, make sure you have both Rust and Anchor installed on your machine. If you’re not sure how to do that, check the [official documentation](https://www.anchor-lang.com/docs/installation).
+
+After confirming that Anchor and Rust are installed, run this command in your terminal:
+
+```
+anchor init blueshift_anchor_vault
+```
+
+Open the newly generated folder, and you’re ready to start coding!
+
+#### Template
+
+Before starting with the logic, copy the following template and use it:
+
+```rust
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_vault {
+    use super::*;
+
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        // ...
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        // ...
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    // ...
+}
+
+#[error_code]
+pub enum VaultError {
+    // ...
+}
+```
+
+#### Deposit
+
+Here’s what happens in the `deposit` logic:
+- It verifies that the vault account has zero lamports, ensuring the vault doesn’t already exist.
+- It checks that the amount being deposited is greater than the minimum rent needed to create a `SystemAccount`.
+- Once those conditions are met, it transfers lamports from the signer to the vault using the System Program.
+
+```rust
+pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+    require_eq!(ctx.accounts.vault.lamports(), 0, VaultError::VaultAlreadyExists);
+    require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
+
+
+    transfer(
+        CpiContext::new(ctx.accounts.system_program.to_account_info(), 
+            Transfer {
+                from: ctx.accounts.signer.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            }
+        ),
+        amount,
+    )?;
+
+    Ok(())
+}
+```
+
+The `deposit` instruction begins by adding some “requirements” before performing any action. These requirements are similar to the checks you would do in your account structs via macros, but since there are no macros to handle these specific conditions, they are handled manually in the code using the `require!()` macro that Rust conveniently created. 
+
+```rust
+require_eq!(ctx.accounts.vault.lamports(), 0, VaultError::VaultAlreadyExists);
+require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
+```
+
+Instead of using the base `require!()` macro, for readability we're going to use their "advanced" verision:
+- `require_eq!()`: checks that the vault account currently holds zero lamports, ensuring that no funds have been deposited previously and preventing multiple deposits to the same vault.
+- `require_gt!()`: ensures that the amount we’re depositing is greater than the minimum rent required for a SystemAccount. On Solana, every account must maintain a certain balance (called “rent”) to remain valid.
+
+
+In this occasion, to simplify the reading instead of performing a simple `require` we're going to use a `require_eq` and `require_gte` to make sure that the lamports present in the vault account, that we can access by using `ctx.accounts.vault.lamports()`, are zero making sure that this vault doesn't actually already exist and making sure that the amount we're trying to deposit is greater than the minimum `rent` needed to create SystemAccount. On Solana we have the concept of `rent`, that is the minimum amount of lamports that an account needs to have deposited in themselves to make sure to exists.
+
+Once these conditions are verified, we move on to the main logic—a simple transfer of lamports from the signer to the vault. This is handled by the System Program, the built-in Solana program that processes basic actions like transfers and account creations. Because Solana programs are modular, one program can call another program’s instructions through a Cross Program Invocation (CPI).
+
+Anchor simplifies this process by providing helper functions for the System Program, so the lamports transfer looks like this:
+
+```rust 
+use anchor_lang::system_program::{transfer, Transfer};
+
+transfer(
+    CpiContext::new(ctx.accounts.system_program.to_account_info(), 
+        Transfer {
+            from: ctx.accounts.signer.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        }
+    ),
+    amount,
+)?;
+```
+
+Here, we create a `CpiContext` specifying the System Program and the relevant from and to accounts, then execute the transfer by passing in the amount of lamports.
+
+#### Withdraw
+
+Here’s what happens in the `withdraw` logic:
+- Transfers lamports from the vault to the signer using the System Program and the signer capabilities of the PDA.
+
+```rust
+pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+    let bindings = ctx.accounts.signer.key();
+    let signer_seeds = &[b"vault", bindings.as_ref(), &[ctx.bumps.vault]];
+
+    transfer(
+        CpiContext::new_with_signer(ctx.accounts.system_program.to_account_info(), 
+            Transfer {
+                from: ctx.accounts.vault.to_account_info(),
+                to: ctx.accounts.signer.to_account_info(),
+            },
+            &[&signer_seeds[..]]
+        ),
+        ctx.accounts.vault.lamports(),
+    )?;
+
+    Ok(())
+}
+```
+
+This time we don’t need any requirement checks before performing the logic because all those validations are already handled in the account struct. We know the vault being withdrawn from is “owned” by the signer due to how the Program Derived Address (PDA) seeds are generated since part of those seeds includes the signer’s key. If this vault was funded previously, that same signer can withdraw whatever lamports were deposited.
+
+As mentioned earlier, PDAs have “signer” capabilities within the same program they’re derived from. In this case, we use the signer’s public key to verify ownership of the vault, but the PDA itself “signs” the transfer. To do this, we:
+- Create `signer_seeds`, an array of references to all the seeds used to derive the PDA.
+- Pass these seeds into `CpiContext::new_with_signer`, allowing the PDA to act as the signer for this CPI call.
+
+Everything else is exactly like the deposit, but in reverse. This time, we’re withdrawing all the lamports from the vault, sending them back to the signer.
+
+> Warning Blockquote

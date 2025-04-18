@@ -52,6 +52,8 @@ async function generateMdxData() {
 
         const { data: lessonMetadata, content: lessonContent } = matter(source);
 
+        lessonMetadata.slug = lessonSlug; // Add slug to lesson metadata
+
         // Store lesson metadata
         allData.lessons[courseSlug][lessonSlug] = {
           metadata: lessonMetadata,

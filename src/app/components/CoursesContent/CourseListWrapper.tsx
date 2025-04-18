@@ -15,7 +15,7 @@ export default async function CourseListWrapper() {
         totalLessons: lessons.length,
         lessons: lessons.map((lesson) => ({
           number: lesson.lessonNumber,
-          slug: lesson.title.toLowerCase().replace(/\s+/g, "-"),
+          slug: lesson.slug.toLowerCase().replace(/\s+/g, "-"),
         })),
       };
     })
