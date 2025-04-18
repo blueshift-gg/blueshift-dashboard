@@ -24,6 +24,6 @@ export default async function CoursePage({ params }: CoursePageProps) {
   }
 
   // Convert lesson title to URL-friendly slug
-  const firstLessonSlug = firstLesson.title.toLowerCase().replace(/\s+/g, "-");
+  const firstLessonSlug = firstLesson.slug.toLowerCase().replace(/\s+/g, "-");
   redirect(`/courses/${resolvedParams.courseName}/${firstLessonSlug}`);
 }
