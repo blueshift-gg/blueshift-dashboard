@@ -1,0 +1,695 @@
+---
+title: "Chapter 2: The Escrow"
+lessonNumber: 2
+---
+
+# Chapter 2: The Escrow
+
+Now that you've got your first Anchor program under your belt, let's explore another common program type — **escrow**.
+
+In simple terms, an escrow program acts as a trusted third party that holds assets on behalf of two other parties until certain conditions are met, facilitating a secure exchange.
+
+Before diving into additional Anchor features and escrow, let's understand accounts and how they work on Solana, as we'll be using different account types in this program.
+
+<ArticleSection name="Account on Solana" id="account-on-solana" />
+
+On Solana, all data is contained in what we call "accounts". You can think of data on Solana as a public database with a single "Accounts" table, where each entry in this table is an individual account with the same base Account type. Here's how the data inside these accounts is structured:
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
+    pub data: Vec<u8>,
+    /// the program that owns this account. If executable, the program that loads this account.
+    pub owner: Pubkey,
+    /// this account's data contains a loaded program (and is now read-only)
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent
+    pub rent_epoch: Epoch,
+}
+```
+
+All accounts on Solana, whether system accounts or otherwise, share this same underlying structure. The key distinction between different account types lies in the program that owns the account, which controls the ability to add, delete, and modify the associated data within the account itself.
+
+For example when we refer to a Token Account, we're talking about accounts owned by the token program. Instead of being empty like System Accounts, Token Accounts can represent **Mints** or **Token Accounts**, which we'll explore in more detail in the following section.
+
+Another important category is Program Accounts - accounts owned by smart contracts that typically store and reference critical protocol or user data. The **Escrow** account we're going to create in this program, is an example of this account type.
+
+<ArticleSection name="Token Program" id="token-program" />
+
+The Token Program is one of many programs provided by the Solana Program Library (SPL). It includes instructions for creating and interacting with SPL Tokens, which represent all non-native tokens (i.e., not SOL) on the Solana network.
+
+The two main account types owned by this program that interact with its logic are:
+- **Mint Account**: A Token Mint is an account that holds data about a specific token.
+- **Token Account**: A Token Account holds tokens of a specific "mint" and has a designated "owner." Only the owner is authorized to decrease the Token Account balance (through transfers, burns, etc.), while anyone can send tokens to the Token Account to increase its balance.
+
+We'll examine how these accounts are created and utilized in the Escrow Program.
+
+<ArticleSection name="Anchor 101" id="anchor-101" />
+
+We've looked at how the basics of Anchor work in the last lesson, covering account structs, macros, and creating a very basic smart contract. This time, we're going a little bit more in depth into some of the new concepts that we'll use in this escrow program.
+
+#### `#[account]`
+
+We briefly touched on the concept of PDAs and used them as system program, just to generate a deterministic address for our vault in the previous program. Now we're going to explore the second property of these account types, that is only possible when we transfer ownership of that account to our program: the ability to save custom data inside the account itself. As said before, any account "owned" by our program can be modified internally, making it easy to save any type of data after depositing enough lamports for rent exemption. Luckily, Anchor helps us tremendously with this process.
+
+First, let's declare the custom data that we want to insert into the account using the #[account] macro::
+
+```rust 
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct Escrow {
+    pub seed: u64,
+    pub maker: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub receive: u64,
+    pub bump: u8,
+}
+
+impl Space for Escrow {
+    const INIT_SPACE: usize = Self::DISCRIMINATOR.len() + 8 + 32 + 32 + 32 + 8 + 1;
+}
+```
+
+As you can see, creating a struct that we want to replicate in the program is very easy. The only constraint is that we can store up to 10,240 bytes (10KiB) in this account. If we need more space, we'll need to use `zero_copy` and store the data with multiple transactions, since the transaction limit is 1232 bytes; but we'll explore this more advanced concept in a future course.
+
+We also implement the `Space` trait with an `INIT_SPACE` constant to define the exact byte size needed to make the account rent-exempt. The space accounts for the Anchor Discriminator (which helps distinguish between different account types) plus the space required by each field in the struct. Refer to [this table](https://www.anchor-lang.com/docs/references/space) for the number of bytes needed by each data type. Note that by default, the discriminator uses 8 bytes, but this can change if a custom discriminator is used. The preferred way to specify the discriminator size inside the Account struct is with `Self::DISCRIMINATOR.len()`.
+
+Here's how this account looks in the Account struct for the "Make" instruction, when we create the account:
+
+```rust 
+#[account(
+    init,
+    payer = maker,
+    space = Escrow::INIT_SPACE,
+    seeds = ["escrow".as_bytes(), maker.key().as_ref(), seed.to_le_bytes().as_ref()],
+    bump,
+)]
+pub escrow: Account<'info, Escrow>,
+```
+
+As you can see, beyond the `seeds` and `bump` fields that we have already covered, we have additional macros we can leverage to make account creation as simple as possible. The `init` argument comes with `payer` and `space` parameters:
+- `payer`: Specifies which account will pay to make this account rent-exempt
+- `space`: Defines how much storage space is required for the account
+
+Because this instruction modifies the payer's balance, the payer (in this case, the maker) must also be a signer of the transaction. This is a security requirement from the System Program to ensure funds cannot be withdrawn without authorization.
+
+If we're not creating the account but accessing an existing one, it will look something like this:
+
+```rust
+#[account(
+    seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+    bump = escrow.bump,
+)]
+pub escrow: Account<'info, Escrow>
+```
+
+This structure is very similar to the PDAs we saw in previous lessons, with the main difference being that we're telling Anchor that the account should match the `Escrow` type and should be deserialized for use accordingly.
+
+Lastly, since we deposited lamports as rent in the account, we should close the account and retrieve the lamports once this account is not needed anymore.
+
+```rust
+#[account(
+    mut,
+    close = maker,
+    seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+    bump = escrow.bump,
+)]
+pub escrow: Account<'info, Escrow>,
+```
+This is done through the `close` field and by specifying the destination to receive the lamports owned by the account.
+
+#### Anchor SPL Crate
+
+Natively in the Anchor crate, it's not possible to have helpers other than the ones we've already examined. This is where another crate, called `anchor_spl`, comes into play.
+
+This crate introduces helpers for all the instructions in both the **SPL Token Program** and the **SPL Token2022 Program**, as well as utilities that help us check data and deserialize both **Mint** and **Token** Accounts.
+
+Let's look at how the `Mint` and `Token` accounts are structured:
+
+```rust
+#[account(
+    mint::authority = <target_account>,
+    mint::decimals = <expr>
+    mint::token_program = <target_account>
+)]
+pub mint: Account<'info, Mint>,
+#[account(
+    mut,
+    associated_token::mint = <target_account>,
+    associated_token::authority = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: Account<'info, TokenAccount>,
+```
+
+The `Account<'info, Mint/TokenAccount>` syntax makes it extremely easy to verify that an account matches one of these types and to deserialize them to access their internal data. Additionally, we have specific arguments that can be used to ensure the account respects the boundaries we require. For example, with **Mint** accounts we can specify the mint `authority`, the `decimals`, and the `token_program`. For **Token Accounts**, we can specify the associated `mint`, the associated `authority`, and the `token_program`.
+
+These accounts can also use the `init` argument that we saw in the previous section. We don't need to specify the required space since it's fixed and known by Anchor, we only need to indicate who will pay for it. Something worth noting is the existence of an `init_if_needed` argument that checks if the account exists and creates one if it doesn't. While this isn't inherently safe for all account types, it's definitely appropriate for token accounts, which is why we use it here.
+
+As mentioned, `anchor_spl` creates helpers for both the **Token** and **Token2022** programs, with the latter introducing Token Extensions. The main challenge is that even though these accounts achieve similar goals and have comparable structures, they can't be deserialized and checked the same way since they're owned by two different programs. We could create more "advanced" logic to handle these different account types, but fortunately Anchor supports this scenario through **InterfaceAccounts**:
+
+```rust
+use anchor_spl::token_interface::{Mint, TokenAccount};
+
+#[account(
+    mint::authority = <target_account>,
+    mint::decimals = <expr>
+    mint::token_program = <target_account>
+)]
+pub mint: InterfaceAccounts<'info, Mint>,
+#[account(
+    mut,
+    associated_token::mint = <target_account>,
+    associated_token::authority = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: InterfaceAccounts<'info, TokenAccount>,
+```
+
+#### Account constraints
+
+We've seen how to use args and custom errors to make debugging easier, but there's an even better way to add custom constraints beyond the standard arguments we've already discussed.
+
+Here are some examples:
+
+```rust
+#[account(
+    seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+    bump = escrow.bump,
+    has_one = maker @ EscrowError::InvalidMaker,
+)]
+pub escrow: Account<'info, Escrow>,
+```
+
+The `has_one` constraint checks that the target field on the account matches the key of the target field in the Accounts struct.
+
+```rust
+#[account(
+    seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+    bump = escrow.bump,
+    constraint = maker.key() == escrow.maker @ EscrowError::InvalidMaker,
+)]
+pub escrow: Account<'info, Escrow>,
+```
+
+If the `has_one` constraint isn't usable (perhaps because the field has a different name), we can create a custom constraint that verifies whether a given expression evaluates to true.
+
+<ArticleSection name="The Escrow Code" id="the-escrow-code" />
+
+Now that we have discussed all the essential information needed to start creating our escrow, it's dive into the logic.
+
+The basic idea behind an escrow is the ability to deposit a certain amount of Token A in exchange for a certain amount of Token B that a second user can claim whenever they want. For this reason, our contract has just 3 instructions: "Make", "Take", and "Refund".
+
+- **Make**: The "maker" sets up the details of the deal and deposits the specified amount of Token A.
+- **Take**: The "taker" accepts the deal, sends the agreed Token B amount to the maker, and withdraws the Token A amount that the maker deposited during "make".
+- **Refund**: The "maker" decides to cancel the deal and retrieves the Token A amount they previously deposited.
+
+Let's start by running creating a new Anchor project:
+
+```
+anchor init blueshift_anchor_escrow
+```
+
+Go into the newly created directory:
+
+```
+cd blueshift_anchor_escrow
+```
+
+And run the following commands to install `anchor_spl` and enable the `init_if_needed` flag:
+
+```
+cargo add anchor-lang --features init-if-needed
+```
+
+and 
+
+``` 
+cargo add anchor-spl
+```
+
+Next, let's look at how to structure the code in `programs/blueshift_anchor_escrow/src`.
+
+#### Template
+
+This time we're going to use a more structured approach instead of a monolithic approach in the lib.rs file. Our project structure will look like this:
+
+```
+src
+├── instructions
+│       ├── make.rs
+│       ├── mod.rs          
+│       ├── refund.rs
+│       └── take.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+And this is how the lib.rs will look like:
+
+
+```rust
+use anchor_lang::prelude::*;
+
+mod state;
+mod errors;
+mod instructions;
+use instructions::*;
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_escrow {
+    use super::*;
+
+    pub fn make(ctx: Context<Make>, seed: u64, recieve: u64, amount: u64) -> Result<()> {
+        //...
+    }
+
+    pub fn take(ctx: Context<Take>) -> Result<()> {
+        //...    
+    }
+
+    pub fn refund(ctx: Context<Refund>) -> Result<()> {
+        //...
+    }
+}
+```
+
+Now let's start with the additional file like `state.rs` and `erorrs.rs` before diving into the logic:
+
+#### State & Errors
+
+For the `state.rs` there isn't much to add beyond discussing the structure and arguments, since we already covered the #[account] macro previously.
+
+```rust 
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct Escrow {
+    pub seed: u64,
+    pub maker: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub receive: u64,
+    pub bump: u8,
+}
+
+impl Space for Escrow {
+    const INIT_SPACE: usize = Self::DISCRIMINATOR.len() + 8 + 32 + 32 + 32 + 8 + 1;
+}
+```
+
+We keep the following fields in the `Escrow` struct to store the necessary state data:
+- **Seed**: A random value for the PDA derivation since we could have multiple escrows from the same person with the same Token A and Token B. Saving it on-chain allows us to reference it when recreating the address.
+- **Maker**: Identifies the creator to ensure they can cancel/refund the deal and receive payment.
+- **Mint A**: Specifies the mint address of Token A the maker offers in the deal.
+- **Mint B**: Specifies the mint address of Token B the maker wants to receive for the deal.
+- **Receive**: Defines the amount of Token B the maker wants in exchange for the deal.
+- **Bump**: Optional but helpful for keeping compute costs lower, as deriving the bump in the contract requires compute power. Saving it allows for deterministic derivation
+
+**Note**: We could store more data, but rent is an expense for users, so we should limit it as much as possible. Game theory allows us to make certain assumptions - for example, we don't need to specify how much the maker deposits in Token A because it will be the "vault" amount, and if someone randomly sends additional tokens to the vault, that simply creates a better deal for the taker.
+
+For the `errors.rs file`, there's nothing special, but it's good practice to keep it separate for easy reference and updating. Here's how it looks:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum EscrowError {
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Invalid maker")]
+    InvalidMaker,
+    #[msg("Invalid mint a")]
+    InvalidMintA,
+    #[msg("Invalid mint b")]
+    InvalidMintB,
+}
+```
+
+#### Make
+
+Here's what happens in the `make` instruction:
+
+- The `Escrow` account gets initialized and filled with all necessary data.
+- The `Vault` account gets initialized as an associated token account from the mint_a and escrow public key.
+- The `maker` deposits the desired amount in the `vault` through a CPI to the `spl_token_program`.
+
+These are all the accounts needed for the `Make` context, most of the macro arguments and account types were already introduced in the introduction, so we'll move quickly through this part:
+
+```rust
+#[instruction(seed: u64)]
+pub struct Make<'info> {
+    #[account(mut)]
+    pub maker: Signer<'info>,
+    #[account(
+        init,
+        payer = maker,
+        space = Escrow::INIT_SPACE,
+        seeds = ["escrow".as_bytes(), maker.key().as_ref(), seed.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    /// Token Accounts
+    #[account(
+        mint::token_program = token_program
+    )]
+    pub mint_a: InterfaceAccount<'info, Mint>,
+    #[account(
+        mint::token_program = token_program
+    )]
+    pub mint_b: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint_a,
+        associated_token::authority = maker,
+        associated_token::token_program = token_program
+    )]
+    pub maker_ata_a: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        init,
+        payer = maker,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+        associated_token::token_program = token_program
+    )]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// Programs
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+For the logic code itself, there are different schools of thought. My personal preference is creating very specific functions as implementations of the Context and a general handler function where we have both the checks and references to these helpers. For this case, it will look something like this:
+
+```rust
+impl<'info> Make<'info> {
+    fn populate_escrow(&mut self, seed: u64, amount: u64, bump: u8) -> Result<()> {
+        self.escrow.set_inner(Escrow {
+            seed,
+            maker: self.maker.key(),
+            mint_a: self.mint_a.key(),
+            mint_b: self.mint_b.key(),
+            receive: amount,
+            bump,
+        });
+
+        Ok(())
+    }
+
+    fn deposit_tokens(&self, amount: u64) -> Result<()> {
+        transfer_checked(
+            CpiContext::new(
+                self.token_program.to_account_info(), 
+                TransferChecked {
+                    from: self.maker_ata_a.to_account_info(),
+                    mint: self.mint_a.to_account_info(),
+                    to: self.vault.to_account_info(),
+                    authority: self.maker.to_account_info(),
+                },
+            ),
+            amount,
+            self.mint_a.decimals
+        )?;
+
+        Ok(())
+    }
+}
+
+pub fn handler(ctx: Context<Make>, seed: u64, receive: u64, amount: u64) -> Result<()> {
+    // Validate the amount
+    require!(receive > 0, EscrowError::InvalidAmount);
+    require!(amount > 0, EscrowError::InvalidAmount);
+
+    // Save the Escrow Data
+    ctx.accounts.populate_escrow(seed, receive, ctx.bumps.escrow)?;
+
+    // Deposit Tokens 
+    ctx.accounts.deposit_tokens(amount)?;
+
+    Ok(())
+}
+```
+
+We can see that Anchor helps us in multiple ways. It provides the `set_inner()` method on an account struct that ensures we don't forget to set any value of the struct when filling out the account. It also offers a helper for the `transfer_checked` instruction that functions similarly to the system program helpers we saw in the previous lesson.
+
+We add two validation checks, one on the `amount` and one on the `receive` arguments to ensure we're not passing a zero value for either.
+
+#### Take
+
+Here's what happens in the `take` instruction:
+
+- The `Escrow` account gets closed, since we don't need it anymore, and lamports are returned to the maker.
+- Transfer Token A from the `vault` to the `taker` and close the `vault` since it's now empty.
+- Transfer Token B from the `taker` to the `maker`. 
+
+These are all the accounts needed for the `Take` context:
+
+```rust
+#[derive(Accounts)]
+pub struct Take<'info> {
+    #[account(mut)]
+    pub taker: Signer<'info>,
+    #[account(mut)]
+    pub maker: SystemAccount<'info>,
+    #[account(
+        mut,
+        close = maker,
+        seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+        bump = escrow.bump,
+        has_one = maker @ EscrowError::InvalidMaker,
+        has_one = mint_a @ EscrowError::InvalidMintA,
+        has_one = mint_b @ EscrowError::InvalidMintB,
+    )]
+    pub escrow: Box<Account<'info, Escrow>>,
+
+    /// Token Accounts
+    pub mint_a: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_b: Box<InterfaceAccount<'info, Mint>>,
+    #[account(
+        mut,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+        associated_token::token_program = token_program
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        init_if_needed,
+        payer = taker,
+        associated_token::mint = mint_a,
+        associated_token::authority = taker,
+        associated_token::token_program = token_program
+    )]
+    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        associated_token::mint = mint_b,
+        associated_token::authority = taker,
+        associated_token::token_program = token_program
+    )]
+    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        init_if_needed,
+        payer = taker,
+        associated_token::mint = mint_b,
+        associated_token::authority = maker,
+        associated_token::token_program = token_program
+    )]
+    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Programs
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+And this is how the logic will look like: 
+
+```rust
+impl<'info> Take<'info> {
+    fn transfer_to_maker(&mut self) -> Result<()> {
+        transfer_checked(
+            CpiContext::new(
+                self.token_program.to_account_info(), 
+                TransferChecked {
+                    from: self.taker_ata_b.to_account_info(),
+                    to: self.maker_ata_b.to_account_info(),
+                    mint: self.mint_b.to_account_info(),
+                    authority: self.taker.to_account_info(),
+                },
+            ),
+            self.escrow.receive,
+            self.mint_b.decimals
+        )?;
+
+        Ok(())
+    }
+
+    fn withdraw_and_close_vault(&mut self) -> Result<()> {
+        // Create the signer seeds for the Vault
+        let signer_seeds: [&[&[u8]]; 1] = [&[
+            b"escrow",
+            self.maker.to_account_info().key.as_ref(),
+            &self.escrow.seed.to_le_bytes()[..],
+            &[self.escrow.bump],
+        ]];
+
+        // Transfer Token A (Vault -> Taker)
+        transfer_checked(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(), 
+                TransferChecked {
+                    from: self.vault.to_account_info(),
+                    to: self.taker_ata_a.to_account_info(),
+                    mint: self.mint_a.to_account_info(),
+                    authority: self.escrow.to_account_info(),
+                },
+                &signer_seeds
+            ),
+            self.vault.amount,
+            self.mint_a.decimals
+        )?;
+    
+        // Close the Vault
+        close_account(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(), 
+                CloseAccount {
+                    account: self.vault.to_account_info(),
+                    authority: self.escrow.to_account_info(),
+                    destination: self.maker.to_account_info(),
+                },
+                &signer_seeds
+            ),
+        )?;
+
+        Ok(())
+    }
+}
+
+pub fn handler(ctx: Context<Take>) -> Result<()> {
+    // Transfer Token B to Maker
+    ctx.accounts.transfer_to_maker()?;
+
+    // Withdraw and close the Vault
+    ctx.accounts.withdraw_and_close_vault()?;
+
+    Ok(())
+}
+```
+
+**Note**: Token Accounts can be closed to retrieve rent after the balance is emptied out.
+
+#### Refund
+
+Here's what happens in the `refund` instruction:
+
+- The `Escrow` account gets closed, since we don't need it anymore, and lamports are returned to the maker.
+- Transfer Token A from the `vault` back to the `maker` and close the `vault` since now it's empty.
+
+These are all the accounts needed for the `Refund` context:
+
+```rust
+#[derive(Accounts)]
+pub struct Refund<'info> {
+    #[account(mut)]
+    pub maker: Signer<'info>,
+    #[account(
+        mut,
+        close = maker,
+        seeds = ["escrow".as_bytes(), maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+        bump = escrow.bump,
+        has_one = maker @ EscrowError::InvalidMaker,
+        has_one = mint_a @ EscrowError::InvalidMintA,
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    /// Token Accounts
+    pub mint_a: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+        associated_token::token_program = token_program
+    )]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = maker,
+        associated_token::mint = mint_a,
+        associated_token::authority = maker,
+        associated_token::token_program = token_program
+    )]
+    pub maker_ata_a: InterfaceAccount<'info, TokenAccount>,
+
+    /// Programs
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+And this is how the logic will look like: 
+
+```rust
+impl<'info> Refund<'info> {
+    fn withdraw_and_close_vault(&mut self) -> Result<()> {
+        // Create the signer seeds for the Vault
+        let signer_seeds: [&[&[u8]]; 1] = [&[
+            b"escrow",
+            self.maker.to_account_info().key.as_ref(),
+            &self.escrow.seed.to_le_bytes()[..],
+            &[self.escrow.bump],
+        ]];
+
+        // Transfer Token A (Vault -> Maker)
+        transfer_checked(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(), 
+                TransferChecked {
+                    from: self.vault.to_account_info(),
+                    to: self.maker_ata_a.to_account_info(),
+                    mint: self.mint_a.to_account_info(),
+                    authority: self.escrow.to_account_info(),
+                },
+                &signer_seeds
+            ),
+            self.vault.amount,
+            self.mint_a.decimals
+        )?;
+
+        // Close the Vault
+        close_account(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(), 
+                CloseAccount {
+                    account: self.vault.to_account_info(),
+                    authority: self.escrow.to_account_info(),
+                    destination: self.maker.to_account_info(),
+                },
+                &signer_seeds
+            ),
+        )?;
+
+        Ok(())
+    }
+}
+
+pub fn handler(ctx: Context<Refund>) -> Result<()> {
+    // Withdraw and close the Vault (Vault -> Maker)
+    ctx.accounts.withdraw_and_close_vault()?;
+    
+    Ok(())
+}
+```

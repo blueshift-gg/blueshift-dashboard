@@ -13,14 +13,14 @@ export const mdxData = {
       },
       "lessons": [
         {
-          "title": "Chapter 1 The Vault",
+          "title": "Chapter 1: The Vault",
           "lessonNumber": 1,
           "slug": "getting-started-with-anchor"
         },
         {
-          "title": "Getting Cracked at Anchor",
+          "title": "Chapter 2: The Escrow",
           "lessonNumber": 2,
-          "slug": "getting-cracked-at-anchor"
+          "slug": "exchanging-assets-with-escrow"
         }
       ]
     },
@@ -63,16 +63,16 @@ export const mdxData = {
   },
   "lessons": {
     "introduction-to-anchor": {
-      "getting-cracked-at-anchor": {
+      "exchanging-assets-with-escrow": {
         "metadata": {
-          "title": "Getting Cracked at Anchor",
+          "title": "Chapter 2: The Escrow",
           "lessonNumber": 2,
-          "slug": "getting-cracked-at-anchor"
+          "slug": "exchanging-assets-with-escrow"
         }
       },
       "getting-started-with-anchor": {
         "metadata": {
-          "title": "Chapter 1 The Vault",
+          "title": "Chapter 1: The Vault",
           "lessonNumber": 1,
           "slug": "getting-started-with-anchor"
         }
