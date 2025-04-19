@@ -38,13 +38,13 @@ export default async function LessonPage({ params, children }: LessonPageProps) 
   // Get next lesson slug (if exists)
   const nextLesson = sortedLessons[currentLessonIndex + 1];
   const nextLessonSlug = nextLesson
-    ? nextLesson.title.toLowerCase().replace(/\s+/g, "-")
+    ? nextLesson.slug
     : "";
 
   // Get previous lesson slug (if exists)
   const previousLesson = sortedLessons[currentLessonIndex - 1];
   const previousLessonSlug = previousLesson
-    ? previousLesson.slug.toLowerCase().replace(/\s+/g, "-")
+    ? previousLesson.slug
     : "";
 
   // Check if this is the last lesson

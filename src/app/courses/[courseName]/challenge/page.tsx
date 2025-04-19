@@ -47,7 +47,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
             courseSlug={courseMetadata.title.toLowerCase().replace(/\s+/g, "-")}
             courseLessons={courseLessons.map((lesson) => ({
               number: lesson.lessonNumber,
-              slug: lesson.title.toLowerCase().replace(/\s+/g, "-"),
+              slug: lesson.slug,
             }))}
           />
         </div>
