@@ -21,12 +21,27 @@ export const courses: CourseMetadata[] = withCourseNumber([
     ]
   },
   {
+    slug: "introduction-to-pinocchio-development",
+    title: "Introduction to Pinocchio Development",
+    language: "Rust",
+    color: "255,173,102",
+    difficulty: 2,
+    isFeatured: true,
+    status: "Unclaimed",
+    lessons: [
+      {
+        slug: "getting-started-with-pinocchio",
+        title: "Getting Started with Pinocchio",
+      },
+    ]
+  },
+  {
     slug: "quantum-vault",
     title: "Quantum Vault",
     language: "Rust",
     color: "255,173,102",
     difficulty: 4,
-    isFeatured: true,
+    isFeatured: false,
     status: "Claimed",
     lessons: [
       {
