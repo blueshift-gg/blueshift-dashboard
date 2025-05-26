@@ -4,17 +4,19 @@
 
 <ArticleSection name="Assembly 101" id="assembly-101" level="h2" />
 
-sBPF assembly is a 1:1, human-readable view of the eBPF bytecode every Solana program ultimately runs. Most developers never touch it, but for edge-case optimisation, or pure curiosity, it helps to know the ground rules.
+sBPF assembly is a 1:1, human-readable view of the eBPF byte-code every Solana program ultimately runs. You rarely need to touch it, but when you’re chasing optimization, or you simply want to know exactly what the VM is doing, these fundamentals help.
 
-High-level languages, like Rust, often lack the expressiveneto to rigidly define desired behavior; occasionally forceing the compiler to play it safe and leaving wasted compute on the table. 
+High-level Rust can’t always express every micro-optimisation, so the compiler sometimes leaves safe, but slower code. Reading (or writing) assembly gives you total control.
 
-Writing or reading assembly lets you specify exactly what should happen.
-
-In this unit you’ll learn some of the basic concepts you'll need to understand to write assembly, such as `directives`, `registers` and `opcodes`. 
+In this unit we’ll cover:
+- Instruction format: how a single 8-byte slot is laid out
+- Directives: assembler hints like `.section` and `.equ`
+- Registers: what the ten GPRs, frame pointer, and stack pointer do
+- Opcodes: the verb list the VM understands
 
 #### Instructions
 
-When you compile your Rust (or C, or assembly) Solana program, the tool-chain turns every high-level statement into a sequence of 8-byte eBPF instructions and packs them, one after another, into the .text section of your on-chain ELF.
+When you compile Rust (or C/assembly) the tool-chain emits a stream of fixed-width, 8-byte instructions and packs them into the .text section of your ELF.
 
 Think of it as a tiny fixed-width struct that the VM can decode in one pass:
 
@@ -47,48 +49,27 @@ Assembler directives tell the assembler where to put things or how to label them
 
 Here are some practical examples of a few that you'll likely see when writing assembly or disassembling binaries:
 
-1. `.globl symbol`: Makes a symbol visible to the linker (e.g. `entrypoint`).
+1. `.globl` [symbol]: Makes a symbol visible to the linker (e.g. `entrypoint`).
 2. `.section .text`: Place following bytes in the code section where our program insns are stored 
 3. `.section .rodata`: Place read-only data (consts, strings) here.
-4. `.ascii` "hello": Emit a null-terminated ASCII string.
-5. `.equ` CONST 42: Create a numeric constant for offsets or flags.
+4. `.ascii` ["hello"]: Emit a ASCII string.
+5. `.equ` [CONST 42]: Create a numeric constant for offsets or flags.
 
 ### Registers
 
-The Solana runtime has 10 general purpose registers, `r0`-`r9`. Some have specific behaviors that we won't go into now, but the most important thing to understand is that `r0` is our return register. 
+The Solana runtime has 10 general purpose registers:
+- `r0` holds the function’s return data.
+- `r1`-`r5` store function arguments, and `r5` can actually store “spillover” data, which is represented by a pointer to some stack data.
+- `r6`-`r9` are call-preserved registers, which means that their values are preserved across function calls.
 
-If `r0` is set to any value other than `0x00` it will be treated as an error code. If `r0` is set to `0x00` by the end of program execution, it will be treated as a `success` code.
-
-Registers are used to store one of two things:
-1. A typed value like a `u8`, `u16`, `u32` or `u64`.
-2. A reference to some segment of data
+Since `r0` holds the return data, if it's set to any value other than `0x00` it will be treated as an error code.
 
 Upon instantiation of the VM, `r0` is instantiated to `0x00` by default and `r1` is instantiated with a pointer to the start of our serialized entrypoint data, which consists of:
-
 1. Number of `Accounts`
 2. Serialized `Account` data + reallocation padding
 3. `Instruction Data` length
 4. `Instruction Data`
 5. `Program ID`
-
-Additionally there is and additional registry: `r10`. It's read-only and is reserved by the Solana VM to serve as a fixed frame pointer
-
-The Solana verifier guarantees every program finishes and can’t blow past bounded memory; a fixed, small stack lets it prove safety quickly and keeps context-switch overhead tiny. 
-
-Since it's read-only; we can load from it or use it in address calculations, but writing a new value into `r10` is illegal.
-
-At program start the VM sets `r10` to the highest valid address of a 512-byte stack that lives in the VM’s private memory and grow the stack downward; we store data at negative offsets from `r10` like this: 
-
-```
-// Reserve 16 bytes on the stack
-stxdw  [r10-8],  r1      ; store r1 at fp-8
-stxdw  [r10-16], r2      ; store r2 at fp-16
-
-// Use the data (e.g., pass pointer to helper)
-mov    r1, r10
-add    r1, -16           ; r1 -> start of our 16-byte buffer
-mov    r2, 2             ; arg: number of 8-byte elements
-```
 
 <ArticleSection name="Example" id="example" level="h2" />
 
