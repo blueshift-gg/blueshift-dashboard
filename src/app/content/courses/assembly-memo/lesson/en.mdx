@@ -50,7 +50,7 @@ Here are some practical examples of a few that you'll likely see when writing as
 1. `.globl symbol`: Makes a symbol visible to the linker (e.g. `entrypoint`).
 2. `.section .text`: Place following bytes in the code section where our program insns are stored 
 3. `.section .rodata`: Place read-only data (consts, strings) here.
-4. `.ascii "hello"`: Emit a null-terminated ASCII string.
+4. `.ascii` "hello": Emit a null-terminated ASCII string.
 5. `.equ` CONST 42: Create a numeric constant for offsets or flags.
 
 ### Registers
@@ -90,9 +90,11 @@ add    r1, -16           ; r1 -> start of our 16-byte buffer
 mov    r2, 2             ; arg: number of 8-byte elements
 ```
 
-### Compilation
+<ArticleSection name="Example" id="example" level="h2" />
 
-To give you an example, let's start with a highly optimized `noop` program written in Pinocchio:
+Now that we know the basic sBPF operations, let’s see what they look like in a real (albeit tiny) program.
+
+Below is a high-performance “noop” written with Pinocchio. All it does is return success.
 
 ```rust
 #![no_std]
@@ -110,7 +112,9 @@ fn process_instruction(
 }
 ```
 
-If we build this code with `cargo build-sbf --dump`, we will get an ELF dump that gives us information about our binary in the `/target/deploy/` directory. We will then want to look for the `.text` section; the part of our binary where executable code is stored.
+If we build this code with `cargo build-sbf --dump`, we will get an ELF dump that gives us information about our binary in the `/target/deploy/` directory. 
+
+We will then want to look for the `.text` section; the part of our binary where executable code is stored.
 
 ```pinocchio_noop-dump.txt
 Disassembly of section .text
@@ -126,8 +130,8 @@ If we were to disassemble the binary to turn it back into compilable sBPF Assemb
 
 ```sbpf
 .globl entrypoint:
-    mov64 r0, 0x00
-    exit
+    mov64 r0, 0x00   ; r0 <- success
+    exit             ; finish, return r0
 ```
 
 This is an extremely small program, with just 3 lines of code, only 2 instructions, or "insns" (We sometimes refer to an sBPF instruction as an `insn` to delinneate between bytecode instructions and transaction instructions) and just `2 CUs` to execute.
@@ -159,4 +163,61 @@ This would make the program cost just `1 CU` to execute. A saving of 50%. This i
 
 Fortunately, we have the ability both to write our own assembly, and to lean on the compiler to get us very close to good bytecode before disassembling and optimizing out the pieces we don't need in there. 
 
-## Assembly Memo
+<ArticleSection name="The Memo Program" id="memo-program" level="h2" />
+
+Now let's look at the simplicity of a bite-size memo program written straight in sBPF assembly.
+
+All it does is print the instruction data to the Solana log and return success.
+
+```
+.equ NUM_ACCOUNTS, 0x00;
+.equ DATA_LEN, 0x08;
+.equ DATA, 0x10;
+
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]
+  ldxdw r2, [r1+DATA_LEN]
+  add64 r1, DATA
+  call sol_log_
+  exit
+```
+
+We begin by declaring three `.equ` constants: NUM_ACCOUNTS, DATA_LEN, and DATA.
+
+Each marks the byte-offset (relative to the entry-buffer pointer in `r1`) for:
+- the account count field,
+- the instruction data length, and
+- the instruction data bytes themselves.
+
+```
+ldxdw r0, [r1+NUM_ACCOUNTS]   ; r0 ← number-of-accounts
+```
+
+As we said before, `r0` is the register the VM reads on exit: `0` means success, any non-zero value is treated as an error code.
+
+To optimize a check, that we want to perform on the account count field, we can load it directly into `r0` guaranteing the program will fail automatically if the instruction passes any account (because the value would be non-zero).
+
+```
+ldxdw r2, [r1+DATA_LEN]   ; r2 ← length of memo
+add64  r1, DATA           ; r1 ← pointer to memo bytes
+```
+
+We then prepare the arguments for the `sol_log_` syscall:
+
+The sBPF helper calls can pass up to five arguments in registers `r1`–`r5`.
+
+In this case, `sol_log_` expects:
+- arg 1 (r1): pointer to the bytes to print
+- arg 2 (r2): length of those bytes
+
+The two instructions above load exactly those values into the right slots.
+
+```
+call 16   ; helper ID 16 = sol_log_
+exit      ; return, using whatever is still in r0
+```
+
+We then call the helper using 16 as the `ID` to print the memo to the validator log, and we end the program using the `exit` call. 
+
+Since we haven't changed `r0` after step 1, a “memo with zero accounts” exits with success (`r0` = 0), while a memo that sneaks in any account exits with a non-zero error.
