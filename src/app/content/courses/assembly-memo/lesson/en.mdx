@@ -2,10 +2,93 @@
 
 ![Image Test](/graphics/asm-memo.png)
 
-## Introduction
-sBPF Assembly is a human-readable, 1:1 representation of the eBPF bytecode that all Solana programs compile down to. It is not typically used for most onchain development, however it is essential for extreme optimization. 
+<ArticleSection name="Assembly 101" id="assembly-101" level="h2" />
 
-High-level languages often lack the expressiveneto to rigidly define desired behavior, forcing compilers to make conservative assumptions at the cost of performance.
+sBPF assembly is a 1:1, human-readable view of the eBPF bytecode every Solana program ultimately runs. Most developers never touch it, but for edge-case optimisation, or pure curiosity, it helps to know the ground rules.
+
+High-level languages, like Rust, often lack the expressiveneto to rigidly define desired behavior; occasionally forceing the compiler to play it safe and leaving wasted compute on the table. 
+
+Writing or reading assembly lets you specify exactly what should happen.
+
+In this unit you’ll learn some of the basic concepts you'll need to understand to write assembly, such as `directives`, `registers` and `opcodes`. 
+
+#### Instructions
+
+When you compile your Rust (or C, or assembly) Solana program, the tool-chain turns every high-level statement into a sequence of 8-byte eBPF instructions and packs them, one after another, into the .text section of your on-chain ELF.
+
+Think of it as a tiny fixed-width struct that the VM can decode in one pass:
+
+```
+   1 byte    4 bits   4 bits     2 bytes         4 bytes
+┌──────────┬────────┬────────┬──────────────┬──────────────────┐
+│  opcode  │  dst   │  src   │   offset     │      imm         │
+└──────────┴────────┴────────┴──────────────┴──────────────────┘
+```
+
+- `opcode`: It says what kind of work this instruction represents. Top 3 bits choose the class: arithmetic, memory, jump, call, exit. Lower 5 bits pick the exact variant (e.g. add, mul, ldxdw, jeq).
+- `dst`: The “destination” register number (r0 – r9). Whatever the instruction produces; like an arithmetic result, a loaded value, a helper return—lands here.
+- `src`: The “source” register. For two-operand arithmetic (add r1, r2) it supplies the second input. For memory ops it can carry the base address you’re loading from or storing to. For ALU-immediate variants (add r1, 10) these 4 bits are folded into the opcode, so src isn’t used.
+- `offset`: A small integer that modifies the instruction’s behaviour: On loads/stores it’s added to src to reach [src + offset]. On jumps it’s a relative branch target measured in instructions (not bytes).
+- `imm`: Arithmetic ops use it for immediate math (add r1, 42). CALL uses it as the helper/syscall number (sol_log = 16). Memory ops often treat it as an absolute pointer or additional stride.
+
+```
+add64   r1, 5            ; r1 = r1 + 5          (opcode uses imm, no src reg)
+ldxdw   r2, [r1 + 12]    ; r2 = *(u64*)(r1+12)  (src = r1, dst = r2, offset = 12)
+jeq     r2, 0, +3        ; if r2 == 0, jump 3   (imm = 0, offset = +3 insns)
+call    16               ; sol_log(...)         (imm = helper ID 16)
+exit                     ; return r0
+```
+
+Each line above is eight bytes wide; each holds exactly those five fields. Once you recognise the pattern: `verb`, `dst`, `src`, `offset`, `imm`; you can skim any disassembly and know what’s happening without hunting through variable-length encodings.
+
+### Directives
+
+Assembler directives tell the assembler where to put things or how to label them.
+
+Here are some practical examples of a few that you'll likely see when writing assembly or disassembling binaries:
+
+1. `.globl symbol`: Makes a symbol visible to the linker (e.g. `entrypoint`).
+2. `.section .text`: Place following bytes in the code section where our program insns are stored 
+3. `.section .rodata`: Place read-only data (consts, strings) here.
+4. `.ascii "hello"`: Emit a null-terminated ASCII string.
+5. `.equ` CONST 42: Create a numeric constant for offsets or flags.
+
+### Registers
+
+The Solana runtime has 10 general purpose registers, `r0`-`r9`. Some have specific behaviors that we won't go into now, but the most important thing to understand is that `r0` is our return register. 
+
+If `r0` is set to any value other than `0x00` it will be treated as an error code. If `r0` is set to `0x00` by the end of program execution, it will be treated as a `success` code.
+
+Registers are used to store one of two things:
+1. A typed value like a `u8`, `u16`, `u32` or `u64`.
+2. A reference to some segment of data
+
+Upon instantiation of the VM, `r0` is instantiated to `0x00` by default and `r1` is instantiated with a pointer to the start of our serialized entrypoint data, which consists of:
+
+1. Number of `Accounts`
+2. Serialized `Account` data + reallocation padding
+3. `Instruction Data` length
+4. `Instruction Data`
+5. `Program ID`
+
+Additionally there is and additional registry: `r10`. It's read-only and is reserved by the Solana VM to serve as a fixed frame pointer
+
+The Solana verifier guarantees every program finishes and can’t blow past bounded memory; a fixed, small stack lets it prove safety quickly and keeps context-switch overhead tiny. 
+
+Since it's read-only; we can load from it or use it in address calculations, but writing a new value into `r10` is illegal.
+
+At program start the VM sets `r10` to the highest valid address of a 512-byte stack that lives in the VM’s private memory and grow the stack downward; we store data at negative offsets from `r10` like this: 
+
+```
+// Reserve 16 bytes on the stack
+stxdw  [r10-8],  r1      ; store r1 at fp-8
+stxdw  [r10-16], r2      ; store r2 at fp-16
+
+// Use the data (e.g., pass pointer to helper)
+mov    r1, r10
+add    r1, -16           ; r1 -> start of our 16-byte buffer
+mov    r2, 2             ; arg: number of 8-byte elements
+```
 
 ### Compilation
 
@@ -75,41 +158,5 @@ It would be possible to simplify our compiled code down to just:
 This would make the program cost just `1 CU` to execute. A saving of 50%. This is because in the Solana runtime, `r0` is instantiated to `0x00` by default, so it does not need to be explicitly set to `0x00` unless it has previously been overwritten with another value. This is what we mean when we say the compiler lacks context.
 
 Fortunately, we have the ability both to write our own assembly, and to lean on the compiler to get us very close to good bytecode before disassembling and optimizing out the pieces we don't need in there. 
-
-## Assembly 101
-In this lesson, we will familiarize you with some of the basic concepts you'll need to understand to write assembly, such as `directives`, `registers` and `opcodes`. 
-
-### Directives
-
-There are a bunch of Assembly directives, each of which are used to tell the assembler to do something. Here are some practical examples of a few that you'll likely see when writing assembly or disassembling binaries:
-
-1. `.globl` - declares a symbol and tells the assembler to expose it to the linker
-2. `.section .text` - tells the assembler to store anything in this section in the text section, where our program insns are stored 
-3. `.section .rodata` - tells the assembler to store anything in this section in the read-only data section
-4. `.ascii` - declares an ASCII string to be consumed by the program
-5. `.equ` - declares a numeric value that can be consumed inline for offsets.
-
-### Registers
-
-The Solana runtime has 10 general purpose registers, `r0`-`r9`. Some have specific behaviors that we won't go into now, but the most important thing to understand is that `r0` is our return register. If `r0` is set to any value other than `0x00` it will be treated as an error code. If `r0` is set to `0x00` by the end of program execution, it will be treated as a `success` code.
-
-Registers are used to store one of two things:
-
-1. A typed value like a `u8`, `u16`, `u32` or `u64`.
-2. A reference to some segment of data
-
-Upon instantiation of the VM, `r0` is instantiated to `0x00` by default and `r1` is instantiated with a pointer to the start of our serialized entrypoint data, which consists of:
-
-1. Number of `Accounts`
-2. Serialized `Account` data + reallocation padding
-3. `Instruction Data` length
-4. `Instruction Data`
-5. `Program ID`
-
-If you wish to dump the assembly of a program, there is an open source tool called `sbpf`.
-
-
-### OP Codes
-OP Codes have several fucntions, such as storing and loading data and arithmetic.
 
 ## Assembly Memo
