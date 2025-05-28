@@ -8,7 +8,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/anchor/vault",
       requirements: [
@@ -59,7 +62,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/pinocchio/vault",
       requirements: [

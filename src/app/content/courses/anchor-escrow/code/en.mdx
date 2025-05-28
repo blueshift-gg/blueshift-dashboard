@@ -83,6 +83,7 @@ Now let's start with the additional file like `state.rs` and `errors.rs` before 
 
 `state.rs` is straightforward; we already know how `#[account]` works, and we have already seen this structure in the past section:
 
+<Codeblock lang="rust">
 ```rust
 use anchor_lang::prelude::*;
 
@@ -97,6 +98,7 @@ pub struct Escrow {
     pub bump: u8,
 }
 ```
+</Codeblock>
 
 What each field does:
   - **seed**: Random number used during seed derivation so one maker can open multiple escrows with the same token pair; stored on-chain so we can always re-derive the PDA.
@@ -111,6 +113,7 @@ We could pack in more info, but extra bytes mean extra rent. Storing only the es
 
 `errors.rs` lives on its own so you can tweak or extend codes without wading through business logic:
 
+<Codeblock lang="rust">
 ```rust
 use anchor_lang::prelude::*;
 
@@ -126,6 +129,7 @@ pub enum EscrowError {
     InvalidMintB,
 }
 ```
+</Codeblock>
 
 Each enum maps to a clear, human-readable message that Anchor will surface whenever a constraint or `require!()` fails.
 
@@ -138,6 +142,7 @@ The `make` instruction does three jobs:
 
 Below are the accounts the context needs. Most of these macro arguments and types were introduced earlier, so we'll skim:
 
+<Codeblock lang="rust">
 ```rust
 #[instruction(seed: u64)]
 pub struct Make<'info> {
@@ -183,8 +188,11 @@ pub struct Make<'info> {
     pub system_program: Program<'info, System>,
 }
 ```
+</Codeblock>
+
 For the logic, I like to keep the handler slim and push more advanced steps into small helpers function:
 
+<Codeblock lang="rust">
 ```rust
 impl<'info> Make<'info> {
     fn populate_escrow(&mut self, seed: u64, amount: u64, bump: u8) -> Result<()> {
@@ -233,9 +241,10 @@ pub fn handler(ctx: Context<Make>, seed: u64, receive: u64, amount: u64) -> Resu
     Ok(())
 }
 ```
+</Codeblock>
 
 We can see that Anchor helps us in multiple ways:
-  - `set_inner()`: guarantees every field is populated.
+- `set_inner()`: guarantees every field is populated.
 - `transfer_checked`: wraps the Token CPI just like the System helpers we used earlier.
 
 Additionally, we add two validation checks; one on the `amount` and one on the `receive` arguments to ensure we're not passing a zero value for either.
@@ -243,12 +252,13 @@ Additionally, we add two validation checks; one on the `amount` and one on the `
 ### Take
 
 The `take` instruction finalizes the swap:
-  - Close the escrow record, sending its rent lamports back to the maker.
+- Close the escrow record, sending its rent lamports back to the maker.
 - Move Token A from the vault to the taker, then close the vault.
 - Move the agreed amount of Token B from the taker to the maker.
 
 These are all the accounts needed for the `Take` context:
 
+<Codeblock lang="rust">
 ```rust
 #[derive(Accounts)]
 pub struct Take<'info> {
@@ -307,9 +317,11 @@ pub struct Take<'info> {
     pub system_program: Program<'info, System>,
 }
 ```
+</Codeblock>
 
 And this is how the logic will look like:
 
+<Codeblock lang="rust">
 ```rust
 impl<'info> Take<'info> {
     fn transfer_to_maker(&mut self) -> Result<()> {
@@ -382,15 +394,17 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
     Ok(())
 }
 ```
+</Codeblock>
 
 **Note**: Once a token account's balance is zero you can close it to reclaim the rent, which we do for the vault above.
 
 ### Refund
 
 The `refund` instruction lets the maker cancel an open offer:
-  - Close the escrow PDA and send its rent lamports back to the maker.
+- Close the escrow PDA and send its rent lamports back to the maker.
 - Move the full Token A balance out of the vault and back to the maker, then close the vault account.
 
+<Codeblock lang="rust">
 ```rust
 #[derive(Accounts)]
 pub struct Refund<'info> {
@@ -430,9 +444,11 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 ```
+</Codeblock>
 
 And this is how the logic will look like:
 
+<Codeblock lang="rust">
 ```rust
 impl<'info> Refund<'info> {
     fn withdraw_and_close_vault(&mut self) -> Result<()> {
@@ -484,5 +500,6 @@ pub fn handler(ctx: Context<Refund>) -> Result<()> {
     Ok(())
 }
 ```
+</Codeblock>
 
 Once this executes, the offer is void, the vault is gone, and the maker has their Token A and rent back in their wallet.

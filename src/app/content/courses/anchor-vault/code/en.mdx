@@ -1,0 +1,134 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+<ArticleSection name="The Vault" id="the-vault" />
+
+Now that we’ve covered the key macros and account anatomy, it’s time to write the actual instruction logic. But before that, let's talk about how would the logic looks like: 
+
+A vault, at its core, lets someone deposit lamports that only that same user can withdraw later. Our deposit and withdraw functions implement exactly that.
+
+Before you begin, be sure Rust and Anchor are installed (see the [official documentation](https://www.anchor-lang.com/docs/installation) if you need a refresher). Then in your terminal run:
+
+```
+anchor init blueshift_anchor_vault
+```
+
+Open the newly generated folder, and you’re ready to start coding!
+
+<ArticleSection name="Template" id="template" level="h3" />
+
+Start by dropping in this scaffold in your `lib.rs`
+
+<Codeblock lang="rust">
+    declare_id!("22222222222222222222222222222222222222222222");
+
+    #[program]
+    pub mod blueshift_anchor_vault {
+        use super::*;
+
+        pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+            // ...
+            Ok(())
+        }
+
+        pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+            // ...
+            Ok(())
+        }
+    }
+
+    #[derive(Accounts)]
+    pub struct VaultAction<'info> {
+        // ...
+    }
+
+    #[error_code]
+    pub enum VaultError {
+        // ...
+    }
+</Codeblock>
+
+<ArticleSection name="Deposit" id="deposit" level="h3" />
+
+Here’s what happens in the `deposit` logic:
+- Verifies the vault currently holds zero lamports (it must not already exist).
+- Ensures the deposit amount exceeds the rent-exempt minimum for a `SystemAccount`.
+- Transfers lamports from the signer to the vault via a CPI to the System Program.
+
+<Codeblock lang="rust">
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        require_eq!(ctx.accounts.vault.lamports(), 0, VaultError::VaultAlreadyExists);
+        require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
+
+
+        transfer(
+            CpiContext::new(ctx.accounts.system_program.to_account_info(), 
+                Transfer {
+                    from: ctx.accounts.signer.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                }
+            ),
+            amount,
+        )?;
+
+        Ok(())
+    }
+</Codeblock>
+
+The two `require` macros act like custom guard clauses:
+- `require_eq!` confirms the vault is empty (preventing double deposits).
+- `require_gt!` checks the amount clears the rent-exempt threshold.
+
+Once the checks pass, Anchor’s System-Program helper calls the `Transfer` CPI:
+
+```rust 
+use anchor_lang::system_program::{transfer, Transfer};
+
+transfer(
+    CpiContext::new(ctx.accounts.system_program.to_account_info(), 
+        Transfer {
+            from: ctx.accounts.signer.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        }
+    ),
+    amount,
+)?;
+```
+
+This Anchor helper makes it super easy by creating a `CpiContext` specifying the System Program and the relevant from and to accounts, then execute the transfer by passing in the amount of lamports we want to transfer.
+
+<ArticleSection name="Withdraw" id="withdraw" level="h3" />
+
+Here’s what happens in the `withdraw` logic:
+- Uses the vault’s PDA to sign the transfer out of the vault on its own behalf.
+- Transfers all lamports in the vault back to the signer.
+
+<Codeblock lang="rust">
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        let bindings = ctx.accounts.signer.key();
+        let signer_seeds = &[b"vault", bindings.as_ref(), &[ctx.bumps.vault]];
+
+        transfer(
+            CpiContext::new_with_signer(ctx.accounts.system_program.to_account_info(), 
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.signer.to_account_info(),
+                },
+                &[&signer_seeds[..]]
+            ),
+            ctx.accounts.vault.lamports(),
+        )?;
+
+        Ok(())
+    }
+</Codeblock>
+
+No extra `require` checks are needed here; ownership and balance validation are already baked into the `VaultAction` context. 
+
+For example, we know the vault being withdrawn from is “owned” by the signer due to how the Program Derived Address (PDA) seeds are generated since part of those seeds includes the signer’s key. If this vault was funded previously, that same signer can withdraw whatever lamports were deposited.
+
+As mentioned earlier, PDAs have “signer” capabilities within the same program they’re derived from. In this case, we use the signer’s public key to verify ownership of the vault, but the PDA itself “signs” the transfer. To do this, we:
+- Create `signer_seeds`, an array of references to all the seeds used to derive the PDA.
+- Pass these seeds into `CpiContext::new_with_signer`, allowing the PDA to act as the signer for this CPI call.
+
+Everything else is exactly like the deposit, but in reverse. This time, we’re withdrawing all the lamports from the vault, sending them back to the signer.
