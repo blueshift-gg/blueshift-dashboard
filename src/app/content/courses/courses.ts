@@ -70,6 +70,27 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     collectionMintAddress: "AL38QM96SDu4Jpx7UGcTcaLtwvWPVgRUzg9PqC787djK",
   },
   {
+    slug: "pinocchio-escrow",
+    language: "Rust",
+    color: "255,173,102",
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Pinocchio Escrow",
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
+    challenge: {
+      apiPath: "/v1/verify/pinocchio/escrow",
+      requirements: [
+        { instructionKey: "deposit" },
+        { instructionKey: "withdraw" },
+        { instructionKey: "refund" },
+      ],
+    },
+    collectionMintAddress: "...",
+  },
+  {
     slug: "pinocchio-memo",
     language: "Rust",
     color: "255,173,102",

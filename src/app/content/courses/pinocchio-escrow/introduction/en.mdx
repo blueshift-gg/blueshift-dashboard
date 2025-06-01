@@ -1,0 +1,556 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Chapter 2: The Escrow
+
+![Image Test](/graphics/pinocchio-escrow.png)
+
+Congrats! You just shipped your first Pinocchio program; from here on, things only get smoother as we rinse and repeat the patterns you've just learned, layering in new tricks along the way.
+
+Our next stop is the Escrow; arguably the most common building block on Solana.
+
+Look closely at an AMM, an orderbook, or an NFT marketplace: under the hood, each relies on an escrow pattern. The program acts as a neutral third party, holding assets from two participants until a set of conditions is met, releasing those assets to complete an exchange of value.
+
+Before we dive into the code, we have to remember that we writing native Solana; this means that we'll not be able to leverage the accounts and security checks that are handled by anchor usually.
+
+For the first time, this program will add some checks on account types, so it's worth taking a moment to see how they work together.
+
+<ArticleSection name="Account Security" id="account-security" level="h2" />
+
+Using Account Types in Anchor, we can easily perform owner, signature, and discriminator checks to ensure we're using the correct accounts for our instruction, for Native Rust we have to manually do so.
+
+But don't worry since this can be done easily like this:
+
+```rust
+// SignerAccount type
+if !account.is_signer() {
+    return Err(PinocchioError::NotSigner.into());
+}
+```
+
+Or like this for an owner check:
+
+```rust
+// SystemAccount type
+if account.owner().ne(&pinocchio_system::ID) {
+    return Err(PinocchioError::InvalidOwner.into());
+}
+```
+
+As you can see, it's really straightforward. Since we have all the account checks in the `TryFrom` implementation that we covered in previous lessons, it's easy to see what's missing and ensure we're writing safe code.
+
+However, as you can see, writing this for each instruction can become repetitive. For this reason, we decided to create a `helper.rs` file where we define the same types as Anchor to help you with these checks.
+
+### Common Interfaces and Traits
+
+For this `helper.rs` file, we decided to leverage two very "Rusty" approaches: **Common Interfaces** and **Traits**. 
+
+We could have gone with a macro approach similar to Anchor, but this would have several key differences:
+
+For this `helper.rs` we decided to leverage 2 very "rusty" decision: Common Interfaces and Traits. We could've went with a macro approach similar to anchor but this would've had some main differences:
+- Traits and Interfaces are much clearer since the reader sees exactly what happens in the function, rather than having to mentally "expand" the macro to follow the logic
+- With Traits and Interfaces, it's easier to spot errors because the compiler checks every call site and enables inference, auto-completion, and refactoring tools. Macros run before the type checker and can inject incorrect tokens as well
+- Traits let you write one generic implementation and reuse it without code bloat, while declarative macros duplicate code for every invocation, increasing compile time and binary size
+- We can wrap all these traits into a crate that can be used by anyone, whereas macro-generated APIs are crate-local by default
+
+I think you're convinced that a Common Interface and Trait approach is better! But let's talk about the syntax and what these things actually do:
+
+**What are Traits and Common Interfaces?**
+
+If you're coming from other programming languages, you might know traits as "interfaces"; they're essentially contracts that define what methods a type must implement. 
+
+In Rust, a trait is like a blueprint that says "any type that implements me must have these specific functions."
+
+Here's a simple example:
+
+```rust
+// Define a Trait
+pub trait AccountCheck {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError>;
+}
+
+// Define a Type
+pub struct SignerAccount;
+
+// Implement the trait for different Types
+impl SignerAccount {
+    pub fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_signer() {
+            return Err(PinocchioError::NotSigner.into());
+        }
+        Ok(())
+    }
+}
+
+pub struct SystemAccount;
+
+impl SystemAccount {
+    pub fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&pinocchio_system::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        Ok(())
+    }
+}
+```
+
+The beauty here is that now any account type that implements `AccountCheck` can be used in the same way; we can call .check() on any of them, and each type handles the validation logic that makes sense for it. 
+
+This is what we mean by "common interface": different types sharing the same method signatures.
+
+Now let's see how we apply this to our account security checks:
+
+### Signer and System Account
+
+As we saw in the previous examples, `SystemAccount` and `SignerAccount` checks are straightforward and don't require any additional validation, so we're going to add the following to our `helper.rs`:
+
+<Codeblock lang="rust">
+pub trait AccountCheck {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError>;
+}
+
+pub struct SignerAccount;
+
+impl SignerAccount {
+    pub fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_signer() {
+            return Err(PinocchioError::NotSigner.into());
+        }
+        Ok(())
+    }
+}
+
+pub struct SystemAccount;
+
+impl SystemAccount {
+    pub fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&pinocchio_system::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        Ok(())
+    }
+}
+</Codeblock>
+
+Here we simply check if the account is a signer or if it's owned by the system program. Notice how both structs provide the same check method, giving us that common interface we talked about.
+
+### Mint and Token Account
+
+Now things get more interesting. We start with the usual `AccountCheck` trait, but we also add other specific traits to provide additional helpers that resemble Anchor macros like `init` and `init_if_needed`.
+
+<Codeblock lang="rust">
+pub struct MintAccount;
+
+impl AccountCheck for MintAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&pinocchio_token::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        if account.data_len() != pinocchio_token::state::Mint::LEN {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
+
+        Ok(())
+    }
+}
+</Codeblock>
+
+For the `init` and `init_if_needed` functionality, we create another trait called `MintInit` that we use specifically for this purpose because of the unique fields required. We then use `CreateAccount` and `InitializeMint2` CPIs to initialize the `Mint` accoun:
+
+<Codeblock lang="rust">
+pub trait MintInit {
+    fn init(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult;
+    fn init_if_needed(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult;
+}
+
+impl MintInit for MintAccount {
+    fn init(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(pinocchio_token::state::Mint::LEN);
+
+        // Fund the account with the required lamports
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: pinocchio_token::state::Mint::LEN as u64,
+            owner: &pinocchio_token::ID,
+        }.invoke()?;
+        
+        InitializeMint2 {
+            mint: account,
+            decimals,
+            mint_authority,
+            freeze_authority,
+        }.invoke()
+    }
+
+    fn init_if_needed(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult {
+        match Self::check(account) {
+            Ok(_) => Ok(()),
+            Err(_) => Self::init(account, payer, decimals, mint_authority, freeze_authority),
+        }
+    }
+}
+</Codeblock>
+
+
+We then exactly the same for the `TokenAccount`:
+
+<Codeblock lang="rust">
+pub struct TokenAccount;
+
+impl AccountCheck for TokenAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&pinocchio_token::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        if account.data_len().ne(&pinocchio_token::state::TokenAccount::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
+
+        Ok(())
+    }
+}
+
+pub trait AccountInit {
+    fn init(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult;
+    fn init_if_needed(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult;
+}
+
+impl AccountInit for TokenAccount {
+    fn init(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(pinocchio_token::state::TokenAccount::LEN);
+
+        // Fund the account with the required lamports
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: pinocchio_token::state::TokenAccount::LEN as u64,
+            owner: &pinocchio_token::ID,
+        }.invoke()?;
+
+        // Initialize the Token Account
+        InitializeAccount3 {
+            account,
+            mint,
+            owner,
+        }.invoke()
+    }
+
+    fn init_if_needed(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult {
+        match Self::check(account) {
+            Ok(_) => Ok(()),
+            Err(_) => Self::init(account, mint, payer, owner),
+        }
+    }
+}
+</Codeblock>
+
+### Token2022
+
+You might have noticed that the only check we performed on the `Mint` and `TokenAccount` for the Legacy SPL Token Program was a length check. This works because when you only have 2 account types that always have fixed sizes, you can discriminate between them using just their length.
+
+For Token2022, this approach breaks down. The `Mint` size can grow and even exceed the `TokenAccount` size by adding token extensions that live directly in the `Mint` data. This means we can't rely solely on size to tell accounts apart.
+
+For this reason, we can now discriminate between a `Mint` and a `TokenAccount` in two ways:
+- **By size**: similar to the Legacy Token Program (when accounts are standard size)
+- **By discriminator**: a special byte that lives at position 165 (one byte larger than the legacy TokenAccount, to avoid conflicts)
+
+So our checks change accordingly:
+
+<Codeblock lang="rust">
+// TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
+pub const TOKEN_2022_PROGRAM_ID: [u8; 32] = [
+    0x06, 0xdd, 0xf6, 0xe1, 0xee, 0x75, 0x8f, 0xde, 0x18, 0x42, 0x5d, 0xbc, 0xe4, 0x6c, 0xcd, 0xda,
+    0xb6, 0x1a, 0xfc, 0x4d, 0x83, 0xb9, 0x0d, 0x27, 0xfe, 0xbd, 0xf9, 0x28, 0xd8, 0xa1, 0x8b, 0xfc,
+];
+
+const TOKEN_2022_ACCOUNT_DISCRIMINATOR_OFFSET: usize = 165;
+pub const TOKEN_2022_MINT_DISCRIMINATOR: u8 = 0x01;
+pub const TOKEN_2022_TOKEN_ACCOUNT_DISCRIMINATOR: u8 = 0x02;
+
+pub struct Mint2022Account;
+
+impl AccountCheck for Mint2022Account {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&TOKEN_2022_PROGRAM_ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        let data = account.try_borrow_data()?;
+
+        if data.len().ne(&pinocchio_token::state::Mint::LEN) {
+            if data[TOKEN_2022_ACCOUNT_DISCRIMINATOR_OFFSET].ne(&TOKEN_2022_MINT_DISCRIMINATOR) {
+                return Err(PinocchioError::InvalidAccountData.into());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl MintInit for Mint2022Account {
+    fn init(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(pinocchio_token::state::Mint::LEN);
+
+        // Fund the account with the required lamports
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: pinocchio_token::state::Mint::LEN as u64,
+            owner: &TOKEN_2022_PROGRAM_ID,
+        }.invoke()?;
+        
+        InitializeMint2 {
+            mint: account,
+            decimals,
+            mint_authority,
+            freeze_authority,
+        }.invoke()
+    }
+
+    fn init_if_needed(account: &AccountInfo, payer: &AccountInfo, decimals: u8, mint_authority: &[u8; 32], freeze_authority: Option<&[u8; 32]>) -> ProgramResult {
+        match Self::check(account) {
+            Ok(_) => Ok(()),
+            Err(_) => Self::init(account, payer, decimals, mint_authority, freeze_authority),
+        }
+    }
+}
+pub struct TokenAccount2022Account;
+
+impl AccountCheck for TokenAccount2022Account {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&TOKEN_2022_PROGRAM_ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        let data = account.try_borrow_data()?;
+
+        if data.len().ne(&pinocchio_token::state::TokenAccount::LEN) {
+            if data[TOKEN_2022_ACCOUNT_DISCRIMINATOR_OFFSET].ne(&TOKEN_2022_TOKEN_ACCOUNT_DISCRIMINATOR) {
+                return Err(PinocchioError::InvalidAccountData.into());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl AccountInit for TokenAccount2022Account {
+    fn init(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(pinocchio_token::state::TokenAccount::LEN);
+
+        // Fund the account with the required lamports
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: pinocchio_token::state::TokenAccount::LEN as u64,
+            owner: &TOKEN_2022_PROGRAM_ID,
+        }.invoke()?;
+        
+        InitializeAccount3 {
+            account,
+            mint,
+            owner,
+        }.invoke()
+    }
+
+    fn init_if_needed(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &[u8; 32]) -> ProgramResult {
+        match Self::check(account) {
+            Ok(_) => Ok(()),
+            Err(_) => Self::init(account, mint, payer, owner),
+        }
+    }
+}
+</Codeblock>
+
+### Interface Accounts
+
+Since we want to make it easy to work with both Token2022 and Legacy Token Programs without having to discriminate between them, we created a helper that follows the same basic principle:
+
+<Codeblock lang="rust">
+pub struct MintInterface;
+
+impl AccountCheck for MintInterface {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&TOKEN_2022_PROGRAM_ID) {
+            if account.owner().ne(&pinocchio_token::ID) {
+                return Err(PinocchioError::InvalidOwner.into());
+            } else {
+                if account.data_len().ne(&pinocchio_token::state::Mint::LEN) {
+                    return Err(PinocchioError::InvalidAccountData.into());
+                }
+            }   
+        } else {
+            let data = account.try_borrow_data()?;
+
+            if data.len().ne(&pinocchio_token::state::Mint::LEN) {
+                if data[TOKEN_2022_ACCOUNT_DISCRIMINATOR_OFFSET].ne(&TOKEN_2022_MINT_DISCRIMINATOR) {
+                    return Err(PinocchioError::InvalidAccountData.into());
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct TokenAccountInterface;
+
+impl AccountCheck for TokenAccountInterface {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&TOKEN_2022_PROGRAM_ID) {
+            if account.owner().ne(&pinocchio_token::ID) {
+                return Err(PinocchioError::InvalidOwner.into());
+            } else {
+                if account.data_len().ne(&pinocchio_token::state::TokenAccount::LEN) {
+                    return Err(PinocchioError::InvalidAccountData.into());
+                }
+            }
+        } else {
+            let data = account.try_borrow_data()?;
+
+            if data.len().ne(&pinocchio_token::state::TokenAccount::LEN) {
+                return Err(PinocchioError::InvalidAccountData.into());
+            }
+        }
+
+        Ok(())
+    }
+}
+</Codeblock>
+
+### Associated Token Account
+
+We can create some checks for the Associated Token Program. These are very similar to the normal Token Program checks, but they include an additional derivation check to ensure the account is derived correctly.
+
+<Codeblock lang="rust">
+pub struct AssociatedTokenAccount;
+
+impl AssociatedTokenAccountCheck for AssociatedTokenAccount {
+    fn check(account: &AccountInfo, authority: &AccountInfo, mint: &AccountInfo) -> Result<(), ProgramError> {
+        TokenAccount::check(account)?;
+
+        if find_program_address(&[authority.key(), &pinocchio_token::ID, mint.key()], &pinocchio_associated_token_account::ID).0.ne(account.key()) {
+            return Err(PinocchioError::InvalidAddress.into());
+        }
+
+        Ok(())
+    }
+}
+
+impl AssociatedTokenAccountInit for AssociatedTokenAccount {
+    fn init(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &AccountInfo, system_program: &AccountInfo, token_program: &AccountInfo) -> ProgramResult {
+        Create {
+            funding_account: payer,
+            account,
+            wallet: owner,
+            mint,
+            system_program,
+            token_program,
+        }.invoke()
+    }
+
+    fn init_if_needed(account: &AccountInfo, mint: &AccountInfo, payer: &AccountInfo, owner: &AccountInfo, system_program: &AccountInfo, token_program: &AccountInfo) -> ProgramResult {
+        match Self::check(account, payer, mint) {
+            Ok(_) => Ok(()),
+            Err(_) => Self::init(account, mint, payer, owner, system_program, token_program),
+        }
+    }
+}
+</Codeblock>
+
+### Program Account
+
+Finally, we create checks and helpers for program accounts, including `init` and `close` helpers. 
+
+You might notice something interesting in our `close` implementation; we resize the account to almost nothing, leaving only the first byte and changing it to 255. This is to prevent reinitialization attacks.
+
+A reinitialization attack happens when an attacker tries to reuse a closed account by reinitializing it with malicious data. By setting the first byte to 255 and shrinking the account to nearly zero size, we make it impossible for the account to be mistaken for any valid account type in the future. This is a common security pattern in Solana programs.
+
+<Codeblock lang="rust">
+pub struct ProgramAccount;
+
+impl AccountCheck for ProgramAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if account.owner().ne(&crate::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
+
+        if account.data_len().ne(&crate::state::Escrow::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
+
+        Ok(())
+    }
+}
+
+pub trait ProgramAccountInit {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult;
+}
+
+impl ProgramAccountInit for ProgramAccount {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(space);
+
+        // Create signer with seeds slice
+        let signer = [Signer::from(seeds)];
+
+        // Create the account
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: space as u64,
+            owner: &crate::ID,
+        }
+        .invoke_signed(&signer)?;
+
+        Ok(())
+    }
+}
+
+pub trait AccountClose {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
+}
+
+impl AccountClose for ProgramAccount {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
+        let mut data = account.try_borrow_mut_data()?;
+        data[0] = 0xff;
+
+        *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
+        account.realloc(1, true)?;
+        account.close()
+    }
+}
+</Codeblock>
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+
+Now that you have a comprehensive vision of what happen under the hoods with this checks, we can finally go and work on the program.
+
+
+
