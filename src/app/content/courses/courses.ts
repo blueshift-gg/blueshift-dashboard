@@ -90,6 +90,19 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     },
   },
   {
+    slug: "assembly-slippage",
+    language: "Assembly",
+    color: "140,255,102",
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Assembly Memo",
+    lessons: [{ slug: "lesson" }],
+    challenge: {
+      apiPath: "/v1/verify/assembly/memo",
+      requirements: [{ instructionKey: "log" }],
+    },
+  },
+  {
     slug: "quantum-vault",
     language: "Rust",
     color: "255,173,102",
