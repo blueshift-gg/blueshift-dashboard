@@ -33,6 +33,10 @@ const courseSections = {
   Assembly: {
     icon: "Assembly",
     title: "languages.assembly",
+  },
+  Research: {
+    icon: "Research",
+    title: "languages.research",
   }
 } as const;
 

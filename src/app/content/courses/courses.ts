@@ -8,7 +8,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/anchor/vault",
       requirements: [
@@ -59,7 +62,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/pinocchio/vault",
       requirements: [
@@ -142,6 +148,22 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       requirements: [{ instructionKey: "create_mint" }],
     },
   },
+  {
+    slug: "research-crateless-program",
+    language: "Research",
+    color: "105,162,241",
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Byte by Byte",
+    lessons: [{ slug: "lesson" }],
+    challenge: {
+      apiPath: "/v1/verify/research/crateless-program",
+      requirements: [
+        { instructionKey: "deposit" },
+        { instructionKey: "withdraw" },
+      ],
+    },
+  }
 ]);
 
 const releasedCourses = (

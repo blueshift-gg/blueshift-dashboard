@@ -35,13 +35,11 @@ export async function generateMetadata({
     href: `/courses/${courseName}/${lessonName}`,
   });
 
-  let ogImage = defaultOpenGraphImage;
-  try {
-    const imageModule = await import(
-      `@/../public/graphics/courses/og-${courseName}.png`
-    );
-    ogImage = imageModule.default;
-  } catch {}
+  const ogImage = {
+    src: `/graphics/banners/${courseName}.png`,
+    width: 1200,
+    height: 630,
+  }
 
   return {
     title: t("title"),
@@ -144,7 +142,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
                 }}
               />
               <div
-                className="w-[24px] h-[24px] rounded-sm flex items-center justify-center"
+                className="w-[24px] h-[24px] rounded-sm flex items-center justify-center text-brand-primary"
                 style={{
                   backgroundColor: `rgb(${courseColors[courseMetadata.language]},0.10)`,
                 }}
