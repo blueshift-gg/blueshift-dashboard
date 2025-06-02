@@ -16,6 +16,7 @@ type ReturningLessonFooterProps = {
   totalLessonCount: number;
   currentLessonSlug: string;
   isChallengeCompleted: boolean;
+  hasChallenge?: boolean;
 };
 
 export default function ReturningCourseFooter({
@@ -24,6 +25,7 @@ export default function ReturningCourseFooter({
   courseName,
   currentLessonSlug,
   isChallengeCompleted,
+  hasChallenge,
 }: ReturningLessonFooterProps) {
   const t = useTranslations();
   const [isHovering, setIsHovering] = useState(false);
@@ -100,7 +102,20 @@ export default function ReturningCourseFooter({
               {completedLessonsCount}/{totalLessonCount}
             </span>
           </div>
-          {!isChallengeCompleted ? (
+          {hasChallenge === false || isChallengeCompleted ? (
+            <Link
+              onMouseOver={() => setIsHovering(true)}
+              onMouseOut={() => setIsHovering(false)}
+              href={`/courses/${courseName}`}
+              className="text-brand-secondary hover:text-brand-primary transition font-medium flex items-center gap-x-2"
+            >
+              <Button
+                variant="primary"
+                size="md"
+                label={t("lessons.review_course")}
+              />
+            </Link>
+          ) : (
             <Link
               onMouseOver={() => setIsHovering(true)}
               onMouseOut={() => setIsHovering(false)}
@@ -113,19 +128,6 @@ export default function ReturningCourseFooter({
                 label={t("lessons.take_challenge")}
                 icon="Challenge"
                 iconSide="left"
-              />
-            </Link>
-          ) : (
-            <Link
-              onMouseOver={() => setIsHovering(true)}
-              onMouseOut={() => setIsHovering(false)}
-              href={`/courses/${courseName}`}
-              className="text-brand-secondary hover:text-brand-primary transition font-medium flex items-center gap-x-2"
-            >
-              <Button
-                variant="primary"
-                size="md"
-                label={t("lessons.review_course")}
               />
             </Link>
           )}

@@ -7,14 +7,19 @@ export default function Footer() {
   const twitterLink = process.env.NEXT_PUBLIC_TWITTER_LINK ?? "";
   const discordLink = process.env.NEXT_PUBLIC_DISCORD_LINK ?? "";
   const githubLink = process.env.NEXT_PUBLIC_GITHUB_LINK ?? "";
-
+  const build =
+    process.env.NEXT_PUBLIC_COMMIT_HASH?.substring(0, 7) ?? "DEVELOPMENT";
+  
   return (
     <div className="border-t border-t-border bg-background-card py-8">
       <div className="wrapper">
         <div className="flex flex-col sm:gap-y-0 gap-y-6 justify-center sm:flex-row items-center sm:justify-between">
-          <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col">
             <span className="text-tertiary/75 font-mono text-sm">
               Blueshift &copy; {year}
+            </span>
+            <span className="text-tertiary/25 font-mono text-xs text-center sm:text-left mt-1">
+              Commit: {build}
             </span>
           </div>
           <div className="flex items-center gap-x-8">

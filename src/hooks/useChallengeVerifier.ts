@@ -47,12 +47,22 @@ export function useChallengeVerifier({
     useState<VerificationApiResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const verificationEndpoint = `${apiBaseUrl}${course.challenge.apiPath}`;
 
-  const initialRequirements = course.challenge.requirements.map((req) => ({
-    ...req,
-    status: "incomplete" as const,
-  }));
+  const verificationEndpoint = useMemo(() => {
+    if (course.challenge) {
+      return `${apiBaseUrl}${course.challenge.apiPath}`;
+    }
+    return undefined;
+  }, [course.challenge]);
+
+  const initialRequirements: ChallengeRequirement[] = useMemo(() => {
+    return course.challenge
+      ? course.challenge.requirements.map((req) => ({
+          ...req,
+          status: "incomplete" as const,
+        }))
+      : [];
+  }, [course.challenge]);
 
   const [requirements, setRequirements] =
     useState<ChallengeRequirement[]>(initialRequirements);
@@ -60,20 +70,22 @@ export function useChallengeVerifier({
   const { authToken, setCertificate } = usePersistentStore();
 
   useEffect(() => {
-    if (verificationData) {
-      setRequirements(
-        course.challenge.requirements.map((req): ChallengeRequirement => {
-          const result = verificationData?.results?.find(
+    // Sync requirements state if the initialRequirements array reference changes
+    // (e.g. due to course.challenge changing if the course prop itself changes)
+    setRequirements(initialRequirements);
+  }, [initialRequirements]);
+
+  useEffect(() => {
+    if (verificationData && course.challenge) {
+      setRequirements((prevRequirements) =>
+        course.challenge!.requirements.map((req): ChallengeRequirement => {
+          const result = verificationData.results?.find(
             (res) => res.instruction === req.instructionKey,
           );
           if (result) {
             return { ...req, status: result.success ? "passed" : "failed" };
           } else {
-            // If no result for a requirement, but we have verification data,
-            // it implies it wasn't part of this verification run or something else.
-            // Keep its existing status or mark as incomplete if it was reset.
-            // For simplicity now, let's find its current status or default to incomplete.
-            const currentReq = requirements.find(
+            const currentReq = prevRequirements.find(
               (r) => r.instructionKey === req.instructionKey,
             );
             return { ...req, status: currentReq?.status || "incomplete" };
@@ -81,10 +93,19 @@ export function useChallengeVerifier({
         }),
       );
     }
-  }, [verificationData, course.challenge.requirements] /* need to keep requirements out of this for now */);
+  }, [verificationData, course.challenge]);
 
   const handleVerificationRequest = useCallback(
     async (body: FormData | string, headers?: HeadersInit) => {
+      if (!verificationEndpoint) {
+        setIsLoading(false);
+        setError("Challenge API path not configured for this course.");
+        console.error(
+          "handleVerificationRequest: Verification endpoint is not defined.",
+        );
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
       setVerificationData(null);
@@ -114,9 +135,8 @@ export function useChallengeVerifier({
           if (!result.certificate) {
             console.error("No certificate received in response.");
             setError("No certificate received.");
-            return
+            return;
           }
-
           setCertificate(course.slug, result.certificate);
         } else {
           const errorText = await response.text();
@@ -140,41 +160,70 @@ export function useChallengeVerifier({
         setIsLoading(false);
       }
     },
-    [verificationEndpoint, authToken],
+    [verificationEndpoint, authToken, course.slug, setCertificate],
   );
 
-  const uploadProgram = useCallback(() => {
+  const uploadProgram = useCallback(async () => {
+    if (!course.challenge || !verificationEndpoint) {
+      setError(
+        "Challenge or verification endpoint is not configured for this course.",
+      );
+      console.warn(
+        "Upload program aborted: Challenge or verification endpoint not configured.",
+      );
+      return;
+    }
+
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".so"; // Or specify accepted file types
+    input.accept = ".so";
     input.style.display = "none";
 
     input.onchange = async (event) => {
       const target = event.target as HTMLInputElement;
       const file = target.files?.[0];
+      const canProceed = !!verificationEndpoint; // Re-check, ensure it's still valid
 
-      if (file) {
+      if (!canProceed) {
+        setError(
+          "Verification endpoint became unavailable during file selection.",
+        );
+        console.error(
+          "uploadProgram.onchange: Verification endpoint is not defined at time of file selection.",
+        );
+      }
+
+      if (file && canProceed) {
         console.log("Selected file:", file.name);
-        console.log("Sending verification request to:", verificationEndpoint);
+        console.log("Sending verification request to:", verificationEndpoint); // verificationEndpoint is confirmed by canProceed
         const formData = new FormData();
-        formData.append("program", file); // "program" is the field name expected by the server
+        formData.append("program", file);
         await handleVerificationRequest(formData);
+      }
+
+      if (input.parentNode === document.body) {
         document.body.removeChild(input);
-      } else {
-        document.body.removeChild(input); // Ensure removal even if no file selected
       }
     };
 
     document.body.appendChild(input);
     input.click();
-    // No need to removeChild here immediately, it's handled in onchange or if dialog is cancelled
-  }, [verificationEndpoint, handleVerificationRequest]);
+  }, [
+    course.challenge,
+    verificationEndpoint,
+    handleVerificationRequest,
+    setError,
+  ]);
 
   const uploadTransaction = useCallback(
     async (base64EncodedTx: string) => {
-      if (!verificationEndpoint) {
-        console.error("Verification endpoint is not configured.");
-        setError("Verification endpoint is not configured.");
+      if (!course.challenge || !verificationEndpoint) {
+        console.error(
+          "Transaction upload aborted: Challenge or verification endpoint is not configured.",
+        );
+        setError(
+          "Challenge or verification endpoint is not configured for this course.",
+        );
         return;
       }
       console.log(
@@ -186,7 +235,12 @@ export function useChallengeVerifier({
         { "Content-Type": "application/json" },
       );
     },
-    [verificationEndpoint, handleVerificationRequest],
+    [
+      course.challenge,
+      verificationEndpoint,
+      handleVerificationRequest,
+      setError,
+    ],
   );
 
   const completedRequirementsCount = useMemo(() => {

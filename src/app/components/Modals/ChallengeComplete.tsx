@@ -63,7 +63,7 @@ export default function ChallengeCompleted({
         transition={{ duration: 0.75, delay: 0.5 }}
         className="w-[175px] relative z-10 mt-6"
       >
-        <img src="/graphics/nft-test.png" className="w-full animate-nft"></img>
+        <img src={`/graphics/nft-${course.slug}.png`} className="w-full animate-nft"></img>
       </motion.div>
       <motion.div
         initial={{ opacity: 0 }}
@@ -109,28 +109,15 @@ export default function ChallengeCompleted({
             </>
           ) : (
             <>
-              <Button
-                label={t("challenges.challenge_completed_tweet")}
-                variant="primary"
-                size="lg"
-                icon="X"
-                className="!w-full !flex-shrink"
-                onClick={() => {
-                  const popupWidth = 600;
-                  const popupHeight = 720;
-                  const left = window.screenX + (window.outerWidth - popupWidth) / 2;
-                  const top = window.screenY + (window.outerHeight - popupHeight) / 2;
-                  const tweetWindow = window.open(
-                    `https://x.com/intent/tweet?text=${encodeURIComponent(`I just completed the Anchor Vault challenge from @blueshift_gg.\n\nTry it out here: https://learn.blueshift.gg/en/courses/${course.slug}/lesson\n\nMake the shift. Build on @solana.`)}`,
-                    "_blank",
-                    `width=${popupWidth},height=${popupHeight},left=${left},top=${top}`
-                  );
-                  if (tweetWindow) {
-                    tweetWindow.focus();
-                    closeModal();
-                  }
-                }}
-              />
+              <Link href={`https://x.com/intent/tweet?text=${encodeURIComponent(`I just completed the Anchor Vault challenge from @blueshift_gg.\n\nTry it out here: https://learn.blueshift.gg/en/courses/${course.slug}/lesson\n\nMake the shift. Build on @solana.`)}`} target="_blank">
+                <Button
+                  label={t("challenges.challenge_completed_tweet")}
+                  variant="primary"
+                  size="lg"
+                  icon="X"
+                  className="!w-full !flex-shrink"
+                />
+              </Link>
               <div
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}

@@ -9,6 +9,7 @@ import Footer from "@/app/components/Footer/Footer";
 import GlobalModals from "@/app/components/Modals/GlobalModals";
 import WalletProvider from "@/app/contexts/WalletProvider";
 import { Geist_Mono, Funnel_Display } from "next/font/google";
+import { GoogleAnalytics } from '@next/third-parties/google'
 
 const GeistMono = Geist_Mono({
   subsets: ["latin"],
@@ -113,6 +114,7 @@ export default async function RootLayout({
           </WalletProvider>
         </NextIntlClientProvider>
       </body>
+      <GoogleAnalytics gaId="G-BW45TC8WPK" />
     </html>
   );
 }

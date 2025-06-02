@@ -33,6 +33,10 @@ const courseSections = {
   Assembly: {
     icon: "Assembly",
     title: "languages.assembly",
+  },
+  Research: {
+    icon: "Research",
+    title: "languages.research",
   }
 } as const;
 
@@ -219,6 +223,7 @@ export default function CourseList({
                                 isChallengeCompleted={
                                   courseStatus[course.slug] !== "Locked"
                                 }
+                                hasChallenge={!!course.challenge}
                               />
                             }
                           />
@@ -363,6 +368,7 @@ export default function CourseList({
                                 totalLessonCount={totalLessons}
                                 currentLessonSlug={currentLessonSlug}
                                 isChallengeCompleted={true}
+                                hasChallenge={!!course.challenge}
                               />
                             }
                           />

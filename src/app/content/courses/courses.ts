@@ -8,7 +8,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/anchor/vault",
       requirements: [
@@ -16,6 +19,7 @@ const allCourses: CourseMetadata[] = withCourseNumber([
         { instructionKey: "withdraw" },
       ],
     },
+    collectionMintAddress: "53tiK9zY67DuyA1tgQ6rfNgixMB1LiCP9D67RgfbCrpz",
   },
   {
     slug: "anchor-escrow",
@@ -24,7 +28,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Escrow",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/anchor/escrow",
       requirements: [
@@ -33,6 +40,7 @@ const allCourses: CourseMetadata[] = withCourseNumber([
         { instructionKey: "refund" },
       ],
     },
+    collectionMintAddress: "2E5K7FxDWGXkbRpFEAkhR8yQwiUBGggVyng2vaAhah5L",
   },
   {
     slug: "anchor-memo",
@@ -54,7 +62,10 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Vault",
-    lessons: [{ slug: "lesson" }],
+    lessons: [
+      { slug: "introduction" },
+      { slug: "code" },
+    ],
     challenge: {
       apiPath: "/v1/verify/pinocchio/vault",
       requirements: [
@@ -62,6 +73,7 @@ const allCourses: CourseMetadata[] = withCourseNumber([
         { instructionKey: "withdraw" },
       ],
     },
+    collectionMintAddress: "AL38QM96SDu4Jpx7UGcTcaLtwvWPVgRUzg9PqC787djK",
   },
   {
     slug: "pinocchio-memo",
@@ -110,10 +122,6 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     isFeatured: true,
     unitName: "Quantum Vault",
     lessons: [{ slug: "introduction-to-quantum-vault" }],
-    challenge: {
-      apiPath: "/v1/verify/quantum/vault",
-      requirements: [],
-    },
   },
   {
     slug: "your-first-spl-token",
@@ -128,6 +136,22 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       requirements: [{ instructionKey: "create_mint" }],
     },
   },
+  {
+    slug: "research-crateless-program",
+    language: "Research",
+    color: "105,162,241",
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Byte by Byte",
+    lessons: [{ slug: "lesson" }],
+    challenge: {
+      apiPath: "/v1/verify/research/crateless-program",
+      requirements: [
+        { instructionKey: "deposit" },
+        { instructionKey: "withdraw" },
+      ],
+    },
+  }
 ]);
 
 const releasedCourses = (
