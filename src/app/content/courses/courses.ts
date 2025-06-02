@@ -94,7 +94,6 @@ const allCourses: CourseMetadata[] = withCourseNumber([
         { instructionKey: "refund" },
       ],
     },
-    collectionMintAddress: "...",
   },
   {
     slug: "pinocchio-memo",
