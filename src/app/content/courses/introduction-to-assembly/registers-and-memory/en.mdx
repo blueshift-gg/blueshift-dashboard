@@ -1,0 +1,71 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# sBPF Registers and Memory Model
+
+sBPF provides 11 general-purpose 64-bit registers inherited from eBPF, but with Solana-specific calling conventions and memory layout constraints that directly impact how you write assembly code:
+
+| Register | Role | Callee-saved? | Usage Notes |
+|----------|------|---------------|-------------|
+| `r0` | Return value | No | Function results, syscall return values |
+| `r1` | Input buffer pointer | No | Points to 0x400000000 on entry |
+| `r2-r5` | Scratch/arguments | No | Helper function arguments, temporary values |
+| `r6-r9` | General purpose | Yes | Must preserve across calls |
+| `r10` | Frame pointer | Yes, read-only | Stack base, cannot modify directly |
+
+- **Callee-saved registers** (`r6`-`r9`) must contain the same values on function exit as they did on entry. The call and exit instructions automatically handle saving and restoring these registers, but you're responsible for not corrupting them within your function.
+
+- **The frame pointer** `r10` is read-only and points to the base of your current stack frame. Unlike traditional architectures where you might manipulate a stack pointer, sBPF uses negative offsets from `r10` for stack access: `ldxdw r0, [r10 - 8]` loads the first 8 bytes from your stack frame.
+
+<ArticleSection name="Fixed Virtual Memory Map" id="fixed-virtual-memory-map" level="h2" />
+
+sBPF uses a fixed virtual memory map that determines where different types of data live:
+
+| Region | Start Address | Purpose | Size/Notes |
+|--------|---------------|---------|------------|
+| Text | 0x100000000 | Code and read-only data | Program binary |
+| Stack | 0x200000000 | Local variables | 32 KiB, grows downward |
+| Heap | 0x300000000 | Dynamic allocation | Via `sol_alloc_free` |
+| Input | 0x400000000 | Program parameters | Serialized arguments |
+
+- The **text region** contains your executable code plus any read-only data like string constants. When you define data with `.quad` or similar directives, it typically ends up here.
+- The **stack region** is where local variables live. With `r10` pointing to the stack base, you access locals with negative offsets: `[r10 - 16]`, `[r10 - 24]`, etc. The stack is limited to 32 KiB total.
+- The **input region** is where Solana places your program's parameters. On entry, `r1` points to this region (`0x400000000`), letting you read the serialized account data and instruction parameters passed to your program.
+
+> Attempting to access unmapped addresses triggers an AccessViolation and the transaction fails.
+
+### Stack Usage
+
+The stack operates with `r10` as the frame pointer pointing to the base of the current stack frame (highest address). Local variables are addressed with negative offsets:
+
+```assembly
+# Store a value on the stack
+mov64 r0, 42
+stxdw [r10 - 8], r0         ; Store at first stack slot
+
+# Load it back
+ldxdw r1, [r10 - 8]         ; Load from first stack slot
+```
+
+### Program Entry and Exit
+
+Your program begins execution at the symbol marked with `.globl` (typically `entrypoint` or `e`). The initial register state is minimal:
+
+```assembly
+.globl entrypoint
+entrypoint:
+    # On entry:
+    # r1 = 0x400000000 (input buffer pointer)
+    # r0, r2-r10 = 0 (all other registers zeroed)
+
+    # Your program logic here
+
+    mov64 r0, 0     # Success code (0 = SUCCESS)
+    exit            # Return to runtime
+```
+
+The exit behavior depends on call depth:
+
+- Call depth 0: exit terminates the program with `r0` as the result code
+- Call depth > 0: exit acts like return, restoring caller-saved registers (`r6`-`r9`), the caller's frame pointer (`r10`), and continuing execution at the return address
+
+The runtime implicitly adds prologue/epilogue code to handle setup and teardown, including initial register state and final return handling.
