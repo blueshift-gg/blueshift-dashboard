@@ -40,6 +40,18 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       { slug: "conclusions" },
     ],
   },
+  {
+    slug: "introduction-to-assembly",
+    language: "Assembly",
+    color: "221,234,224",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "assembly-101" },
+      { slug: "instruction" },
+      { slug: "tooling" },
+    ],
+  },
 ]);
 
 const releasedCoursesSetting = process.env.NEXT_PUBLIC_RELEASED_COURSES?.trim();

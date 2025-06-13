@@ -1,0 +1,60 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Assembly 101
+
+Solana sBPF is Solana's custom variant of the extended Berkeley Packet Filter (eBPF) instruction-set and virtual-machine that runs every on-chain program.
+
+You rarely need to touch it, but when you’re chasing optimization, or you simply want to know exactly what the VM is doing, these fundamentals help.
+
+High-level Rust can’t always express every micro-optimisation, so the compiler sometimes leaves safe, but slower code. Reading (or writing) assembly gives you total control.
+
+<ArticleSection name="The sBPF Virtual Machine" id="the-sbpf-virtual-machine" level="h2" />
+
+The sBPF virtual machine is Solana's custom execution environment: a 64-bit register machine that sits between your program and the validator's native CPU. 
+
+Think of it as a specialized computer designed specifically for blockchain execution: fast enough for high-throughput transaction processing, but constrained enough to guarantee security and determinism across thousands of validators.
+
+### Architecture
+
+sBPF is a load-store architecture with 11 general-purpose registers and no complex addressing modes. 
+
+This simplicity is intentional: fewer instruction variants mean faster verification, faster JIT compilation, and more predictable performance. 
+
+The VM executes bytecode that's been verified for safety, then JIT-compiles hot paths to native machine code for maximum speed.
+
+### sBPF vs eBPF
+
+While sBPF inherits eBPF's instruction format, Solana made several key modifications:
+- **Removed kernel helpers**: No access to host system state or kernel functions
+- **Added custom syscalls**: Solana-specific operations for account access, logging, and cross-program calls
+- **Modified memory model**: Account data access instead of kernel memory maps
+- **Deterministic timing**: All operations have predictable compute costs
+- **Extended immediate values**: Some instructions support wider immediate operands
+
+<ArticleSection name="The JIT Compiler Pipeline" id="the-jit-compiler-pipeline" level="h2" />
+
+The heart of sBPF's performance lies in its `Just-In-Time` compilation strategy, which transforms your bytecode into native machine instructions at runtime. 
+
+When a program is first invoked, the Solana runtime doesn't interpret the sBPF instructions one by one; instead, it compiles the entire program to native code and executes that directly.
+
+The process begins with static verification, where the runtime walks through every possible execution path in your program to ensure memory safety. 
+
+The verifier checks that all memory accesses stay within bounds, that jumps only target valid instruction addresses, and that the program terminates within the compute unit limit. This analysis happens only once per program deployment, not on every invocation.
+
+Once verified, the JIT compiler translates sBPF instructions to the host architecture's native code. A simple sBPF addition like `add64 r1, r2` becomes a single `x86-64 add` instruction. 
+
+Memory operations are more complex: each sBPF load or store gets compiled into native instructions plus bounds-checking code that validates the address is within the allowed memory regions.
+
+The compiler applies several optimizations during translation: 
+- Register allocation maps sBPF's 11 virtual registers to the host CPU's physical registers reducing memory traffic. 
+- Dead code elimination removes unreachable instructions. 
+- Branch prediction hints are inserted based on the program's control flow patterns. 
+
+The result is machine code that runs at near-native speed while maintaining all the safety guarantees of the virtual machine.
+
+Syscall handling requires special attention during compilation. When the JIT encounters a call instruction, it generates code that saves the current register state, marshals arguments according to the syscall's interface, invokes the runtime function, and restores the execution context. 
+
+> This boundary crossing is one of the few places where sBPF execution isn't quite as fast as native code, which is why minimizing syscalls is crucial for performance.
+
+The compiled native code includes runtime checks that the static verifier couldn't prove at compile time. Every memory access gets bounds-checked against the current memory layout. Compute unit consumption is tracked and compared against the remaining budget. These checks are implemented as efficient inline code rather than function calls, keeping the overhead minimal while preserving safety.

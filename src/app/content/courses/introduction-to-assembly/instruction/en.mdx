@@ -1,0 +1,175 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instructions
+
+When you compile Rust (or C/assembly) the tool-chain emits a stream of fixed-width, 8-byte instructions and packs them into the `.text` section of your ELF.
+
+Think of it as a tiny fixed-width struct that the VM can decode in one pass:
+
+```
+   1 byte    4 bits   4 bits     2 bytes         4 bytes
+┌──────────┬────────┬────────┬──────────────┬──────────────────┐
+│  opcode  │  dst   │  src   │   offset     │      imm         │
+└──────────┴────────┴────────┴──────────────┴──────────────────┘
+```
+
+- `opcode`: It says what kind of work this instruction represents. Top 3 bits choose the class: arithmetic, memory, jump, call, exit. Lower 5 bits pick the exact variant (e.g. add, mul, ldxdw, jeq).
+- `dst`: The “destination” register number (`r0` – `r10`). Whatever the instruction produces; like an arithmetic result, a loaded value, a helper return—lands here.
+- `src`: The “source” register. For two-operand arithmetic (add r1, r2) it supplies the second input. For memory ops it can carry the base address you’re loading from or storing to. For ALU-immediate variants (add r1, 10) these 4 bits are folded into the opcode, so src isn’t used.
+- `offset`: A small integer that modifies the instruction’s behaviour: On loads/stores it’s added to src to reach [src + offset]. On jumps it’s a relative branch target measured in instructions (not bytes).
+- `imm`: Arithmetic ops use it for immediate math (add r1, 42). CALL uses it as the helper/syscall number (sol_log = 16). Memory ops often treat it as an absolute pointer or additional stride.
+
+<ArticleSection name="How does it work?" id="how-does-it-work" level="h2" />
+
+The opcode tells you everything about how to interpret the remaining fields.
+
+When the VM encounters `add64 r1, r2`, it reads the opcode and knows this is a 64-bit arithmetic operation using two registers. 
+
+The `dst` field says the result goes into `r1`, the `src` field says `r2` provides the second operand, and the offset and immediate fields are ignored.
+
+For `add64 r1, 42`, the opcode changes to indicate this is an immediate operation. Now `dst` still points to `r1`, but src is meaningless, and the immediate field (`imm`) provides the second operand. 
+
+The VM knows which fields matter based solely on the opcode.
+
+For memory operations like `ldxdw r1, [r2+8]`, it's a little different since it combine multiple fields meaningfully. 
+
+The opcode indicates a 64-bit load from memory, `dst` receives the loaded value, `src` provides the base address, and `offset` (8) is added to create the final address `r2 + 8`. The immediate field remains unused.
+
+This uniform approach extends to control flow. When you write `jeq r1, r2, +5`, the opcode encodes a conditional jump comparing two registers. 
+
+If `r1` equals `r2`, the VM adds the `offset` (5) to the program counter to jump forward 5 instructions. The immediate field could alternatively hold a constant for comparison in `jeq r1, 42, +5`.
+
+> TLDR: Opcode determines which fields are meaningful. You don't need to memorize complex addressing modes or special cases: the instruction format stays constant, and the opcode tells you how to interpret each field.
+
+### Function Calls and Syscalls
+
+Until sBPF v3, `call imm` served double duty: the immediate value determined whether you were calling an internal function or invoking a syscall. 
+
+The runtime distinguished between these based on the immediate value range, with syscall numbers typically being small positive integers like `16` for `sol_log`.
+
+From sBPF v3 onwards, the instructions were separated for clarity and security. `call off` now handles internal function calls using a relative offset, while `syscall imm` explicitly invokes runtime functions. 
+
+This separation makes the bytecode more explicit about its intentions and allows for better verification.
+
+Indirect calls through `callx` also evolved. In earlier versions, the target register was encoded in the immediate field, but from v2 onwards, it's encoded in the source register field. 
+
+<ArticleSection name="Opcodes Reference Table" id="opcodes-reference-table" level="h2" />
+
+### Memory Load Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0x18` | `00011000` | until v2 | `lddw dst, imm` | Load 64-bit immediate (first slot) |
+| `0x00` | `00000000` | until v2 | `lddw dst, imm` | Load 64-bit immediate (second slot) |
+| `0x61` | `01100001` | until v2 | `ldxw dst, [src + off]` | Load word from memory |
+| `0x69` | `01101001` | until v2 | `ldxh dst, [src + off]` | Load halfword from memory |
+| `0x71` | `01110001` | until v2 | `ldxb dst, [src + off]` | Load byte from memory |
+| `0x79` | `01111001` | until v2 | `ldxdw dst, [src + off]` | Load doubleword from memory |
+| `0x2C` | `00101100` | from v2 | `ldxb dst, [src + off]` | Load byte from memory |
+| `0x3C` | `00111100` | from v2 | `ldxh dst, [src + off]` | Load halfword from memory |
+| `0x8C` | `10001100` | from v2 | `ldxw dst, [src + off]` | Load word from memory |
+| `0x9C` | `10011100` | from v2 | `ldxdw dst, [src + off]` | Load doubleword from memory |
+
+### Memory Store Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0x62` | `01100010` | until v2 | `stw [dst + off], imm` | Store word immediate |
+| `0x6A` | `01101010` | until v2 | `sth [dst + off], imm` | Store halfword immediate |
+| `0x72` | `01110010` | until v2 | `stb [dst + off], imm` | Store byte immediate |
+| `0x7A` | `01111010` | until v2 | `stdw [dst + off], imm` | Store doubleword immediate |
+| `0x63` | `01100011` | until v2 | `stxw [dst + off], src` | Store word from register |
+| `0x6B` | `01101011` | until v2 | `stxh [dst + off], src` | Store halfword from register |
+| `0x73` | `01110011` | until v2 | `stxb [dst + off], src` | Store byte from register |
+| `0x7B` | `01111011` | until v2 | `stxdw [dst + off], src` | Store doubleword from register |
+| `0x27` | `00100111` | from v2 | `stb [dst + off], imm` | Store byte immediate |
+| `0x37` | `00110111` | from v2 | `sth [dst + off], imm` | Store halfword immediate |
+| `0x87` | `10000111` | from v2 | `stw [dst + off], imm` | Store word immediate |
+| `0x97` | `10010111` | from v2 | `stdw [dst + off], imm` | Store doubleword immediate |
+| `0x2F` | `00101111` | from v2 | `stxb [dst + off], src` | Store byte from register |
+| `0x3F` | `00111111` | from v2 | `stxh [dst + off], src` | Store halfword from register |
+| `0x8F` | `10001111` | from v2 | `stxw [dst + off], src` | Store word from register |
+| `0x9F` | `10011111` | from v2 | `stxdw [dst + off], src` | Store doubleword from register |
+
+### Control Flow Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0x05` | `00000101` | all | `ja off` | Unconditional jump |
+| `0x15` | `00010101` | all | `jeq dst, imm, off` | Jump if equal to immediate |
+| `0x1D` | `00011101` | all | `jeq dst, src, off` | Jump if equal to register |
+| `0x25` | `00100101` | all | `jgt dst, imm, off` | Jump if greater than immediate (unsigned) |
+| `0x2D` | `00101101` | all | `jgt dst, src, off` | Jump if greater than register (unsigned) |
+| `0x35` | `00110101` | all | `jge dst, imm, off` | Jump if greater or equal immediate (unsigned) |
+| `0x3D` | `00111101` | all | `jge dst, src, off` | Jump if greater or equal register (unsigned) |
+| `0x45` | `01000101` | all | `jset dst, imm, off` | Jump if bit set (immediate mask) |
+| `0x4D` | `01001101` | all | `jset dst, src, off` | Jump if bit set (register mask) |
+| `0x55` | `01010101` | all | `jne dst, imm, off` | Jump if not equal to immediate |
+| `0x5D` | `01011101` | all | `jne dst, src, off` | Jump if not equal to register |
+| `0x65` | `01100101` | all | `jsgt dst, imm, off` | Jump if greater than immediate (signed) |
+| `0x6D` | `01101101` | all | `jsgt dst, src, off` | Jump if greater than register (signed) |
+| `0x75` | `01110101` | all | `jsge dst, imm, off` | Jump if greater or equal immediate (signed) |
+| `0x7D` | `01111101` | all | `jsge dst, src, off` | Jump if greater or equal register (signed) |
+| `0xA5` | `10100101` | all | `jlt dst, imm, off` | Jump if less than immediate (unsigned) |
+| `0xAD` | `10101101` | all | `jlt dst, src, off` | Jump if less than register (unsigned) |
+| `0xB5` | `10110101` | all | `jle dst, imm, off` | Jump if less or equal immediate (unsigned) |
+| `0xBD` | `10111101` | all | `jle dst, src, off` | Jump if less or equal register (unsigned) |
+| `0xC5` | `11000101` | all | `jslt dst, imm, off` | Jump if less than immediate (signed) |
+| `0xCD` | `11001101` | all | `jslt dst, src, off` | Jump if less than register (signed) |
+| `0xD5` | `11010101` | all | `jsle dst, imm, off` | Jump if less or equal immediate (signed) |
+| `0xDD` | `11011101` | all | `jsle dst, src, off` | Jump if less or equal register (signed) |
+
+### Function Call Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0x85` | `10000101` | until v3 | `call imm` or `syscall imm` | Call function or syscall |
+| `0x85` | `10000101` | from v3 | `call off` | Call function with relative offset |
+| `0x8D` | `10001101` | until v2 | `callx imm` | Indirect call (register in imm field) |
+| `0x8D` | `10001101` | from v2 | `callx src` | Indirect call (register in src field) |
+| `0x95` | `10010101` | until v3 | `exit` or `return` | Return from function |
+| `0x95` | `10010101` | from v3 | `syscall imm` | Call syscall |
+| `0x9D` | `10011101` | from v3 | `exit` or `return` | Return from function |
+
+### Product/Quotient/Remainder Operations (sBPF v2+)
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0x36` | `00110110` | from v2 | `uhmul64 dst, imm` | Unsigned high multiply 64-bit immediate |
+| `0x3E` | `00111110` | from v2 | `uhmul64 dst, src` | Unsigned high multiply 64-bit register |
+| `0x46` | `01000110` | from v2 | `udiv32 dst, imm` | Unsigned divide 32-bit immediate |
+| `0x4E` | `01001110` | from v2 | `udiv32 dst, src` | Unsigned divide 32-bit register |
+| `0x56` | `01010110` | from v2 | `udiv64 dst, imm` | Unsigned divide 64-bit immediate |
+| `0x5E` | `01011110` | from v2 | `udiv64 dst, src` | Unsigned divide 64-bit register |
+| `0x66` | `01100110` | from v2 | `urem32 dst, imm` | Unsigned remainder 32-bit immediate |
+| `0x6E` | `01101110` | from v2 | `urem32 dst, src` | Unsigned remainder 32-bit register |
+| `0x76` | `01110110` | from v2 | `urem64 dst, imm` | Unsigned remainder 64-bit immediate |
+| `0x7E` | `01111110` | from v2 | `urem64 dst, src` | Unsigned remainder 64-bit register |
+| `0x86` | `10000110` | from v2 | `lmul32 dst, imm` | Low multiply 32-bit immediate |
+| `0x8E` | `10001110` | from v2 | `lmul32 dst, src` | Low multiply 32-bit register |
+| `0x96` | `10010110` | from v2 | `lmul64 dst, imm` | Low multiply 64-bit immediate |
+| `0x9E` | `10011110` | from v2 | `lmul64 dst, src` | Low multiply 64-bit register |
+| `0xB6` | `10110110` | from v2 | `shmul64 dst, imm` | Signed high multiply 64-bit immediate |
+| `0xBE` | `10111110` | from v2 | `shmul64 dst, src` | Signed high multiply 64-bit register |
+| `0xC6` | `11000110` | from v2 | `sdiv32 dst, imm` | Signed divide 32-bit immediate |
+| `0xCE` | `11001110` | from v2 | `sdiv32 dst, src` | Signed divide 32-bit register |
+| `0xD6` | `11010110` | from v2 | `sdiv64 dst, imm` | Signed divide 64-bit immediate |
+| `0xDE` | `11011110` | from v2 | `sdiv64 dst, src` | Signed divide 64-bit register |
+| `0xE6` | `11100110` | from v2 | `srem32 dst, imm` | Signed remainder 32-bit immediate |
+| `0xEE` | `11101110` | from v2 | `srem32 dst, src` | Signed remainder 32-bit register |
+| `0xF6` | `11110110` | from v2 | `srem64 dst, imm` | Signed remainder 64-bit immediate |
+| `0xFE` | `11111110` | from v2 | `srem64 dst, src` | Signed remainder 64-bit register |
+
+### Byte Swap Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0xDC` | `11011100` | all | `be dst, imm` | Byte swap (16, 32, or 64 bit) |
+| `0xD4` | `11010100` | until v2 | `le dst, imm` | Little endian convert (deprecated) |
+
+### Special Operations
+
+| Opcode | Binary | Feature Set | Mnemonic | Description |
+|--------|--------|-------------|----------|-------------|
+| `0xF7` | `11110111` | from v2 | `hor64 dst, imm` | High-order 32-bit OR |
