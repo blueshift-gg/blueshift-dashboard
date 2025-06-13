@@ -1,0 +1,76 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Program Example 
+
+Now that we know the basic sBPF operations, let’s see what they look like in a real (even if tiny) program.
+
+<ArticleSection name="Pinocchio NoOp" id="pinocchio-noop" level="h2" />
+
+Below is a high-performance “noop” written with Pinocchio. All it does is return success.
+
+```rust
+#![no_std]
+use pinocchio::{entrypoint::InstructionContext, lazy_program_entrypoint, no_allocator, nostd_panic_handler, ProgramResult};
+
+lazy_program_entrypoint!(process_instruction);
+
+nostd_panic_handler!();
+no_allocator!();
+
+fn process_instruction(
+    _context: InstructionContext, // wrapper around the input buffer
+ ) -> ProgramResult {
+    Ok(())
+}
+```
+
+If we build this code with `cargo build-sbf --dump`, we will get an ELF dump that gives us information about our binary in the `/target/deploy/` directory.
+
+We will then want to look for the `.text` section; the part of our binary where executable code is stored.
+
+```pinocchio_noop-dump.txt
+Disassembly of section .text
+0000000000000120 <entrypoint>
+     120 b7 00 00 00 00 00 00 00      	mov64 r0, 0x0
+     128 95 00 00 00 00 00 00 00      	exit
+```
+
+<ArticleSection name="Assembly NoOp" id="assembly-noop" level="h2" />
+
+If we were to disassemble the binary to turn it back into compilable sBPF Assembly, the code would look like this:
+
+```sbpf
+.globl entrypoint:
+    mov64 r0, 0x00   ; r0 <- success
+    exit             ; finish, return r0
+```
+
+This is an extremely small program, with just 3 lines of code, only 2 instructions, or "insns" (We sometimes refer to an sBPF instruction as an `insn` to delinneate between bytecode instructions and transaction instructions) and just `2 CUs` to execute.
+
+Let's break down what each line does:
+
+1. `.globl entrypoint:` tells the linker that this is the offset of our program entrypoint in the binary. This is interpreted by the runtime to where it should start executing sBPF `insns` from.
+2. `mov64 r0, 0x00` sets the value of `r0` (register zero) to `0x00`. `r0` is our return register, and setting it to zero indicates successful program execution.
+3. `exit` tells the runtime we can now exit the program, taking the current value of `r0` as our execution result.
+
+
+If we think about it, this actually maps very logically to our Rust code. We told the compiler:
+1. This is our entrypoint function
+2. Expect it to return a `ProgramResult` which evaluates to a numeric value
+3. Return `Ok(())` which evaluates to `0x00`
+
+As such, the above bytecode is actually a very reasonable interpretation by the compiler of our desired logic, but it is still not quite optimal.
+
+<ArticleSection name="Optimized Assembly NoOp" id="optimized-assembly-noop" level="h2" />
+
+It would be possible to simplify our compiled code down to just:
+
+```sbpf
+.globl entrypoint:
+    exit
+```
+
+This would make the program cost just `1 CU` to execute. A saving of 50%. This is because in the Solana runtime, `r0` is instantiated to `0x00` by default, so it does not need to be explicitly set to `0x00` unless it has previously been overwritten with another value. This is what we mean when we say the compiler lacks context.
+
+Fortunately, we have the ability both to write our own assembly, and to lean on the compiler to get us very close to good bytecode before disassembling and optimizing out the pieces we don't need in there.

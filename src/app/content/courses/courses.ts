@@ -51,6 +51,7 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       { slug: "instruction" },
       { slug: "registers-and-memory" },
       { slug: "tooling" },
+      { slug: "program-example" },
       { slug: "conclusion" },
     ],
   },
