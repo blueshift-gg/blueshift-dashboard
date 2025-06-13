@@ -2,6 +2,7 @@ import createMDX from "@next/mdx";
 import rehypePrettyCode from "rehype-pretty-code";
 import createNextIntlPlugin from "next-intl/plugin";
 import redirects from "./redirects.mjs";
+import remarkGfm from 'remark-gfm'
 
 const nextConfig = {
   async redirects() {
@@ -43,6 +44,7 @@ const withMDX = createMDX({
         },
       ],
     ],
+    remarkPlugins: [remarkGfm],
   },
 });
 
