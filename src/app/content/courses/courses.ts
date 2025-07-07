@@ -2,6 +2,18 @@ import { CourseMetadata, withCourseNumber } from "@/app/utils/course";
 
 const allCourses: CourseMetadata[] = withCourseNumber([
   {
+    slug: "introduction-to-blockchain-and-solana",
+    language: "General",
+    color: "0,255,255",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "introduction" },
+      { slug: "introduction-to-solana" },
+      { slug: "conclusions" },
+    ],
+  },
+  {
     slug: "introduction-to-anchor",
     language: "Anchor",
     color: "221,234,224",

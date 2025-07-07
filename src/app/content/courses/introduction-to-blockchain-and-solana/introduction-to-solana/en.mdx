@@ -1,0 +1,370 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Solana
+
+Before building on Solana, it's essential to understand several key concepts unique to Solana development. This section covers the core concepts you need to understand as you start building on Solana, including accounts, transactions, programs, and more.
+
+<ArticleSection name="Accounts on Solana" id="accounts-on-solana" level="h2" />
+
+In Web2, you're used to thinking about data storage in a familiar pattern:
+
+```js
+// Traditional database/API approach
+const user = {
+  id: 123,
+  name: "Alice",
+  balance: 1000,
+  posts: [1, 2, 3]
+}
+
+// Your application logic
+function transferMoney(from, to, amount) {
+  database.update('users', from, { balance: balance - amount })
+  database.update('users', to, { balance: balance + amount })
+}
+```
+
+Your application controls the database, defines the schema, and manages all the business logic. Data and logic live in the same place, giving you complete control over how information is stored and accessed.
+
+Other blockchain like Ethereum, follows a more familiar object-oriented model:
+
+```solidity
+contract BankAccount {
+    mapping(address => uint256) private balances;
+    
+    function transfer(address to, uint256 amount) public {
+        balances[msg.sender] -= amount;
+        balances[to] += amount;
+    }
+}
+
+The smart contract is like a class that owns its data. When you deploy the contract, it gets an address, and all the data lives "inside" that contract.
+
+> This feels similar to how you might design a traditional application with classes and private data.
+
+For Solana, instead of contracts owning data, everything is an account, and accounts are just data containers that can be owned by programs.
+
+Think of it like this:
+- Accounts: Database records/files in a filesystem
+- Programs: Applications that can read/write to those files
+- Owners: Who has permission to modify each file
+
+```rust
+// This is NOT a smart contract - it's just a data structure
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct UserAccount {
+    pub name: String,
+    pub balance: u64,
+    pub posts: Vec<u32>,
+}
+
+// This is the program (smart contract) that operates on accounts
+pub fn transfer_money(accounts: &[AccountInfo], amount: u64) -> ProgramResult {
+    let from_account = &accounts[0];  // Account containing sender's data
+    let to_account = &accounts[1];    // Account containing receiver's data
+    
+    // Deserialize, modify, serialize back
+    let mut from_data = UserAccount::try_from_slice(&from_account.data.borrow())?;
+    let mut to_data = UserAccount::try_from_slice(&to_account.data.borrow())?;
+    
+    from_data.balance -= amount;
+    to_data.balance += amount;
+    
+    from_data.serialize(&mut &mut from_account.data.borrow_mut()[..])?;
+    to_data.serialize(&mut &mut to_account.data.borrow_mut()[..])?;
+    
+    Ok(())
+}
+```
+
+> Unlike databases where you simply insert records, Solana accounts must be explicitly created and funded:
+
+### Basics
+
+Every Solana account shares the same base Account type, regardless of their purpose:
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
+    pub data: Vec<u8>,
+    /// the program that owns this account. If executable, the program that loads this account.
+    pub owner: Pubkey,
+    /// this account's data contains a loaded program (and is now read-only)
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent
+    pub rent_epoch: Epoch,
+}
+```
+
+Every account on Solana has a unique 32-byte address, typically displayed as a base58 encoded string (e.g., `14grJpemFaf88c8tiVb77W7TYg2W3ir6pfkKz3YjhhZ5`).
+
+This address works similarly to a wallet address; it can sign transactions to modify its own data, change ownership, or reclaim lamports stored in the account.
+
+> Important: This signing capability only exists when the account is owned by the "System Program" (Solana's base program). Once ownership transfers to another program, that program gains complete control over the account's data and lamports, regardless of whether you hold the private key.
+
+We said before that the addresses are the key to locate the corresponding on-chain data of the account. The account address acts as the "unique ID" for each entry in the "Accounts" table.
+
+### Key Account Properties
+
+- Accounts can store up to 10MiB of data, which can contain either: executable program code (for program accounts); program state and user data (for data accounts)
+- Accounts require a rent deposit in lamports (SOL's smallest unit) proportional to the data stored. This prevents blockchain bloat by ensuring unused accounts are eventually removed. You can fully recover this deposit when you close the account.
+- Every account has a program owner: only the owning program can modify the account's data or deduct lamports; anyone can increase an account's lamport balance; the System Program owns accounts by default until ownership is transferred
+
+### Different type of accounts
+
+1. System Accounts: Store SOL and are owned by the System Program
+2. Token Accounts: Store SPL tokens information like ownership or token itself and are owned by the Token Program
+3. Program Accounts: Store executable code (or the Smart Contract) and are marked as `executable: true`
+4. Data Accounts: Store application-specific data and are owned by your custom programs
+
+<ArticleSection name="Transactions on Solana" id="transactions-on-solana" level="h2" />
+
+In Web2, when you want to modify data, you typically make individual API calls:
+
+```js
+// Traditional Web2 approach - sequential API calls
+await updateUser(userId, { name: "Alice" });
+await transferMoney(fromAccount, toAccount, 100);
+await logActivity(userId, "transfer", 100);
+await sendNotification(toAccount, "You received $100");
+```
+
+Each API call is independent, and if one fails, you handle it separately. You might use database transactions to group operations, but the HTTP requests themselves are atomic.
+
+Other blockchain like Ethereum, follows a simpler model where each transaction calls one function:
+
+```solidity
+// Ethereum - one function call per transaction
+contract.transfer(recipient, amount); // This is one transaction
+If you need to do multiple things, you either:
+```
+
+The main difference is that to create transactions on Ethereum you have to:
+- Make multiple separate transactions (expensive and slow)
+- Build everything into one smart contract function
+- Use complex proxy patterns
+
+Solana instead, follows an atomic aransaction model; that measn that every transaction can contain multiple instructions, and they all succeed or fail together; atomically.
+
+Think of it like this:
+- Transaction: A database transaction that can modify multiple records
+- Instructions: Individual operations within that transaction
+- Accounts: The specific records being modified
+
+```rust
+// Solana transaction can contain multiple instructions
+Transaction {
+    instructions: [
+        // Instruction 1: Transfer SOL
+        system_program::transfer(from_wallet, to_wallet, amount),
+        
+        // Instruction 2: Update user profile  
+        my_program::update_profile(user_account, new_name),
+        
+        // Instruction 3: Log the activity
+        my_program::log_activity(activity_account, "transfer", amount),
+        
+        // Instruction 4: Send notification
+        notification_program::send(recipient, message),
+    ],
+    signers: [user_keypair], // Who authorizes this transaction
+}
+```
+
+> A transaction is essentially a request to process one or more instructions.
+
+### Basics
+
+Solana transactions include instructions that invoke programs on the network. As said before, we can have multiple instructions in a transaction and transaction are atomic: if any instruction fails, the entire transaction fails and no changes occur; this instructions execute in sequential order.
+
+The transaction size limit is 1232 bytes and each instruction requires three pieces of information: the address of the program to invoke; the accounts the instruction reads from or writes to; any extra data required by the instruction (e.g., function arguments)
+
+### Transaction Fees: 
+
+Every Solana transaction requires a base fee (SOL) to compensate validators for processing the transaction. You can also pay an optional prioritization fee to increase the chance that the current leader (validator) processes your transaction.
+
+The base fee for a transaction is 5000 lamports per signature on the transaction and the prioritization fee (optional) is an extra fee you pay to the validator to increase the chance that the current leader processes your transaction.
+
+The prioritization fee equals: compute unit limit (maximum compute units your transaction) * compute unit price (price per compute unit, in micro-lamports that we want to pay).
+
+> The transaction fee payer must be an account owned by the System Program.
+
+<ArticleSection name="Programs on Solana" id="programs-on-solana" level="h2" />
+
+In Web2, your application is a monolithic entity that owns and controls everything:
+
+```js
+// Traditional Web2 application
+class UserService {
+  constructor() {
+    this.database = new Database(); // App owns its data
+    this.users = new Map();         // App manages state
+  }
+  
+  createUser(name, email) {
+    const user = { id: generateId(), name, email };
+    this.database.save('users', user);  // App controls storage
+    this.users.set(user.id, user);      // App manages memory
+    return user;
+  }
+  
+  updateUser(id, updates) {
+    const user = this.users.get(id);
+    Object.assign(user, updates);
+    this.database.update('users', id, user);
+    return user;
+  }
+}
+```
+
+Your application code, business logic, and data all live together. You deploy everything as one unit, and it runs on servers you control.
+
+Other blockchain like Ethereum, follows an object-oriented model where smart contracts are like classes that own their data:
+
+```solidity
+// Ethereum contract owns its state
+contract UserManager {
+    mapping(address => User) private users;  // Contract owns this data
+    uint256 private userCount;               // Contract owns this state
+    
+    function createUser(string memory name) public {
+        users[msg.sender] = User(name, block.timestamp);
+        userCount++;  // Modifying contract's internal state
+    }
+    
+    function updateUser(string memory newName) public {
+        users[msg.sender].name = newName;  // Direct state modification
+    }
+}
+```
+
+When you deploy an Ethereum contract, it gets an address and owns all its internal state. The contract code and data are bundled together.
+
+Solana programs are stateless; they don't own any data and operate only on accounts passed to them.
+
+```rust
+// Solana program - completely stateless
+use solana_program::prelude::*;
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct User {
+    pub name: String,
+    pub created_at: i64,
+}
+
+// This function doesn't own any data
+pub fn create_user(
+    accounts: &[AccountInfo],    // Data is passed in
+    name: String,
+) -> ProgramResult {
+    let user_account = &accounts[0];  // Account passed from outside
+    
+    // Program operates on external data
+    let user = User {
+        name,
+        created_at: Clock::get()?.unix_timestamp,
+    };
+    
+    // Serialize data back to the account
+    user.serialize(&mut &mut user_account.data.borrow_mut()[..])?;
+    Ok(())
+}
+```
+
+Think of Solana programs like pure functions or microservices that:
+- Receive data as input (accounts)
+- Process that data
+- Return modified data
+- Don't maintain any internal state
+
+### Basics
+
+On Solana, "smart contracts" are called programs. Programs are deployed on-chain to accounts that contain the program's compiled executable binary. 
+
+Users interact with programs by sending transactions containing instructions that tell the program what to do.
+
+### Key Points
+
+- Programs are accounts containing executable code, organized into functions called instructions.
+- While programs are stateless, they can include instructions that create and update other accounts to store data.
+- An upgrade authority can update programs. Once this authority is removed, the program becomes immutable.
+- Users can verify an on-chain program account's data matches its public source code through [verifiable builds](https://github.com/Ellipsis-Labs/solana-verifiable-build).
+
+<ArticleSection name="Program Derived Addresses" id="program-derived-addresses" level="h2" />
+
+We've already explored `Accounts` on Solana extensively in the previous section. But we haven't discussed the "superpower" that accounts can possess: Program Derived Addresses (or PDAs).
+
+PDAs are deterministically created addresses that use a combination of "seeds" (predefined inputs) and a specific program ID. These inputs are hashed together using `SHA-256 `to create an address that is not on the `ed25519` elliptic curve (the off-curve parameter is what we call a bump; a number between 0 and 255). This means that no private key can ever exist for a PDA.
+
+> When the SHA-256 hash produces an address that lies on the Ed25519 curve (which happens about 50% of the time), we start with bump = 255 and simply iterate down through bump = 254, bump = 253, etc. until we get an address that is not on the elliptic curve.
+
+On paper the derivation looks like this:
+
+```rust
+use solana_nostd_sha256::hashv;
+
+const PDA_MARKER: &[u8; 21] = b"ProgramDerivedAddress";
+
+let pda = hashv(&[
+    signer.key().as_ref(),
+    &[bump],
+    ID.as_ref(),
+    PDA_MARKER,
+]);
+```
+
+The only seed of this PDA is the `signer` publickey and the result is an address that we can use to create hashmap-like structures on-chain from a predefined set of inputs (e.g. strings, numbers, and other account addresses).
+
+The benefit of this approach is that it eliminates the need to keep track of an exact address. Instead, you simply need to recall the specific inputs used for its derivation creating way more programmability when working on Programs.
+
+Another superpower that PDA unlock is program signing. Since PDAs don't have private keys, how can they authorize transactions? Solana's runtime allows programs to "sign" for PDAs that are derived from the program's address.
+
+```rust
+// Program can sign for its PDAs
+let seeds = &[b"vault", user.as_ref(), &[bump]];
+
+invoke_signed(
+    &transfer_instruction,
+    &[from_pda, to_account, token_program],
+    &[&seeds[..]], // Program proves it controls this PDA
+)?;
+```
+
+This enables programs to hold funds, manage escrow accounts, and control assets without exposing private keys.
+
+<ArticleSection name="Cross Program Invocation" id="cross-program-invocation" level="h2" />
+
+Cross Program Invocations (CPIs) allow one program to call another program within the same transaction. This enables true composability: anyone can combine multiple programs atomically.
+
+In Web2, calling multiple services requires separate API calls. Each service is separate, runs on different servers, and you handle failures independently. If one service is down, others might still work.
+
+Solana instead allows programs to call other programs within the same transaction using CPIs. Think of it like calling multiple microservices in a single atomic database transaction that makes possible to create "synchronous" calls across different services and permits composability without integrations.
+
+### Basics
+
+Writing a CPI follows the same pattern as any instruction. Each CPI must specify:
+- Program address: Which program to invoke
+- Accounts: All accounts the instruction needs
+- Instruction data: Which function to call and its parameters
+
+```rust
+// Basic CPI setup
+let cpi_accounts = TransferAccounts {
+    from: source_account.clone(),
+    to: destination_account.clone(), 
+    authority: authority_account.clone(),
+};
+
+let cpi_ctx = CpiContext::new(token_program.clone(), cpi_accounts);
+token_program::cpi::transfer(cpi_ctx, amount)?;
+```
+
+When a program makes a Cross Program Invocation (CPI) to another program:
+- Signer privileges from the original transaction extend to called programs (ex. A->B)
+- Programs can make CPIs up to a depth of 4 levels deep
+- Programs can sign for their PDAs in CPIs using `CpiContext::new_with_signer`
+
+
