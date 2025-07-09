@@ -1,0 +1,66 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instruction Introspection with Pinocchio
+
+Pinocchio has different types than the one used by the `solana_program` crate this means that we had to create a new SDK that was optimize for pinocchio.
+
+With the help of [Orion](https://x.com/BasedOrion_) we created a set of helper that respected the "original" implementation but made the `Instruction` sysvar, one of the most expansive sysvar to use, one of the most efficient sysvar out there.
+
+For this reason we can use "Instruction Introspection" in pinocchio without having to install any external crate and access all the informations that we need by importing this functions:
+
+```rust
+use pinocchio::sysvars::instructions::{
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="How to use Introspection" id="how-to-use-introspection" level="h2" />
+
+As previously said in the introduction paragraph, "Instruction Introspection" just deserialized the data of the `Instruction` sysvar account to get us all the data that we need about our instructions.
+
+We start by checking what is the current index. We can do it by using the `load_current_index_checked` function like so:
+
+```rust
+let index = load_current_index_checked(&self.accounts.sysvar_instructions)?;
+```
+
+After this, we can check an instruction at a "relative" index by using the `load_instruction_at_checked`. This time we're going to check the instruction just after the one we're using introspection in like so:
+
+```rust
+// We then Load the instruction that is right after / the one that we want to check for the correct input.
+let instruction = load_instruction_at_checked(index as usize + 1, &self.accounts.sysvar_instructions)?;
+```
+
+Before going thourgh the next steps we should ask ourselves what information are essential to not incurr in a malicious attack.
+
+We usually start start by checking if the program used is the one that we expect. In this example we're introspecting another instruction of the system program, so we can do it like so:
+
+```rust
+if instruction.get_program_id() != &pinocchio_system::ID {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+We then check if the instruction is the one that we expect. To do so we compare the discriminator and the instruction data with the one that we expect. So we start by creating an `instruction_data` variable and check against that like so:
+
+```rust
+let mut instruction_data = [0u8; 12];
+instruction_data[0..4].copy_from_slice(&2u32.to_le_bytes());
+instruction_data[4..12].copy_from_slice(&100_000_000u64.to_le_bytes());
+
+if instruction.get_instruction_data() != instruction_data {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+We can then do more program specific checks based on the logic of the instruction that we are checking.
+
+We can check the accounts that are present in the introspected instruction. This step require us to know exactly the structure of the account struct since we're going to ask for the data or the pubkey of an account that is present at a certain index like this: 
+
+```rust
+if instruction.get_account_meta_at(0)?.key() != self.accounts.from.key() {
+    return Err(ProgramError::InvalidAccountData);
+}
+```
