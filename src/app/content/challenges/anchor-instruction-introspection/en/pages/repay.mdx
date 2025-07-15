@@ -1,12 +1,12 @@
 # Repay
 
-The `repay` instruction is the second half of our flash loan system. It performs 2 steps:
-1. Verify the borrow: verify that in the first instruction, a `borrow` instruction actually happened. After that it grabs the `amount_borrowed` from the instruction data.
-2. Transfer the funds back: calculate the `fee` and transfer the `borrowed_fund` + `fee` back to the protocol
+The repay instruction completes our flash loan cycle by ensuring the borrowed funds are returned with appropriate fees. This instruction performs two essential steps:
+1. Extract loan amount: Use instruction introspection to retrieve the original `amount_borrowed` from the borrow instruction's data
+2. Transfer funds back: Calculate the `fee` and transfer the borrowed amount plus fee back to the protocol
 
-<ArticleSection name="Fund Transfer" id="fund-transfer" level="h2" />
+<ArticleSection name="Instruction Introspection" id="instruction-introspection" level="h2" />
 
-First, we implement the actual transfer of funds with proper validation:
+First, we need to examine the first instruction in the transaction to extract the original loan amount:
 
 <Codeblock lang="rust">
 ```rust
@@ -14,10 +14,10 @@ let ixs = ctx.accounts.instructions.to_account_info();
 
 let mut amount_borrowed: u64;
 
-if let Ok(repay_ix) = load_instruction_at_checked(0, &ixs) {
+if let Ok(borrow_ix) = load_instruction_at_checked(0, &ixs) {
     // Check the amount borrowed:
     let mut borrowed_data: [u8;8] = [0u8;8];
-    borrowed_data.copy_from_slice(&repay_ix.data[8..16]);
+    borrowed_data.copy_from_slice(&borrow_ix.data[8..16]);
     amount_borrowed = u64::from_le_bytes(borrowed_data)
 
 } else {
@@ -25,6 +25,12 @@ if let Ok(repay_ix) = load_instruction_at_checked(0, &ixs) {
 }
 ```
 </Codeblock>
+
+> We're not checking that this is the actual `borrow_ix` using the program ID and discriminator because it doesn't matter if they actually construct a "fake" instruction; it's safe for the protocol since it's just getting paid. At the same time, if we loaned the money we know that it's going to be the first instruction and that the `amount_borrowed` will be there.
+
+<ArticleSection name="Transfer Funds" id="transfer-funds" level="h2" />
+
+Next, we calculate the protocol fee and transfer the total amount back:
 
 <Codeblock lang="rust">
 ```rust
@@ -43,3 +49,5 @@ transfer(
 )?;
 ```
 </Codeblock>
+
+Our fee is hard coded to 500 basis point and we perform "checked" math to make sure that the amount doesn't overflow which could be exploited with very large numbers. Additionally we convert the amount to `u128` for the multiplication to prevent intermediate overflow, then we safely cast back to `u64`
