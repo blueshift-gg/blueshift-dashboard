@@ -1,0 +1,114 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Pinocchio Flash Loan
+
+Instruction introspection is a powerful feature that allows a blockchain program to examine and analyze other instructions within the same transaction bundle. This includes instructions that haven't been executed yet, giving your program the ability to "look ahead" and make decisions based on what will happen later in the transaction.
+
+Think of it like having X-ray vision for transactions: your program can see through the entire transaction to understand the complete sequence of operations before deciding how to proceed.
+
+The most compelling application of instruction introspection is flash loans. These are a unique type of loan that exists only within the boundaries of a single transaction.
+
+Here's how flash loans work:
+- **Borrow**: At the beginning of a transaction, you can instantly borrow a large amount of capital using a `loan` instruction
+- **Use**: You can use this borrowed capital for trading, arbitrage, or other operations within the same transaction
+- **Repay**: Before the transaction ends, you must repay the loan plus a small fee using a `repay` instruction
+
+The key insight is that flash loans rely on the atomic nature of blockchain transactions. If any part of the transaction fails (including the repayment), the entire transaction is rolled back as if it never happened. This means the lender has zero risk: either they get repaid, or the loan never actually occurred.
+
+In this challenge, you'll create a simple flash loan program that demonstrates instruction introspection in action. The program will examine instruction data and accounts across different instructions within the same transaction to ensure loan terms are met.
+
+If you're new to instruction introspection, we recommend starting with the[ Instruction Introspection Course](/en/courses/instruction-introspection) to understand the fundamental concepts used in this program.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Before you begin, be sure Rust and Pinocchio are installed. Then in your terminal run:
+
+```
+# create workspace
+cargo new blueshift_secp256r1_vault --lib --edition 2021
+cd blueshift_secp256r1_vault
+```
+
+Add `pinocchio`, `pinocchio-system `and `pinocchio-token`:
+
+```
+cargo add pinocchio pinocchio-system pinocchio-token
+```
+
+Declare the crate types in `Cargo.toml` to generate deployment artifacts in `target/deploy`:
+
+```
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+You're now ready to write your flash loan program.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+This time we'll split the program into small, focused modules instead of cramming everything into the `lib.rs`. The folder tree will look roughly like this:
+
+```
+src
+├── instructions
+│       ├── helpers.rs
+│       ├── loan.rs
+│       ├── mod.rs
+│       └── repay.rs
+├── lib.rs
+```
+
+**Note**: remember to change the program ID to `22222222222222222222222222222222222222222222` since we use this under the hood to test your program.
+
+The entrypoint, that lives in the `lib.rs` looks very similar to what we talked about in the [Introduction to Pinocchio Course](/en/courses/introduction-to-pinocchio)
+
+<Codeblock lang="rust">
+```rust
+use pinocchio::{account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee, 
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7, 
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Loan::DISCRIMINATOR, data)) => Loan::try_from((data, accounts))?.process(),
+        Some((Repay::DISCRIMINATOR, _)) => Repay::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Helpers" id="helpers" level="h2" />
+
+Before diving into the `loan` and `repay` instruction, let's have a look at the `helpers.rs`:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct LoanData {
+    pub protocol_token_account: [u8; 32],
+    pub balance: u64,
+}
+
+pub fn get_token_amount(data: &[u8]) -> u64 {
+    unsafe { *(data.as_ptr().add(64) as *const u64) }
+}
+```
+</Codeblock>
+
+As you can see, there isn't much. There is a `LoanData` struct that we're going to use as throwaway account data to save the data of the loans before the `repay` instruction and the `get_token_amount()` helper that gives us the amount present in the token account.

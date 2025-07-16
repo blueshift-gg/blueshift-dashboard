@@ -1,0 +1,121 @@
+# Repay
+
+The `repay` instruction is the second half of our flash loan system. And thanks to the design that we creted in the `loan` instruction, the instruction logic is pretty easy since we're just going to:
+1. Check that all balances have been correctly repayed using the `loan` account.
+2. Close the `loan` account since we don't need it anymore.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+- `borrower`: the user that requested the flash loan and is going to back the lamports for creating the `loan` account. Must be a mutable
+- `loan`: the "scrap" account used to save the `protocol_token_account` and the final `balance` that they need to have. Must be mutable since we're going to close it at the end of the instruction.
+
+Here's the implementation:
+
+<Codeblock lang="rust">
+```rust
+pub struct RepayAccounts<'a> {
+    pub borrower: &'a AccountInfo,
+    pub loan: &'a AccountInfo,
+    pub token_accounts: &'a [AccountInfo],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for RepayAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [borrower, loan, token_accounts @ ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        Ok(Self {
+            borrower,
+            loan,
+            token_accounts,
+        })
+    }
+}
+```
+</Codeblock>
+
+This time, `token_accounts` are a dynamic number of accounts that just rapresent the `protocol_token_account` associated with the loan that the `borrower` took. 
+
+<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+
+We don't need any instruction data since we're going to use the `balance` field in the `loan` account to check if the repayment went through 
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+We begin by deserializing the `accounts` struct.
+
+<Codeblock lang="rust">
+```rust
+pub struct Repay<'a> {
+    pub accounts: RepayAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Repay<'a> {
+    type Error = ProgramError;
+    
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let accounts = RepayAccounts::try_from(accounts)?;
+
+        Ok(Self { accounts })
+    }
+}
+
+```
+</Codeblock>
+
+We then proceed to check if all the loans got repayed by grabbing the number of loans present in the `loan` account and iterating through the data verifying that the `protocol_token_account` is the correct one and that the balance inside of it greater than what we expect.
+
+<Codeblock lang="rust"> 
+```rust
+impl<'a> Repay<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+    
+    pub fn process(&mut self) -> ProgramResult {  
+        let loan_data = self.accounts.loan.try_borrow_data()?;
+        let loan_num = loan_data.len() / size_of::<LoanData>();
+
+        if loan_num.ne(&self.accounts.token_accounts.len()) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Process each pair of token accounts (protocol, borrower) with corresponding amounts
+        for i in 0..loan_num {
+            // Validate that protocol_ata is the same as the one in the loan account
+            let protocol_token_account = &self.accounts.token_accounts[i];
+
+            if unsafe { *(loan_data.as_ptr().add(i * size_of::<LoanData>()) as *const [u8; 32]) } != *protocol_token_account.key() {
+                return Err(ProgramError::InvalidAccountData);
+            }
+
+            // Check if the loan is already repaid
+            let balance = get_token_amount(&protocol_token_account.try_borrow_data()?);
+            let loan_balance = unsafe { *(loan_data.as_ptr().add(i * size_of::<LoanData>() + size_of::<[u8; 32]>()) as *const u64) };
+            
+            if balance < loan_balance {
+                return Err(ProgramError::InvalidAccountData);
+            }
+        }
+    
+        //..
+    }
+}
+```
+</Codeblock>
+
+We can then proceed to close the `loan` account and retrieve rent since we don't need it anymore:
+
+<Codeblock lang="rust">
+```rust    
+// Close the loan account and give back the lamports to the borrower
+unsafe {
+    *self.accounts.borrower.borrow_mut_lamports_unchecked() += *self.accounts.loan.borrow_lamports_unchecked();
+    *self.accounts.loan.borrow_mut_lamports_unchecked() = 0;
+
+    self.accounts.loan.close_unchecked();
+}
+```
+</Codeblock>
+
+> As you can see, for optimization purpose and by design, the repayment doesn't happen in this instruction. This is because the `borrower` could decide to opt to repay the right token account in another instruction, like when performing the swap, or executing a series of CPIs from their arb program.
