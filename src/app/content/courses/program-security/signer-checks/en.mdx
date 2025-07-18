@@ -1,0 +1,136 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Signer checks
+
+Signer checks are the digital equivalent of requiring a handwritten signature, they prove that an account holder actually authorized a transaction rather than someone else acting on their behalf. In Solana's trustless environment, this cryptographic proof is the only way to verify authentic authorization.
+
+This becomes critical when dealing with Program Derived Accounts (PDAs) and authority-gated operations. Most program accounts store an `authority` field that determines who can modify them, and many PDAs are derived from specific user accounts. Without signer verification, your program has no way to distinguish between legitimate owners and malicious impersonators.
+
+The consequences of missing signer checks are devastating: any account can perform operations that should be restricted to specific authorities, leading to unauthorized access, drained accounts, and complete loss of control over program state.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Consider this vulnerable instruction that transfers ownership of a program account:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+        //..
+
+        pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+            ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+        Ok(())
+
+        //..
+    }
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+At first glance, this looks secure. The `has_one = owner` constraint ensures that the owner account passed to the instruction matches the `owner` field stored in the `program_account`. The data validation is perfect, but there's a fatal flaw.
+
+Notice that `owner` is an `UncheckedAccount`, not a `Signer`. This means while Anchor verifies that the provided account matches the stored owner, it never checks whether that account actually signed the transaction.
+
+An attacker can exploit this by:
+- Finding any program account they want to hijack
+- Reading the current owner's public key from the account data
+- Crafting a transaction that passes the real owner's public key as the owner parameter
+- Setting themselves as the `new_owner`
+- Submitting the transaction without the real owner's signature
+
+The `has_one` constraint passes because the public keys match, but since there's no signer verification, the attacker successfully transfers ownership to themselves without the legitimate owner's consent. Once they control the account, they can perform any operation as the new authority.
+
+Luckily `Anchor` makes it super easy to perform this check directly in the account struct by just changing `UncheckedAccount` to `Signer` like this:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Or you could add the `signer` account constraint like this:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Or you could just add a signer check in the instruction using the `ctx.accounts.owner.is_signer` check like this:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+        //..
+
+        pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+            if !ctx.accounts.owner.is_signer {
+                return Err(ProgramError::MissingRequiredSignature.into());
+            }
+
+            ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+        Ok(())
+
+        //..
+    }
+}
+
+By adding this check, the instruction handler will only proceed if the authority account has signed the transaction. If the account is not signed, the transaction will fail.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+In Pinocchio, since we don't have the possibility of adding security checks directly inside of the account struct, we are forced to do so in the instruction logic. 
+
+We can do so very similarly to anchor by using the `is_signer()` function like this:
+
+```rust
+if !self.accounts.owner.is_signer() {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```
+
+
+
+
+

@@ -1,0 +1,129 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Owner checks
+
+Owner checks are the first line of defense in Solana program security. They verify that an account passed into an instruction handler is actually owned by the expected program, preventing attackers from substituting malicious lookalike accounts.
+
+Every account in Solana's `AccountInfo` struct contains an owner field that identifies which program controls that account. Owner checks ensure this `owner` field matches the expected `program_id` before your program trusts the account's data.
+
+The `AccountInfo` struct contains several fields, including the owner, which represents the program that owns the account. Owner checks ensure that this `owner` field in the `AccountInfo` matches the expected `program_id`.
+
+Without owner checks, an attacker can create a perfect "replica" of your account data structure, complete with the correct discriminator and all the right fields, and use it to manipulate instructions that rely on data validation. It's like someone creating a fake ID that looks identical to a real one, but is controlled by the wrong authority.
+
+> The crucial exception is when you're modifying the account's internal data. In those cases, Solana's runtime automatically prevents other programs from writing to accounts they don't own. But for read operations and validation logic, you're on your own.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Consider this vulnerable instruction that executes logic based on the `owner` of a `program_account`:
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+        //..
+
+        pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+            let account_data = ctx.accounts.program_account.try_borrow_data()?;
+            let mut account_data_slice: &[u8] = &account_data;
+            let account_state = ProgramAccount::try_deserialize(&mut account_data_slice)?;
+
+            if account_state.owner != ctx.accounts.owner.key() {
+                return Err(ProgramError::InvalidArgument.into());
+            }
+
+            //..do something
+        Ok(())
+
+        //..
+    }
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+The `UncheckedAccount` type is Anchor's way of saying "I'm not checking anything, handle with extreme care." While the account data might deserialize perfectly and look legitimate, the missing owner check creates a critical vulnerability.
+
+An attacker can create their own account with identical data structure and pass it to your instruction. Your program will happily check the ownership field, but since the attacker controls the account, they can do whatever they want inside of the instruction.
+
+The fix is simple but essential: always verify the account is owned by your program before trusting its contents.
+
+This is super easy with `Anchor` since it's possible to perform this check directly in the account struct by just changing `UncheckedAccount` to `ProgramAccount` like this:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+Or you could add the `owner` account constraint like this:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut, owner = ID)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+```
+
+Or you could just add a owner check in the instruction using the `ctx.accounts.program_account.owner` check like this:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+        //..
+
+        pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+            if ctx.accounts.program.owner != ID {
+                return Err(ProgramError::IncorrectProgramId.into());
+            }
+            
+            //..
+
+        Ok(())
+
+        //..
+    }
+}
+
+By adding this check, the instruction handler will only proceed if the account has the correct `program_id`. If the account is not owned by our program, the transaction will fail.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+In Pinocchio, since we don't have the possibility of adding security checks directly inside of the account struct, we are forced to do so in the instruction logic. 
+
+We can do so very similarly to anchor by using the `is_owned_by()` function like this:
+
+```rust
+if !self.accounts.owner.is_owned_by(ID) {
+    return Err(ProgramError::IncorrectProgramId.into());
+}
+```
+
+
+
+
+
