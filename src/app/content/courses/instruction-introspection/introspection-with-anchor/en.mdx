@@ -3,15 +3,15 @@ import { Codeblock } from "../../../../components/Codeblock/Codeblock";
 
 # Instruction Introspection with Anchor
 
-Anchor doesn't support any specific `Instruction` sysvar helper; but all type and function used by the `solana_program` crate are inherently supported in anchor.
+Anchor does not have a built-in helper for the `Instruction` sysvar, but all types and functions from the `solana_program` crate are inherently supported in Anchor.
 
-So to use "Instruction Introspection" in anchor we're going to need to add the `solana_program` crate to our project like this:
+To use Instruction Introspection in Anchor, you will need to add the `solana_program` crate to your project:
 
+```sh
+cargo add solana-program
 ```
-crate add solana-program
-```
 
-After this we can access all the information that we need by importing this functions:
+After adding the crate, you can access the necessary functions by importing them:
 
 ```rust
 use solana_program::sysvar::instructions::{
@@ -23,9 +23,9 @@ use solana_program::sysvar::instructions::{
 
 <ArticleSection name="How to use Introspection" id="how-to-use-introspection" level="h2" />
 
-As previously said in the introduction paragraph, "Instruction Introspection" just deserialized the data of the `Instruction` sysvar account to get us all the data that we need about our instructions.
+As mentioned in the introduction, Instruction Introspection works by deserializing the data from the `Instruction` sysvar account to provide details about the instructions in a transaction.
 
-Even if the `load_instruction_at_checked` function checks that the account we're deserializing is the correct one, it's always good to add an additional check to our account struct like this:
+Even though the `load_instruction_at_checked` function verifies that the account being deserialized is the correct one, it is good practice to add an additional check to your account struct:
 
 ```rust
 #[account(address = instructions::ID)]
@@ -33,47 +33,50 @@ Even if the `load_instruction_at_checked` function checks that the account we're
 instructions: UncheckedAccount<'info>,
 ```
 
-After this we can finally start working with "instruction introspection".
+Now you can start working with Instruction Introspection.
 
-We start by checking what is the current index. We can do it by using the `load_current_index_checked` function like so:
+First, check the current instruction's index using the `load_current_index_checked` function:
 
 ```rust
-// Check what is the current index of the instruction that is being executed (Might be in a different position than [0]).
+// Check the index of the currently executing instruction. This could be in a different position than [0]).
 let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
 ```
 
-After this, we can check an instruction at a "relative" index by using the `load_instruction_at_checked`. This time we're going to check the instruction just after the one we're using introspection in like so:
+Next, you can check an instruction at a relative index using `load_instruction_at_checked`. Here, we will check the
+instruction immediately following the current one:
 
 ```rust
-// We then Load the instruction that is right after / the one that we want to check for the correct input.
+// Load the next instruction to check its input.
 let ix = load_instruction_at_checked(index as usize + 1, &ctx.accounts.instructions.to_account_info())?;
 ```
 
-Before going through the next steps we should ask ourselves what information are essential to not incur in a malicious attack.
+Before going to the next step, it is important to consider what information is essential for preventing a malicious
+attack.
 
-We usually start start by checking if the program used is the one that we expect. In this example we're introspecting another instruction of this program, so we can do it like so:
+We usually start by checking if the program being called is the expected one. In this example, we are introspecting another instruction from the same program:
 
 ```rust
 require_keys_eq!(ix.program_id, ID, EscrowError::InvalidProgram);
 ```
 
-We then check if the instruction is the one that we expect. To do so we compare the discriminator of the instruction with the one that we expect; in this occasion is another anchor instruction so we can do it like so:
+Next, check if the instruction is the one you expect. To do so, compare the instruction's discriminator with the expected one. In this case, since it is another Anchor instruction, you can do it like so:
 
 ```rust
 require!(ix.data[0..8].eq(instruction::TakeEnd::DISCRIMINATOR.as_slice()), EscrowError::InvalidIx);
 ```
 
-> Anchor makes it easier for us by providing the `Discriminator` trait directly on the instruction: use anchor_lang::Discriminator.
+> Anchor makes this easier by providing the `Discriminator` trait `anchor_lang::Discriminator` directly on the
+instruction.
 
-We can then do more program specific checks based on the logic of the instruction that we are checking.
+You can then perform more program-specific checks based on the logic of the instruction being checked.
 
-In this example we start by checking that the instruction data, an amount, is correct. Instruction data is always deserialized after the discriminator, so we can do it like so:
+In this example, we check that the instruction data (an amount) is correct. Instruction data is always deserialized after the discriminator, so you can do it like this:
 
 ```rust
 require!(ix.data[8..16].eq(&escrow.take_amount.to_le_bytes()), EscrowError::InvalidAmount);
 ```
 
-We then check the accounts that are present in the introspected instruction. This step require us to know exactly the structure of the account struct since we're going to ask for the data or the pubkey of an account that is present at a certain index like this: 
+Finally, check the accounts present in the introspected instruction. This step requires you to know the exact structure of the `Account` struct, since you will be requesting the data or public key of an account at a specific index:
 
 ```rust
 let maker_ata = get_associated_token_address(&ctx.accounts.maker.key(), &escrow.mint_b);
