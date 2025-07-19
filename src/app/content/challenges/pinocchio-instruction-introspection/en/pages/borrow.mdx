@@ -38,8 +38,20 @@ impl<'a> TryFrom<&'a [AccountInfo]> for LoanAccounts<'a> {
             return Err(ProgramError::InvalidAccountData);
         }
 
+        // Check that the loan account is empty
         if loan.try_borrow_data()?.len().ne(&0) {
             return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Check duplicate token accounts
+        let num_pairs = token_accounts.len() / 2;
+        for i in 0..num_pairs - 1 {
+            let key_i = token_accounts[i * 2].key();
+            for key_j in token_accounts[(i + 1) * 2..].iter().step_by(2).map(|acc| acc.key()) {
+                if key_i == key_j {
+                    return Err(ProgramError::InvalidAccountData);
+                }
+            }
         }
 
         Ok(Self {
@@ -57,6 +69,10 @@ impl<'a> TryFrom<&'a [AccountInfo]> for LoanAccounts<'a> {
 As you can see, since the `token_accounts` are a dynamic number of accounts, we pass it in similarly to how we pass `remaining_accounts`.
 
 But to make sure that the structure is correct, we need to add some validation to it; each loan needs a `protocol_token_account` and a `borrower_token_account` for this reason we need to make sure that there are some accounts in that array and that the number of accounts is divisible by 2
+
+Additionally, we verify that the loan account contains no existing data, as pre-existing data would create a critical vulnerability in our program. 
+
+We also check for duplicate `protocol_token_account` entries, which would allow an attacker to request multiple loans while only being required to repay the largest amount.
 
 <ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
 
