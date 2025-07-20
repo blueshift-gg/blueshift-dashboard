@@ -94,6 +94,7 @@ export function useAuth() {
       }
       const nowInSeconds = Date.now() / 1000;
       const isExpired = expirationTime <= nowInSeconds;
+      // Check wallet mismatch only if publicKey is available (wallet is connected)
       const isWalletMismatch =
         !!publicKey && decodedJwt.sub !== publicKey.toBase58();
       return isExpired || isWalletMismatch;
@@ -101,7 +102,7 @@ export function useAuth() {
       console.error("Error decoding JWT token during expiry check:", error);
       return true; // Error decoding, treat as expired/invalid
     }
-  }, [authToken]);
+  }, [authToken, publicKey]);
 
   const _performSignInSequence = useCallback(async () => {
     if (!publicKey || !signMessage) {
@@ -220,6 +221,16 @@ export function useAuth() {
     // as transient disconnections shouldn't always force a sign-out.
     // The `logout` function explicitly handles disconnection.
   }, [authToken, connected, authState.status, setAuthState]);
+
+  // Effect to trigger automatic login when a wallet is connected but no valid token exists, or logout when a wallet is disconnected but a token exists.
+  useEffect(() => {
+    if (publicKey && (!authToken || checkTokenExpired())) {
+      login();
+    }
+    if (!publicKey && authToken) {
+      logout();
+    }
+  }, [publicKey]);
 
   // useEffect to handle signing after modal connection or if connection was pending.
   useEffect(() => {
