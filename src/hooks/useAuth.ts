@@ -88,12 +88,15 @@ export function useAuth() {
       if (typeof expirationTime === "undefined") {
         // No expiration claim, treat as non-expiring for the purpose of this specific check.
         console.warn(
-          "JWT token does not have an expiration (exp) claim. Treating as non-expiring.",
+          "JWT token does not have an expiration (exp) claim. Treating as non-expiring."
         );
         return false;
       }
       const nowInSeconds = Date.now() / 1000;
-      return expirationTime <= nowInSeconds;
+      const isExpired = expirationTime <= nowInSeconds;
+      const isWalletMismatch =
+        !!publicKey && decodedJwt.sub !== publicKey.toBase58();
+      return isExpired || isWalletMismatch;
     } catch (error) {
       console.error("Error decoding JWT token during expiry check:", error);
       return true; // Error decoding, treat as expired/invalid
@@ -105,7 +108,7 @@ export function useAuth() {
       setAuthState({
         loading: false,
         error: new Error(
-          "Wallet not ready for signing: publicKey or signMessage missing.",
+          "Wallet not ready for signing: publicKey or signMessage missing."
         ),
         status: "signed-out",
       });
@@ -117,7 +120,7 @@ export function useAuth() {
 
     try {
       const { pubkey, timestamp, message } = prepareSignInMessage(
-        publicKey.toBase58(),
+        publicKey.toBase58()
       );
       const encodedMessage = new TextEncoder().encode(message);
       const signature = await signMessage(encodedMessage);
@@ -140,7 +143,7 @@ export function useAuth() {
           .text()
           .catch(() => "Failed to read error response body.");
         throw new Error(
-          `Authentication API request failed with status ${response.status}: ${errorBody || response.statusText}`,
+          `Authentication API request failed with status ${response.status}: ${errorBody || response.statusText}`
         );
       }
       const data: AuthResponse = await response.json();
@@ -183,7 +186,7 @@ export function useAuth() {
       setAuthState({
         loading: false,
         error: new Error(
-          "Cannot initiate login: wallet state is not conducive to signing.",
+          "Cannot initiate login: wallet state is not conducive to signing."
         ),
         status: "signed-out",
       });
