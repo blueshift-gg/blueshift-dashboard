@@ -6,6 +6,29 @@ import { useEffect, useState } from "react";
 import { anticipate } from "motion";
 import classNames from "classnames";
 import { useTranslations } from "next-intl";
+import { usePathname } from "next/navigation";
+
+function getGithubSourceUrl(pathname: string): string {
+  const url =
+    "https://github.com/blueshift-gg/blueshift-dashboard/tree/master/src/app/content";
+  const pathParts = pathname.replace(/^\//, "").split("/");
+  const [locale, type, courseOrChallenge, lessonOrPage] = pathParts;
+
+  if (type === "courses" && pathParts.length >= 4) {
+    return `${url}/courses/${courseOrChallenge}/${lessonOrPage}/${locale}.mdx`;
+  }
+
+  if (type === "challenges" && pathParts.length === 3) {
+    return `${url}/challenges/${courseOrChallenge}/${locale}/challenge.mdx`;
+  }
+
+  if (type === "challenges" && pathParts.length === 4) {
+    return `${url}/challenges/${courseOrChallenge}/${locale}/pages/${lessonOrPage}.mdx`;
+  }
+
+  return "";
+}
+
 export default function TableOfContents() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [sections, setSections] = useState<
@@ -16,6 +39,8 @@ export default function TableOfContents() {
     }[]
   >([]);
   const t = useTranslations();
+  const pathname = usePathname();
+  const githubUrl = getGithubSourceUrl(pathname);
   useEffect(() => {
     // Get all h2 elements from the article
     const article = document.querySelector("article");
@@ -172,12 +197,19 @@ export default function TableOfContents() {
           ))}
         </div>
       </div>
-      <div className="flex items-center space-x-2">
-        <Icon name="Github" />
-        <span className="font-medium font-mono text-primary">
-          {t("contents.view_source")}
-        </span>
-      </div>
+      {githubUrl ? (
+        <a
+          href={githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center space-x-2 hover:text-tertiary text-primary"
+        >
+          <Icon name="Github" />
+          <span className="font-medium font-mono">
+            {t("contents.view_source")}
+          </span>
+        </a>
+      ) : null}
     </motion.div>
   );
 }
