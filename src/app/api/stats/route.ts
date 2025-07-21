@@ -1,106 +1,67 @@
+import { challenges } from '@/app/content/challenges/challenges';
 import { decodeCoreCollectionNumMinted } from '@/lib/nft/decodeCoreCollectionNumMinted';
 import { Connection, PublicKey } from '@solana/web3.js';
 
-// Separate types for addresses (input) and data (output)
-interface AccountAddresses {
-  'anchor-vault': string;
-  'anchor-escrow': string;
-  'pinocchio-vault': string;
-  'pinocchio-escrow': string;
-  'pinocchio-secp256r1-vault': string;
-  'mint-an-spl-token': string;
+interface ChallengeStats {
+  [key: string]: number;
 }
 
-interface AccountData {
-  'anchor-vault': number;
-  'anchor-escrow': number;
-  'pinocchio-vault': number;
-  'pinocchio-escrow': number;
-  'pinocchio-secp256r1-vault': number;
-  'mint-an-spl-token': number;
-  'total': number;
-}
-
-// Type for just the account keys (without total)
-type AccountKey = keyof AccountAddresses;
-
-const ACCOUNTS: AccountAddresses = {
-  'anchor-vault': "53tiK9zY67DuyA1tgQ6rfNgixMB1LiCP9D67RgfbCrpz",
-  'anchor-escrow': "2E5K7FxDWGXkbRpFEAkhR8yQwiUBGggVyng2vaAhah5L",
-  'pinocchio-vault': "AL38QM96SDu4Jpx7UGcTcaLtwvWPVgRUzg9PqC787djK",
-  'pinocchio-escrow': "HTXVJ8DD6eSxkVyDwgddxGw8cC8j6kXda3BUipA43Wvs",
-  'pinocchio-secp256r1-vault': "4NKZ2B5zeG9TGZifzfnG7Zw28P3ZetjaS6xPVKW5MHrp",
-  'mint-an-spl-token': "2NVDhSXZck9AX2aUdPSxMemLN2wtqEd5sNEcwuZVCbHW"
-}
-
-async function getMultipleAccountData(
-  accountAddresses: AccountAddresses
-): Promise<AccountData> {
-  const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
-
-  if (!rpcEndpoint) {
-    throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
-  }
-
-  const connection = new Connection(rpcEndpoint, { httpAgent: false });
-  
-  // Convert addresses to PublicKey objects - use AccountKey instead of keyof AccountData
-  const publicKeys = Object.entries(accountAddresses).map(([key, address]) => ({
-    key: key as AccountKey,
-    publicKey: new PublicKey(address)
-  }));
-
-  const result: AccountData = {
-    'anchor-escrow': 0,
-    'anchor-vault': 0,
-    'pinocchio-vault': 0,
-    'pinocchio-escrow': 0,
-    'pinocchio-secp256r1-vault': 0,
-    'mint-an-spl-token': 0,
-    'total': 0,
-  };
-
-  try {
-    // Fetch all accounts in a single batch request for better performance
-    const accountInfos = await connection.getMultipleAccountsInfo(
-      publicKeys.map(item => item.publicKey)
-    );
-
-    // Process each account
-    accountInfos.forEach((accountInfo, index) => {
-      const { key } = publicKeys[index];
-      
-      if (accountInfo) {
-        try {
-          const collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
-          const size = collectionSize ?? 0;
-          result[key] = size;
-          result.total += size;
-          
-          if (collectionSize === null) {
-            console.error(`Failed to decode num_minted for ${key}: ${accountAddresses[key]}`);
-          }
-        } catch (error) {
-          console.error(`Failed to decode data for ${key}: ${accountAddresses[key]}`, error);
-          result[key] = 0;
-        }
-      } else {
-        console.error(`Failed to fetch account info for ${key}: ${accountAddresses[key]}`);
-        result[key] = 0;
-      }
-    });
-
-  } catch (error) {
-    console.error('Failed to fetch multiple account details:', error);
-    // Keep default 0 values for all accounts on network error
-  }
-
-  return result;
+interface StatsData {
+  challenges: ChallengeStats;
+  total: number;
 }
 
 export async function GET(_request: Request) { // eslint-disable-line @typescript-eslint/no-unused-vars
   try {
-    const data = await getMultipleAccountData(ACCOUNTS);
+    const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+    if (!rpcEndpoint) {
+      throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
+    }
+
+    const accountAddresses = challenges.reduce((acc: Record<string, string>, challenge) => {
+      if (challenge.collectionMintAddress) {
+        acc[challenge.slug] = challenge.collectionMintAddress;
+      }
+      return acc;
+    }, {});
+
+    const connection = new Connection(rpcEndpoint, { httpAgent: false });
+    
+    const publicKeysWithKeys = Object.entries(accountAddresses).map(([key, address]) => ({
+      key,
+      publicKey: new PublicKey(address)
+    }));
+
+    const accountInfos = await connection.getMultipleAccountsInfo(
+      publicKeysWithKeys.map(item => item.publicKey)
+    );
+
+    const data = accountInfos.reduce<StatsData>(
+      (stats, accountInfo, index) => {
+        const { key } = publicKeysWithKeys[index];
+        const address = accountAddresses[key];
+
+        let size = 0;
+        if (accountInfo) {
+          try {
+            const collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
+            size = collectionSize ?? 0;
+            if (collectionSize === null) {
+              console.error(`Failed to decode num_minted for ${key}: ${address}`);
+            }
+          } catch (error) {
+            console.error(`Failed to decode data for ${key}: ${address}`, error);
+          }
+        } else {
+          console.error(`Failed to fetch account info for ${key}: ${address}`);
+        }
+
+        stats.challenges[key] = size;
+        stats.total += size;
+        return stats;
+      },
+      { challenges: {}, total: 0 }
+    );
     
     return new Response(JSON.stringify(data), {
       status: 200,
