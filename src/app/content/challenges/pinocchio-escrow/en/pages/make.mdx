@@ -15,9 +15,9 @@ Below are the accounts the context needs:
 - mint_b: the token we want to receive
 - maker_ata_a: the associated token account owned by the maker. Must be mutable
 - vault: the associated token account owned by the escrow. Must be mutable
-- associated_token_program: the associated token program. Must be executable
-- token_program: the token program. Must be executable
 - system_program: the system program. Must be executable
+- token_program: the token program. Must be executable
+- associated_token_program: the associated token program. Must be executable
 
 **Note**: We're going to use the types that introduced in the [Introduction to Pinocchio](/en/courses/introduction-to-pinocchio/pinocchio-accounts).
 
@@ -40,7 +40,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for MakeAccounts<'a> {
   type Error = ProgramError;
 
   fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
-    let [maker, escrow, mint_a, mint_b, maker_ata_a, vault, system_program, token_program, _] = accounts else {
+    let [maker, escrow, mint_a, mint_b, maker_ata_a, vault, system_program, _token_program, _associated_token_program] = accounts else {
       return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -48,7 +48,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for MakeAccounts<'a> {
     SignerAccount::check(maker)?;
     MintInterface::check(mint_a)?;
     MintInterface::check(mint_b)?;
-    AssociatedTokenAccount::check(maker_ata_a, maker, mint_a, token_program)?;
+    AssociatedTokenAccount::check(maker_ata_a, maker, mint_a)?;
 
     // Return the accounts
     Ok(Self {
@@ -128,7 +128,7 @@ pub struct Make<'a> {
 
 impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Make<'a> {
   type Error = ProgramError;
-  
+
   fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
     let accounts = MakeAccounts::try_from(accounts)?;
     let instruction_data = MakeInstructionData::try_from(data)?;
@@ -144,7 +144,7 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Make<'a> {
       Seed::from(&seed_binding),
       Seed::from(&bump_binding),
     ];
-            
+
     ProgramAccount::init::<Escrow>(
       accounts.maker,
       accounts.escrow,
@@ -178,12 +178,12 @@ We can now focus on the logic itself that will just be populating the escrow acc
 ```rust
 impl<'a> Make<'a> {
   pub const DISCRIMINATOR: &'a u8 = &0;
-  
+
   pub fn process(&mut self) -> ProgramResult {
     // Populate the escrow account
     let mut data = self.accounts.escrow.try_borrow_mut_data()?;
     let escrow = Escrow::load_mut(data.as_mut())?;
-    
+
     escrow.set_inner(
       self.instruction_data.seed,
       *self.accounts.maker.key(),

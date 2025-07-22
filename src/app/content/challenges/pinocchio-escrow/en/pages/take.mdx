@@ -16,11 +16,11 @@ Below are the accounts the context needs:
 - mint_b: the token we want to receive
 - vault: the associated token account owned by the escrow. Must be mutable
 - taker_ata_a: the associated token account owned by the taker for mint_a. Must be mutable
-- maker_ata_b: the associated token account owned by the maker for mint_b. Must be mutable
 - taker_ata_b: the associated token account owned by the taker for mint_b. Must be mutable
-- associated_token_program: the associated token program. Must be executable
-- token_program: the token program. Must be executable
+- maker_ata_b: the associated token account owned by the maker for mint_b. Must be mutable
 - system_program: the system program. Must be executable
+- token_program: the token program. Must be executable
+- associated_token_program: the associated token program. Must be executable
 
 And we perform these checks on it:
 
@@ -44,7 +44,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for TakeAccounts<'a> {
   type Error = ProgramError;
 
   fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
-    let [taker, maker, escrow, mint_a, mint_b, vault, taker_ata_a, taker_ata_b, maker_ata_b, system_program, token_program, _] = accounts else {
+    let [taker, maker, escrow, mint_a, mint_b, vault, taker_ata_a, taker_ata_b, maker_ata_b, system_program, _token_program, _associated_token_program] = accounts else {
       return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -53,8 +53,8 @@ impl<'a> TryFrom<&'a [AccountInfo]> for TakeAccounts<'a> {
     ProgramAccount::check(escrow)?;
     MintInterface::check(mint_a)?;
     MintInterface::check(mint_b)?;
-    AssociatedTokenAccount::check(taker_ata_b, taker, mint_b, token_program)?;
-    AssociatedTokenAccount::check(vault, escrow, mint_a, token_program)?;
+    AssociatedTokenAccount::check(taker_ata_b, taker, mint_b)?;
+    AssociatedTokenAccount::check(vault, escrow, mint_a)?;
 
     // Return the accounts
     Ok(Self {
@@ -93,7 +93,7 @@ pub struct Take<'a> {
 
 impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
   type Error = ProgramError;
-  
+
   fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
     let accounts = TakeAccounts::try_from(accounts)?;
 
@@ -133,7 +133,7 @@ We can now focus on the logic itself that will:
 ```rust
 impl<'a> Take<'a> {
   pub const DISCRIMINATOR: &'a u8 = &1;
-  
+
   pub fn process(&mut self) -> ProgramResult {
     let data = self.accounts.escrow.try_borrow_data()?;
     let escrow = Escrow::load(&data)?;
@@ -143,7 +143,7 @@ impl<'a> Take<'a> {
     if &escrow_key != self.accounts.escrow.key() {
       return Err(ProgramError::InvalidAccountOwner);
     }
-    
+
     let seed_binding = escrow.seed.to_le_bytes();
     let bump_binding = escrow.bump;
     let escrow_seeds = [
@@ -153,9 +153,9 @@ impl<'a> Take<'a> {
       Seed::from(&bump_binding),
     ];
     let signer = Signer::from(&escrow_seeds);
-    
+
     let amount = TokenAccount::get_amount(self.accounts.vault);
-    
+
     // Transfer from the Vault to the Taker
     Transfer {
       from: self.accounts.vault,
