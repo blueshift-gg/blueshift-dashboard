@@ -7,6 +7,7 @@ import { ChallengeMetadata } from "@/app/utils/challenges";
 import { Link } from "@/i18n/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import Icon from "../Icon/Icon";
+import { useParams } from "next/navigation";
 
 type ChallengesFooterProps = {
   challenge: ChallengeMetadata;
@@ -20,6 +21,8 @@ export default function ChallengesFooter({
   setSelectedChallenge,
 }: ChallengesFooterProps) {
   const t = useTranslations();
+  const challengeTitle = t(`challenges.${challenge.slug}.title`);
+  const {locale} = useParams(); 
   const { challengeStatuses } = usePersistentStore();
   const status = challengeStatuses[challenge.slug];
   const { view } = usePersistentStore();
@@ -80,7 +83,20 @@ export default function ChallengesFooter({
         />
       )}
       {status === "claimed" && (
-        <Button
+        <div className="flex flex-col gap-4 w-full">
+          <Link
+            href={`https://x.com/intent/tweet?text=${encodeURIComponent(`I just completed the ${challengeTitle} challenge from @blueshift_gg.\n\nTry it out here: https://learn.blueshift.gg/${locale}/challenges/${challenge.slug}\n\nMake the shift. Build on @solana.`)}`}
+            target="_blank"
+          >
+            <Button
+            label={t("ChallengePage.mint_modal_tweet")}
+            variant="primary"
+            size="lg"
+            icon="X"
+            className="!w-full !flex-shrink"
+            />
+          </Link>
+          <Button
           variant={challenge.language.toLowerCase() as ButtonVariant}
           size="md"
           label={t("ChallengeCenter.view_nft")}
@@ -92,6 +108,8 @@ export default function ChallengesFooter({
             setSelectedChallenge(challenge);
           }}
         />
+        </div>
+        
       )}
     </div>
   );
