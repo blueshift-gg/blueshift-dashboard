@@ -1,0 +1,255 @@
+![Pinocchio Amm Challenge](/graphics/challenge-banners/pinocchio-amm.png)
+
+# The Amm
+
+An Automated Market Maker (AMM) is a foundational building block of decentralized finance, enabling users to swap tokens directly with a smart contract rather than relying on a traditional order book or centralized exchange.
+
+Think of an AMM as a self-operating liquidity pool: users deposit pairs of tokens, and the AMM uses a mathematical formula to determine the price and facilitate swaps between them. This allows anyone to trade tokens instantly, at any time, without needing a counterparty.
+
+If you look closely, you'll notice that an AMM it's not other than an Escrow with additional steps, calculation and logic. So if you missed it, go through the [Pinocchio Escrow Challenge](/en/challenges/pinocchio-escrow) before going through this course.
+
+In this challenge, you'll implement a simple AMM with four core instructions:
+- **Initialize**: Set up the AMM by creating its configuration account and minting the LP (liquidity provider) token that represents shares in the pool.
+- **Deposit**: Allow users to supply both `token_x` and `token_y` to the pool. In return, they’ll receive a proportional amount of LP tokens, representing their share of the liquidity.
+- **Withdraw**: Enable users to redeem their LP tokens to withdraw their share of `token_x` and `token_y` from the pool, effectively removing liquidity.
+- **Swap**: Let anyone trade token_x for `token_y` (or vice versa) using the pool, with a small fee paid to liquidity providers.
+
+**Note**: If you're not familiar with Pinocchio, you should start by reading the [Introduction to Pinocchio](/en/courses/introduction-to-pinocchio) to familiarize with the core concepts that we're going to use in this program.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Let's start by creating a fresh Rust environment:
+
+```
+# create workspace
+cargo new blueshift_native_amm --lib --edition 2021
+cd blueshift_native_amm
+```
+
+Add `pinocchio`, `pinocchio-system`, `pinocchio-token`, `pinocchio-associated-token-account` and the `constant-product-curve` created by [Dean](https://x.com/deanmlittle) to handle all calculation for our Amm:
+
+```
+cargo add pinocchio pinocchio-system pinocchio-token pinocchio-associated-token-account
+cargo add cargo add --git="https://github.com/deanmlittle/constant-product-curve" constant-product-curve
+```
+
+Declare the crate types in `Cargo.toml` to generate deployment artifacts in `target/deploy`:
+
+```
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+You're now ready to write your amm program.
+
+<ArticleSection name="Constat Product Curve" id="constant-product-curve" level="h2" />
+
+At the heart of most AMMs is a simple but powerful formula known as the constant product curve. This formula ensures that the product of the two token reserves in the pool always remains constant, even as users trade or provide liquidity.
+
+### The formula
+
+The most common AMM formula is: `x * y = k` where: 
+- `x` = amount of token X in the pool
+- `y` = amount of token Y in the pool
+- `k` = a constant (never changes)
+
+Whenever someone swaps one token for another, the pool adjusts the reserves so that the product `k` remains unchanged. This creates a price curve that automatically adjusts based on supply and demand.
+
+### Example
+
+Suppose the pool starts with 100 token X and 100 token Y: `100 * 100 = 10,000`.
+
+If a user wants to swap 10 token X for token Y, the pool must keep `k = 10,000`. So, if `x_new` = 110 (after deposit), solve for `y_new`: `110 * y_new = 10,000` so `y_new = 10,000 / 110 ≈ 90.91`. 
+
+The user will receive `100 - 90.91 = 9.09` token Y (minus any fees).
+
+### Liquidity Provision
+
+When users deposit both tokens into the pool, they become liquidity providers (LPs). In return, they receive LP tokens that represent their share of the pool.
+- LP tokens are minted in proportion to how much liquidity you add.
+- When you withdraw, you burn your LP tokens to reclaim your share of both tokens (plus a share of the fees collected from swaps).
+
+The first liquidity provider sets the initial ratio. For example, if you deposit 100 X and 100 Y, you might receive 100 LP tokens. 
+
+After that, if the pool already has 100 X and 100 Y, and you add 10 X and 10 Y, you get LP tokens proportional to your contribution: `share = deposit_x / total_x = 10 / 100 = 10%` so the Amm will mint to the user wallet, 10% of total LP supply.
+
+### Fees
+
+Each swap usually charges a small fee (e.g., 0.3%), which is added to the pool. This means LPs earn a share of the trading fees, increasing the value of their LP tokens over time and incentivising people to provide liquidity.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+This time we'll split the program into small, focused modules instead of cramming everything into the `lib.rs`. The folder tree will look roughly like this:
+
+```
+src
+├── instructions
+│       ├── deposit.rs
+│       ├── initialize.rs
+│       ├── mod.rs
+│       ├── swap.rs
+│       └── withdraw.rs
+├── lib.rs
+└── state.rs
+```
+
+The entrypoint, that lives in the `lib.rs` looks always the same:
+
+<Codeblock lang="rust">
+```rust
+use pinocchio::{
+    account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey,
+    ProgramResult,
+};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+pub mod state;
+pub use state::*;
+
+pub mod error;
+pub use error::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Initialize::DISCRIMINATOR, data)) => {
+            Initialize::try_from((data, accounts))?.process()
+        }
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, data)) => Withdraw::try_from((data, accounts))?.process(),
+        Some((Swap::DISCRIMINATOR, data)) => Swap::try_from((data, accounts))?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="State" id="state" level="h2" />
+
+We're going to move into the `state.rs` where all the data for our `Escrow` lives. Let's break this down into two parts: the struct definition and its implementation.
+
+First, let's look at the struct definition:
+
+<Codeblock lang="rust">
+```rust
+use core::mem::size_of;
+use pinocchio::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
+
+#[repr(C, packed)]
+pub struct Config {
+    pub state: u8,
+    pub seed: u64,
+    pub authority: Pubkey,
+    pub mint_x: Pubkey, // Token X Mint
+    pub mint_y: Pubkey, // Token Y Mint
+    pub fee: u16,       // Swap fee in basis points
+    pub config_bump: [u8; 1],
+}
+
+#[repr(u8)]
+pub enum AmmState {
+    Uninitialized = 0u8,
+    Initialized = 1u8,
+    Disabled = 2u8,
+    WithdrawOnly = 3u8,
+}
+```
+</Codeblock>
+
+The `#[repr(C, packed)]` attribute ensures our struct has a predictable, tightly-packed memory layout. This is crucial for on-chain programs, as it guarantees that data is stored and deserialized exactly as expected, avoiding alignment issues and making serialization more efficient.
+
+Each field in the `Config` struct serves a specific purpose:
+- **state**: Tracks the current status of the AMM (e.g., uninitialized, initialized, disabled, or withdraw-only). 
+- **seed**: A unique value used for program-derived address (PDA) generation, allowing multiple AMMs to exist with different configurations.
+- **authority**: The public key with administrative control over the AMM (e.g., for pausing or upgrading the pool). Can be set to immutable by passing `[0u8; 32]`.
+- **mint_x**: The SPL token mint address for token X in the pool.
+- **mint_y**: The SPL token mint address for token Y in the pool.
+- **fee**: The swap fee, expressed in basis points (1 basis point = 0.01%), which is collected on each trade and distributed to liquidity providers.
+- **config_bump**: The bump seed used in PDA derivation to ensure the config account address is valid and unique. Saved to make PDA derivation more efficient.
+
+The `AmmState` enum defines the possible states for the AMM, making it easy to manage the pool’s lifecycle and restrict certain actions based on its status.
+
+Now, let's look at the implementation with all its helper methods:
+
+<Codeblock lang="rust">
+```rust
+impl Config {
+    pub const LEN: usize = size_of::<u8>()
+        + size_of::<u64>()
+        + size_of::<Pubkey>() * 3
+        + size_of::<u16>()
+        + size_of::<u8>();
+
+    #[inline(always)]
+    pub fn load(account_info: &AccountInfo) -> Result<&Self, ProgramError> {
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let data = account_info.try_borrow_data()?;
+
+        if data.len().ne(&Config::LEN) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(unsafe { &*(data.as_ptr() as *const Self) })
+    }
+
+    #[inline(always)]
+    pub unsafe fn load_unchecked(bytes: &mut [u8]) -> Result<&Self, ProgramError> {
+        if bytes.len().ne(&Config::LEN) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(&*(bytes.as_ptr() as *const Self))
+    }
+
+    #[inline(always)]
+    pub fn load_mut_unchecked(bytes: &mut [u8]) -> Result<&mut Self, ProgramError> {
+        if bytes.len().ne(&Config::LEN) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) })
+    }
+
+    #[inline(always)]
+    pub fn set_inner(
+        &mut self,
+        seed: u64,
+        authority: Pubkey,
+        mint_x: Pubkey,
+        mint_y: Pubkey,
+        fee: u16,
+        config_bump: [u8; 1],
+    ) {
+        self.state = AmmState::Initialized as u8;
+        self.seed = seed;
+        self.authority = authority;
+        self.mint_x = mint_x;
+        self.mint_y = mint_y;
+        self.fee = fee;
+        self.config_bump = config_bump;
+    }
+}
+```
+</Codeblock>
+
+The implementation of the Config struct provides several important features to ensure safety, efficiency, and clarity in your Amm program:
+1. Precise Size Calculation: The `LEN` constant computes the exact size of the `Config` struct in bytes. This guarantees that account allocations and deserialization are always correct, preventing subtle bugs due to size mismatches.
+2. Safe and Flexible Loading: The `load` method safely loads and validates a `Config` struct from an account, checking both the account owner and data length. The `load_unchecked` and `load_mut_unchecked` methods provide lower-level, unchecked access for advanced use cases where you can guarantee safety, such as during initialization or trusted internal calls.
+3. Performance Optimizations: The use of `#[inline(always)]` hints to the compiler to aggressively inline these methods, reducing function call overhead in performance-critical onchain code.
+The set_inner method allows for efficient, atomic updates of all struct fields at once, minimizing the risk of inconsistent state.
+4. Memory Safety: All loading methods validate the data length before casting, and the safe loader also checks account ownership. This helps prevent accidental memory corruption or unauthorized access.

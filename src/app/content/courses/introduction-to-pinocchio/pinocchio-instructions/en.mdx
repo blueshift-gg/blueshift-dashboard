@@ -97,4 +97,99 @@ Transfer {
 2. `Signer` wraps these seeds in a Signer helper
 3. `invoke_signed` executes the CPI, passing the signer array to authorize the transfer
 
-The result? A clean, first-class interface for both regular and signed CPIs - no macros required, and no hidden magic.
+The result? A clean, first-class interface for both regular and signed CPIs: no macros required, and no hidden magic.
+
+<ArticleSection name="Multiple Instruction Structure" id="multiple-instruction-structure" level="h2" />
+
+Often, you’ll want to reuse the same account structure and validation logic across several instructions; such as when updating different configuration fields. 
+
+Instead of creating a separate discriminator for each instruction, you can use a pattern that distinguishes instructions by the size of their data payload.
+
+Here’s how it works:
+
+We use a single instruction discriminator for all related config updates. The specific instruction is determined by the length of the incoming data.
+
+After that, in your processor, match on `self.data.len()`. Each instruction type has a unique data size, so you can dispatch to the correct handler accordingly.
+
+It will look like this:
+
+```rust
+pub struct UpdateConfig<'a> {
+    pub accounts: UpdateConfigAccounts<'a>,
+    pub data: &'a [u8],
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for UpdateConfig<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = UpdateConfigAccounts::try_from(accounts)?;
+
+        // Return the initialized struct
+        Ok(Self { accounts, data })
+    }
+}
+
+impl<'a> UpdateConfig<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &4;
+
+    pub fn process(&mut self) -> ProgramResult {
+        match self.data.len() {
+            len if len == size_of::<UpdateConfigStatusInstructionData>() => {
+                self.process_update_status()
+            }
+            len if len == size_of::<UpdateConfigFeeInstructionData>() => self.process_update_fee(),
+            len if len == size_of::<UpdateConfigAuthorityInstructionData>() => {
+                self.process_update_authority()
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+
+    //..
+}
+```
+
+Notice that we defer deserialization of the instruction data until after we know which handler to call. This avoids unnecessary parsing and keeps the entrypoint logic clean.
+
+Each handler then can deserialize its specific data type and performs the update:
+
+```rust
+pub fn process_update_authority(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigAuthorityInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_authority_unchecked(instruction_data.authority) }?;
+
+    Ok(())
+}
+
+pub fn process_update_fee(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigFeeInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_fee_unchecked(instruction_data.fee) }?;
+
+    Ok(())
+}
+
+pub fn process_update_status(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigStatusInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_state_unchecked(instruction_data.status) }?;
+
+    Ok(())
+}
+```
+
+This approach lets you share account validation and use a single entrypoint for multiple related instructions, reducing boilerplate and making your codebase easier to maintain. 
+
+By pattern matching on data size, you can efficiently route to the correct logic without extra discriminators or complex parsing.
+

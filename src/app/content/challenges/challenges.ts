@@ -62,6 +62,22 @@ const allChallenges: ChallengeMetadata[] = [
     collectionMintAddress: "HTXVJ8DD6eSxkVyDwgddxGw8cC8j6kXda3BUipA43Wvs",
   },
   {
+    slug: "pinocchio-amm",
+    language: "Rust",
+    color: "255,173,102",
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Pinocchio AMM",
+    apiPath: "/v1/verify/pinocchio/amm",
+    pages: [{ slug: "initialize" }, { slug: "deposit" }, { slug: "withdraw" }, { slug: "swap" }, { slug: "conclusion" }],
+    requirements: [
+      { instructionKey: "initialize" },
+      { instructionKey: "deposit" },
+      { instructionKey: "withdraw" },
+      { instructionKey: "swap" },
+    ],
+  },
+  {
     slug: "pinocchio-secp256r1-vault",
     language: "Rust",
     color: "255,173,102",

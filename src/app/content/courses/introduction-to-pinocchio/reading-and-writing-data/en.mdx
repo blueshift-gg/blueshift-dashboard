@@ -1,0 +1,195 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Reading and Writing Data
+
+Pinocchio is designed for maximum performance, which often requires direct, low-level memory operations, such as pointer arithmetic and manual buffer manipulation.
+
+To achieve this, we frequently use Rust’s unsafe features. In Rust, “unsafe” means the compiler cannot guarantee memory safety. However, unsafe code can still be correct and reliable if we rigorously uphold and document the assumptions that make it so. 
+
+In Pinocchio, we can do this because we have precise control over how the compiler structure, serialize and pass the data into our programs.
+
+For example, we might assume: “This buffer is always at least 32 bytes because it is constructed by X, so it is safe to read 32 bytes from it.”
+
+Whenever we write or read data using unsafe code, we must consciously check and document these assumptions:
+- The buffer size is always correct for the operation.
+- Data is properly aligned in memory.
+- There are no overlapping mutable references.
+- All reads and writes stay strictly within bounds.
+
+By making these assumptions explicit and verifying them, we can write highly optimized code that is also robust and maintainable; even when the Rust compiler cannot enforce safety for us.
+
+<ArticleSection name="Reading Data" id="reading-data" level="h2" />
+
+There are several ways to read data from a byte slice in an "unsafe" context, each with different trade-offs between safety and performance. Let’s look at the most common patterns:
+
+Always start by checking that the buffer is at least as large as the data you want to read:
+
+```rust
+if data.len().le(size_of::<u64>()) {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+for transmuting data instead, we need to make sure that the data lenght is exactly as we want:
+
+```rust
+if data.len().ne(&size_of::<u64>()) {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+We can move to then parse each field individually:
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len().ge(&size_of::<u64>()) {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        Ok(Self { amount })
+    }
+}
+```
+
+> The data should be serialized as little-endian bytes, but it’s always a good idea to double-check using `u64::from_le_bytes`.
+
+Or, for maximum performance, you can reinterpret a byte slice as a struct using `read_unaligned`. This only works if you guarantee the layout and size:
+
+```rust
+#[repr(C), packed]
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len().ne(size_of::<u64>()) {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        // SAFETY: We checked the length and the struct is repr(C, packed)
+       Ok(unsafe { (data.as_ptr() as *const Self).read_unaligned() })
+    }
+}
+```
+
+> When using `read_unaligned`, it is critical that the struct uses `#[repr(C, packed)]` to guarantee the layout, and that the buffer is exactly the right size. Note: `read_unaligned` is safe for unaligned data.
+
+### Undefined Behaviour
+
+At first glance, using `read_unaligned()` and `core::mem::transmute()` may seem similar, but there is a crucial difference:
+- `read_unaligned()`: Safe for unaligned data, as long as the layout matches (`#[repr(C, packed)]`). No undefined behavior from misalignment.
+- `transmute()`: Unsafe for unaligned data, even if packed. You must ensure both layout and alignment. Using transmute on an unaligned pointer is undefined behavior.
+
+The only way to guarantee that data is aligned is to create a struct with `#[repr(align(N))]`, but this only works if you control the allocation of the buffer. 
+
+With a byte slice, you do not control the alignment. The only way to do is by allocating your own buffer (e.g., with `Box<[u8]>` or `Vec<u8>`) but this is not possible in `no_std` environments like Pinocchio, and is usually not worth the overhead compared to simply using `read_unaligned()`.
+
+<ArticleSection name="Writing Data" id="writing-data" level="h2" />
+
+Writing data follows the same principles as reading. So we'll focus more on showing you different patterns to write data into a struct.
+
+Let's take the example of the `Config` struct  of our amm program: 
+
+```rust
+#[repr(C, packed)]
+pub struct Config {
+    pub state: u8,
+    pub seed: u64,
+    pub authority: Pubkey,
+    pub mint_x: Pubkey, // Token X Mint
+    pub mint_y: Pubkey, // Token Y Mint
+    pub fee: u16,       // Swap fee in basis points
+    pub config_bump: [u8; 1],
+}
+```
+
+The safest approach is to serialize each field individually, ensuring correct byte order and avoiding alignment issues. This is especially useful for simple or variable-sized data.
+
+```rust
+fn write_config_to_slice(
+    account_info: &AccountInfo,
+    state: u8,
+    seed: u64,
+    authority: Pubkey,
+    mint_x: Pubkey,
+    mint_y: Pubkey,
+    fee: u16,
+    config_bump: [u8; 1],
+) -> Result<(), ProgramError> {
+    let data = account_info.try_borrow_mut_data()?;
+
+    if data.len() != Config::LEN {
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    data[0] = state;
+    data[1..9].copy_from_slice(&seed.to_le_bytes());
+    data[9..41].copy_from_slice(authority.as_ref());
+    data[41..73].copy_from_slice(mint_x.as_ref());
+    data[73..105].copy_from_slice(mint_y.as_ref());
+    data[105..107].copy_from_slice(&fee.to_le_bytes());
+    data[107] = config_bump[0];
+
+    Ok(())
+}
+```
+
+> Tip: Always double-check your offsets and lengths to avoid off-by-one errors. Or if you're feeling fancy create const with the offsets so it's easier to update if you decide to change the ordering of the fields.
+
+Or for maximum performance and ergonomics, you can reinterpret the account’s data buffer as a struct and mutate its fields directly. Since we usually are already "loading" the account to check for ownership and discriminator we can use the follwing pattern:
+
+```rust
+impl Config {
+    #[inline(always)]
+    pub fn load_mut(account_info: &AccountInfo) -> Result<&Self, ProgramError> {
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let data = account_info.try_borrow_mut_data()?;
+
+        if data.len().ne(&Config::LEN) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) })
+    }
+
+    #[inline(always)]
+    pub unsafe fn set_authority_unchecked(
+        &mut self,
+        authority: Pubkey,
+    ) -> Result<(), ProgramError> {
+        self.authority = authority;
+
+        Ok(())
+    }
+}
+```
+
+And usage:
+
+```rust
+let config = Config::load_mut(&self.accounts.config)?;
+unsafe { config.set_authority_unchecked(instruction_data.authority) }?;
+```
+
+> As noted previously, the struct must be `#[repr(C, packed)]` to ensure layout matches the buffer and the buffer must be exactly the right size.
+
+
+<ArticleSection name="Dynamically Sized Data" id="dynamically-sized-data" level="h2" />
+
+

@@ -1,0 +1,106 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Performance
+
+While many developers turn to Pinocchio for its fine-grained control over account fields, its true strength lies in enabling maximum performance. 
+
+In this section, we’ll explore practical strategies to achieve optimal efficiency in your Solana programs.
+
+<ArticleSection name="Superflous Checks" id="superflous-checks" level="h2" />
+
+Developers often add extra account constraints for safety, but these can introduce unnecessary overhead. It’s important to distinguish between essential and redundant checks.
+
+For example, when simply reading from a `Token Account` or `Mint`, deserialization and validation are necessary. But if these same accounts are later used in a CPI (Cross-Program Invocation), any mismatch or error will cause the instruction to fail at that point. Thus, preemptive checks can be redundant.
+
+Similarly, verifying the "owner" of a Token Account is often superfluous; especially if the account is controlled by a PDA (Program Derived Address). If the owner is incorrect, the CPI will fail due to invalid seeds. In cases where the transfer is not executed by a PDA, you should focus on validating the recipient, particularly when depositing into a PDA-controlled account since the interested of the sender is aligned with the one of the program.
+
+Let's take on the example of an `Escrow`:
+
+...
+
+### Associated Token Program
+
+`Associated Token Accounts` (ATAs) are convenient but come with a performance cost. Avoid enforcing their use unless absolutely necessary, and never require their creation within your instruction logic. For most scenarios, the `init-if-needed` pattern adds avoidable complexity and resource usage (like in Amm instruction that are composed by router like Jupiter).
+
+If your program relies on ATAs, ensure they are created externally. Within your program, verify their correctness by deriving the expected address directly like this:
+
+```rust
+let (associated_token_account, _) = find_program_address(
+    &[
+        self.accounts.owner.key(),
+        self.accounts.token_program.key(),
+        self.accounts.mint.key(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+```
+
+By minimizing unnecessary checks and account requirements, you reduce compute costs and streamline your program’s execution; unlocking the full performance potential of native solana development.
+
+> Adding checks to let the instruction fail early has its advantages, since the compute units consumed will definitely be lower. So consider whether the instruction will mainly be used with flags like `{ skipPreflight: true }`.
+
+<ArticleSection name="Perf Flag" id="perf-flag" level="h2" />
+
+Rust’s feature flags provide a powerful way to conditionally compile code, enabling you to toggle functionality for different build profiles; such as development, testing, or maximum performance in production. 
+
+This is especially useful in Solana programs, where every compute unit counts.
+
+### Setting Up Feature Flags
+
+Feature flags are defined in your `Cargo.toml` file under the `[features]` section. For example, you might want a `perf` flag that enables performance optimizations by disabling logging and extra checks:
+
+```
+[features]
+default = ["perf"]
+perf = []
+```
+
+Here, the perf feature is enabled by default, but you can override it when building or testing.
+
+### Using Feature Flags in Code
+
+You can use Rust’s conditional compilation attributes to include or exclude code based on the active feature. For example:
+
+```rust
+pub fn process(ctx: Context<'info>) -> ProgramResult {
+    #[cfg(not(feature = "perf"))]
+    sol_log("Create Class");
+    Self::try_from(ctx)?.execute()
+}
+```
+
+Most programs return the name of the instruction as a log to make debugging easier and to ensure that the correct instruction is called. 
+
+However, this is expensive and not actually needed except to make the explorer more readable and to enhance debugging.
+
+```rust
+#[cfg(not(feature = "perf"))]
+if name.len() > MAX_NAME_LEN {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+
+Another example is the superfluous checks discussed earlier.
+
+If we know that our instruction is safe without these checks, we shouldn’t make them the default, but instead hide them behind a flag.
+
+> In this example, we created a `perf` flag to indicate that, if we want the program to be as performant as possible, we should use the perf flag while compiling it.
+
+### Building with Different Flags
+
+To build your program with or without the `perf` feature, use:
+
+- With performance optimizations (default):
+
+```
+cargo build-bpf
+```
+
+- With extra checks and logging:
+
+```
+cargo build-bpf --no-default-features
+```
+
+This approach allows you to maintain a single codebase that can be tuned for development safety or production speed simply by toggling a feature flag.

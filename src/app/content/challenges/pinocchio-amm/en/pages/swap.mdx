@@ -1,0 +1,182 @@
+# Swap
+
+The `swap` instruction performs two main tasks:
+- Calculate the amount of `mint_x` that we're going to receive by sending a certain amount of `mint_y` into the amm (and viceversa) with fee.
+- Transfer the `from` token to the vault and the `to` token to the user token account
+
+> As mention in the `initialize` instruction section; we're going to initialize all the `Associated Token Accounts` outside of our instruction for optimization purposes.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+
+Below are the accounts required for this context:
+- `user`: The user that is swapping the token into the liquidity of the Amm. Must be a `signer`.
+- `vault_x`: The token account that holds all of token X deposited into the pool. Must be passed as `mutable`.
+- `vault_y`: The token account that holds all of token Y deposited into the pool. Must be passed as `mutable`.
+- `user_x_ata`: The user's associated token account for token X. This is the account that will receieve or send token X into the pool. Must be passed as `mutable`.
+- `user_y_ata`: The user's associated token account for token Y. This is the account that will receieve or send token Y into the pool. Must be passed as `mutable`.
+- `config`: The configuration account for the AMM pool. Stores all relevant pool parameters and state.
+- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. Must be `executable`.
+
+Here, again, I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct SwapAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub user_x: &'a AccountInfo,
+    pub user_y: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        //.. 
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+
+Here's the instruction data we need to pass in:
+- `is_x`: If this swap is being performed from token X to token Y or viceversa; needed to line up the accounts correctly. Must be a `[u8]`
+- `amount`: The amount of token the user is willing to send in exchange of the other token on the pair. Must be a `[u64]`
+- `min`: The mint amount of token that the user is willing to receive in the exchange of the `amount`. Must be a `[u64]`
+- `expiration`: The expiration of this order. Important to make sure that the transaction has to be played in a certain amount of time. Must be a `[i64]`
+
+We're going to handle the implementation for the `SwapInstructionData` same as initialization. So I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct SwapInstructionData {
+    pub is_x: bool,
+    pub amount: u64,
+    pub min: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+</Codeblock>
+
+> Make sure that any of the amount, like `amount` and `mint` are greater than zero and that the order has not expired yet using the `Clock` sysvar.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+We begin by deserializing both the `instruction_data` and the `accounts`.
+
+When then need to:
+- Load the `Config` account to grab all the data inside of it. We can do so using the `Config::load()` helper.
+- Verify that the `AmmState` is valid (so if it's equal to `AmmState::Initialized`).
+- Check the derivation of `vault_x` and `vault_y` to be Associated Token Accounts.
+- Deserialize all the token accounts involved and use the data inside of them to calculate the amount to swap using the `constant-product-curve` crate and checking for slippage like this: 
+<Codeblock lang="rust">
+```rust
+// Deserialize the token accounts
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+// Swap Calculations
+let mut curve = ConstantProduct::init(
+    vault_x.amount(),
+    vault_y.amount(),
+    vault_x.amount(),
+    config.fee,
+    None,
+)
+.map_err(|_| ProgramError::Custom(1))?;
+
+let p = match self.instruction_data.is_x {
+    true => LiquidityPair::X,
+    false => LiquidityPair::Y,
+};
+
+let swap_result = curve
+    .swap(p, self.instruction_data.amount, self.instruction_data.min)
+    .map_err(|_| ProgramError::Custom(1))?;
+
+// Check for correct values
+if swap_result.deposit == 0 || swap_result.withdraw == 0 {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+</Codeblock>
+
+- Create the transfer logic checking the `is_x` value and transfer the `from` amounts to the vaults and the `to` amounts to the user token accounts like this:
+
+<Codeblock lang="rust">
+```rust
+if self.instruction_data.is_x {
+    Transfer {
+        //...
+    }
+    .invoke()?;
+
+    Transfer {
+        //...
+    }
+    .invoke_signed(&signer_seeds)?;
+} else {
+    Transfer {
+        //...
+
+    }
+    .invoke()?;
+
+    Transfer {
+        //...
+    }
+    .invoke_signed(&signer_seeds)?;
+}
+```
+</Codeblock>
+
+You should be proficient enough to this on your own, so I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct Swap<'a> {
+    pub accounts: SwapAccounts<'a>,
+    pub instruction_data: SwapInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = SwapAccounts::try_from(accounts)?;
+        let instruction_data = SwapInstructionData::try_from(data)?;
+
+        // Return the initialized struct
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+impl<'a> Swap<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &3;
+
+    pub fn process(&mut self) -> ProgramResult {
+        //..
+        
+        Ok(())
+    }
+}
+```
+</Codeblock>

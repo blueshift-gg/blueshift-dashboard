@@ -1,0 +1,177 @@
+# Deposit
+
+The `initialize` instruction performs three main tasks:
+- Deposit the `mint_x` and `mint_y` token based on the amount of LP the user want to `mint`.
+- Calculate the amount to deposit and check that the amount isn't greater than `max_x` and `max_y` designeted by the user.
+- Mint the right amount of `mint_lp` in the user ata.
+
+> As mention in the `initialize` instruction section; we're going to initialize all the `Associated Token Accounts` outside of our instruction for optimization purposes.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+
+Below are the accounts required for this context:
+- `user`: The user that is depositing the token into the liquidity of the Amm. Must be a `signer`.
+- `mint_lp`: The Mint account that will represent the pool’s liquidity. Must be passed as `mutable`.
+- `vault_x`: The token account that holds all of token X deposited into the pool. Must be passed as `mutable`.
+- `vault_y`: The token account that holds all of token Y deposited into the pool. Must be passed as `mutable`.
+- `user_x_ata`: The user's associated token account for token X. This is the source account from which the user's token X will be transferred into the pool. Must be passed as `mutable`.
+- `user_y_ata`: The user's associated token account for token Y. This is the source account from which the user's token Y will be transferred into the pool. Must be passed as `mutable`.
+- `config`: The configuration account for the AMM pool. Stores all relevant pool parameters and state.
+- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. Must be `executable`.
+
+Here, again, I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
+    pub user_lp_ata: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //.. 
+  }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+
+Here's the instruction data we need to pass in:
+- `amount`: The amount of LP token that the user wish to receive. Must be a `[u64]`
+- `max_x`: The max amount of token X that the user is willing to deposit. Must be a `[u64]`
+- `max_y`: The max amount of token Y that the user is willing to deposit. Must be a `[u64]`
+- `expiration`: The expiration of this order. Important to make sure that the transaction has to be played in a certain amount of time. Must be a `[i64]`
+
+We're going to handle the implementation for the `DepositInstructionData` same as initialization. So I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+##[repr(C, packed)]
+pub struct DepositInstructionData {
+    pub amount: u64,
+    pub max_x: u64,
+    pub max_y: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+</Codeblock>
+
+> Make sure that any of the amount, like `amount`, `max_y` and `max_x` are greater than zero and that the order has not expired yet using the `Clock` sysvar.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+We begin by deserializing both the `instruction_data` and the `accounts`.
+
+When then need to:
+- Load the `Config` account to grab all the data inside of it. We can do so using the `Config::load()` helper.
+- Verify that the `AmmState` is valid (so if it's equal to `AmmState::Initialized`)
+- Check the derivation of `vault_x` and `vault_y` to be Associated Token Accounts like this:
+<Codeblock lang="rust">
+```rust
+// Check if the vault_x is valid
+let (vault_x, _) = find_program_address(
+    &[
+        self.accounts.config.key(),
+        self.accounts.token_program.key(),
+        &config.mint_x,
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+
+if vault_x.ne(self.accounts.vault_x.key()) {
+    return Err(ProgramError::InvalidAccountData);
+}
+```
+</Codeblock>
+- Deserialize all the token accounts involved and use the data inside of them to calculate the amount to deposits using the `constant-product-curve` crate and checking for slippage like this: 
+<Codeblock lang="rust">
+```rust
+// Deserialize the token accounts
+let mint_lp = unsafe { Mint::from_account_info_unchecked(self.accounts.mint_lp)? };
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+// Grab the amounts to deposit
+let (x, y) = match mint_lp.supply() == 0 && vault_x.amount() == 0 && vault_y.amount() == 0 {
+    true => (self.instruction_data.max_x, self.instruction_data.max_y),
+    false => {
+        let amounts = ConstantProduct::xy_deposit_amounts_from_l(
+            vault_x.amount(),
+            vault_y.amount(),
+            mint_lp.supply(),
+            self.instruction_data.amount,
+            6,
+        )
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+        (amounts.x, amounts.y)
+    }
+};
+
+// Check for slippage
+if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+</Codeblock>
+
+> If it's the first deposit, we can skip the calculation of LP tokens and deposits and just go with the value that the user suggest
+
+- Transfer the amounts from the token accounts of the user to the vaults and mint the appropriate amount of LP tokens in the user token account
+
+> The `mint_authority` of the `mint_lp` is the `config` account
+
+You should be proficient enough to this on your own, so I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        // Return the initialized struct
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+    
+      Ok(())
+    }
+}
+```
+</Codeblock>

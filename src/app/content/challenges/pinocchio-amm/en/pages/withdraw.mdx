@@ -1,0 +1,155 @@
+# Withdraw
+
+The `initialize` instruction performs two main tasks:
+- Withdraw the `mint_x` and `mint_y` token based on the amount of LP the user want to `burn`.
+- Calculate the amount to withdraw and check that the amount isn't less than `mint_x` and `mint_y` designeted by the user.
+- Burn the right amount of `mint_lp` from the user ata.
+
+> As mention in the `initialize` instruction section; we're going to initialize all the `Associated Token Accounts` outside of our instruction for optimization purposes.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+
+Below are the accounts required for this context:
+- `user`: The user that is withdrawing the token into the liquidity of the Amm. Must be a `signer`.
+- `mint_lp`: The Mint account that will represent the pool’s liquidity. Must be passed as `mutable`.
+- `vault_x`: The token account that holds all of token X deposited into the pool. Must be passed as `mutable`.
+- `vault_y`: The token account that holds all of token Y deposited into the pool. Must be passed as `mutable`.
+- `user_x_ata`: The user's associated token account for token X. This is the destination account from which the user's token X will be transferred into the pool. Must be passed as `mutable`.
+- `user_y_ata`: The user's associated token account for token Y. This is the destination account from which the user's token Y will be transferred into the pool. Must be passed as `mutable`.
+- `config`: The configuration account for the AMM pool. Stores all relevant pool parameters and state.
+- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. Must be `executable`.
+
+Here, again, I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
+    pub user_lp_ata: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        //.. 
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+
+Here's the instruction data we need to pass in:
+- `amount`: The amount of LP token that the user wish to burn. Must be a `[u64]`
+- `min_x`: The min amount of token X that the user is willing to withdraw. Must be a `[u64]`
+- `min_y`: The mint amount of token Y that the user is willing to withdraw. Must be a `[u64]`
+- `expiration`: The expiration of this order. Important to make sure that the transaction has to be played in a certain amount of time. Must be a `[i64]`
+
+We're going to handle the implementation for the `WithdrawInstructionData` same as initialization. So I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct WithdrawInstructionData {
+    pub amount: u64,
+    pub min_x: u64,
+    pub min_y: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for WithdrawInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+</Codeblock>
+
+> Make sure that any of the amount, like `amount`, `min_y` and `min_x` are greater than zero and that the order has not expired yet using the `Clock` sysvar.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+We begin by deserializing both the `instruction_data` and the `accounts`.
+
+When then need to:
+- Load the `Config` account to grab all the data inside of it. We can do so using the `Config::load()` helper.
+- Verify that the `AmmState` is valid (so if it's not equal to `AmmState::Disabled`).
+- Check the derivation of `vault_x` and `vault_y` to be Associated Token Accounts.
+- Deserialize all the token accounts involved and use the data inside of them to calculate the amount to withdraw using the `constant-product-curve` crate and checking for slippage like this: 
+<Codeblock lang="rust">
+```rust
+let mint_lp = unsafe { Mint::from_account_info_unchecked(self.accounts.mint_lp)? };
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+let (x, y) = match mint_lp.supply() == self.instruction_data.amount {
+    true => (vault_x.amount(), vault_y.amount()),
+    false => {
+        let amounts = ConstantProduct::xy_withdraw_amounts_from_l(
+            vault_x.amount(),
+            vault_y.amount(),
+            mint_lp.supply(),
+            self.instruction_data.amount,
+            6,
+        )
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+        (amounts.x, amounts.y)
+    }
+};
+
+// Check for slippage
+if !(x <= self.instruction_data.min_x && y <= self.instruction_data.min_y) {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+</Codeblock>
+- Transfer the amounts from the vaults to the token accounts of the user and burn the appropriate amount of LP tokens in the user token account
+
+> The `authority` of `vault_x` and `vault_y` is the `config` account
+
+You should be proficient enough to this on your own, so I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+    pub instruction_data: WithdrawInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+        let instruction_data = WithdrawInstructionData::try_from(data)?;
+
+        // Return the initialized struct
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &2;
+
+    pub fn process(&mut self) -> ProgramResult {
+        //..
+        
+        Ok(())
+    }
+}
+```
+</Codeblock>

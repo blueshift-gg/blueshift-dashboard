@@ -1,0 +1,184 @@
+# Initialize
+
+The `initialize` instruction performs two main tasks:
+- Initializes the `Config` account and stores all the information needed for the amm to operate correctly.
+- Creates the `mint_lp` Mint account and assigns the `mint_authority` to the `config` account.
+
+> We’re not going to initialize any Associated Token Accounts (ATAs) here, since it’s often unnecessary and can be wasteful. In the subsequent `deposit`, `withdraw`, and `swap` instructions, we’ll check that tokens are deposited into the correct ATAs. However, you should create an “initializeAccount” helper on the frontend to generate these accounts on demand.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+
+Below are the accounts required for this context:
+- `initializer`: The creator of the `config` account. This does not necessarily have to be the authority over it as well. Must be a `signer` and `mutable`, since this account will pay for the initialization of both the `config` and the `mint_lp`.
+- `mint_lp`: The Mint account that will represent the pool’s liquidity. The `mint_authority` should be set to the `config` account. Must be passed as `mutable`.
+- `config`: The configuration account being initialized. Must be `mutable`.
+- `system` and `token` programs: Program accounts required to initialize the above accounts. Must be `executable`.
+
+> As you become more experienced, you’ll notice that many of these checks can be omitted, relying instead on the constraints enforced by the CPIs themselves. For example, for this account struct, any explicit checks isn't necessary; if the constraints aren’t met, the program will fail by default. I’ll point out these nuances as we go through the logic.
+
+Since there aren’t many changes from the usual struct we create, I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct InitializeAccounts<'a> {
+    pub initializer: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for InitializeAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //.. 
+  }
+}
+```
+</Codeblock>
+
+> You’ll need to pass in all the accounts discussed above, but not all of them need to be included in the `InitializeAccounts` struct, since you may not need to reference every account directly in the implementation.
+
+<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+
+Here's the instruction data we need to pass in:
+- `seed`: A random number used for PDA (Program Derived Address) seed derivation. This allows for unique pool instances. Must be a `[u64]`
+- `fee`: The swap fee, expressed in basis points (1 basis point = 0.01%). This fee is collected on each trade and distributed to liquidity providers. Must be a `[u16]`
+- `mint_x`: The SPL token mint address for token X in the pool. Must be a `[u8; 32]`
+- `mint_y`: The SPL token mint address for token Y in the pool. Must be a `[u8; 32]`
+- `config_bump`: The bump seed used for deriving the `config` account PDA.  Must be a `u8`
+- `lp_bump`: The bump seed used for deriving the `lp_mint` account PDA. Must be a `u8`
+- `authority`: The public key that will have administrative authority over the AMM. If not provided, the pool can be set as immutable. Must be a `[u8; 32]`
+
+> As you can see, several of these fields could be derived differently. For example, we could obtain `mint_x` by passing the `Mint` account and reading it directly from there, or generate the `bump` value within the program itself. However, by passing them explicitly, we’re aiming to create the most optimized and efficient program possible.
+
+In this implementation, we’re handling instruction data parsing in a more flexible and low-level way than usual. For this reason we'll expalin why we're making the following decisions:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct InitializeInstructionData {
+    pub seed: u64,
+    pub fee: u16,
+    pub mint_x: [u8; 32],
+    pub mint_y: [u8; 32],
+    pub config_bump: [u8; 1],
+    pub lp_bump: [u8; 1],
+    pub authority: [u8; 32],
+}
+
+impl TryFrom<&[u8]> for InitializeInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        const INITIALIZE_DATA_LEN_WITH_AUTHORITY: usize = size_of::<InitializeInstructionData>();
+        const INITIALIZE_DATA_LEN: usize =
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY - size_of::<[u8; 32]>();
+
+        match data.len() {
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY => {
+                Ok(unsafe { (data.as_ptr() as *const Self).read_unaligned() })
+            }
+            INITIALIZE_DATA_LEN => {
+                // If the authority is not present, we need to build the buffer and add it at the end before transmuting to the struct
+                let mut raw: MaybeUninit<[u8; INITIALIZE_DATA_LEN]> = MaybeUninit::uninit();
+                let raw_ptr = raw.as_mut_ptr() as *mut u8;
+                unsafe {
+                    // Copy the provided data
+                    core::ptr::copy_nonoverlapping(data.as_ptr(), raw_ptr, INITIALIZE_DATA_LEN);
+                    // Add the authority to the end of the buffer
+                    core::ptr::write_bytes(raw_ptr.add(INITIALIZE_DATA_LEN), 0, 32);
+                    // Now transmute to the struct
+                    Ok((raw.as_ptr() as *const Self).read_unaligned())
+                }
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+}
+```
+</Codeblock>
+
+We start by defining the `InitializeInstructionData` struct, which represents the data layout for the initialize instruction. We use `#[repr(C, packed)]` to ensure there are no alignment issues, since we deserialize the data by directly transmuting it into the struct.
+
+The `authority` field is optional, so if it is set to `None`, we don’t need to actually pass it in saving 32 bytes of transaction data. For this reason, we implement deserialization logic that checks the length of the data: one path for when `authority` is present, and another for when it is absent.
+
+If the data includes the `authority` field, we can transmute it directly. However, if the data does not include `authority`, we create a buffer using the `MaybeUninit` method since it's the most optimal, append a `[0u8; 32]` segment at the end to fill the missing field, and then transmute the data into the struct. This approach ensures we avoid unaligned or “dirty” data during deserialization.
+
+> Using `#[repr(C, packed)]` is mandatory to not run into Undefined Behaviours (UB)
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+We begin by deserializing both the `instruction_data` and the `accounts`.
+
+When then need to:
+- Create the `Config` account using the `CreateAccount` instruction from the system program and the following seeds:
+<Codeblock lang="rust">
+```rust
+let seed_binding = self.instruction_data.seed.to_le_bytes();
+let config_seeds = [
+    Seed::from(b"config"),
+    Seed::from(&seed_binding),
+    Seed::from(&self.instruction_data.mint_x),
+    Seed::from(&self.instruction_data.mint_y),
+    Seed::from(&self.instruction_data.config_bump),
+];
+```
+</Codeblock>
+- Populate the `Config` account loading it using the `Config::load_mut_unchecked()` helper and then populating it with all the data needed using the `config.set_ineer()` helper.
+- Create the `Mint` account for the lp using the `CreateAccount` and `InitializeMint2` instruction and the following seeds: 
+<Codeblock lang="rust">
+```rust
+let mint_lp_seeds = [
+    Seed::from(b"mint_lp"),
+    Seed::from(self.accounts.config.key()),
+    Seed::from(&self.instruction_data.lp_bump),
+];
+```
+</Codeblock>
+
+You should be proficient enough to this on your own, so I’ll leave the implementation to you:
+
+<Codeblock lang="rust">
+```rust
+pub struct Initialize<'a> {
+    pub accounts: InitializeAccounts<'a>,
+    pub instruction_data: InitializeInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Initialize<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = InitializeAccounts::try_from(accounts)?;
+        let instruction_data: InitializeInstructionData = InitializeInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Initialize<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+    
+      Ok(())
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Security" id="security" level="h2" />
+
+As mentioned earlier, it might seem unusual, but we don’t need to perform explicit checks on the accounts being passed in.
+
+This is because, in practice, the instruction will fail if something is wrong; either during a CPI (Cross-Program Invocation) or early through checks that we put into the program.
+
+For example, consider the `initializer` account. We expect it to be both a `signer` and `mutable`, but if it isn’t, the `CreateAccount` instruction will fail automatically since it requires those properties for the `payer`.
+
+Similarly, if the `config` account is passed with an invalid `mint_x` or `mint_y`, any attempt to deposit into the protocol will fail during the token transfer.
+
+As you gain more experience, you’ll find that many checks can be omitted to keep instructions lightweight and optimized, relying on the system and downstream instructions to enforce constraints.
