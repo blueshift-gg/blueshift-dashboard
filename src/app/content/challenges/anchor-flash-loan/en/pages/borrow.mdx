@@ -1,0 +1,93 @@
+# Borrow
+
+The borrow instruction is the first half of our flash loan system. It performs three critical steps to ensure safe and atomic lending:
+1. Transfer funds: Move the requested `borrow_amount` from the protocol's treasury to the borrower's account
+2. Verify repayment: Use instruction introspection to confirm that a valid repayment instruction exists at the end of the transaction
+
+<ArticleSection name="Fund Transfer" id="fund-transfer" level="h2" />
+
+First, we implement the actual transfer of funds with proper validation:
+
+<Codeblock lang="rust">
+```rust
+// Make sure we're not sending in an invalid amount that can crash our Protocol
+require!(borrow_amount > 0, ProtocolError::InvalidAmount);
+
+// Derive the Signer Seeds for the Protocol Account
+let seeds = &[
+    b"protocol".as_ref(),
+    &[ctx.bumps.protocol]
+];
+let signer_seeds = &[&seeds[..]];
+
+// Transfer the funds from the protocol to the borrower
+transfer(
+    CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(), 
+        Transfer {
+            from: ctx.accounts.protocol_ata.to_account_info(),
+            to: ctx.accounts.borrower_ata.to_account_info(),
+            authority: ctx.accounts.protocol.to_account_info(),
+        }, 
+        signer_seeds
+    ), 
+    borrow_amount
+)?;
+```
+</Codeblock>
+
+This code ensures we're transferring a valid amount and uses the protocol's Program Derived Address (PDA) to authorize the transfer.
+
+<ArticleSection name="Instruction Introspection" id="instruction-introspection" level="h2" />
+
+Now comes the security-critical part: using instruction introspection to verify the transaction's structure and ensure our flash loan will be repaid.
+
+We start by accessing the `instructions` sysvar, which contains information about all instructions in the current transaction:
+
+
+<Codeblock lang="rust">
+```rust
+/*
+    Instruction Introspection
+
+    This is the primary means by which we secure our program,
+    enforce atomicity while making a great UX for our users.
+*/
+
+let ixs = ctx.accounts.instructions.to_account_info();
+```
+</Codeblock>
+
+Finally, we perform the most critical check: ensuring that the last instruction in the transaction is a valid repayment instruction:
+- We start by checking the number of instruction and making sure that we're loading the last instruction of the transaction
+- Then we verify that it's the repay instruction by verifying the program ID and the discriminator of the instruction
+- We finish by verifying that the ATAs passed in the repay instruction are the same that we're passing in our `Borrow` instruction
+
+<Codeblock lang="rust">
+```rust
+/*
+    Repay Instruction Check
+
+    Make sure that the last instruction of this transaction is a repay instruction
+*/
+
+// Check how many instruction we have in this transaction
+let instruction_sysvar = ixs.try_borrow_data()?;
+let len = u16::from_le_bytes(instruction_sysvar[0..2].try_into().unwrap());
+
+// Ensure we have a repay ix
+if let Ok(repay_ix) = load_instruction_at_checked(len as usize - 1, &ixs) {
+
+    // Instruction checks
+    require_keys_eq!(repay_ix.program_id, ID, ProtocolError::InvalidProgram);
+    require!(repay_ix.data[0..8].eq(instruction::Repay::DISCRIMINATOR), ProtocolError::InvalidIx);
+
+    // We could check the Wallet and Mint separately but by checking the ATA we do this automatically
+    require_keys_eq!(repay_ix.accounts.get(3).ok_or(ProtocolError::InvalidBorrowerAta)?.pubkey, ctx.accounts.borrower_ata.key(), ProtocolError::InvalidBorrowerAta);
+    require_keys_eq!(repay_ix.accounts.get(4).ok_or(ProtocolError::InvalidProtocolAta)?.pubkey, ctx.accounts.protocol_ata.key(), ProtocolError::InvalidProtocolAta);
+
+} else {
+    return Err(ProtocolError::MissingRepayIx.into());
+}
+```
+</Codeblock>

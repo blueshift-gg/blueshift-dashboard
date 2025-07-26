@@ -8,6 +8,7 @@ import Header from "@/app/components/Header/Header";
 import Footer from "@/app/components/Footer/Footer";
 import GlobalModals from "@/app/components/Modals/GlobalModals";
 import WalletProvider from "@/contexts/WalletProvider";
+import TanstackProvider from "@/contexts/TanstackProvider";
 import { Geist_Mono, Funnel_Display } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { headers } from "next/headers";
@@ -108,20 +109,22 @@ export default async function RootLayout({
         className={`${MontechV2.variable} ${GeistMono.variable} ${FunnelDisplay.variable} ${Switzer.variable} antialiased`}
       >
         <NextIntlClientProvider>
-          <WalletProvider>
-            <GlobalModals />
-            {!pathname?.includes("/nft-generator") ? (
-              <>
-                <Header />
-                <div className="pt-[69px] min-h-[calc(100dvh-69px)]">
-                  {children}
-                </div>
-                <Footer />
-              </>
-            ) : (
-              children
-            )}
-          </WalletProvider>
+          <TanstackProvider>
+            <WalletProvider>
+              <GlobalModals />
+              {!pathname?.includes("/nft-generator") ? (
+                <>
+                  <Header />
+                  <div className="pt-[69px] min-h-[calc(100dvh-69px)]">
+                    {children}
+                  </div>
+                  <Footer />
+                </>
+              ) : (
+                children
+              )}
+            </WalletProvider>
+          </TanstackProvider>
         </NextIntlClientProvider>
       </body>
       <GoogleAnalytics gaId="G-BW45TC8WPK" />

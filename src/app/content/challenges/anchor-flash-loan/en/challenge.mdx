@@ -1,0 +1,189 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Anchor Flash Loan
+
+Instruction introspection is a powerful feature that allows a blockchain program to examine and analyze other instructions within the same transaction bundle. This includes instructions that haven't been executed yet, giving your program the ability to "look ahead" and make decisions based on what will happen later in the transaction.
+
+Think of it like having X-ray vision for transactions: your program can see through the entire transaction to understand the complete sequence of operations before deciding how to proceed.
+
+The most compelling application of instruction introspection is flash loans. These are a unique type of loan that exists only within the boundaries of a single transaction.
+
+Here's how flash loans work:
+- **Borrow**: At the beginning of a transaction, you can instantly borrow a large amount of capital using a `loan` instruction
+- **Use**: You can use this borrowed capital for trading, arbitrage, or other operations within the same transaction
+- **Repay**: Before the transaction ends, you must repay the loan plus a small fee using a `repay` instruction
+
+The key insight is that flash loans rely on the atomic nature of blockchain transactions. If any part of the transaction fails (including the repayment), the entire transaction is rolled back as if it never happened. This means the lender has zero risk: either they get repaid, or the loan never actually occurred.
+
+In this challenge, you'll create a simple flash loan program that demonstrates instruction introspection in action. The program will examine instruction data and accounts across different instructions within the same transaction to ensure loan terms are met.
+
+If you're new to instruction introspection, we recommend starting with the[ Instruction Introspection Course](/en/courses/instruction-introspection) to understand the fundamental concepts used in this program.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Before you begin, ensure you have Rust and Anchor installed. If you need setup instructions, refer to the [official anchor documentation](https://www.anchor-lang.com/docs/installation). Then in your terminal run:
+
+```
+anchor init blueshift_anchor_flash_loan
+```
+
+Add the required dependencies:
+- `anchor-spl`: Provides utilities for working with SPL tokens (Solana's token standard)
+
+```
+cd blueshift_anchor_flash_loan
+cargo add anchor-spl
+```
+
+Now you're ready to dive into building your flash loan program!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Let's build the foundation of our flash loan program by setting up the basic structure, accounts, and error handling that both our borrow and repay instructions will use.
+
+We'll implement everything in `lib.rs` since we only have two instructions that share the same account structure. Here's our starting template with all the essential components:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+  token::{Token, TokenAccount, Mint, Transfer, transfer}, 
+  associated_token::AssociatedToken
+}; 
+use anchor_lang::{
+  Discriminator,
+  solana_program::sysvar::instructions::{
+      ID as INSTRUCTIONS_SYSVAR_ID,
+      load_instruction_at_checked
+  }
+};
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_flash_loan {
+  use super::*;
+
+  pub fn borrow(ctx: Context<Loan>, borrow_amount: u64) -> Result<()> {
+    // borrow logic...
+    
+    Ok(())
+  }
+
+  pub fn repay(ctx: Context<Loan>) -> Result<()> {
+    // repay logic...
+
+    Ok(())
+  }
+}
+
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  // loan accounts...
+}
+
+#[error_code]
+pub enum ProtocolError {
+  // error enum..
+}
+```
+</Codeblock>
+
+**Note**: remember to change the program ID to `22222222222222222222222222222222222222222222` since we use this under the hood to test your program.
+
+<ArticleSection name="Accounts" id="accounts" level="h2" />
+
+Since both the `borrow` and `repay` instructions work with the same accounts, we can create a single `Loan` context that serves both functions. This makes our code more maintainable and easier to understand.
+
+Our `Loan` account struct needs these components:
+- `borrower`: the user requesting the flash loan.
+- `protocol`: a Program Derived Address (PDA) that owns the protocol's liquidity pool.
+- `mint`: the specific token being borrowed.
+- `borrower_ata`: the borrower's Associated Token Account that will receive the borrowed tokens.
+- `protocol_ata`: the protocol's Associated Token Account that will provide the borrowed tokens.
+- `instructions`: the Instructions Sysvar account for introspection.
+- `token_program`, `associated_token_program`, and `system_program`: required programs for the program.
+
+Here's how we define the account struct:
+
+<Codeblock lang="rust">
+```rust
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  #[account(mut)]
+  pub borrower: Signer<'info>,
+  #[account(
+    seeds = [b"protocol".as_ref()],
+    bump,
+  )]
+  pub protocol: SystemAccount<'info>,
+
+  pub mint: Account<'info, Mint>,
+  #[account(
+    init_if_needed,
+    payer = borrower,
+    associated_token::mint = mint,
+    associated_token::authority = borrower,
+  )]
+  pub borrower_ata: Account<'info, TokenAccount>,
+  #[account(
+    mut,
+    associated_token::mint = mint,
+    associated_token::authority = protocol,
+  )]
+  pub protocol_ata: Account<'info, TokenAccount>,
+
+  #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+  /// CHECK: InstructionsSysvar account
+  instructions: UncheckedAccount<'info>,
+  pub token_program: Program<'info, Token>,
+  pub associated_token_program: Program<'info, AssociatedToken>,
+  pub system_program: Program<'info, System>
+}
+```
+</Codeblock>
+
+As you can see, the accounts needed for this instruction and their constraint are quite straightforward:
+- `protocol`: uses `seeds = [b"protocol".as_ref()]` to create a deterministic address that owns all protocol liquidity. This ensures only our program can control these funds.
+- `borrower_ata`: uses `init_if_needed` because the borrower might not have an associated token account for this specific token yet. The constraint automatically creates one if needed.
+- `protocol_ata`: must already exist and be mutable since we'll be transferring tokens from it. The `associated_token::authority = protocol` constraint ensures only the protocol PDA can authorize transfers.
+- `instructions`: uses the `address` constraint to verify we're accessing the correct system account that contains transaction instruction data.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+Flash loans require precise validation at multiple steps, so we need comprehensive error handling. Here's our complete error enum:
+
+<Codeblock lang="rust">
+```rust
+#[error_code]
+pub enum ProtocolError {
+    #[msg("Invalid instruction")]
+    InvalidIx,
+    #[msg("Invalid instruction index")]
+    InvalidInstructionIndex,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Not enough funds")]
+    NotEnoughFunds,
+    #[msg("Program Mismatch")]
+    ProgramMismatch,
+    #[msg("Invalid program")]
+    InvalidProgram,
+    #[msg("Invalid borrower ATA")]
+    InvalidBorrowerAta,
+    #[msg("Invalid protocol ATA")]
+    InvalidProtocolAta,
+    #[msg("Missing repay instruction")]
+    MissingRepayIx,
+    #[msg("Missing borrow instruction")]
+    MissingBorrowIx,
+    #[msg("Overflow")]
+    Overflow,
+}
+```
+</Codeblock>
+
+With this foundation in place, we're ready to implement the core logic for our flash loan instructions. The account structure ensures proper token handling, while the error system provides clear feedback for debugging and security validation.
+
+> The program does't quite compile yet. Can you figure out why?

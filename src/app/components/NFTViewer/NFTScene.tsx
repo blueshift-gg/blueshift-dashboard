@@ -504,8 +504,8 @@ function Scene({
 
       // More reasonable quality settings that work reliably
       const targetSize = 1600;
-      const supersampleFactor = 3; // Good balance of quality vs performance
-      const renderSize = targetSize * supersampleFactor; // 9600x9600
+      const supersampleFactor = 4; // Good balance of quality vs performance
+      const renderSize = targetSize * supersampleFactor;
 
       // Configure the screenshot renderer
       screenshotRenderer.setPixelRatio(1);

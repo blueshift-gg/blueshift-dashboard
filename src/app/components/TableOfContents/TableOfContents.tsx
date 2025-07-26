@@ -27,13 +27,13 @@ export default function TableOfContents() {
 
     h2Elements.forEach((h2) => {
       if (!h2.id) {
-        h2.id = `section-${Math.random().toString(36).substr(2, 9)}`;
+        h2.id = `section-${Math.random().toString(36).substring(2, 11)}`;
       }
     });
 
     h3Elements.forEach((h3) => {
       if (!h3.id) {
-        h3.id = `subsection-${Math.random().toString(36).substr(2, 9)}`;
+        h3.id = `subsection-${Math.random().toString(36).substring(2, 11)}`;
       }
     });
 

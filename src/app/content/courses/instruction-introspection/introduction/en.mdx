@@ -1,0 +1,106 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instruction Introspection
+
+Instruction introspection is a powerful capability on Solana that allows a program to analyze other instructions
+within the same transaction, including those not yet executed. This enables you to dynamically respond to or augment
+these instructions — for example, by injecting safeguards, validating behavior, or integrating instructions from
+external programs into your own logic.
+
+This is made possible by a special system account called the `Instructions` sysvar. Sysvars are read-only accounts maintained by the Solana runtime that expose internal state to programs (e.g., clock, rent, epoch schedule, etc.). The Instructions sysvar specifically exposes the full list of instructions in the current transaction, along with their metadata and serialized data.
+
+Here’s how Solana serializes this information at runtime:
+
+```rust
+// First encode the number of instructions:
+//  0..2 - num_instructions
+//
+// Then a table of offsets of where to find them in the data
+//  3..2 * num_instructions table of instruction offsets
+//
+// Each instruction is then encoded as:
+//   0..2 - num_accounts
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
+//   3..35 - pubkey - 32 bytes
+//   35..67 - program_id
+//   67..69 - data len - u16
+//   69..data_len - data
+#[cfg(not(target_os = "solana"))]
+fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
+    // 64 bytes is a reasonable guess, calculating exactly is slower in benchmarks
+    let mut data = Vec::with_capacity(instructions.len() * (32 * 2));
+    append_u16(&mut data, instructions.len() as u16);
+    for _ in 0..instructions.len() {
+        append_u16(&mut data, 0);
+    }
+
+    for (i, instruction) in instructions.iter().enumerate() {
+        let start_instruction_offset = data.len() as u16;
+        let start = 2 + (2 * i);
+        data[start..start + 2].copy_from_slice(&start_instruction_offset.to_le_bytes());
+        append_u16(&mut data, instruction.accounts.len() as u16);
+        for account_meta in &instruction.accounts {
+            let mut account_meta_flags = InstructionsSysvarAccountMeta::empty();
+            if account_meta.is_signer {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_SIGNER;
+            }
+            if account_meta.is_writable {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_WRITABLE;
+            }
+            append_u8(&mut data, account_meta_flags.bits());
+            append_slice(&mut data, account_meta.pubkey.as_ref());
+        }
+
+        append_slice(&mut data, instruction.program_id.as_ref());
+        append_u16(&mut data, instruction.data.len() as u16);
+        append_slice(&mut data, instruction.data);
+    }
+    data
+}
+```
+
+This means that by reading the `Instructions` sysvar account inside your program, you can access all the instructions included in the current transaction.
+
+You don’t need to parse the raw bytes manually. Solana provides helper functions:
+- `load_current_index_checked`: returns the index of the currently executing instruction.
+- `load_instruction_at_checked`: lets you load a specific instruction by its index in a parsed, deserialized format.
+
+<ArticleSection name="How does it work?" id="how-does-it-work" level="h2" />
+
+Each Solana instruction contains:
+- the program ID it targets,
+- the accounts it interacts with (including metadata like signer/writable),
+- and the data payload (typically a discriminator + arguments).
+
+And this is exactly what the `load_instruction_at_checked` function from the Instructions sysvar gives you:
+- program_id: the program this instruction is calling.
+- accounts: a list of involved accounts with metadata.
+- data: the raw input payload (if we're introspecting an anchor instruction, it often starts with an 8-byte discriminator followed by parameters).
+
+To safely and efficiently introspect other instructions, follow these steps:
+- Determine the Current Instruction Index: Use `load_current_index_checked` to find the index of the currently executing instruction.
+> Keep in mind: your instruction may not be the first one (index 0) in the transaction.
+
+- Load a Target Instruction to Analyze: With the index in hand, use `load_instruction_at_checked(index)` to load another instruction in the same transaction—either the one before, after, or at a specific position.
+> This is useful for validating behavior, ensuring expected inputs, or composing securely across programs.
+
+- Build Constraints to Prevent Malicious Behavior: Instruction introspection is powerful, but it introduces new attack surfaces. Make sure to: validate that the introspected instruction is targeting the expected program, confirm that account addresses and data match expected patterns, and avoid assumptions about instruction order unless explicitly enforced.
+
+By taking these precautions, you can safely leverage instruction introspection to build powerful, composable, and secure Solana programs.
+
+<ArticleSection name="Common Constraints for Introspection" id="common-constraints-for-introspection" level="h2" />
+
+When using instruction introspection, it’s essential to enforce strict constraints to prevent malicious or unexpected behavior. The most common safeguards include:
+- Instruction Verification: Validate the instruction’s program ID and discriminator to ensure it's the correct one. The discriminator (usually the first 1, 4, or 8 bytes of the instruction data) uniquely identifies which function is being called.
+> This step ensures you're inspecting the intended instruction and not a spoofed or malformed one.
+
+- Variable Validation: After the discriminator, parse and check critical variables used by the instruction. These may include amounts, directions (e.g., long/short), or IDs, and you should always confirm that these fields align with the expected logic of your integration or safeguard.
+- Account Verification: Validate the structure and identity of the instruction’s accounts. Check that expected accounts appear at specific positions (e.g., signer, vault, collateral) and ensure that roles like signer/writable status match your assumptions.
+
+By applying these constraints, you ensure that your program is responding only to valid and trusted instructions, making your logic more robust, composable, and secure.
+
+Together with transaction atomicity, these checks allow you to build robust, composable logic that can safely interact
+with other programs and instructions within the same transaction.
+
+> Remember, transactions in Solana are atomic. If any instruction fails, the entire transaction is rolled back.
