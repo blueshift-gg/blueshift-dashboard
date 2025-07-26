@@ -54,7 +54,7 @@ pub struct Repay<'a> {
 
 impl<'a> TryFrom<&'a [AccountInfo]> for Repay<'a> {
     type Error = ProgramError;
-    
+
     fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
         let accounts = RepayAccounts::try_from(accounts)?;
 
@@ -71,8 +71,8 @@ Next, we check if all loans have been repaid. We do this by retrieving the numbe
 ```rust
 impl<'a> Repay<'a> {
     pub const DISCRIMINATOR: &'a u8 = &1;
-    
-    pub fn process(&mut self) -> ProgramResult {  
+
+    pub fn process(&mut self) -> ProgramResult {
         let loan_data = self.accounts.loan.try_borrow_data()?;
         let loan_num = loan_data.len() / size_of::<LoanData>();
 
@@ -92,12 +92,12 @@ impl<'a> Repay<'a> {
             // Check if the loan is already repaid
             let balance = get_token_amount(&protocol_token_account.try_borrow_data()?);
             let loan_balance = unsafe { *(loan_data.as_ptr().add(i * size_of::<LoanData>() + size_of::<[u8; 32]>()) as *const u64) };
-            
+
             if balance < loan_balance {
                 return Err(ProgramError::InvalidAccountData);
             }
         }
-    
+
         //..
     }
 }
@@ -107,12 +107,12 @@ impl<'a> Repay<'a> {
 We can then proceed to close the `loan` account and reclaim the rent, as it's no longer needed:
 
 <Codeblock lang="rust">
-  ```rust
+```rust
+drop(loan_data);
 // Close the loan account and give back the lamports to the borrower
 unsafe {
     *self.accounts.borrower.borrow_mut_lamports_unchecked() += *self.accounts.loan.borrow_lamports_unchecked();
-    *self.accounts.loan.borrow_mut_lamports_unchecked() = 0;
-
+    // There is no need to manually zero out lamports in the loan account because it is done in the close_unchecked function
     self.accounts.loan.close_unchecked();
 }
 ```

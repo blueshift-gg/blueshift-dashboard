@@ -9,7 +9,7 @@ The `loan` instruction is the first half of our flash loan system. It performs f
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
 
 - `borrower`: the user requesting the flash loan. Must be a Signer
-- `protocol`: a Program Derived Address (PDA) that owns the protocol's liquidity pool for a specific fee. 
+- `protocol`: a Program Derived Address (PDA) that owns the protocol's liquidity pool for a specific fee.
 - `loan`: the "scratch" account used to save the `protocol_token_account` and the final `balance` that it needs to have. Must be mutable
 - `token_program`: the token program. Must be executable
 
@@ -32,7 +32,11 @@ impl<'a> TryFrom<&'a [AccountInfo]> for LoanAccounts<'a> {
         let [borrower, protocol, loan, instruction_sysvar, _token_program, _system_program, token_accounts @ ..] = accounts else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
-        
+
+        if instruction_sysvar.key() != &INSTRUCTIONS_ID {
+            return Err(ProgramError::UnsupportedSysvar);
+        }
+
         // Verify that the number of token accounts is valid
         if (token_accounts.len() % 2).ne(&0) || token_accounts.len().eq(&0) {
             return Err(ProgramError::InvalidAccountData);
@@ -121,7 +125,7 @@ pub struct Loan<'a> {
 
 impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Loan<'a> {
     type Error = ProgramError;
-    
+
     fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
         let accounts = LoanAccounts::try_from(accounts)?;
         let instruction_data = LoanInstructionData::try_from(data)?;
@@ -144,11 +148,11 @@ Next, we create the `signer_seeds` needed to transfer tokens to the borrower and
 of this account is calculated using `size_of::<LoanData>() * self.instruction_data.amounts.len()` to ensure it can
 hold all the loan data for the transaction.
 
-<Codeblock lang="rust"> 
+<Codeblock lang="rust">
 ```rust
 impl<'a> Loan<'a> {
     pub const DISCRIMINATOR: &'a u8 = &0;
-    
+
     pub fn process(&mut self) -> ProgramResult {
         // Get the fee
         let fee = self.instruction_data.fee.to_le_bytes();
@@ -172,7 +176,7 @@ impl<'a> Loan<'a> {
             space: size as u64,
             owner: &ID,
         }.invoke()?;
-    
+
         //..
     }
 }
@@ -182,7 +186,7 @@ impl<'a> Loan<'a> {
 We then create a mutable slice from the `loan` account's data. We will populate this slice in a `for` loop as we process each loan and its corresponding transfer:
 
 <Codeblock lang="rust">
-```rust    
+```rust
 let mut loan_data = self.accounts.loan.try_borrow_mut_data()?;
 let loan_entries = unsafe {
     core::slice::from_raw_parts_mut(
@@ -196,13 +200,13 @@ let loan_entries = unsafe {
 Finally, we loop through all the loans. In each iteration, we get the `protocol_token_account` and `borrower_token_account`, calculate the balance due to the protocol, save this data in the `loan` account, and transfer the tokens.
 
 <Codeblock lang="rust">
-```rust    
+```rust
 for (i, amount) in self.instruction_data.amounts.iter().enumerate() {
     let protocol_token_account = &self.accounts.token_accounts[i * 2];
     let borrower_token_account = &self.accounts.token_accounts[i * 2 + 1];
 
-    // Get the balance of the borrower's token account and add the fee to it so we can save it to the loan account
-    let balance = get_token_amount(&borrower_token_account.try_borrow_data()?);
+    // Get the balance of the protocol's token account and add the fee to it so we can save it to the loan account
+    let balance = get_token_amount(&protocol_token_account.try_borrow_data()?);
     let balance_with_fee = balance.checked_add(
         amount.checked_mul(self.instruction_data.fee as u64)
             .and_then(|x| x.checked_div(10_000))
@@ -229,9 +233,9 @@ for (i, amount) in self.instruction_data.amounts.iter().enumerate() {
 We finish by using instruction introspection to perform the necessary checks. We verify that the last instruction in the transaction is a `repay` instruction and that it uses the same `loan` account as our current `loan` instruction.
 
 <Codeblock lang="rust">
-```rust   
+```rust
 // Introspecting the Repay instruction
-let instruction_sysvar = unsafe { Instructions::new_unchecked(self.accounts.instruction_sysvar.try_borrow_data()?) };    
+let instruction_sysvar = unsafe { Instructions::new_unchecked(self.accounts.instruction_sysvar.try_borrow_data()?) };
 let num_instructions = instruction_sysvar.num_instructions();
 let instruction = instruction_sysvar.load_instruction_at(num_instructions as usize - 1)?;
 
