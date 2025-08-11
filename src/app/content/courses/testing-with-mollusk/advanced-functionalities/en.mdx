@@ -105,105 +105,82 @@ let (associated_token_program, associated_token_program_account) =
 
 These helpers ensure that token-related tests have access to the correct program accounts with proper configuration, enabling comprehensive testing of token operations without manual program setup.
 
-If we then wanted to create State accounts from the token program that are already initialized, we would need to create them using the Account method and load them in the account struct of the Mollusk instance.
+### Pre-initialized token state helpers
 
-Creating initialized token accounts manually involves significant boilerplate for serializing account data and calculating rent exemption. Here are helper functions that streamline this process:
+Use the official state helpers added in mollusk-svm-programs-token (PR #146) to create pre-initialized SPL Token state without issuing raw instructions.
+
+> Note: The example below uses `spl-token` types (`Mint`, `Account`), so add it as a dev-dependency: `cargo add spl-token --dev`.
 
 ```rust
-use spl_token::{state::{Mint, Account as TokenAccount, AccountState}, ID as token};
-use spl_associated_token_account::get_associated_token_address_with_program_id;
+use {
+    mollusk_svm::Mollusk,
+    solana_sdk::pubkey::Pubkey,
+    spl_token::state::{Mint, Account as TokenAccount, AccountState},
+};
 
-// Create a Keyed Account for a Mint with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_mint_default(
-    mollusk: &Mollusk,
-    authority: &Pubkey,
-    decimals: u8,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
+#[test]
+fn test_preinitialized_token_state() {
+    let mut mollusk = Mollusk::default();
+
+    // Add SPL programs
+    mollusk_svm_programs_token::token::add_program(&mut mollusk);
+    mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
+    mollusk_svm_programs_token::associated_token::add_program(&mut mollusk);
+
+    // Optional: program keyed accounts
+    let (_token_program, _token_program_account) =
+        mollusk_svm_programs_token::token::keyed_account();
+    let (_token2022_program, _token2022_program_account) =
+        mollusk_svm_programs_token::token2022::keyed_account();
+    let (_associated_token_program, _associated_token_program_account) =
+        mollusk_svm_programs_token::associated_token::keyed_account();
+
+    // Authorities and user
+    let mint_authority = Pubkey::new_unique();
+    let user = Pubkey::new_unique();
+
+    // Choose your mint address and pre-mint amount
+    let mint_pubkey = Pubkey::new_unique();
+    let decimals = 9u8;
+    let amount_to_mint: u64 = 1_000_000;
+
+    // 1) Create a pre-initialized Mint account
     let mint_data = Mint {
-        mint_authority: Some(*authority).into(),
-        supply: 0,
+        mint_authority: Some(mint_authority).into(),
+        supply: amount_to_mint, // reflect pre-minted supply
         decimals,
         is_initialized: true,
         freeze_authority: None.into(),
     };
+    let mint_account =
+        mollusk_svm_programs_token::token::create_account_for_mint(mint_data);
 
-    let mut data = vec![0u8; Mint::LEN];
-    Mint::pack(mint_data, &mut data).unwrap();
-
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(Mint::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for a Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let account_data = TokenAccount {
-        mint: *mint,
-        owner: *owner,
-        amount,
+    // 2) Create a pre-initialized Associated Token Account (ATA) for the user
+    let ata_data = TokenAccount {
+        mint: mint_pubkey,
+        owner: user,
+        amount: amount_to_mint, // balance after a hypothetical mint_to
         delegate: None.into(),
         state: AccountState::Initialized,
         is_native: None.into(),
         delegated_amount: 0,
         close_authority: None.into(),
     };
+    let (ata_pubkey, ata_account) =
+        mollusk_svm_programs_token::associated_token::create_account_for_associated_token_account(ata_data);
 
-    let mut data = vec![0u8; TokenAccount::LEN];
-    TokenAccount::pack(account_data, &mut data).unwrap();
+    // 3) Provide these as input accounts to your instruction under test
+    let accounts = vec![
+        (mint_pubkey, mint_account),
+        (ata_pubkey, ata_account),
+    ];
 
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(TokenAccount::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for an Associated Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_associated_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let associated_token_address = get_associated_token_address_with_program_id(
-        owner,
-        mint,
-        &token_program.unwrap_or(token::ID),
-    );
-
-    keyed_account_for_token_account_default(
-        mollusk,
-        mint,
-        owner,
-        amount,
-        Some(associated_token_address),
-        Some(token_program.unwrap_or(token::ID)),
-    )
+    // Now pass `accounts` to a Mollusk execution call alongside your instruction
+    // e.g. mollusk.process_and_validate_instruction(&instruction, &accounts, &[Check::success()]);
 }
 ```
+
+> With these helpers you avoid manual serialization, rent math, and address derivation. They create data-ready accounts you can drop straight into your Mollusk tests.
 
 <ArticleSection name="Benchmarking Compute Units" id="benchmarking-compute-units" level="h2" />
 

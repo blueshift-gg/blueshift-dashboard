@@ -114,12 +114,12 @@ use solana_sdk::{
 let payer = Pubkey::new_unique();
 let payer_account = Account::new(100_000_000, 0, &system_program::id());
 
-// Uninitialized account with no lamports
-let uninitialized_account = Pubkey::new_unique();
-let uninitialized_account_account = Account::new(0, 0, &system_program::id());
+// Uninitialized account that requires nothing
+let some_temp_account = Pubkey::new_unique();
+let some_temp_account_account = Account::default();
 ```
 
-For `ProgramAccounts` that contain data, you have two construction approaches:
+For `ProgramAccounts` that contain data, construct `Account` with the correct fields set. Use Mollusk's rent sysvar to compute rent-exempt lamports:
 
 ```rust
 use solana_sdk::account::Account;
@@ -132,44 +132,24 @@ let lamports = mollusk
     .rent
     .minimum_balance(data.len());
 
-let program_account = Pubkey::new_unique();
-let program_account_account = Account {
+let program_account_pubkey = Pubkey::new_unique();
+let program_account = Account {
     lamports,
     data,
-    owner: ID, // The program's that owns the account
+    owner: ID,       // your program ID
     executable: false,
     rent_epoch: 0,
 };
-```
-
-Or using `AccountSharedData`:
-
-```rust
-use solana_sdk::account::AccountSharedData;
-
-let data = vec![
-    // Your serialized account data
-];
-let lamports = mollusk
-    .sysvars
-    .rent
-    .minimum_balance(data.len());
-
-let program_account = Pubkey::new_unique();
-let mut program_account_account = AccountSharedData::new(lamports, data.len(), &ID);
-program_account_account.set_data_from_slice(&data);
 ```
 
 Once you've created your accounts, compile them into the format Mollusk expects:
 
 ```rust
 let accounts = [
-    (user, user_account),
-    (program_account, program_account_account)
+    (payer, payer_account),
+    (program_account_pubkey, program_account),
 ];
 ```
-
-> When using AccountSharedData, remember to call `.into()` to convert it to the Account type that Mollusk requires for execution like this: `program_account_account.into()`.
 
 ### Instructions
 

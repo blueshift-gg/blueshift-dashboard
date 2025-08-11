@@ -105,105 +105,82 @@ let (associated_token_program, associated_token_program_account) =
 
 Ces aides garantissent que les tests liés aux jetons ont accès aux comptes de programme corrects avec une configuration appropriée, ce qui permet de tester de manière exhaustive les opérations liées aux jetons sans configuration manuelle du programme.
 
-Si nous voulions ensuite créer des comptes de `State` à partir du programme de jetons déjà initialisés, nous devrions les créer à l'aide de la méthode `Account` et les charger dans la structure de compte de l'instance Mollusk.
+### Assistants d'état pré-initialisé pour les jetons
 
-La création manuelle de comptes de jetons initialisés implique un travail fastidieux pour sérialiser les données des comptes et calculer l'exonération de rente. Voici des fonctions d'aide qui simplifient ce processus :
+Utilisez les fonctions d'aide officielles ajoutées dans mollusk-svm-programs-token (PR #146) pour créer de l'état SPL Token pré-initialisé sans émettre d'instructions brutes.
+
+> Remarque : L'exemple ci-dessous utilise les types `spl-token` (`Mint`, `Account`), ajoutez-le en dépendance de dev : `cargo add spl-token --dev`.
 
 ```rust
-use spl_token::{state::{Mint, Account as TokenAccount, AccountState}, ID as token};
-use spl_associated_token_account::get_associated_token_address_with_program_id;
+use {
+    mollusk_svm::Mollusk,
+    solana_sdk::pubkey::Pubkey,
+    spl_token::state::{Mint, Account as TokenAccount, AccountState},
+};
 
-// Create a Keyed Account for a Mint with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_mint_default(
-    mollusk: &Mollusk,
-    authority: &Pubkey,
-    decimals: u8,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
+#[test]
+fn test_etat_token_preinitialise() {
+    let mut mollusk = Mollusk::default();
+
+    // Ajouter les programmes SPL
+    mollusk_svm_programs_token::token::add_program(&mut mollusk);
+    mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
+    mollusk_svm_programs_token::associated_token::add_program(&mut mollusk);
+
+    // Facultatif : comptes clé du programme
+    let (_token_program, _token_program_account) =
+        mollusk_svm_programs_token::token::keyed_account();
+    let (_token2022_program, _token2022_program_account) =
+        mollusk_svm_programs_token::token2022::keyed_account();
+    let (_associated_token_program, _associated_token_program_account) =
+        mollusk_svm_programs_token::associated_token::keyed_account();
+
+    // Autorités et utilisateur
+    let mint_authority = Pubkey::new_unique();
+    let user = Pubkey::new_unique();
+
+    // Choisissez l'adresse du mint et le montant pré-minté
+    let mint_pubkey = Pubkey::new_unique();
+    let decimals = 9u8;
+    let amount_to_mint: u64 = 1_000_000;
+
+    // 1) Créer un compte Mint pré-initialisé
     let mint_data = Mint {
-        mint_authority: Some(*authority).into(),
-        supply: 0,
+        mint_authority: Some(mint_authority).into(),
+        supply: amount_to_mint, // reflète une supply déjà mintée
         decimals,
         is_initialized: true,
         freeze_authority: None.into(),
     };
+    let mint_account =
+        mollusk_svm_programs_token::token::create_account_for_mint(mint_data);
 
-    let mut data = vec![0u8; Mint::LEN];
-    Mint::pack(mint_data, &mut data).unwrap();
-
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(Mint::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for a Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let account_data = TokenAccount {
-        mint: *mint,
-        owner: *owner,
-        amount,
+    // 2) Créer un compte Token associé (ATA) pré-initialisé pour l'utilisateur
+    let ata_data = TokenAccount {
+        mint: mint_pubkey,
+        owner: user,
+        amount: amount_to_mint, // solde après un mint_to hypothétique
         delegate: None.into(),
         state: AccountState::Initialized,
         is_native: None.into(),
         delegated_amount: 0,
         close_authority: None.into(),
     };
+    let (ata_pubkey, ata_account) =
+        mollusk_svm_programs_token::associated_token::create_account_for_associated_token_account(ata_data);
 
-    let mut data = vec![0u8; TokenAccount::LEN];
-    TokenAccount::pack(account_data, &mut data).unwrap();
+    // 3) Fournir ces comptes comme entrées à votre instruction sous test
+    let accounts = vec![
+        (mint_pubkey, mint_account),
+        (ata_pubkey, ata_account),
+    ];
 
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(TokenAccount::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for an Associated Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_associated_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let associated_token_address = get_associated_token_address_with_program_id(
-        owner,
-        mint,
-        &token_program.unwrap_or(token::ID),
-    );
-
-    keyed_account_for_token_account_default(
-        mollusk,
-        mint,
-        owner,
-        amount,
-        Some(associated_token_address),
-        Some(token_program.unwrap_or(token::ID)),
-    )
+    // Passez maintenant `accounts` à un appel d'exécution Mollusk avec votre instruction
+    // ex. mollusk.process_and_validate_instruction(&instruction, &accounts, &[Check::success()]);
 }
 ```
+
+> Avec ces aides, vous évitez la sérialisation manuelle, le calcul de la rente et la dérivation d'adresse. Elles créent des comptes prêts à l'emploi que vous pouvez utiliser directement dans vos tests Mollusk.
 
 <ArticleSection name="Benchmark des Unités de Calcul" id="benchmarking-compute-units" level="h2" />
 
@@ -465,21 +442,6 @@ mollusk.set_feature_set(FeatureSet::default());
 Pour obtenir la liste complète des fonctionnalités disponibles, consultez la [documentation](https://docs.rs/agave-feature-set/2.3.6/agave_feature_set/) de la crate `agave-feature-set` qui détaille toutes les fonctionnalités configurables de la blockchain et leurs implications.
 
 Mollusk donne accès à toutes les variables système (sysvars) que les programmes peuvent interroger pendant leur exécution. Bien que ces paramètres soient automatiquement configurés avec des valeurs par défaut raisonnables, vous pouvez les personnaliser pour des scénarios de test précis :
-
-```rust
-/// Mollusk sysvars wrapper for easy manipulation
-pub struct Sysvars {
-    pub clock: Clock,                     // Current slot, epoch, and timestamp
-    pub epoch_rewards: EpochRewards,      // Epoch reward distribution info  
-    pub epoch_schedule: EpochSchedule,    // Epoch timing and slot configuration
-    pub last_restart_slot: LastRestartSlot, // Last validator restart information
-    pub rent: Rent,                       // Rent calculation parameters
-    pub slot_hashes: SlotHashes,          // Recent slot hash history
-    pub stake_history: StakeHistory,      // Historical stake activation data
-}
-```
-
-Vous pouvez personnaliser certains sysvars pour tester la logique dépendante du temps, les calculs de rente ou d'autres comportements dépendants du système, ou utiliser certaines fonctions d'aide :
 
 ```rust
 #[test]
