@@ -1,0 +1,140 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Revival Attack
+
+Các cuộc tấn công revival (hồi sinh) khai thác cơ chế đóng account của Solana bằng cách đưa các account "chết" trở lại sống trong cùng một giao dịch.
+
+Khi bạn đóng một account bằng cách chuyển lamport ra khỏi nó, Solana không ngay lập tức thu hồi nó; account chỉ được dọn dẹp sau khi giao dịch hoàn thành. Sự chậm trễ này tạo ra một cửa sổ nguy hiểm nơi kẻ tấn công có thể "hồi sinh" các account đã đóng bằng cách gửi lamport trở lại cho chúng, để lại các zombie account với dữ liệu cũ mà chương trình của bạn có thể vẫn tin tưởng.
+
+Cuộc tấn công thành công vì hiểu lầm cơ bản về vòng đời account. Các nhà phát triển giả định rằng đóng một account làm cho nó ngay lập tức không thể sử dụng được, nhưng trong thực tế, account vẫn có thể truy cập được cho đến khi giao dịch kết thúc. Kẻ tấn công có thể kẹp giữa instruction đóng của bạn với một transfer hoàn lại phí thuê của account, ngăn chặn việc thu hồi và duy trì account ở trạng thái có thể khai thác tiếp.
+
+Điều này đặc biệt có hại trong các protocol nơi việc đóng account đại diện cho kết thúc của một quy trình, như: hoàn thành escrow, giải quyết tranh chấp, hoặc đốt tài sản. Một account được hồi sinh có thể lừa chương trình của bạn tin rằng những thao tác này chưa bao giờ hoàn thành, có thể cho phép double-spending, truy cập trái phép, hoặc thao tác protocol.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này đóng một program account:
+
+```rust
+#[program]
+pub mod insecure_close{
+    use super::*;
+
+    //..
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+        **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+            .checked_add(ctx.accounts.account_to_close.to_account_info().lamports())
+            .unwrap();
+        **ctx.accounts.account_to_close.to_account_info().lamports.borrow_mut() = 0;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+Mã này trông có vẻ đúng: nó chuyển tất cả lamport từ account đến đích, điều này sẽ kích hoạt việc thu hồi account. Tuy nhiên, dữ liệu của account vẫn không bị động đến, và account vẫn có thể truy cập được trong cùng giao dịch.
+
+Kẻ tấn công có thể khai thác điều này bằng cách tạo một giao dịch với nhiều instruction:
+- Instruction 1: Gọi hàm đóng của bạn để rút cạn lamport của account
+- Instruction 2: Chuyển lamport trở lại account "đã đóng" (revival)
+- Instruction 3: Sử dụng account được hồi sinh trong các thao tác tiếp theo
+
+Kết quả là một zombie account có vẻ đã đóng đối với logic chương trình của bạn nhưng vẫn hoạt động với tất cả dữ liệu gốc nguyên vẹn. Điều này có thể dẫn đến:
+- Double-spending: Sử dụng các escrow account "đã đóng" nhiều lần
+- Authorization bypass: Hồi sinh các admin account nên được vô hiệu hóa
+- State corruption: Hoạt động trên các account không nên tồn tại nữa
+
+Giải pháp an toàn nhất là sử dụng ràng buộc `close` của Anchor, xử lý việc đóng an toàn tự động:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+   #[account(
+        mut,
+        close = owner,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Hoặc bạn có thể thêm ràng buộc account `signer` như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Đối với logic đóng tùy chỉnh, triển khai pattern đóng an toàn đầy đủ:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    let account = ctx.accounts.account.to_account_info();
+
+    let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+    **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+        .checked_add(account.lamports())
+        .unwrap();
+    **account.lamports.borrow_mut() = 0;
+
+    let mut data = account.try_borrow_mut_data()?;
+    for byte in data.deref_mut().iter_mut() {
+        *byte = 0;
+    }
+
+    let dst: &mut [u8] = &mut data;
+    let mut cursor = std::io::Cursor::new(dst);
+    cursor
+        .write_all(&anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, triển khai pattern đóng thủ công:
+
+```rust
+self.program_account.realloc(0, true)?;
+self.program_account.close()?;
+
+let mut data_ref = self.program_account.try_borrow_mut_data()?;
+data_ref[0] = 0xff;
+```
+
+
+
+
+

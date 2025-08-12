@@ -1,0 +1,256 @@
+# Vay (Loan)
+
+Lệnh `loan` (vay) là nửa đầu của hệ thống flash loan. Nó thực hiện bốn bước quan trọng để đảm bảo việc cho vay an toàn và nguyên tử:
+1. Giải tuần tự hóa một số lượng tài khoản động dựa trên số lượng khoản vay mà người dùng muốn thực hiện.
+2. Lưu tất cả các khoản vay này trong tài khoản "tạm thời" `loan` và tính toán số dư cuối cùng mà `protocol_token_account` cần có.
+3. Xác minh việc hoàn trả: Sử dụng instruction introspection để xác nhận rằng một lệnh hoàn trả hợp lệ tồn tại ở cuối giao dịch
+4. Chuyển tiền: Di chuyển tất cả số tiền vay được yêu cầu từ kho bạc của giao thức đến tài khoản của người vay
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+
+- `borrower`: người dùng yêu cầu flash loan. Phải là một Signer (người ký)
+- `protocol`: một Program Derived Address (PDA) sở hữu pool thanh khoản của giao thức cho một mức phí cụ thể.
+- `loan`: tài khoản "tạm thời" được sử dụng để lưu `protocol_token_account` và `balance` cuối cùng mà nó cần có. Phải có thể thay đổi (mutable)
+- `token_program`: chương trình token. Phải có thể thực thi (executable)
+
+Đây là cách triển khai:
+
+<Codeblock lang="rust">
+```rust
+pub struct LoanAccounts<'a> {
+    pub borrower: &'a AccountInfo,
+    pub protocol: &'a AccountInfo,
+    pub loan: &'a AccountInfo,
+    pub instruction_sysvar: &'a AccountInfo,
+    pub token_accounts: &'a [AccountInfo],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for LoanAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [borrower, protocol, loan, instruction_sysvar, _token_program, _system_program, token_accounts @ ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        if instruction_sysvar.key() != &INSTRUCTIONS_ID {
+            return Err(ProgramError::UnsupportedSysvar);
+        }
+
+        // Verify that the number of token accounts is valid
+        if (token_accounts.len() % 2).ne(&0) || token_accounts.len().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        if loan.try_borrow_data()?.len().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(Self {
+            borrower,
+            protocol,
+            loan,
+            instruction_sysvar,
+            token_accounts,
+        })
+    }
+}
+```
+</Codeblock>
+
+Vì `token_accounts` là một mảng động các tài khoản, chúng ta truyền chúng vào tương tự như `remaining_accounts`.
+
+Để đảm bảo cấu trúc đúng, chúng ta thêm xác thực. Mỗi khoản vay yêu cầu một `protocol_token_account` và một `borrower_token_account`, vì vậy chúng ta phải xác minh rằng mảng chứa các tài khoản và số lượng tài khoản chia hết cho hai.
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Chương trình flash loan của chúng ta cần xử lý lượng dữ liệu thay đổi tùy thuộc vào số lượng khoản vay mà người dùng muốn thực hiện đồng thời. Đây là cấu trúc dữ liệu chúng ta cần:
+- `bump`: Một byte đơn được sử dụng để tạo ra protocol PDA mà không cần sử dụng hàm `find_program_address()`.
+- `fee`: tỷ lệ phí (tính bằng basis points) mà người dùng trả cho việc vay
+- `amounts`: một mảng động các số tiền vay, vì người dùng có thể yêu cầu nhiều khoản vay trong một giao dịch
+
+Đây là cách triển khai:
+
+<Codeblock lang="rust">
+```rust
+pub struct LoanInstructionData<'a> {
+    pub bump: [u8; 1],
+    pub fee: u16,
+    pub amounts: &'a [u64],
+}
+
+impl<'a> TryFrom<&'a [u8]> for LoanInstructionData<'a> {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        // Get the bump
+        let (bump, data) = data.split_first().ok_or(ProgramError::InvalidInstructionData)?;
+
+        // Get the fee
+        let (fee, data) = data.split_at_checked(size_of::<u16>()).ok_or(ProgramError::InvalidInstructionData)?;
+
+        // Verify that the data is valid
+        if data.len() % size_of::<u64>() != 0 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        // Get the amounts
+        let amounts: &[u64] = unsafe {
+            core::slice::from_raw_parts(
+                data.as_ptr() as *const u64,
+                data.len() / size_of::<u64>()
+            )
+        };
+
+        Ok(Self { bump: [*bump], fee: u16::from_le_bytes(fee.try_into().map_err(|_| ProgramError::InvalidInstructionData)?), amounts })
+    }
+}
+```
+</Codeblock>
+
+Chúng ta sử dụng các hàm `split_first` và `split_at_checked` để tuần tự trích xuất `bump` và `fee` từ dữ liệu lệnh, cho phép chúng ta xử lý các byte còn lại và chuyển đổi chúng trực tiếp thành một slice `u64` bằng cách sử dụng hàm `core::slice::from_raw_parts()` để phân tích cú pháp hiệu quả.
+
+> Suy ra `protocol` Program Derived Address với `fee` tạo ra các pool thanh khoản riêng biệt cho mỗi mức phí, loại bỏ nhu cầu lưu trữ dữ liệu phí trong các tài khoản. Thiết kế này vừa an toàn vừa tối ưu vì mỗi PDA với một mức phí cụ thể chỉ sở hữu thanh khoản liên quan đến tỷ lệ phí đó. Nếu ai đó truyền một mức phí không hợp lệ, tài khoản token tương ứng cho mức phí đó sẽ trống, tự động khiến việc chuyển tiền thất bại do không đủ tiền.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+Sau khi giải tuần tự hóa `instruction_data` và `accounts`, chúng ta kiểm tra rằng số lượng `amounts` bằng số lượng `token_accounts` chia cho hai. Điều này đảm bảo chúng ta có đúng số lượng tài khoản cho các khoản vay được yêu cầu.
+
+<Codeblock lang="rust">
+```rust
+pub struct Loan<'a> {
+    pub accounts: LoanAccounts<'a>,
+    pub instruction_data: LoanInstructionData<'a>,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Loan<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = LoanAccounts::try_from(accounts)?;
+        let instruction_data = LoanInstructionData::try_from(data)?;
+
+        // Verify that the number of amounts matches the number of token accounts
+        if instruction_data.amounts.len() != accounts.token_accounts.len() / 2 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+```
+</Codeblock>
+
+Tiếp theo, chúng ta tạo `signer_seeds` cần thiết để chuyển token cho người vay và tạo tài khoản `loan`. Kích thước
+của tài khoản này được tính bằng `size_of::<LoanData>() * self.instruction_data.amounts.len()` để đảm bảo nó có thể
+chứa tất cả dữ liệu khoản vay cho giao dịch.
+
+<Codeblock lang="rust">
+```rust
+impl<'a> Loan<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Get the fee
+        let fee = self.instruction_data.fee.to_le_bytes();
+
+        // Get the signer seeds
+        let signer_seeds = [
+            Seed::from("protocol".as_bytes()),
+            Seed::from(&fee),
+            Seed::from(&self.instruction_data.bump),
+        ];
+        let signer_seeds = [Signer::from(&signer_seeds)];
+
+        // Open the LoanData account and create a mutable slice to push the Loan struct to it
+        let size = size_of::<LoanData>() * self.instruction_data.amounts.len();
+        let lamports = Rent::get()?.minimum_balance(size);
+
+        CreateAccount {
+            from: self.accounts.borrower,
+            to: self.accounts.loan,
+            lamports,
+            space: size as u64,
+            owner: &ID,
+        }.invoke()?;
+
+        //..
+    }
+}
+```
+</Codeblock>
+
+Sau đó chúng ta tạo một slice có thể thay đổi từ dữ liệu của tài khoản `loan`. Chúng ta sẽ điền vào slice này trong một vòng lặp `for` khi xử lý từng khoản vay và việc chuyển tiền tương ứng:
+
+<Codeblock lang="rust">
+```rust
+let mut loan_data = self.accounts.loan.try_borrow_mut_data()?;
+let loan_entries = unsafe {
+    core::slice::from_raw_parts_mut(
+        loan_data.as_mut_ptr() as *mut LoanData,
+        self.instruction_data.amounts.len()
+    )
+};
+```
+</Codeblock>
+
+Cuối cùng, chúng ta lặp qua tất cả các khoản vay. Trong mỗi lần lặp, chúng ta lấy `protocol_token_account` và `borrower_token_account`, tính toán số dư mà giao thức cần có, lưu dữ liệu này trong tài khoản `loan`, và chuyển token.
+
+<Codeblock lang="rust">
+```rust
+for (i, amount) in self.instruction_data.amounts.iter().enumerate() {
+    let protocol_token_account = &self.accounts.token_accounts[i * 2];
+    let borrower_token_account = &self.accounts.token_accounts[i * 2 + 1];
+
+    // Lấy số dư của tài khoản token của giao thức và thêm phí vào để chúng ta có thể lưu nó vào tài khoản loan
+    let balance = get_token_amount(&protocol_token_account.try_borrow_data()?);
+    let balance_with_fee = balance.checked_add(
+        amount.checked_mul(self.instruction_data.fee as u64)
+            .and_then(|x| x.checked_div(10_000))
+            .ok_or(ProgramError::InvalidInstructionData)?
+    ).ok_or(ProgramError::InvalidInstructionData)?;
+
+    // Đẩy struct Loan vào tài khoản loan
+    loan_entries[i] = LoanData {
+        protocol_token_account: *protocol_token_account.key(),
+        balance: balance_with_fee,
+    };
+
+    // Chuyển token từ giao thức đến người vay
+    Transfer {
+        from: protocol_token_account,
+        to: borrower_token_account,
+        authority: self.accounts.protocol,
+        amount: *amount,
+    }.invoke_signed(&signer_seeds)?;
+}
+```
+</Codeblock>
+
+Chúng ta kết thúc bằng cách sử dụng instruction introspection để thực hiện các kiểm tra cần thiết. Chúng ta xác minh rằng lệnh cuối cùng trong giao dịch là một lệnh `repay` và nó sử dụng cùng tài khoản `loan` như lệnh `loan` hiện tại của chúng ta.
+
+<Codeblock lang="rust">
+```rust
+// Introspecting lệnh Repay
+let instruction_sysvar = unsafe { Instructions::new_unchecked(self.accounts.instruction_sysvar.try_borrow_data()?) };
+let num_instructions = instruction_sysvar.num_instructions();
+let instruction = instruction_sysvar.load_instruction_at(num_instructions as usize - 1)?;
+
+if instruction.get_program_id() != &crate::ID {
+    return Err(ProgramError::InvalidInstructionData);
+}
+
+if unsafe { *(instruction.get_instruction_data().as_ptr()) } != *Repay::DISCRIMINATOR {
+    return Err(ProgramError::InvalidInstructionData);
+}
+
+if unsafe { instruction.get_account_meta_at_unchecked(1).key } != *self.accounts.loan.key() {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+</Codeblock>
+
+> Việc sử dụng tài khoản `loan` và cấu trúc instruction introspection theo cách này đảm bảo rằng chúng ta thực sự không cần phải thực hiện bất kỳ introspection nào trong lệnh `repay` vì tất cả các kiểm tra hoàn trả sẽ được xử lý bởi tài khoản `loan`.

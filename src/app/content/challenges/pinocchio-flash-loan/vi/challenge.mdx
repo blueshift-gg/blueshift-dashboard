@@ -1,0 +1,120 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Pinocchio Flash Loan
+
+Instruction introspection là một tính năng mạnh mẽ cho phép chương trình blockchain kiểm tra và phân tích các instruction khác trong cùng một gói giao dịch. Điều này bao gồm các instruction chưa được thực thi, cho phép chương trình của bạn có khả năng "nhìn trước" và đưa ra quyết định dựa trên những gì sẽ xảy ra sau này trong giao dịch.
+
+Hãy nghĩ về nó như việc có tầm nhìn tia X cho các giao dịch: chương trình của bạn có thể nhìn xuyên qua toàn bộ giao dịch để hiểu trình tự hoàn chỉnh của các hoạt động trước khi quyết định cách tiến hành.
+
+Ứng dụng hấp dẫn nhất của instruction introspection là flash loan. Đây là một loại khoản vay độc đáo chỉ tồn tại trong ranh giới của một giao dịch duy nhất.
+
+Đây là cách flash loan hoạt động:
+- **Vay**: Ở đầu giao dịch, bạn có thể ngay lập tức vay một lượng lớn vốn bằng cách sử dụng instruction `loan`
+- **Sử dụng**: Bạn có thể sử dụng vốn vay này để giao dịch, arbitrage, hoặc các hoạt động khác trong cùng giao dịch
+- **Trả nợ**: Trước khi giao dịch kết thúc, bạn phải trả lại khoản vay cộng với một khoản phí nhỏ bằng cách sử dụng instruction `repay`
+
+Điểm quan trọng là flash loan dựa vào tính chất nguyên tử của các giao dịch blockchain. Nếu bất kỳ phần nào của giao dịch thất bại (bao gồm việc trả nợ), toàn bộ giao dịch sẽ được hoàn tác như thể nó chưa bao giờ xảy ra. Điều này có nghĩa là người cho vay có rủi ro bằng không: hoặc họ được trả nợ, hoặc khoản vay thực sự chưa bao giờ xảy ra.
+
+Trong thử thách này, bạn sẽ tạo một chương trình flash loan đơn giản để minh họa instruction introspection trong thực tế. Chương trình sẽ kiểm tra dữ liệu instruction và tài khoản qua các instruction khác nhau trong cùng giao dịch để đảm bảo các điều khoản vay được đáp ứng.
+
+Nếu bạn mới làm quen với instruction introspection, chúng tôi khuyên bạn nên bắt đầu với [Khóa học Instruction Introspection](/vi/courses/instruction-introspection) để hiểu các khái niệm cơ bản được sử dụng trong chương trình này.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Trước khi bắt đầu, hãy đảm bảo Rust và Pinocchio đã được cài đặt. Sau đó, chạy lệnh sau trong terminal của bạn:
+
+<Codeblock lang="terminal">
+```bash
+# tạo workspace
+cargo new blueshift_pinocchio_flash_loan --lib --edition 2021
+cd blueshift_pinocchio_flash_loan
+```
+</Codeblock>
+
+Thêm `pinocchio`, `pinocchio-system`, và `pinocchio-token`:
+
+<Codeblock lang="terminal">
+```bash
+cargo add pinocchio pinocchio-system pinocchio-token
+```
+</Codeblock>
+
+Khai báo các loại crate trong `Cargo.toml` để tạo ra các artifact triển khai trong `target/deploy`:
+
+<Codeblock lang="toml">
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+</Codeblock>
+
+Bây giờ bạn đã sẵn sàng để viết chương trình flash loan của mình.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Lần này, chúng ta sẽ chia chương trình thành các module nhỏ, tập trung thay vì đặt mọi thứ trong `lib.rs`. Cây thư mục sẽ trông giống như thế này:
+
+```
+src
+├── instructions
+│       ├── helpers.rs
+│       ├── loan.rs
+│       ├── mod.rs
+│       └── repay.rs
+├── lib.rs
+```
+
+**Lưu ý**: Nhớ thay đổi program ID thành `22222222222222222222222222222222222222222222` vì chúng tôi sử dụng điều này để kiểm tra chương trình của bạn.
+
+Entrypoint trong `lib.rs` rất giống với những gì chúng ta đã đề cập trong [Khóa học Giới thiệu về Pinocchio](/vi/courses/introduction-to-pinocchio).
+
+<Codeblock lang="rust">
+```rust
+use pinocchio::{account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Loan::DISCRIMINATOR, data)) => Loan::try_from((data, accounts))?.process(),
+        Some((Repay::DISCRIMINATOR, _)) => Repay::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Các hàm hỗ trợ" id="helpers" level="h2" />
+
+Trước khi đi sâu vào các instruction `loan` và `repay`, hãy xem xét `helpers.rs`:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct LoanData {
+    pub protocol_token_account: [u8; 32],
+    pub balance: u64,
+}
+
+pub fn get_token_amount(data: &[u8]) -> u64 {
+    unsafe { *(data.as_ptr().add(64) as *const u64) }
+}
+```
+</Codeblock>
+
+File này khá đơn giản. Nó chứa một struct `LoanData`, mà chúng ta sẽ sử dụng để tạm thời lưu trữ dữ liệu khoản vay trong một tài khoản trước khi khoản vay được trả lại. Nó cũng cung cấp một hàm hỗ trợ `get_token_amount()` để đọc số lượng token từ một tài khoản.

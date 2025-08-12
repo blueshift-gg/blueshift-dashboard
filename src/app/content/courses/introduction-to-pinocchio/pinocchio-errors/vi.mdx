@@ -1,0 +1,87 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Error
+
+Rõ ràng, mô tả chi tiết các lỗi là thiết yếu trong các chương trình Solana được xây dựng với Pinocchio. Chúng làm cho việc debug (gỡ lỗi) dễ dàng hơn và cung cấp phản hồi có ý nghĩa cho người dùng và client tương tác với chương trình của bạn.
+
+### PinocchioError Enum
+
+Khi định nghĩa các kiểu error tùy chỉnh trong Rust, bạn có một số tùy chọn, chẳng hạn như `thiserror`, `anyhow`, và `failure`. Đối với các chương trình Pinocchio, `thiserror` là lựa chọn được ưa thích vì:
+- Nó cho phép bạn chú thích mỗi biến thể error với một thông báo có thể đọc được bằng cách sử dụng thuộc tính `#[error("...")]`.
+- Nó tự động triển khai các trait `core::error::Error` và `Display`, làm cho error của bạn dễ in và debug.
+- Tất cả thông báo error và formatting được kiểm tra tại compile time, giảm nguy cơ các vấn đề runtime.
+- Quan trọng nhất, `thiserror` hỗ trợ môi trường `no_std` khi bạn vô hiệu hóa các tính năng mặc định của nó, điều này được yêu cầu đối với các chương trình Pinocchio.
+
+Để sử dụng thiserror trong chương trình Pinocchio, thêm nó vào `Cargo.toml` của bạn như thế này:
+
+```
+[dependencies]
+thiserror = { version = "1.0", default-features = false }
+```
+
+Here’s how you can define a custom error type for your Pinocchio program:
+
+```rust
+use {
+    num_derive::FromPrimitive,
+    pinocchio::program_error::{ProgramError, ToStr},
+    thiserror::Error,
+};
+
+#[derive(Clone, Debug, Eq, Error, FromPrimitive, PartialEq)]
+pub enum PinocchioError {
+    // 0
+    /// Lamport balance below rent-exempt threshold.
+    #[error("Lamport balance below rent-exempt threshold")]
+    NotRentExempt,
+}
+```
+
+Mỗi biến thể được chú thích với một thông báo sẽ được hiển thị khi error xảy ra.
+
+Để trả về error tùy chỉnh của bạn từ các instruction Solana, triển khai `From<PinocchioError>` cho `ProgramError`:
+
+```rust
+impl From<PinocchioError> for ProgramError {
+    fn from(e: PinocchioError) -> Self {
+        ProgramError::Custom(e as u32)
+    }
+}
+```
+
+Điều này cho phép bạn sử dụng toán tử `?` và trả về error tùy chỉnh của bạn một cách liền mạch.
+
+### Deserialize Error từ các giá trị thô
+
+Nếu bạn cần chuyển đổi mã error thô (chẳng hạn như những cái từ log hoặc cross-program invocation) trở lại thành error enum của bạn, triển khai `TryFrom<u32>`:
+
+```rust
+impl TryFrom<u32> for PinocchioError {
+    type Error = ProgramError;
+    fn try_from(error: u32) -> Result<Self, Self::Error> {
+        match error {
+            0 => Ok(PinocchioError::NotRentExempt),
+            _ => Err(ProgramError::InvalidArgument),
+        }
+    }
+}
+```
+
+> Điều này là tùy chọn, nhưng hữu ích cho xử lý error nâng cao và testing.
+
+### Error có thể dễ dàng đọc được
+
+Để logging và debugging, bạn có thể muốn cung cấp một biểu diễn chuỗi của error của mình. Triển khai trait `ToStr` cho phép bạn làm điều này:
+
+```rust
+impl ToStr for PinocchioError {
+    fn to_str<E>(&self) -> &'static str {
+        match self {
+            PinocchioError::NotRentExempt => "Error: Lamport balance below rent-exempt threshold",
+        }
+    }
+}
+```
+
+> Bước này cũng là tùy chọn, nhưng nó có thể làm cho báo cáo error thân thiện với người dùng hơn.

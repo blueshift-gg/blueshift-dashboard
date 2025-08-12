@@ -1,0 +1,229 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Build your Codama IDL from scratch
+
+Building a Codama IDL from scratch means creating the complete tree of nodes for your program. To do this efficiently, let's examine the types of nodes available for use:
+
+<ArticleSection name="Node Types" id="node-types" level="h2" />
+
+### Value Node
+
+To pass specific values into a node, we use `ValueNode`. This type represents all available value nodes that can hold different types of data. 
+
+[Here](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/valueNodes/README.md) you can find detailed documentation on all the values available.
+
+> `ValueNode` is a type alias and cannot be used directly as a node. When a `ValueNode` is required, use one of the specific value node types instead.
+
+### Type Node
+
+To define the structure and shape of data, we use `TypeNode`. These nodes describe what kind of data is expected: such as numbers, strings, structs, arrays, or custom types. 
+
+They define the schema without containing actual values. 
+
+[Here](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/typeNodes/README.md) you can find detailed documentation on all the types available.
+
+> `TypeNode` is a type alias and cannot be used directly as a node. When a `TypeNode` is required, use one of the specific type node types instead.
+
+### Discriminator Node
+
+To differentiate between accounts and instructions in our program, we use discriminators. There are different methods to accomplish this, and the `DiscriminatorNode` provides all available options:
+
+- `ConstantDiscriminatorNode`: Used to describe a constant value at a given offset. It takes a `ConstantValueNode` as the constant and a `number` as the offset:
+    
+    ```ts
+    const discriminatorNode = constantDiscriminatorNode(constantValueNodeFromString('utf8', 'Hello'), 64);
+    ```
+
+- `FieldDiscriminatorNode`: Used to describe a default value of a struct field at a given offset. It takes a `CamelCaseString` as the field name and a `number` as the offset:
+    
+    ```ts
+    const discriminatorNode = fieldDiscriminatorNode('accountState', 64);
+    ```
+
+    > The field must be available in the account data or instruction arguments and it must have a default value. For instance:
+
+    ```ts
+    accountNode({
+        data: structTypeNode([
+            structFieldTypeNode({
+                name: 'discriminator',
+                type: numberTypeNode('u32'),
+                defaultValue: numberValueNode(42),
+                defaultValueStrategy: 'omitted',
+            }),
+            // ...
+        ]),
+        discriminators: [fieldDiscriminatorNode('discriminator')],
+        // ...
+    });
+    ```
+
+- `SizeDiscriminatorNode`: Used to distinguish accounts or instructions based on the size of their data. It takes a `number` as the size parameter:
+    
+    ```ts
+    const discriminatorNode = sizeDiscriminatorNode(165);
+    ```
+
+> `DiscriminatorNode` is a type alias and cannot be used directly as a node. When a `DiscriminatorNode` is required, use one of the specific discriminator node types instead.
+
+### Pda Seed Node
+
+To define seeds for Program Derived Addresses (PDAs), we use `PdaSeedNode`. These nodes specify how PDA addresses should be derived, either from constant values or variable inputs. The `PdaSeedNode` provides different methods to define PDA seeds:
+
+- `ConstantPdaSeedNode`: Used to describe a constant seed for a program-derived address. It takes a `TypeNode` and `ValueNode` in combination:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNode(stringTypeNode('utf8'), stringValueNode('auth'));
+    ```
+
+    > A `constantPdaSeedNodeFromString` helper can also be used to define string-based constants more easily. For instance, the following example is equivalent to the one above:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNodeFromString('utf8', 'auth');
+    ```
+
+- `VariablePdaSeedNode`: Used to describe a variable seed for a program-derived address. It takes a name and a `TypeNode`:
+
+    ```ts
+    const pdaSeedNode = variablePdaSeedNode('authority', publicKeyTypeNode())
+    ```
+
+Here's how they're used in a `pdaNode`:
+
+```ts
+const counterPda = pdaNode({
+    name: 'counter',
+    seeds: [
+        constantPdaSeedNodeFromString('utf8', 'counter'),
+        variablePdaSeedNode('authority', publicKeyTypeNode()),
+    ],
+});
+```
+
+> `PdaSeedNode` is a type alias and cannot be used directly as a node. When a `PdaSeedNode` is required, use one of the specific pda seed node types instead.
+
+<ArticleSection name="Writing a Codama IDL" id="writing-a-codama-idl" level="h2" />
+
+Now that we have examined the most important nodes available in a program, let's discover how to create a Codama IDL from scratch.
+
+### Root Node
+
+To create the foundation of your Codama IDL, we use `RootNode`. This node serves as the top-level container that holds your main `ProgramNode` as well as any additional programs that may be referenced by the main program.
+
+```ts
+const node = rootNode(programNode({ ... }));
+```
+
+### Program Node
+
+To define an entire on-chain program, we use `ProgramNode`. This node represents the complete program deployed on-chain and defines all the minimum viable elements such as accounts, instructions, PDAs, and errors.
+
+In addition to these core elements, this node accepts the program's name, version, deployment public key, and markdown documentation:
+
+
+```ts
+const node = programNode({
+    name: 'counter',
+    publicKey: '22222222222222222222222222222222222222222222',
+    version: '0.0.1',
+    docs: [],
+    accounts: [],
+    instructions: [],
+    definedTypes: [],
+    pdas: [],
+    errors: [],
+});
+```
+
+In the next sections we'll examine all these elements in detail.
+
+### Account Node
+
+To define on-chain accounts, we use `AccountNode`. This node is characterized by its name, data structure, and optional attributes such as PDA definitions and account discriminators. 
+
+It represents the accounts that typically correspond to the `state.rs` file of your program.
+
+The docs field can be used to add documentation explaining what this account accomplishes within the program:
+
+```ts
+const node = accountNode({
+    name: 'token',
+    data: structTypeNode([
+        structFieldTypeNode({ name: 'mint', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'owner', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'amount', type: numberTypeNode('u64') }),
+    ]),
+    discriminators: [sizeDiscriminatorNode(72)],
+    size: 72,
+    pda: pdaLinkNode("associatedTokenAccount"),
+});
+```
+
+> The `AccountNode` does not store an array of `PdaNode` but a single optional link to a `PdaNode` via a `PdaLinkNode` so if a `PdaNode` is defined inside a `ProgramNode` the two can be linked together here.
+
+### Instruction Node
+
+To define program instructions, we use `InstructionNode`. This node represents an instruction in a program and allows you to specify the discriminator, required accounts, and instruction data without complications.
+
+Additionally, you can include optional accounts. Based on your program's design, these optional accounts can be resolved in two ways: by being omitted or by passing the program ID as an account. You can select the resolution method using the `optionalAccountStrategy: "omitted" | "programId"` field.
+
+> When the `optionalAccountStrategy` is not provided, the `programId` strategy is assumed by default.
+
+The docs field can be used to add documentation explaining what this instruction accomplishes within the program.
+
+```ts
+const node = instructionNode({
+    name: 'increment',
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    arguments: [
+        instructionArgumentNode({
+            name: 'discriminator',
+            type: numberTypeNode('u8'),
+            defaultValue: numberValueNode(1),
+            defaultValueStrategy: 'omitted',
+        }),
+    ],
+    accounts: [
+        instructionAccountNode({ name: 'counter', isWritable: true, isSigner: true }),
+        instructionAccountNode({ name: 'authority', isWritable: false, isSigner: false }),
+    ],
+    remainingAccounts: [instructionRemainingAccountsNode(argumentValueNode('authorities'), { isSigner: true })],
+    optionalAccountStrategy: 'omitted',
+});
+```
+
+In `instructionAccountNode`, you can specify account optionality using the `isOptional: boolean` field, or provide a `defaultValue` that resolves to a `ValueNode`. 
+
+> The defaultValue functionality also works for `instructionArgumentNode`.
+
+The defaultValueStrategy in instructionArgumentNode determines how default values are handled: "optional" means that the argument's default value may be overridden by a provided argument or "omitted" that means that no argument should be provided and the default value should always be used
+
+The strategy defaults to "optional" if not specified.
+
+### Error Node
+
+To define errors that can be returned by a program, we use `ErrorNode`. This node is characterized by a name, a numeric code that will be returned, and an associated readable message for debugging.
+
+```ts
+const node = errorNode({
+    name: 'invalidAmountArgument',
+    code: 1,
+    message: 'The amount argument is invalid.',
+});
+```
+
+### PDA Node
+
+To provide definitions for specific Program-Derived Addresses, we use `PdaNode`. This node is characterized by a name and a list of seeds that can be either constant or variable, allowing for flexible PDA generation.
+
+```ts
+const node = pdaNode({
+    name: 'counter',
+    seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+    docs: ['The counter PDA derived from its authority.'],
+});
+```
+
+> If the program ID differs from the nearest ProgramNode ancestor, you need to specify it using the programId field.
+
+This can be used to link PDAs as `defaultValue` in the `instructionAccountNode` using the `pdaValueNode`.

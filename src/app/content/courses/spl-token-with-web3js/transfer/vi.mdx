@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instruction chuyển token
+
+Chuyển token từ account này sang account khác. Đây là thao tác cơ bản để gửi token giữa các người dùng.
+
+Trước khi chúng ta có thể chuyển bất kỳ token nào, chúng ta sẽ cần phải có:
+- Account `Mint` đã được khởi tạo.
+- Account `Token` nguồn hoặc account `Associated Token` đã có tối thiểu số lượng chúng ta muốn chuyển.
+- Account `Token` đích hoặc account `Associated Token` sẽ nhận token từ account `Token` nguồn.
+
+> Số lượng token chúng ta chuyển được "chuẩn hóa" với decimal. Điều này có nghĩa là nếu chúng ta muốn chuyển 1 token có decimal là 6, chúng ta sẽ cần thực sự đặt `1e6` làm amount
+
+<ArticleSection name="Instruction thô" id="raw-instruction" level="h2" />
+
+Bằng cách chỉ sử dụng instruction "thô" mà không có bất kỳ abstraction nào, đây là cách chuyển token sẽ trông như thế nào:
+
+```ts
+const destination = Keypair.generate();
+
+const destinationTokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    destination.publicKey,
+);
+
+// Create ATA creation instruction
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    destinationTokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// Transfer tokens to ATA 
+const transferInstruction = createTransferInstruction(
+    sourceTokenAccount, // source token account pubkey
+    destinationTokenAccount, // destination token account pubkey
+    keypair.publicKey, // owner of the source token account
+    1e6, // amount
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token accounts created and tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Instruction được trừu tượng hóa" id="abstracted-instruction" level="h2" />
+
+Đây là cách các instruction tương tự sẽ trông như thế nào được trừu tượng hóa với instruction `transfer()`:
+
+```ts
+const destination = Keypair.generate();
+
+const destinationAta = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    destination.publicKey
+);
+
+console.log(`This is your ATA: ${ata.address}!`)
+  
+let tx = await transfer(
+    connection, // connection
+    keypair, // payer
+    sourceAta, // source token account
+    destinationAta, // destination token account
+    keypair.publicKey, // owner of the source token account
+    1e6, // amount to transfer
+);
+
+console.log(`Succesfully Transferred!. Transaction Here: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+<ArticleSection name="Instruction được kiểm tra" id="checked-instruction" level="h2" />

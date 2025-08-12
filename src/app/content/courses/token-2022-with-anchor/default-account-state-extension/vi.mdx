@@ -1,0 +1,203 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Default Account State Extension
+
+Phần mở rộng `DefaultAccountState` là một Mint extension cho phép tất cả `Token` account mới được tạo cho mint cụ thể đó bị đóng băng theo mặc định. `Freeze Authority` của mint sau đó có thể thaw (bỏ đóng băng) những `Token` account này để chúng có thể trở nên có thể sử dụng được.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Vì `Anchor` không có bất kỳ macro nào cho extension `default_account_state`, chúng ta sẽ tạo `Mint` account bằng cách sử dụng raw CPI.
+
+Đây là cách tạo mint với Default Account State extension:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint, state::AccountState},
+        InitializeMint2,
+    },
+    token_interface::{
+        default_account_state_initialize, DefaultAccountStateInitialize, Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_default_account_state_(
+    ctx: Context<Initialize>,
+) -> Result<()> {
+    // Calculate space required for mint and extension data
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::DefaultAccountState])?;
+
+    // Calculate minimum lamports required for size of mint account with extensions
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoke System Program to create new account with space for mint and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the NonTransferable extension
+    // This instruction must come before the instruction to initialize the mint data
+    default_account_state_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            DefaultAccountStateInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        &AccountState::Frozen, // default frozen token accounts
+    )?;
+
+    // Initialize the standard mint account data
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimals
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+> Hãy nhớ rằng `Freeze Authority` trên `Mint` là bắt buộc đối với phần mở rộng này hoặc chúng ta sẽ không thể thaw bất kỳ `Token` account nào khi chúng được tạo.
+
+<ArticleSection name="Thawing the Token Account" id="thawing-the-token-account" level="h2" />
+
+Có phần mở rộng `DefaultAccountState` nghĩa là tất cả các `Token` account khi được khởi tạo sẽ mặc định bị `đóng băng`.
+
+Điều này có nghĩa là nó không thể nào thực hiện `Mint`, `Transfer` hoặc hầu như bất kỳ thao tác nào trên những `Token` account đó nếu chúng ta không thaw (bỏ đóng băng) chúng.
+
+Chúng ta có thể dễ dàng gỡ bỏ đóng băng một `Token` account bằng cách sử dụng instruction `thaw_account()` như thế này:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    token_interface::{thaw_account, ThawAccount, Mint, Token, Token2022}
+};
+
+#[derive(Accounts)]
+pub struct ThawAccount<'info> {
+    #[account(mut)]
+    pub freeze_authority: Signer<'info>,
+    #[account(
+        mut,
+        mint::freeze_authority = freeze_authority,
+    )]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_account: InterfaceAccount<'info, Token>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn thaw_account(
+    ctx: Context<UpdateState>,
+) -> Result<()> {
+    thaw_account(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            ThawAccount {
+                account: ctx.accounts.token_account.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                freeze_authority: ctx.accounts.freeze_authority.to_account_info(),
+            },
+        ),
+        &account_state,
+    )?;
+    Ok(())
+}
+```
+
+<ArticleSection name="Thay đổi Default Account State" id="changing-the-default-account-state" level="h2" />
+
+Khi chúng ta không cần có kiểm soát lớn hơn đối với phân phối token và chúng ta muốn để mọi người tự do giao dịch token, chúng ta có thể thay đổi default account state bằng cách sử dụng instruction `default_account_state_update()` như thế này:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    token_interface::{default_account_state_update, DeafaultAccountStateUpdate, Mint, Token2022}
+    spl_token_2022::state::AccountState,   
+};
+
+#[derive(Accounts)]
+pub struct UpdateState<'info> {
+    #[account(mut)]
+    pub freeze_authority: Signer<'info>,
+    #[account(
+        mut,
+        mint::freeze_authority = freeze_authority,
+    )]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn update_state(
+    ctx: Context<UpdateState>,
+    account_state: AnchorAccountState,
+) -> Result<()> {
+    // Convert AnchorAccountState to spl_token_2022::state::AccountState
+    let account_state = account_state.to_spl_account_state();
+
+    default_account_state_update(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            DefaultAccountStateUpdate {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                freeze_authority: ctx.accounts.freeze_authority.to_account_info(),
+            },
+        ),
+        &account_state,
+    )?;
+    Ok(())
+}
+
+// Custom enum to implement AnchorSerialize and AnchorDeserialize
+// This is required to pass the enum as an argument to the instruction
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub enum AnchorAccountState {
+    Uninitialized,
+    Initialized,
+    Frozen,
+}
+
+// Implement conversion from AnchorAccountState to spl_token_2022::state::AccountState
+impl AnchorAccountState {
+    pub fn to_spl_account_state(&self) -> AccountState {
+        match self {
+            AnchorAccountState::Uninitialized => AccountState::Uninitialized,
+            AnchorAccountState::Initialized => AccountState::Initialized,
+            AnchorAccountState::Frozen => AccountState::Frozen,
+        }
+    }
+}
+```

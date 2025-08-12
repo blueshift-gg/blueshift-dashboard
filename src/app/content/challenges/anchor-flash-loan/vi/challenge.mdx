@@ -1,0 +1,193 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Anchor Flash Loan
+
+Instruction introspection là một tính năng mạnh mẽ cho phép một chương trình blockchain kiểm tra và phân tích các instruction khác trong cùng một transaction bundle. Điều này bao gồm cả những instruction chưa được thực thi, giúp chương trình của bạn có khả năng "nhìn trước" và đưa ra quyết định dựa trên những gì sẽ xảy ra sau đó trong transaction.
+
+Hãy nghĩ về nó như việc có tầm nhìn tia X cho các transaction: chương trình của bạn có thể nhìn xuyên qua toàn bộ transaction để hiểu được chuỗi hoạt động hoàn chỉnh trước khi quyết định cách tiến hành.
+
+Ứng dụng hấp dẫn nhất của instruction introspection là flash loan. Đây là một loại khoản vay độc đáo chỉ tồn tại trong phạm vi của một transaction duy nhất.
+
+Cách thức hoạt động của flash loan:
+- **Borrow**: Ở đầu transaction, bạn có thể ngay lập tức vay một lượng vốn lớn bằng cách sử dụng instruction `loan`
+- **Use**: Bạn có thể sử dụng vốn vay này để giao dịch, arbitrage, hoặc các hoạt động khác trong cùng transaction đó
+- **Repay**: Trước khi transaction kết thúc, bạn phải trả lại khoản vay cộng với một khoản phí nhỏ bằng cách sử dụng instruction `repay`
+
+Điểm quan trọng là flash loan dựa vào tính chất atomic của blockchain transaction. Nếu bất kỳ phần nào của transaction thất bại (bao gồm cả việc trả nợ), toàn bộ transaction sẽ được rollback như thể nó chưa bao giờ xảy ra. Điều này có nghĩa là người cho vay không có rủi ro: hoặc họ được trả nợ, hoặc khoản vay thực sự chưa bao giờ xảy ra.
+
+Trong thử thách này, bạn sẽ tạo một chương trình flash loan đơn giản để minh họa instruction introspection trong thực tế. Chương trình sẽ kiểm tra dữ liệu instruction và các account qua các instruction khác nhau trong cùng một transaction để đảm bảo các điều khoản vay được đáp ứng.
+
+Nếu bạn mới làm quen với instruction introspection, chúng tôi khuyên bạn nên bắt đầu với [Khóa học Instruction Introspection](/vi/courses/instruction-introspection) để hiểu các khái niệm cơ bản được sử dụng trong chương trình này.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Trước khi bắt đầu, hãy đảm bảo bạn đã cài đặt Rust và Anchor. Nếu bạn cần hướng dẫn thiết lập, hãy tham khảo [tài liệu chính thức của anchor](https://www.anchor-lang.com/docs/installation). Sau đó chạy lệnh sau trong terminal:
+
+<Codeblock lang="terminal">
+```bash
+anchor init blueshift_anchor_flash_loan
+```
+</Codeblock>
+
+Thêm các dependency cần thiết:
+- `anchor-spl`: Cung cấp các tiện ích để làm việc với SPL token (tiêu chuẩn token của Solana)
+
+<Codeblock lang="terminal">
+```bash
+cd blueshift_anchor_flash_loan
+cargo add anchor-spl
+```
+</Codeblock>
+
+Bây giờ bạn đã sẵn sàng để bắt đầu xây dựng chương trình flash loan của mình!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Hãy xây dựng nền tảng cho chương trình flash loan bằng cách thiết lập cấu trúc cơ bản, các account và xử lý lỗi mà cả hai instruction borrow và repay sẽ sử dụng.
+
+Chúng ta sẽ triển khai mọi thứ trong `lib.rs` vì chỉ có hai instruction chia sẻ cùng một cấu trúc account. Đây là template khởi đầu với tất cả các thành phần thiết yếu:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+  token::{Token, TokenAccount, Mint, Transfer, transfer}, 
+  associated_token::AssociatedToken
+}; 
+use anchor_lang::{
+  Discriminator,
+  solana_program::sysvar::instructions::{
+      ID as INSTRUCTIONS_SYSVAR_ID,
+      load_instruction_at_checked
+  }
+};
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_flash_loan {
+  use super::*;
+
+  pub fn borrow(ctx: Context<Loan>, borrow_amount: u64) -> Result<()> {
+    // borrow logic...
+    
+    Ok(())
+  }
+
+  pub fn repay(ctx: Context<Loan>) -> Result<()> {
+    // repay logic...
+
+    Ok(())
+  }
+}
+
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  // loan accounts...
+}
+
+#[error_code]
+pub enum ProtocolError {
+  // error enum..
+}
+```
+</Codeblock>
+
+**Lưu ý**: nhớ thay đổi program ID thành `22222222222222222222222222222222222222222222` vì chúng tôi sử dụng ID này để test chương trình của bạn.
+
+<ArticleSection name="Accounts" id="accounts" level="h2" />
+
+Vì cả hai instruction `borrow` và `repay` đều làm việc với cùng các account, chúng ta có thể tạo một context `Loan` duy nhất phục vụ cho cả hai chức năng. Điều này giúp code dễ bảo trì và hiểu hơn.
+
+Struct account `Loan` của chúng ta cần các thành phần sau:
+- `borrower`: người dùng yêu cầu flash loan.
+- `protocol`: một Program Derived Address (PDA) sở hữu liquidity pool của protocol.
+- `mint`: token cụ thể được vay.
+- `borrower_ata`: Associated Token Account của người vay sẽ nhận token được vay.
+- `protocol_ata`: Associated Token Account của protocol sẽ cung cấp token được vay.
+- `instructions`: account Instructions Sysvar cho introspection.
+- `token_program`, `associated_token_program`, và `system_program`: các program cần thiết cho chương trình.
+
+Đây là cách chúng ta định nghĩa account struct:
+
+<Codeblock lang="rust">
+```rust
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  #[account(mut)]
+  pub borrower: Signer<'info>,
+  #[account(
+    seeds = [b"protocol".as_ref()],
+    bump,
+  )]
+  pub protocol: SystemAccount<'info>,
+
+  pub mint: Account<'info, Mint>,
+  #[account(
+    init_if_needed,
+    payer = borrower,
+    associated_token::mint = mint,
+    associated_token::authority = borrower,
+  )]
+  pub borrower_ata: Account<'info, TokenAccount>,
+  #[account(
+    mut,
+    associated_token::mint = mint,
+    associated_token::authority = protocol,
+  )]
+  pub protocol_ata: Account<'info, TokenAccount>,
+
+  #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+  /// CHECK: InstructionsSysvar account
+  instructions: UncheckedAccount<'info>,
+  pub token_program: Program<'info, Token>,
+  pub associated_token_program: Program<'info, AssociatedToken>,
+  pub system_program: Program<'info, System>
+}
+```
+</Codeblock>
+
+Như bạn có thể thấy, các account cần thiết cho instruction này và các ràng buộc của chúng khá đơn giản:
+- `protocol`: sử dụng `seeds = [b"protocol".as_ref()]` để tạo một địa chỉ xác định sở hữu toàn bộ liquidity của protocol. Điều này đảm bảo chỉ chương trình của chúng ta mới có thể kiểm soát các khoản tiền này.
+- `borrower_ata`: sử dụng `init_if_needed` vì người vay có thể chưa có associated token account cho token cụ thể này. Ràng buộc này sẽ tự động tạo một account nếu cần.
+- `protocol_ata`: phải đã tồn tại và có thể thay đổi vì chúng ta sẽ chuyển token từ đó. Ràng buộc `associated_token::authority = protocol` đảm bảo chỉ protocol PDA mới có quyền chuyển token.
+- `instructions`: sử dụng càng buộc `address` để xác minh chúng ta đang truy cập đúng system account chứa dữ liệu instruction của transaction.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+Flash loan yêu cầu validation chính xác ở nhiều bước, vì vậy chúng ta cần xử lý lỗi toàn diện. Đây là error enum hoàn chỉnh của chúng ta:
+
+<Codeblock lang="rust">
+```rust
+#[error_code]
+pub enum ProtocolError {
+    #[msg("Invalid instruction")]
+    InvalidIx,
+    #[msg("Invalid instruction index")]
+    InvalidInstructionIndex,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Not enough funds")]
+    NotEnoughFunds,
+    #[msg("Program Mismatch")]
+    ProgramMismatch,
+    #[msg("Invalid program")]
+    InvalidProgram,
+    #[msg("Invalid borrower ATA")]
+    InvalidBorrowerAta,
+    #[msg("Invalid protocol ATA")]
+    InvalidProtocolAta,
+    #[msg("Missing repay instruction")]
+    MissingRepayIx,
+    #[msg("Missing borrow instruction")]
+    MissingBorrowIx,
+    #[msg("Overflow")]
+    Overflow,
+}
+```
+</Codeblock>
+
+Với nền tảng này, chúng ta sẵn sàng triển khai logic cốt lõi cho các instruction flash loan. Cấu trúc account đảm bảo xử lý token đúng cách, trong khi hệ thống lỗi cung cấp phản hồi rõ ràng cho việc debug và validation bảo mật.
+
+> Chương trình chưa biên dịch được. Bạn có thể tìm ra lý do không?

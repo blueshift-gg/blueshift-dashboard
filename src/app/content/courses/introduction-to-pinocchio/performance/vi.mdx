@@ -1,0 +1,106 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Hiệu suất
+
+Mặc dù nhiều nhà phát triển chuyển sang Pinocchio vì khả năng kiểm soát chi tiết các trường account, sức mạnh thực sự của nó nằm ở việc cho phép ttoois đa hóa hiệu suất.
+
+Trong phần này, chúng ta sẽ khám phá các chiến lược thực tế để đạt được hiệu suất tối ưu trong các chương trình Solana của bạn.
+
+<ArticleSection name="Kiểm tra thừa" id="superflous-checks" level="h2" />
+
+Các nhà phát triển thường thêm các ràng buộc account bổ sung cho mục đích an toàn, nhưng điều này có thể dẫn đến phát sinh các chi phí không cần thiết. Do đó, rất quan trọng để phân biệt giữa các kiểm tra thiết yếu và kiểm tra dư thừa.
+
+Ví dụ, khi chỉ đọc từ `Token Account` hoặc `Mint`, deserialization và validation là cần thiết. Nhưng nếu những account tương tự này sau đó được sử dụng trong CPI (Cross-Program Invocation), bất kỳ sự không khớp hoặc lỗi nào sẽ khiến instruction thất bại tại thời điểm đó. Do đó, các kiểm tra phòng ngừa có thể là dư thừa.
+
+Tương tự, việc xác minh "owner" của Token Account thường là thừa; đặc biệt nếu account được kiểm soát bởi PDA (Program Derived Address). Nếu owner không chính xác, CPI sẽ thất bại do seed không hợp lệ. Trong trường hợp transfer không được thực thi bởi PDA, bạn nên tập trung vào việc xác thực người nhận, đặc biệt khi gửi vào account được kiểm soát bởi PDA vì lợi ích của người gửi phù hợp với lợi ích của chương trình.
+
+Hãy lấy ví dụ về `Escrow`:
+
+...
+
+### Associated Token Program
+
+Việc sử dụng `Associated Token Account` (ATA) thì thuận tiện nhưng đi kèm với chi phí hiệu suất. Tránh ép buộc sử dụng chúng trừ khi thực sự cần thiết, và không bao giờ yêu cầu tạo chúng trong logic instruction của bạn. Đối với hầu hết các kịch bản, pattern `init-if-needed` làm tăng thêm độ phức tạp và sử dụng tài nguyên có thể tránh được (như trong instruction Amm được tạo bởi router như Jupiter).
+
+Nếu chương trình của bạn dựa vào ATA, hãy đảm bảo chúng được tạo bên ngoài. Trong chương trình của bạn, xác minh tính đúng đắn của chúng bằng cách derive địa chỉ mong đợi trực tiếp như thế này:
+
+```rust
+let (associated_token_account, _) = find_program_address(
+    &[
+        self.accounts.owner.key(),
+        self.accounts.token_program.key(),
+        self.accounts.mint.key(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+```
+
+Bằng cách tối giản hóa những kiểm tra và yêu cầu account không cần thiết, bạn giảm chi phí tính toán và làm cho quá trình thực thi của chương trình của bạn trở nên linh hoạt hơn; giúp bạn tận dụng tối đa tiềm năng hiệu suất của phát triển native trên Solana.
+
+> Thêm các kiểm tra để cho phép instruction thất bại sớm là một lợi thế, vì lượng compute unit tiêu thụ sẽ chắc chắn thấp hơn. Do đó, hãy cân nhắc liệu instruction có chủ yếu được sử dụng với các cờ như `{ skipPreflight: true }` hay không.
+
+<ArticleSection name="Perf Flag" id="perf-flag" level="h2" />
+
+Các cờ chức năng của Rust cung cấp một cách mạnh mẽ để biên dịch mã một cách điều kiện, cho phép bạn bật/tắt các tính năng cho các profile build khác nhau; chẳng hạn như development, testing, hoặc hiệu suất tối đa trong production. 
+
+Điều này đặc biệt hữu ích trong các chương trình Solana, nơi mỗi compute unit đều quan trọng.
+
+### Thiết lập Feature Flag
+
+Feature flag được định nghĩa trong file `Cargo.toml` của bạn dưới phần `[features]`. Ví dụ, bạn có thể muốn một flag `perf` cho phép tối ưu hóa hiệu suất bằng cách vô hiệu hóa logging và kiểm tra bổ sung:
+
+```
+[features]
+default = ["perf"]
+perf = []
+```
+
+Ở đây, feature perf được bật theo mặc định, nhưng bạn có thể ghi đè nó khi building hoặc testing.
+
+### Sử dụng Feature Flag trong Code
+
+Bạn có thể sử dụng các thuộc tính biên dịch có điều kiện của Rust để bao gồm hoặc loại trừ mã dựa trên tính năng hoạt động. Ví dụ:
+
+
+```rust
+pub fn process(ctx: Context<'info>) -> ProgramResult {
+    #[cfg(not(feature = "perf"))]
+    sol_log("Create Class");
+    Self::try_from(ctx)?.execute()
+}
+```
+
+Hầu hết các chương trình trả về tên của instruction dưới dạng log để làm cho việc debugging dễ dàng hơn và đảm bảo rằng instruction đúng được gọi.
+
+Tuy nhiên, điều này tốn kém và thực sự không cần thiết ngoại trừ để làm cho explorer dễ đọc hơn và cải thiện quá trình gỡ lỗi.
+
+```rust
+#[cfg(not(feature = "perf"))]
+if name.len() > MAX_NAME_LEN {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+
+Một ví dụ khác là các kiểm tra thừa đã thảo luận trước đó.
+
+Nếu bạn không chắc chắn rằng instruction của bạn là an toàn mà không cần các kiểm tra này, bạn không nên làm chúng mặc định, nhưng thay vào đó ẩn chúng sau một cờ.
+> Trong ví dụ này, chúng ta đã tạo một flag `perf` để chỉ ra rằng, nếu chúng ta muốn chương trình đạt được hiệu suất tối đa, chúng ta nên sử dụng flag `perf` khi biên dịch.
+
+### Building với các Flag khác nhau
+
+Để build chương trình của bạn có hoặc không có feature `perf`, sử dụng:
+
+- Với tối ưu hóa hiệu suất (mặc định):
+
+```
+cargo build-bpf
+```
+
+- Với kiểm tra bổ sung và logging:
+
+```
+cargo build-bpf --no-default-features
+```
+
+Cách tiếp cận này cho phép bạn duy trì một codebase duy nhất có thể được điều chỉnh cho an toàn trogn quá trình phát triển hoặc tốc độ trên production chỉ bằng cách bật/tắt các cờ chức năng.

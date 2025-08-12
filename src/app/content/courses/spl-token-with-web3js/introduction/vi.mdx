@@ -1,0 +1,195 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Program
+
+Trên Solana, mọi thứ liên quan đến token đều được xử lý bởi [SPL Token Program](https://github.com/solana-program/token) và [Token2022 Program](/vi/courses/token-2022-program): framework token native của Solana định nghĩa cách tất cả token được tạo, quản lý và chuyển giao.
+
+Đây là một chương trình duy nhất, thống nhất xử lý tất cả các thao tác token trên mạng, đảm bảo tính nhất quán và khả năng tương tác.
+
+> Quyết định có một interface duy nhất, thống nhất cho tất cả token trên Solana tạo ra một triển khai dễ dàng có thể được sao chép trên tất cả dApp (ứng dụng phi tập trung) và tích hợp (như ví, ...)
+
+Hãy bắt đầu bằng việc cài đặt package cần thiết để làm việc với SPL Token program sử dụng Web3.js:
+
+```
+npm i @solana/spl-token
+```
+
+<ArticleSection name="Mint và Token Account" id="mint-and-token-accounts" level="h2" />
+
+Bên dưới, việc tạo account `Mint` và `Token` khá "phức tạp". Có nhiều instruction khác nhau yêu cầu đầu vào và account khác nhau; account cần được trả phí thuê trước khi chúng ta thực sự có thể khởi tạo nó, ...
+
+### Mint Account
+
+Không có bất kỳ abstraction nào, việc tạo account `Mint` sẽ trông như thế này:
+
+```ts
+import {
+    Keypair,
+    sendAndConfirmTransaction,
+    SystemProgram,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    createInitializeMint2Instruction,
+    MINT_SIZE,
+    getMinimumBalanceForRentExemptMint,
+    TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+
+const mint = Keypair.generate();
+
+const mintRent = await getMinimumBalanceForRentExemptMint(connection);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: feePayer.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: MINT_SIZE,
+    lamports: mintRent,
+    programId: TOKEN_PROGRAM_ID
+});
+
+const initializeMintInstruction = createInitializeMint2Instruction(
+    mint.publicKey, // mint pubkey
+    6, // decimals
+    feePayer.publicKey, // mint authority
+    null, // freeze authority
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+May mắn thay, package `@solana/spl-token` có một số abstraction. Vì vậy chúng ta có thể tạo account `Mint` với một hàm `createMint()` duy nhất như thế này:
+
+```ts
+const mint = await createMint(
+    connection, // connection
+    keypair, // payer
+    keypair.publicKey, // mint authority
+    null, // freeze authority
+    6 // decimals
+);
+```
+
+### Token Account
+
+Điều tương tự cũng áp dụng với account `Token`. Nếu chúng ta tạo nó mà không có bất kỳ abstraction nào, nó sẽ trông như thế này:
+
+```ts
+import {
+    Keypair,
+    sendAndConfirmTransaction,
+    SystemProgram,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    createInitializeAccount3Instruction,
+    ACCOUNT_SIZE,
+    getMinimumBalanceForRentExemptAccount,
+    TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+
+const token = Keypair.generate();
+
+const tokenRent = await getMinimumBalanceForRentExemptAccount(connection);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: feePayer.publicKey,
+    newAccountPubkey: token.publicKey,
+    space: ACCOUNT_SIZE,
+    lamports: tokenRent,
+    programId: TOKEN_PROGRAM_ID
+});
+
+const initializeTokenInstruction = createInitializeAccount3Instruction(
+    token.publicKey, // token pubkey
+    mint.publicKey, // mint pubkey
+    feePayer.publicKey, // owner pubkey
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTokenInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, token]);
+
+console.log(`Token created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Nhưng giống như account `Mint`, package `@solana/spl-token` có một số abstraction để tạo account `Token`. Chúng ta có thể sử dụng hàm `createAccount()` như thế này:
+
+```ts
+const token = await createAccount(
+    connection, // connection
+    keypair, // payer
+    mint.publicKey, // mint pubkey
+    keypair.publicKey, // owner pubkey
+);
+```
+
+### Associated Token Account
+
+Điều tương tự cũng áp dụng cho account `Associated Token`, nhưng abstraction không liên quan đến việc tạo account như đối với account `Mint` và `Token`, nó chủ yếu liên quan đến việc derive địa chỉ.
+
+Vì vậy đây là cách chúng ta tạo account `Associated Token` mà không có bất kỳ abstraction nào:
+
+```ts
+import {
+    sendAndConfirmTransaction,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    TOKEN_PROGRAM_ID
+    createAssociatedTokenAccountIdempotentInstruction,
+    getAssociatedTokenAddress,
+} from "@solana/spl-token";
+
+const associatedTokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey, // mint pubkey
+    keypair.publicKey, // owner pubkey
+    false, // allow owner off-curve
+    TOKEN_PROGRAM_ID
+);
+
+// Create ATA creation instructions for all accounts
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    associatedTokenAccount, // associated token account address
+    keypair.publicKey, // owner
+    mint.publicKey, // mint
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Associated Token created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Và đây là cách nó trông với abstraction:
+
+```ts
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection, // connection
+    keypair, // payer
+    mint, // mint pubkey
+    keypair.publicKey // owner pubkey
+);
+```
+
+> Như bạn có thể thấy, hàm được gọi là `getOrCreateAssociatedTokenAccount()`. Điều này là vì có thể xảy ra trường hợp account `Associated Token` đã được tạo trước đó và chúng ta không muốn giao dịch của mình thất bại vì điều đó. Vì vậy những gì nó làm là tạo hoặc chỉ trả về địa chỉ của ATA.

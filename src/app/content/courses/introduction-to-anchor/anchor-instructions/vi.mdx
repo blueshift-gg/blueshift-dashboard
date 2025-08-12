@@ -1,0 +1,311 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# Instructions & CPIs
+
+Instruction là các khối xây dựng của các chương trình Solana, định nghĩa các hành động có thể được thực hiện. Trong Anchor, instruction được triển khai như các hàm với các thuộc tính và ràng buộc cụ thể. Hãy khám phá cách làm việc với chúng một cách hiệu quả.
+
+<ArticleSection name="Cấu trúc Instruction" id="instruction-structure" level="h2" />
+
+Trong Anchor, instruction được định nghĩa bằng module `#[program]` và các hàm instruction riêng lẻ. Đây là cấu trúc cơ bản:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>, data: u64) -> Result<()> {
+        // Instruction logic here
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Ngữ cảnh của Instruction" id="instruction-context" level="h3" />
+
+Mỗi hàm instruction nhận một struct `Context` làm tham số đầu tiên. Context này chứa:
+- `accounts`: Các tài khoản được truyền cho instruction
+- `program_id`: Public key của chương trình
+- `remaining_accounts`: Bất kỳ tài khoản bổ sung nào không được định nghĩa rõ ràng trong struct context
+- `bumps`: Trường `bumps` đặc biệt hữu ích khi làm việc với PDAs, vì nó cung cấp các bump seeds đã được sử dụng để tạo ra địa chỉ PDA (chỉ khi bạn đang tạo chúng trong account struct)
+
+Có thể được truy cập bằng cách:
+
+```rust
+// Accessing accounts
+ctx.accounts.account_1
+ctx.accounts.account_2
+
+// Accessing program ID
+ctx.program_id
+
+// Accessing remaining accounts
+for remaining_account in ctx.remaining_accounts {
+    // Process remaining account
+}
+
+// Accessing bumps for PDAs
+let bump = ctx.bumps.pda_account;
+```
+
+<ArticleSection name="Instruction Discriminator" id="instruction-discriminator" level="h3" />
+
+Giống như accounts, instructions trong Anchor sử dụng discriminators để xác định các loại instruction khác nhau. Discriminator mặc định là một prefix 8-byte được tạo bằng cách sử dụng `sha256("global:<instruction_name>")[0..8]`. Tên instruction nên được viết theo snake_case.
+
+<AnchorDiscriminatorCalculator value={"initialize_account"} displayMode="instruction" />
+
+<ArticleSection name="Custom Instruction Discriminator" id="custom-instruction-discriminator" level="h3" />
+
+Bạn cũng có thể chỉ định một discriminator tùy chỉnh cho instructions của mình:
+
+```rust
+#[instruction(discriminator = 1)]
+pub fn custom_discriminator(ctx: Context<Custom>) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+<ArticleSection name="Instruction Scaffold" id="instruction-scaffold" level="h2" />
+
+Bạn có thể viết instruction theo nhiều cách khác nhau, trong phần này chúng ta sẽ học một số phong cách và cách bạn có thể thiết lập chúng
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h3" />
+
+Logic instruction có thể được tổ chức theo nhiều cách khác nhau, tùy thuộc vào độ phức tạp của chương trình và phong cách lập trình ưa thích của bạn. Dưới đây là các phương pháp chính:
+
+1. **Inline Instruction Logic**
+
+Đối với các instruction đơn giản, bạn có thể viết logic trực tiếp trong hàm instruction:
+
+```rust
+pub fn initialize(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Transfer tokens logic
+
+    // Close token account logic
+    
+    Ok(())
+}
+```
+2. **Separate Module Implementation**
+
+Đối với các chương trình rất phức tạp, bạn có thể tổ chức logic trong các module riêng biệt:
+
+```rust
+// In a separate file: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Transfer tokens logic
+
+    // Close token account logic
+ 
+    Ok(())
+}
+
+// In your lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+3. **Separate Context Implementation**
+
+Đối với các instruction phức tạp hơn, bạn có thể chuyển logic sang implementation của context struct:
+
+```rust
+// In a separate file: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    ctx.accounts.transfer_tokens(amount)?;
+    ctx.accounts.close_token_account()?;
+ 
+    Ok(())
+}
+
+impl<'info> Transfer<'info> {
+    /// Transfers tokens from source to destination account
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Transfer tokens logic
+
+        Ok(())
+    }
+
+    /// Closes the source token account after transfer
+    pub fn close_token_account(&mut self) -> Result<()> {
+        // Close token account logic
+
+    }
+}
+
+// In your lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+<ArticleSection name="Instruction Parameters" id="instruction-parameters" level="h3" />
+
+Instructions có thể nhận các tham số ngoài context. Các tham số này được serialize và deserialize tự động bởi Anchor. Dưới đây là những điểm chính về instruction parameters:
+
+1. **Basic Types**
+
+Anchor hỗ trợ tất cả các kiểu dữ liệu nguyên thủy của Rust và các kiểu Solana phổ biến:
+
+```rust
+pub fn complex_instruction(
+    ctx: Context<Complex>,
+    amount: u64,
+    pubkey: Pubkey,
+    vec_data: Vec<u8>,
+) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+2. **Custom Types**
+
+Bạn có thể sử dụng các kiểu tùy chỉnh làm tham số, nhưng chúng phải implement `AnchorSerialize` và `AnchorDeserialize`:
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct InstructionData {
+    pub field1: u64,
+    pub field2: String,
+}
+
+pub fn custom_type_instruction(
+    ctx: Context<Custom>,
+    data: InstructionData,
+) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+<ArticleSection name="Best Practices" id="instruction-discriminator" level="h3" />
+
+1. **Giữ Instructions Tập Trung**: Mỗi instruction nên làm một việc và làm tốt. Nếu một instruction đang làm quá nhiều việc, hãy xem xét chia nó thành nhiều instructions.
+
+2. **Sử Dụng Context Implementation**: Đối với các instruction phức tạp, hãy sử dụng phương pháp context implementation để:
+   - Giữ code của bạn được tổ chức
+   - Làm cho việc test dễ dàng hơn
+   - Cải thiện khả năng tái sử dụng
+   - Thêm tài liệu phù hợp
+
+3. **Xử Lý Lỗi**: Luôn sử dụng xử lý lỗi phù hợp và trả về các thông báo lỗi có ý nghĩa:
+```rust
+#[error_code]
+pub enum TransferError {
+    #[msg("Insufficient balance")]
+    InsufficientBalance,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+
+impl<'info> Transfer<'info> {
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        require!(amount > 0, TransferError::InvalidAmount);
+        require!(
+            self.source.amount >= amount,
+            TransferError::InsufficientBalance
+        );
+
+        // Transfer logic
+        Ok(())
+    }
+}
+```
+
+4. **Tài Liệu**: Luôn tài liệu hóa logic instruction của bạn, đặc biệt khi sử dụng context implementation:
+```rust
+impl<'info> Transfer<'info> {
+    /// # Transfers tokens
+    ///
+    /// Transfers tokens from source to destination account
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Implementation
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Cross-Program Invocations (CPIs)" id="cross-program-invocations" level="h2" />
+
+Cross Program Invocations (CPI) đề cập đến quá trình một chương trình gọi các instructions của chương trình khác, điều này cho phép tính kết hợp của các chương trình Solana. Anchor cung cấp một cách thuận tiện để thực hiện CPIs thông qua `CpiContext` và các builders cụ thể cho từng chương trình.
+
+**Lưu ý**: Bạn có thể tìm thấy tất cả System Program CPI bằng cách sử dụng anchor crate chính và thực hiện: `use anchor_lang::system_program::*`; và đối với những cái liên quan đến SPL token program, chúng ta sẽ cần import anchor_spl crate và thực hiện: `use anchor_spl::token::*`
+
+<ArticleSection name="Basic CPI Structure" id="basic-cpi-structure" level="h3" />
+
+Đây là cách thực hiện một CPI cơ bản:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport(ctx: Context<TransferLamport>, amount: u64) -> Result<()> {
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.from.to_account_info(),
+        to: ctx.accounts.to.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="CPI with PDA Signers" id="cpi-with-pda-signers" level="h3" />
+
+Khi thực hiện CPIs yêu cầu chữ ký PDA, hãy sử dụng `CpiContext::new_with_signer`:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport_with_pda(ctx: Context<TransferLamportWithPda>, amount: u64) -> Result<()> {
+    let seeds = &[
+        b"vault".as_ref(),
+        &[ctx.bumps.vault],
+    ];
+    let signer = &[&seeds[..]];
+    
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault.to_account_info(),
+        to: ctx.accounts.recipient.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+Anchor cung cấp một hệ thống xử lý lỗi mạnh mẽ cho instructions. Đây là cách implement custom errors và xử lý chúng trong instructions của bạn:
+
+```rust
+#[error_code]
+pub enum MyError {
+    #[msg("Custom error message")]
+    CustomError,
+    #[msg("Another error with value: {0}")]
+    ValueError(u64),
+}
+
+pub fn handle_errors(ctx: Context<HandleErrors>, value: u64) -> Result<()> {
+    require!(value > 0, MyError::CustomError);
+    require!(value < 100, MyError::ValueError(value));
+    
+    Ok(())
+}
+```
+

@@ -1,0 +1,184 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Memo Transfer Extension
+
+Phần mở rộng `MemoTranfer` là một `Token` account extension đảm bảo rằng tất cả transfer đến một token account phải bao gồm memo, tạo điều kiện cho việc theo dõi giao dịch nâng cao và nhận dạng người dùng.
+
+<ArticleSection name="Khởi tạo Token Account" id="initializing-the-token-account" level="h2" />
+
+Để khởi tạo phần mở rộng `MemoTransfer` trên `Token` account, chúng ta sẽ cần hàm `enableRequiredMemoTransfers()`.
+
+Đây là cách tạo token với phần mở rộng Immutable Owner:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createInitializeImmutableOwnerInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calculate the size needed for a Token account with Transfer Fee extension
+const accountLen = getAccountLen([ExtensionType.ImmutableOwner]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Memo Transfer extension
+const enableMemoTransferInstruction = createEnableRequiredMemoTransfersInstruction(
+    destinationTokenAccount.publicKey,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the Token account itself
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableMemoTransferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Transfer Token với Memo" id="transferring-token-with-a-memo" level="h2" />
+
+Để sử dụng Memo program trên Solana, chúng ta có hai cách khả thi.
+
+Xây dựng memo instruction "thô" của riêng chúng ta như thế này:
+
+```ts
+const message = "Hello, Solana";
+
+new TransactionInstruction({
+    keys: [{ pubkey: keypair.publicKey, isSigner: true, isWritable: true }],
+    data: Buffer.from(message, "utf-8"), // Memo message. In this case it is "Hello, Solana"
+    programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Memo program that validates keys and memo message
+}),
+
+Hoặc chúng ta có thể sử dụng Memo program SDK sau khi tải gói hỗ trợ như thế này:
+
+```
+npm i @solana/spl-memo
+```
+
+Trong ví dụ của chúng ta, chúng ta sẽ sử dụng cách thứ hai và nó sẽ trông như thế này:
+
+```ts
+const memoInstruction = createMemoInstruction(
+    "Hello, world!",
+    [keypair.publicKey],
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount.publicKey,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferTransaction = new Transaction().add(
+    memoInstruction,
+    transferInstruction,
+);
+
+const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [keypair]);
+
+console.log(`Tokens transferred with memo! Check out your TX here: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`);
+```
+
+<ArticleSection name="Vô hiệu hóa và kích hoạt Memo" id="disabling-and-enabling-the-memo" level="h2" />
+
+Nếu chúng ta không muốn thực thi transfer phải đi kèm với memo nữa, chúng ta có thể làm như vậy bằng cách sử dụng hàm `disableRequiredMemoTransfer` và nó sẽ trông như thế này:
+
+```ts
+const disableRequiredMemoTransfersInstruction = createDisableRequiredMemoTransfersInstruction(
+    destinationTokenAccount,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    disableRequiredMemoTransfersInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+
+console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Và nếu chúng ta muốn kích hoạt lại, chúng ta chỉ cần sử dụng hàm `enableRequiredMemoTransfers()` như thế này:
+
+```ts
+const enableRequiredMemoTransfersInstruction = createEnableRequiredMemoTransfersInstruction(
+    destinationTokenAccount,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    enableRequiredMemoTransfersInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+
+console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

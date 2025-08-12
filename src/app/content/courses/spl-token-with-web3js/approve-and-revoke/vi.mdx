@@ -1,0 +1,112 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instruction Approve và Revoke
+
+Approve cung cấp ủy quyền để chuyển một số lượng token cụ thể thay mặt cho chủ sở hữu account. Điều này cho phép chuyển token mà không cần cấp toàn quyền kiểm soát account.
+
+> Chúng ta đặt một số lượng "được phê duyệt", và đối tượng được ủy nhiệm chỉ có thể chuyển tối đa số lượng đó
+
+Revoke loại bỏ quyền của đối tượng được ủy nhiệm hiện tại đối với account, trả lại toàn quyền kiểm soát cho chủ sở hữu account.
+
+> Ngay lập tức hủy bỏ bất kỳ đối tượng được ủy nhiệm hiện có nào và chỉ chủ sở hữu account mới có thể revoke delegation (không phải bản thân đối tượng được ủy nhiệm)
+
+Trước khi chúng ta có thể delegate hoặc revoke bất kỳ token account nào, chúng ta sẽ cần phải có:
+- Account `Mint` đã được khởi tạo
+- Account `Token` hoặc account `Associated Token` đã được khởi tạo nơi chúng ta sẽ kiểm soát
+
+> Số lượng token chúng ta đúc được "chuẩn hóa" với decimal. Điều này có nghĩa là nếu chúng ta muốn đúc 1 token có decimal là 6, chúng ta sẽ cần thực sự đặt `1_000_000` làm amount
+
+<ArticleSection name="Instruction thô" id="raw-instruction" level="h2" />
+
+Bằng cách chỉ sử dụng instruction "thô" mà không có bất kỳ abstraction nào, approve token:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+const tokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    tokenAccount.publicKey,
+);
+
+// Create ATA creation instruction
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    tokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// Delegate an ATA 
+const approveInstruction = createApproveInstruction(
+    tokenAccount // account
+    delegate.publicKey, // delegate
+    keypair.publickey // owner
+    1e6, // amount of tokens
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    approveInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token accounts created and delegated! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Bằng cách chỉ sử dụng instruction "thô" mà không có bất kỳ abstraction nào, đây là cách revoke token:
+
+```ts
+// Revoke the delegate of an ATA 
+const revokeInstruction = createRevokeInstruction(
+    tokenAccount // account
+    keypair.publickey // owner
+);
+
+const transaction = new Transaction().add(revokeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token account delegate revoked! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Instruction được trừu tượng hóa" id="abstracted-instruction" level="h2" />
+
+Đây là cách các instruction tương tự sẽ trông như thế nào được khi được trừu tượng hóa với instruction `approve()`:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    tokenAccount.publicKey
+);
+
+console.log(`This is your ATA: ${ata.address}!`)
+  
+let tx = await approve(
+    connection,
+    keypair,
+    ata.address, // token Account
+    delegate-publicKey, // delegate
+    keypair.publicKey, // owner
+    1e6, // amount
+);
+
+console.log(`Succesfully Delegated!. Transaction Here: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+Đây là cách các instruction tương tự sẽ trông như thế nào khi được trừu tượng hóa với instruction `revoke()`:
+
+```ts
+let tx = await revoke(
+    connection,
+    keypair,
+    ata.address, // token Account
+    keypair.publicKey, // owner
+);
+
+console.log(`Succesfully Revoked Delegate!. Transaction Here: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```

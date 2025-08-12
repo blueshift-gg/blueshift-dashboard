@@ -1,0 +1,496 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Các chức năng nâng cao
+
+Mollusk cung cấp các tùy chọn khởi tạo linh hoạt để phù hợp với các kịch bản kiểm thử khác nhau. Bạn có thể tạo instance được tải sẵn với chương trình của mình hoặc bắt đầu với môi trường tối thiểu và thêm component khi cần.
+
+Khi kiểm thử một chương trình cụ thể, hãy khởi tạo Mollusk với chương trình của bạn được tải sẵn:
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::pubkey::Pubkey;
+
+const ID: Pubkey = solana_sdk::pubkey!("22222222222222222222222222222222222222222222");
+
+#[test]
+fn test() {
+    let mollusk = Mollusk::new(&ID, "target/deploy/program.so");
+}
+```
+
+Cách tiếp cận này tự động tải chương trình đã biên dịch của bạn và làm cho nó có sẵn để kiểm thử, tối ưu hóa quá trình thiết lập cho test suite cụ thể cho chương trình.
+
+Đối với các kịch bản kiểm thử rộng hơn hoặc khi bạn cần thêm chương trình một cách động, hãy bắt đầu với instance mặc định:
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    // System Program, ...
+    let mollusk = Mollusk::default();
+}
+```
+
+Instance mặc định bao gồm các chương trình builtin thiết yếu như System Program, cung cấp nền tảng cho hầu hết các thao tác Solana mà không bị dư thừa các chương trình bạn không cần.
+
+Khi kiểm thử của bạn yêu cầu System Program, Mollusk cung cấp một công cụ hỗ trợ tiện lợi để tạo các tham chiếu account cần thiết:
+
+```rust
+let (system_program, system_program_account) = keyed_account_for_system_program();
+```
+
+Để sao chép chức năng tải chương trình hoặc tải các chương trình tùy chỉnh không có sẵn theo mặc định, bạn có thể sử dụng những helper này:
+
+```rust
+use mollusk_svm::Mollusk;
+use mollusk_svm::program::create_program_account_loader_v3;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Get the account that you need
+    let program = &ID; // ID of the program we're trying to load into mollusk
+    let program_account = create_program_account_loader_v3(&ID);
+
+    // Load the program into your mollusk instance
+    mollusk.add_program(
+        &ID,
+        "src/programs/program",
+        &mollusk_svm::program::loader_keys::LOADER_V3
+    );
+}
+```
+
+<ArticleSection name="Token Program" id="token-program" level="h2" />
+
+Bộ hỗ trợ token program của Mollusk đơn giản hóa đáng kể các kịch bản kiểm thử liên quan đến SPL token. Crate `mollusk-svm-programs-token` cung cấp hỗ trợ được cấu hình sẵn cho các chương trình `Token`, `Token2022`, và `Associated Token`.
+
+Sau khi bao gồm token helper crate, hãy thêm các token program cụ thể mà kiểm thử của bạn yêu cầu:
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Add the SPL Token Program
+    mollusk_svm_programs_token::token::add_program(&mut mollusk);
+
+    // Add the Token2022 Program
+    mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
+
+    // Add the Associated Token Program
+    mollusk_svm_programs_token::associated_token::add_program(&mut mollusk);
+}
+```
+
+Và tạo các tham chiếu account cần thiết cho kịch bản kiểm thử của bạn:
+
+```rust
+// SPL Token Program
+let (token_program, token_program_account) = 
+    mollusk_svm_programs_token::token::keyed_account();
+
+// Token2022 Program
+let (token2022_program, token2022_program_account) = 
+    mollusk_svm_programs_token::token2022::keyed_account();
+
+// Associated Token Program
+let (associated_token_program, associated_token_program_account) =
+    mollusk_svm_programs_token::associated_token::keyed_account();
+```
+
+Những hàm bỗ trợ này đảm bảo rằng các kiểm thử liên quan đến token có quyền truy cập vào các program account đúng với cấu hình thích hợp, cho phép kiểm thử toàn diện các thao tác token mà không cần thiết lập chương trình thủ công.
+
+Nếu sau đó chúng ta muốn tạo trạng thái cho account từ token program đã được khởi tạo, chúng ta sẽ cần tạo chúng bằng phương thức Account và tải chúng vào account struct của instance Mollusk.
+
+Tạo token account đã được khởi tạo một cách thủ công liên quan đến boilerplate đáng kể để serialize dữ liệu account và tính toán phí thuê. Đây là các hàm bộ trợ tối ưu hóa quá trình này:
+
+```rust
+use spl_token::{state::{Mint, Account as TokenAccount, AccountState}, ID as token};
+use spl_associated_token_account::get_associated_token_address_with_program_id;
+
+// Create a Keyed Account for a Mint with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_mint_default(
+    mollusk: &Mollusk,
+    authority: &Pubkey,
+    decimals: u8,
+    pubkey: Option<Pubkey>,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let mint_data = Mint {
+        mint_authority: Some(*authority).into(),
+        supply: 0,
+        decimals,
+        is_initialized: true,
+        freeze_authority: None.into(),
+    };
+
+    let mut data = vec![0u8; Mint::LEN];
+    Mint::pack(mint_data, &mut data).unwrap();
+
+    let account = Account {
+        lamports: mollusk.sysvars.rent.minimum_balance(Mint::LEN),
+        data,
+        owner: token_program.unwrap_or(token::ID),
+        executable: false,
+        rent_epoch: 0,
+    };
+
+    (pubkey.unwrap_or(Pubkey::new_unique()), account)
+}
+
+// Create a Keyed Account for a Token Account with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_token_account_default(
+    mollusk: &Mollusk,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    pubkey: Option<Pubkey>,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let account_data = TokenAccount {
+        mint: *mint,
+        owner: *owner,
+        amount,
+        delegate: None.into(),
+        state: AccountState::Initialized,
+        is_native: None.into(),
+        delegated_amount: 0,
+        close_authority: None.into(),
+    };
+
+    let mut data = vec![0u8; TokenAccount::LEN];
+    TokenAccount::pack(account_data, &mut data).unwrap();
+
+    let account = Account {
+        lamports: mollusk.sysvars.rent.minimum_balance(TokenAccount::LEN),
+        data,
+        owner: token_program.unwrap_or(token::ID),
+        executable: false,
+        rent_epoch: 0,
+    };
+
+    (pubkey.unwrap_or(Pubkey::new_unique()), account)
+}
+
+// Create a Keyed Account for an Associated Token Account with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_associated_token_account_default(
+    mollusk: &Mollusk,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let associated_token_address = get_associated_token_address_with_program_id(
+        owner,
+        mint,
+        &token_program.unwrap_or(token::ID),
+    );
+
+    keyed_account_for_token_account_default(
+        mollusk,
+        mint,
+        owner,
+        amount,
+        Some(associated_token_address),
+        Some(token_program.unwrap_or(token::ID)),
+    )
+}
+```
+
+<ArticleSection name="Benchmarking Compute Unit" id="benchmarking-compute-units" level="h2" />
+
+Mollusk bao gồm một hệ thống benchmarking đơn vị tính toán chuyên dụng cho phép đo lường và theo dõi chính xác hiệu quả tính toán của chương trình của bạn. `MolluskComputeUnitBencher` cung cấp API được tối ưu hóa để tạo benchmark toàn diện giám sát việc tiêu thụ compute unit trên các kịch bản instruction khác nhau.
+
+Hệ thống benchmarking này đặc biệt có giá trị cho tối ưu hóa hiệu suất, vì nó tạo ra các báo cáo chi tiết hiển thị cả việc sử dụng compute unit hiện tại và sự khác nhau với các lần chạy trước đó.
+
+Điều này cho phép bạn ngay lập tức thấy tác động của các thay đổi code đối với hiệu quả chương trình của mình, giúp bạn tối ưu hóa các nút thắt hiệu suất quan trọng.
+
+Bencher tích hợp liền mạch với thiết lập kiểm thử Mollusk hiện có của bạn:
+
+```rust
+use {
+    mollusk_svm_bencher::MolluskComputeUnitBencher,
+    mollusk_svm::Mollusk,
+    /* ... */
+};
+
+// Optionally disable logging.
+solana_logger::setup_with("");
+
+/* Instruction & accounts setup ... */
+
+let mollusk = Mollusk::new(&program_id, "my_program");
+
+MolluskComputeUnitBencher::new(mollusk)
+    .bench(("bench0", &instruction0, &accounts0))
+    .bench(("bench1", &instruction1, &accounts1))
+    .bench(("bench2", &instruction2, &accounts2))
+    .bench(("bench3", &instruction3, &accounts3))
+    .must_pass(true)
+    .out_dir("../target/benches")
+    .execute();
+```
+
+### Tùy chọn cấu hình
+
+Bencher cung cấp một số tùy chọn cấu hình:
+- `must_pass(true)`: Kích hoạt panic nếu bất kỳ benchmark nào thất bại trong việc thực thi thành công, đảm bảo benchmark của bạn vẫn hợp lệ khi code thay đổi
+- `out_dir("../target/benches")`: Chỉ định nơi báo cáo markdown sẽ được tạo, cho phép tích hợp với hệ thống CI/CD và workflow tài liệu
+
+### Tích hợp với Cargo
+
+Để chạy benchmark sử dụng `cargo bench`, hãy thêm cấu hình benchmark vào `Cargo.toml` của bạn:
+
+```
+[[bench]]
+name = "compute_units"
+harness = false
+```
+
+### Báo cáo Benchmark
+
+Bencher tạo ra các báo cáo dạng markdown cung cấp cả số liệu hiệu suất hiện tại và so sánh với lịch sử:
+
+```
+| Name   | CUs   | Delta  |
+|--------|-------|--------|
+| bench0 | 450   | --     |
+| bench1 | 579   | -129   |
+| bench2 | 1,204 | +754   |
+| bench3 | 2,811 | +2,361 |
+```
+
+Định dạng báo cáo bao gồm:
+- Name: Định danh benchmark mà bạn đã chỉ định
+- CUs: Tiêu thụ compute unit hiện tại cho kịch bản này
+- Delta: Thay đổi từ lần chạy benchmark trước đó (dương cho biết tăng sử dụng, âm cho biết tối ưu hóa)
+
+<ArticleSection name="Custom Syscall" id="custom-syscalls" level="h2" />
+
+Mollusk hỗ trợ việc tạo và kiểm thử custom syscall, cho phép bạn mở rộng Solana Virtual Machine với chức năng chuyên biệt cho các kịch bản kiểm thử.
+
+Khả năng này đặc biệt có giá trị để kiểm thử việc tạo Syscall mới có thể được thêm thông qua SIMD bằng cách mô phỏng các hành vi runtime cụ thể, hoặc tạo môi trường được kiểm soát để kiểm thử.
+
+> Custom syscall hoạt động ở cấp VM, cung cấp quyền truy cập trực tiếp vào invoke context và môi trường thực thi.
+
+### Định nghĩa Custom Syscall
+
+Custom syscall được định nghĩa bằng macro `declare_builtin_function!`, tạo ra một syscall có thể được đăng ký với môi trường runtime của Mollusk:
+
+```rust
+use {
+    mollusk_svm::{result::Check, Mollusk},
+    solana_instruction::Instruction,
+    solana_program_runtime::{
+        invoke_context::InvokeContext,
+        solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
+    },
+    solana_pubkey::Pubkey,
+};
+
+declare_builtin_function!(
+    /// A custom syscall to burn compute units for testing
+    SyscallBurnCus,
+    fn rust(
+        invoke_context: &mut InvokeContext,
+        to_burn: u64,
+        _arg2: u64,
+        _arg3: u64,
+        _arg4: u64,
+        _arg5: u64,
+        _memory_mapping: &mut MemoryMapping,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        // Consume the specified number of compute units
+        invoke_context.consume_checked(to_burn)?;
+        Ok(0)
+    }
+);
+```
+
+> Đây là một ví dụ về custom syscall đơn giản chỉ "đốt" CU.
+
+Chữ ký hàm syscall tuân theo một pattern cụ thể:
+- `invoke_context`: Cung cấp quyền truy cập vào execution context và runtime state
+- Argument 1-5: Tối đa năm argument 64-bit có thể được truyền từ chương trình
+- memory_mapping: Cung cấp quyền truy cập vào memory space của chương trình
+- Return value: Một `Result<u64, Box<dyn std::error::Error>>` cho biết thành công hay thất bại
+
+> Đây là cách tất cả Syscall được tạo bên dưới
+
+### Đăng ký Custom Syscall
+
+Khi đã được định nghĩa, custom syscall phải được đăng ký với môi trường program runtime của Mollusk trước khi chúng có thể được sử dụng:
+
+```rust
+#[test]
+fn test_custom_syscall() {
+    std::env::set_var("SBF_OUT_DIR", "../target/deploy");
+    let program_id = Pubkey::new_unique();
+
+    let mollusk = {
+        let mut mollusk = Mollusk::default();
+
+        // Register the custom syscall with a specific name
+        mollusk
+            .program_cache
+            .program_runtime_environment
+            .register_function("sol_burn_cus", SyscallBurnCus::vm)
+            .unwrap();
+
+        // Add your program that uses the custom syscall
+        mollusk.add_program(
+            &program_id,
+            "test_program_custom_syscall",
+            &mollusk_svm::program::loader_keys::LOADER_V3,
+        );
+
+        mollusk
+    };
+}
+```
+
+Syscall được đăng ký với một cái tên ("sol_burn_cus" trong ví dụ này) để chương trình của bạn có thể tham chiếu khi thực hiện syscall.
+
+### Kiểm thử hành vi Custom Syscall
+
+Custom syscall có thể được kiểm thử như bất kỳ chức năng chương trình nào khác, với lợi ích bổ sung là kiểm soát chính xác hành vi của chúng:
+
+```rust
+fn instruction_burn_cus(program_id: &Pubkey, to_burn: u64) -> Instruction {
+    Instruction::new_with_bytes(*program_id, &to_burn.to_le_bytes(), vec![])
+}
+
+#[test]
+fn test_custom_syscall() {
+    // ... mollusk setup ...
+    
+    // Establish baseline compute unit usage
+    let base_cus = mollusk
+        .process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, 0),
+            &[],
+            &[Check::success()],
+        )
+        .compute_units_consumed;
+    
+    // Test different compute unit consumption levels
+    for to_burn in [100, 1_000, 10_000] {
+        mollusk.process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, to_burn),
+            &[],
+            &[
+                Check::success(),
+                Check::compute_units(base_cus + to_burn), // Verify exact CU consumption
+            ],
+        );
+    }
+}
+```
+
+> Ví dụ này minh họa việc kiểm thử một syscall đốt compute unit, xác thực rằng số lượng đợn vị tính toán được yêu cầu chính xác được tiêu thụ. Khả năng xác minh dữ liệu chính xác làm cho Mollusk trở thành cách tốt nhất để kiểm thử custom syscall trước khi triển khai.
+
+<ArticleSection name="Phương thức cấu hình" id="configuration-methods" level="h2" />
+
+Mollusk cung cấp các tùy chọn cấu hình toàn diện cho phép bạn tùy chỉnh môi trường thực thi để phù hợp với các yêu cầu kiểm thử cụ thể như chúng ta có thể thấy từ `Context` của Mollusk:
+
+```rust
+/// Instruction context fixture.
+pub struct Context {
+    /// The compute budget to use for the simulation.
+    pub compute_budget: ComputeBudget,
+    /// The feature set to use for the simulation.
+    pub feature_set: FeatureSet,
+    /// The runtime sysvars to use for the simulation.
+    pub sysvars: Sysvars,
+    /// The program ID of the program being invoked.
+    pub program_id: Pubkey,
+    /// Accounts to pass to the instruction.
+    pub instruction_accounts: Vec<AccountMeta>,
+    /// The instruction data.
+    pub instruction_data: Vec<u8>,
+    /// Input accounts with state.
+    pub accounts: Vec<(Pubkey, Account)>,
+}
+```
+
+Những phương thức cấu hình này cho phép kiểm soát chính xác compute budget, các chức năng khả dụng, và biến hệ thống, làm cho việc kiểm thử chương trình dưới các điều kiện runtime khác nhau trở nên khả thi.
+
+### Thiết lập cấu hình cơ bản
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::feature_set::FeatureSet;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+
+    // Configure compute budget for performance testing
+    mollusk.set_compute_budget(200_000);
+    
+    // Configure feature set to enable/disable specific Solana features
+    mollusk.set_feature_set(FeatureSet::all_enabled());
+    
+    // Sysvars are handled automatically but can be customized if needed
+}
+```
+
+Compute budget xác định có bao nhiêu compute unit khả dụng cho việc thực thi chương trình. Điều này rất quan trọng để kiểm thử các chương trình tiếp cận hoặc vượt quá giới hạn compute:
+
+```rust
+// Test with standard compute budget
+mollusk.set_compute_budget(200_000);
+```
+
+Bộ chức năng của Solana kiểm soát những chức năng blockchain nào hoạt động trong quá trình thực thi chương trình. Mollusk cho phép bạn cấu hình những chức năng này để kiểm thử khả năng tương thích trên các trạng thái mạng khác nhau:
+
+```rust
+use solana_sdk::feature_set::FeatureSet;
+
+// Enable all features (latest functionality)
+mollusk.set_feature_set(FeatureSet::all_enabled());
+
+// Use default feature set (production-like environment)
+mollusk.set_feature_set(FeatureSet::default());
+```
+
+Để có danh sách toàn diện các chức năng khả dụng, hãy tham khảo [tài liệu](https://docs.rs/agave-feature-set/2.3.6/agave_feature_set/) crate `agave-feature-set`, chi tiết tất cả các chức năng trên blockchain có thể cấu hình và ý nghĩa của chúng.
+
+Mollusk cung cấp quyền truy cập vào tất cả biến hệ thống (sysvar) mà các chương trình có thể truy vấn trong quá trình thực thi. Mặc dù những biến này được cấu hình tự động với các giá trị mặc định hợp lý, bạn có thể tùy chỉnh chúng cho các kịch bản kiểm thử cụ thể:
+
+```rust
+/// Mollusk sysvars wrapper for easy manipulation
+pub struct Sysvars {
+    pub clock: Clock,                     // Current slot, epoch, and timestamp
+    pub epoch_rewards: EpochRewards,      // Epoch reward distribution info  
+    pub epoch_schedule: EpochSchedule,    // Epoch timing and slot configuration
+    pub last_restart_slot: LastRestartSlot, // Last validator restart information
+    pub rent: Rent,                       // Rent calculation parameters
+    pub slot_hashes: SlotHashes,          // Recent slot hash history
+    pub stake_history: StakeHistory,      // Historical stake activation data
+}
+```
+
+Bạn có thể tùy chỉnh sysvar cụ thể để kiểm thử logic phụ thuộc thời gian, tính toán phí thuê, hoặc các hành vi phụ thuộc hệ thống khác hoặc sử dụng một số hàm bổ trợ:
+
+```rust
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+
+    // Customize clock for time-based testing
+    mollusk.sysvars.clock.epoch = 10;
+    mollusk.sysvars.clock.unix_timestamp = 1234567890;
+
+    // Jump to Slot 1000
+    warp_to_slot(&mut Mollusk, 1000)
+}
+```

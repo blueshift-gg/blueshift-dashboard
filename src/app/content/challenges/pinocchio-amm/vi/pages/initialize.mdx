@@ -1,0 +1,182 @@
+# Khởi tạo
+
+Instruction `initialize` thực hiện hai nhiệm vụ chính:
+- Khởi tạo tài khoản `Config` và lưu trữ tất cả thông tin cần thiết để AMM hoạt động chính xác.
+- Tạo tài khoản Mint `mint_lp` và gán `mint_authority` cho tài khoản `config`.
+
+> Chúng ta sẽ không khởi tạo bất cứ tài khoản Associated Token nào trong instruction này, vì nó thường không cần thiết và có thể lãng phí. Trong các instruction tiếp theo `deposit`, `withdraw`, và `swap`, chúng ta sẽ kiểm tra rằng các token được gửi vào đúng các tài khoản ATA. Tuy nhiên, bạn nên tạo một lời gọi “initializeAccount” trên frontend để tạo các tài khoản này khi cần thiết. 
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+
+Dưới đây là các tài khoản cần thiết cho context này:
+- `initializer`: Người tạo tài khoản `config`. Điều này không nhất thiết phải là authority của nó. Phải là `signer` và `mutable`, vì tài khoản này sẽ trả phí cho việc khởi tạo cả `config` và `mint_lp`.
+- `mint_lp`: Tài khoản Mint đại diện cho liquidity của pool. `mint_authority` phải được đặt thành tài khoản `config`. Phải là `mutable`.
+- `config`: Tài khoản cấu hình đang được khởi tạo. Phải là `mutable`.
+- `system` và `token` programs: Các tài khoản chương trình cần thiết để khởi tạo các tài khoản trên. Phải là `executable`.
+
+> Khi bạn có nhiều kinh nghiệm hơn, bạn sẽ nhận thấy rằng có rất nhiều kiểm tra có thể bỏ qua, dựa vào các ràng buộc được CPIs thực thi thay vì kiểm tra rõ ràng. Ví dụ, trong cấu trúc tài khoản này, bất kỳ kiểm tra rõ ràng nào cũng không cần thiết; nếu các ràng buộc không được đáp ứng, chương trình sẽ thất bại theo mặc định. Tôi sẽ đề cập đến những điểm này khi chúng ta đi qua logic.
+
+Bởi vì không có nhiều thay đổi so với cấu trúc tài khoản thông thường, tôi sẽ để bạn tự thực hiện:
+
+<Codeblock lang="rust">
+```rust
+pub struct InitializeAccounts<'a> {
+    pub initializer: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for InitializeAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //.. 
+  }
+}
+```
+</Codeblock>
+
+> Bạn sẽ cần truyền tất cả các tài khoản được thảo luận ở trên, nhưng không phải tất cả chúng đều cần phải được bao gồm trong cấu trúc `InitializeAccounts`, vì bạn có thể không cần tham chiếu trực tiếp đến mỗi tài khoản trong việc triển khai.
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Đây là dữ liệu instruction mà chúng ta cần truyền vào:
+- `seed`: Một số ngẫu nhiên được sử dụng để tạo seed cho PDA (Program Derived Address). Điều này cho phép tạo các instance pool duy nhất. Phải là `[u64]`
+- `fee`: Phí hoán đổi, được biểu thị bằng basis point (1 basis point = 0.01%). Phí này được thu trên mỗi giao dịch và phân phối cho các liquidity provider. Phải là `[u16]`
+- `mint_x`: Địa chỉ mint của SPL token cho token X trong pool. Phải là `[u8; 32]`
+- `mint_y`: Địa chỉ mint của SPL token cho token Y trong pool. Phải là `[u8; 32]`
+- `config_bump`: Bump seed được sử dụng để tạo PDA của tài khoản `config`. Phải là `u8`
+- `lp_bump`: Bump seed được sử dụng để tạo PDA của tài khoản `lp_mint`. Phải là `u8`
+- `authority`: Public key sẽ có quyền quản trị đối với AMM. Nếu không được cung cấp, pool có thể được đặt thành bất biến. Phải là `[u8; 32]`
+
+> Như bạn thấy, có nhiều trường có thể được suy ra khác nhau. Ví dụ, chúng ta có thể lấy `mint_x` bằng cách chuyển tài khoản `Mint` và đọc trực tiếp từ đó, hoặc tạo giá trị `bump` bên trong chương trình chính. Tuy nhiên, bằng cách chuyển chúng một cách rõ ràng, chúng ta đang hướng đến việc tạo ra chương trình tối ưu nhất và hiệu quả nhất có thể.
+
+Trong khi triển khai, chúng ta sẽ xử lý việc phân tích dữ liệu instruction một cách linh hoạt và cấp thấp hơn thông thường. Do đó, chúng ta sẽ giải thích lý do chúng ta đang đưa ra các quyết định sau:
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct InitializeInstructionData {
+    pub seed: u64,
+    pub fee: u16,
+    pub mint_x: [u8; 32],
+    pub mint_y: [u8; 32],
+    pub config_bump: [u8; 1],
+    pub lp_bump: [u8; 1],
+    pub authority: [u8; 32],
+}
+
+impl TryFrom<&[u8]> for InitializeInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        const INITIALIZE_DATA_LEN_WITH_AUTHORITY: usize = size_of::<InitializeInstructionData>();
+        const INITIALIZE_DATA_LEN: usize =
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY - size_of::<[u8; 32]>();
+
+        match data.len() {
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY => {
+                Ok(unsafe { (data.as_ptr() as *const Self).read_unaligned() })
+            }
+            INITIALIZE_DATA_LEN => {
+                // If the authority is not present, we need to build the buffer and add it at the end before transmuting to the struct
+                let mut raw: MaybeUninit<[u8; INITIALIZE_DATA_LEN]> = MaybeUninit::uninit();
+                let raw_ptr = raw.as_mut_ptr() as *mut u8;
+                unsafe {
+                    // Copy the provided data
+                    core::ptr::copy_nonoverlapping(data.as_ptr(), raw_ptr, INITIALIZE_DATA_LEN);
+                    // Add the authority to the end of the buffer
+                    core::ptr::write_bytes(raw_ptr.add(INITIALIZE_DATA_LEN), 0, 32);
+                    // Now transmute to the struct
+                    Ok((raw.as_ptr() as *const Self).read_unaligned())
+                }
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+}
+```
+</Codeblock>
+
+Trường authority trong `InitializeInstructionData` là tùy chọn và có thể được bỏ qua để tạo một pool bất biến.
+
+Để tạo điều kiện thuận lợi cho điều này và tiết kiệm 32 byte dữ liệu giao dịch khi tạo pool bất biến, chúng ta kiểm tra độ dài dữ liệu instruction và phân tích dữ liệu tương ứng; nếu dữ liệu ngắn hơn, chúng ta đặt trường authority thành `None` bằng cách ghi 32 byte zero vào cuối buffer; nếu nó bao gồm trường `authority` đầy đủ, chúng ta cast byte slice trực tiếp thành struct.
+
+<ArticleSection name="Logic Instruction" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách deserialize cả `instruction_data` và `accounts`.
+
+Sau đó chúng ta cần:
+- Tạo tài khoản `Config` bằng cách sử dụng instruction `CreateAccount` từ system program và các seed sau:
+<Codeblock lang="rust">
+```rust
+let seed_binding = self.instruction_data.seed.to_le_bytes();
+let config_seeds = [
+    Seed::from(b"config"),
+    Seed::from(&seed_binding),
+    Seed::from(&self.instruction_data.mint_x),
+    Seed::from(&self.instruction_data.mint_y),
+    Seed::from(&self.instruction_data.config_bump),
+];
+```
+</Codeblock>
+- Điền thông tin vào tài khoản `Config` bằng cách tải nó sử dụng hàm hỗ trợ `Config::load_mut_unchecked()` và sau đó điền tất cả dữ liệu cần thiết bằng hàm hỗ trợ `config.set_inner()`.
+- Tạo tài khoản `Mint` cho lp bằng cách sử dụng instruction `CreateAccount` và `InitializeMint2` và các seed sau:
+<Codeblock lang="rust">
+```rust
+let mint_lp_seeds = [
+    Seed::from(b"mint_lp"),
+    Seed::from(self.accounts.config.key()),
+    Seed::from(&self.instruction_data.lp_bump),
+];
+```
+</Codeblock>
+
+> `mint_authority` của `mint_lp` là tài khoản `config`
+
+Bạn đã có đủ trình độ để làm điều này một mình, vì vậy tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct Initialize<'a> {
+    pub accounts: InitializeAccounts<'a>,
+    pub instruction_data: InitializeInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Initialize<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = InitializeAccounts::try_from(accounts)?;
+        let instruction_data: InitializeInstructionData = InitializeInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Initialize<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+    
+      Ok(())
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Bảo mật" id="security" level="h2" />
+
+Như đã nói ở trên, điều này có thể trông khác thường, nhưng chúng ta không cần phải thực hiện kiểm tra rõ ràng trên các tài khoản được truyền vào.
+
+Điều này là do, trong thực tế, instruction sẽ thất bại nếu có gì đó sai; hoặc trong quá trình CPI (Cross-Program Invocation) hoặc sớm thông qua các kiểm tra mà chúng ta đặt vào chương trình.
+
+Ví dụ, hãy xem xét tài khoản `initializer`. Chúng ta mong đợi nó phải là cả `signer` và `mutable`, nhưng nếu không phải, instruction `CreateAccount` sẽ tự động thất bại vì nó yêu cầu các thuộc tính đó cho `payer`.
+
+Tương tự, nếu tài khoản `config` được truyền với `mint_x` hoặc `mint_y` không hợp lệ, bất kỳ nỗ lực nào để gửi vào protocol sẽ thất bại trong quá trình chuyển token.
+
+Khi bạn có nhiều kinh nghiệm hơn, bạn sẽ nhận thấy rằng có rất nhiều kiểm tra có thể bỏ qua để giữ các instruction nhẹ nhàng và tối ưu, dựa vào các instruction hệ thống và downstream để thực thi các ràng buộc.

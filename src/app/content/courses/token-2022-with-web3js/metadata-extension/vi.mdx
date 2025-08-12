@@ -1,0 +1,240 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metadata Extension
+
+Phần mở rộng `Metadata` là một `Mint` account extension giới thiệu khả năng nhúng metadata trực tiếp vào mint account một cách native và không cần phải sử dụng chương trình khác.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Phần mở rộng `Metadata` hơi khác so với những gì chúng ta đã quen làm vì nó được cấu thành từ 2 phần mở rộng khác nhau đều nằm trên `Mint` account:
+- Phần mở rộng `Metadata` chứa tất cả thông tin metadata như tên, ký hiệu, uri và các thông tin khác của accunt.
+- Phần mở rộng `MetadataPointer` tham chiếu `Mint` account tới nơi phần mở rộng `Metadata` tồn tại.
+
+Thông thường, khi được sử dụng, 2 phần mở rộng này tồn tại trên cùng `Mint` account; và chúng ta sẽ làm tương tự cho ví dụ này.
+
+Hãy bắt đầu với một số điều cơ bản trước khi đi sâu vào code:
+
+Trong khi extension `MetadataPointer` tồn tại trong crate `anchor-spl`, để khởi tạo `Metadata` chúng ta cần sử dụng crate `spl_token_metadata_interface`.
+
+Vì vậy hãy cài đặt package cần thiết:
+
+```
+npm i @solana/spl-token-metadata
+```
+
+Ngoài ra, extension `Metadata` là một trong những extension "duy nhất" yêu cầu bạn khởi tạo extension sau khi đã khởi tạo `Mint` account.
+
+Điều này là vì instruction khởi tạo metadata  phân bổ động không gian cần thiết cho nội dung metadata có độ dài biến đổi.
+
+Đồng thời, điều này có nghĩa là chúng ta sẽ cần khởi tạo `Mint` account với đủ lamport để được miễn rent với extension `Metadata` được bao gồm, nhưng chỉ phân bổ đủ không gian cho extension `MetadataPointer` vì instruction `token_metadata_initialize()` thực sự tăng không gian một cách chính xác.
+
+Trong code điều này trông như thế này:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    TYPE_SIZE,
+    LENGTH_SIZE,
+    createInitializeMetadataPointerInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+import { 
+    createInitializeInstruction, 
+    pack, 
+    TokenMetadata 
+} from "@solana/spl-token-metadata";
+
+const mint = Keypair.generate();
+
+const metadata: TokenMetadata = {
+    mint: mint.publicKey,
+    name: "Test Token",
+    symbol: "TST",
+    uri: "https://example.com/metadata.json",
+    additionalMetadata: [["customField", "customValue"]],
+};
+
+// Size of Mint Account with extensions
+const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+
+// Size of the Metadata Extension
+const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
+
+// Minimum lamports required for Mint Account
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeMetadataPointer = createInitializeMetadataPointerInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMetadataInstruction = createInitializeInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        mint: mint.publicKey,
+        metadata: mint.publicKey,
+        name: metadata.name,
+        symbol: metadata.symbol,
+        uri: metadata.uri,
+        mintAuthority: keypair.publicKey,
+        updateAuthority: keypair.publicKey,
+    }
+);
+
+const updateMetadataFieldInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: metadata.additionalMetadata[0][0],
+    value: metadata.additionalMetadata[0][1],
+    });
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMetadataPointer,
+    initializeMintInstruction,
+    initializeMetadataInstruction,
+    updateMetadataFieldInstructions,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+> Instruction `initialize` của `metadata-interface` không cho phép `additionalMetdata` vì vậy nếu chúng ta muốn tạo một `tài sản` có nó, chúng ta sẽ cần sử dụng instruction `token_metadata_update_field()` như chúng ta sẽ thấy trong phần tiếp theo.
+
+<ArticleSection name="Cập nhật Metadata" id="updating-the-metadata" level="h2" />
+
+Chúng ta có thể cập nhật tất cả các trường của metadata bằng cách sử dụng cùng instruction `token_metadata_update_field()`.
+
+Đối với `additionalMetadata`, điều này hoạt động hơi khác một chút vì chúng ta có thể cập nhật trường hiện có bằng cách chỉ truyền cùng một `Field` với giá trị mới hoặc chỉ thêm trường mới vào `Metadata`.
+
+Bên dưới, chương trình sử dụng cùng instruction với cờ khác nhau dựa trên những gì chúng ta đang cố gắng thay đổi, điều này có nghĩa là chúng ta có thể thay đổi tất cả các trường như thế này: 
+
+```ts
+const newMetadata: TokenMetadata = {
+    mint: mint.publicKey,
+    name: "New Name",
+    symbol: "TST2",
+    uri: "https://example.com/metadata2.json",
+    additionalMetadata: [
+        ["customField1", "customValue1"],
+        ["customField2", "customValue2"],
+    ],
+};
+
+// Size of Mint Account with extensions
+const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+
+// Size of the Metadata Extension
+const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(newMetadata).length;
+
+// Minimum lamports required for Mint Account
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
+
+// Get the old balance of the keypair
+const oldBalance = await connection.getBalance(mint.publicKey)
+
+console.log(`Old balance: ${oldBalance}`);
+console.log(`Lamports: ${lamports}`);
+
+// Add lamports to the Mint if needed to cover the new metadata rent exemption
+if (oldBalance < lamports) {
+    const transferInstruction = SystemProgram.transfer({
+        fromPubkey: keypair.publicKey,
+        toPubkey: mint.publicKey,
+        lamports: lamports - oldBalance,
+    });
+
+    const transaction = new Transaction().add(transferInstruction);
+
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {commitment: "finalized"});
+
+    console.log(`Lamports added to Mint! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+}
+
+const updateMetadataNameInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Name", // Field | string
+    value: "New Name",
+});
+
+const updateMetadataSymbolInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Symbol", // Field | string
+    value: "TST2",
+});
+
+const updateMetadataUriInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Uri", // Field | string
+    value: "https://example.com/metadata2.json",
+});
+
+const updateMetadataAdditionalMetadataInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "customField2", // Field | string
+    value: "customValue2",
+});
+
+const transaction = new Transaction().add(
+    updateMetadataNameInstructions,
+    updateMetadataSymbolInstructions,
+    updateMetadataUriInstructions,
+    updateMetadataAdditionalMetadataInstructions,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Metadata updated! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+> Như bạn có thể thấy chúng ta luôn cần đảm bảo rằng account được miễn phí thuê. Đó là lý do tại sao chúng ta thực hiện tất cả các tính toán về phí thuê ngay từ đầu và chuyển thêm lamport vào nếu cần.
+
+Chúng ta cũng có thể xóa `trường` trong struct `additionalMetadata` bằng cách sử dụng instruction `remove_key()` như thế này:
+
+```ts
+const removeMetadataKeyInstructions = createRemoveKeyInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    key: "customField", // Field | string
+    idempotent: true,
+});
+```

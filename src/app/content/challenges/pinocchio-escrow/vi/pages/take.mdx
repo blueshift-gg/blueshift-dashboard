@@ -1,0 +1,189 @@
+# Take
+
+Instruction `take` hoàn thiện việc hoán đổi:
+- Đóng bản ghi escrow, gửi lamport tiền thuê về cho maker.
+- Chuyển Token A từ vault đến taker, sau đó đóng vault.
+- Chuyển số lượng Token B đã thỏa thuận từ taker đến maker.
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+
+Dưới đây là các tài khoản mà context cần:
+
+- taker: người muốn nhận giao dịch. Phải là signer và mutable.
+- maker: người tạo escrow. Phải là mutable.
+- escrow: tài khoản escrow mà chúng ta đang khởi tạo. Phải là mutable.
+- mint_a: token mà chúng ta đang gửi vào escrow
+- mint_b: token mà chúng ta muốn nhận
+- vault: tài khoản token liên kết thuộc sở hữu của escrow. Phải là mutable
+- taker_ata_a: tài khoản token liên kết thuộc sở hữu của taker cho mint_a. Phải là mutable
+- taker_ata_b: tài khoản token liên kết thuộc sở hữu của taker cho mint_b. Phải là mutable
+- maker_ata_b: tài khoản token liên kết thuộc sở hữu của maker cho mint_b. Phải là mutable
+- system_program: chương trình hệ thống. Phải là executable
+- token_program: chương trình token. Phải là executable
+
+Và chúng ta thực hiện các kiểm tra này trên nó:
+
+<Codeblock lang="rust">
+```rust
+pub struct TakeAccounts<'a> {
+  pub taker: &'a AccountInfo,
+  pub maker: &'a AccountInfo,
+  pub escrow: &'a AccountInfo,
+  pub mint_a: &'a AccountInfo,
+  pub mint_b: &'a AccountInfo,
+  pub vault: &'a AccountInfo,
+  pub taker_ata_a: &'a AccountInfo,
+  pub taker_ata_b: &'a AccountInfo,
+  pub maker_ata_b: &'a AccountInfo,
+  pub system_program: &'a AccountInfo,
+  pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for TakeAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    let [taker, maker, escrow, mint_a, mint_b, vault, taker_ata_a, taker_ata_b, maker_ata_b, system_program, token_program, _] = accounts else {
+      return Err(ProgramError::NotEnoughAccountKeys);
+    };
+
+    // Basic Accounts Checks
+    SignerAccount::check(taker)?;
+    ProgramAccount::check(escrow)?;
+    MintInterface::check(mint_a)?;
+    MintInterface::check(mint_b)?;
+    AssociatedTokenAccount::check(taker_ata_b, taker, mint_b, token_program)?;
+    AssociatedTokenAccount::check(vault, escrow, mint_a, token_program)?;
+
+    // Return the accounts
+    Ok(Self {
+      taker,
+      maker,
+      escrow,
+      mint_a,
+      mint_b,
+      taker_ata_a,
+      taker_ata_b,
+      maker_ata_b,
+      vault,
+      system_program,
+      token_program,
+    })
+  }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Tất cả dữ liệu mà chúng ta cần để thực hiện logic đã tồn tại trong tài khoản Escrow hoặc trên các tài khoản mà chúng ta đang deserialize. Vì lý do này, chúng ta không cần bất kỳ `instruction_data` nào cho instruction này.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách khởi tạo các tài khoản cần thiết trong việc triển khai `TryFrom`, sau khi chúng ta đã deserialize các tài khoản.
+
+Đối với bước này, chúng ta đảm bảo cả tài khoản Token A của taker và tài khoản Token B của maker đều được khởi tạo bằng cách sử dụng `AssociatedTokenAccount::init_if_needed` vì chúng ta không chắc chắn rằng chúng đã tồn tại
+
+<Codeblock lang="rust">
+```rust
+pub struct Take<'a> {
+  pub accounts: TakeAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
+  type Error = ProgramError;
+  
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    let accounts = TakeAccounts::try_from(accounts)?;
+
+    // Initialize necessary accounts
+    AssociatedTokenAccount::init_if_needed(
+      accounts.taker_ata_a,
+      accounts.mint_a,
+      accounts.taker,
+      accounts.taker,
+      accounts.system_program,
+      accounts.token_program,
+    )?;
+
+    AssociatedTokenAccount::init_if_needed(
+      accounts.maker_ata_b,
+      accounts.mint_b,
+      accounts.taker,
+      accounts.maker,
+      accounts.system_program,
+      accounts.token_program,
+    )?;
+
+    Ok(Self {
+      accounts,
+    })
+  }
+}
+```
+</Codeblock>
+
+Bây giờ chúng ta có thể tập trung vào logic chính sẽ:
+- Chuyển token từ `taker_ata_b` đến `maker_ata_b`.
+- Chuyển token từ `vault` đến `taker_ata_a`.
+- Đóng `vault` hiện đã trống và rút tiền thuê từ tài khoản.
+
+<Codeblock lang="rust">
+```rust
+impl<'a> Take<'a> {
+  pub const DISCRIMINATOR: &'a u8 = &1;
+  
+  pub fn process(&mut self) -> ProgramResult {
+    let data = self.accounts.escrow.try_borrow_data()?;
+    let escrow = Escrow::load(&data)?;
+
+    // Check if the escrow is valid
+    let escrow_key = create_program_address(&[b"escrow", self.accounts.maker.key(), &escrow.seed.to_le_bytes(), &escrow.bump], &crate::ID)?;
+    if &escrow_key != self.accounts.escrow.key() {
+      return Err(ProgramError::InvalidAccountOwner);
+    }
+    
+    let seed_binding = escrow.seed.to_le_bytes();
+    let bump_binding = escrow.bump;
+    let escrow_seeds = [
+      Seed::from(b"escrow"),
+      Seed::from(self.accounts.maker.key().as_ref()),
+      Seed::from(&seed_binding),
+      Seed::from(&bump_binding),
+    ];
+    let signer = Signer::from(&escrow_seeds);
+    
+    let amount = TokenAccount::get_amount(self.accounts.vault);
+    
+    // Transfer from the Vault to the Taker
+    Transfer {
+      from: self.accounts.vault,
+      to: self.accounts.taker_ata_a,
+      authority: self.accounts.escrow,
+      amount,
+    }.invoke_signed(&[signer.clone()])?;
+
+    // Close the Vault
+    CloseAccount {
+      account: self.accounts.vault,
+      destination: self.accounts.maker,
+      authority: self.accounts.escrow,
+    }.invoke_signed(&[signer.clone()])?;
+
+    // Transfer from the Taker to the Maker
+    Transfer {
+      from: self.accounts.taker_ata_b,
+      to: self.accounts.maker_ata_b,
+      authority: self.accounts.taker,
+      amount: escrow.receive,
+    }.invoke()?;
+
+    // Close the Escrow
+    drop(data);
+    ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
+
+    Ok(())
+  }
+}
+```
+</Codeblock>

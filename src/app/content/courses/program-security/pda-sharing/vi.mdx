@@ -1,0 +1,97 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# PDA Sharing
+
+Các cuộc tấn công PDA sharing (chia sẻ PDA) khai thác các chương trình sử dụng cùng một Program Derived Address (PDA) trên nhiều người dùng hoặc domain, cho phép kẻ tấn công truy cập vào tiền, dữ liệu, hoặc quyền không thuộc về họ. Trong khi sử dụng PDA toàn cục có thể có vẻ tốt cho các thao tác toàn chương trình, nó tạo ra sự nhiễm chéo nguy hiểm nơi hành động của một người dùng có thể ảnh hưởng đến tài sản của người dùng khác.
+
+Lỗ hổng xuất phát từ tính cụ thể seed không đủ khi derive PDA. Khi nhiều account chia sẻ cùng một PDA authority, chương trình mất khả năng phân biệt giữa các nỗ lực truy cập hợp pháp và bất hợp pháp. Kẻ tấn công có thể tạo các account riêng của họ tham chiếu đến cùng một PDA được chia sẻ, sau đó sử dụng signing authority của PDA đó để thao tác tài sản thuộc về người dùng khác.
+
+Điều này đặc biệt nguy hiểm trong các protocol DeFi nơi PDA kiểm soát token vault, số dư người dùng, hoặc quyền rút tiền. Một PDA được chia sẻ về cơ bản tạo ra một master key mở khóa tài sản của nhiều người dùng, biến các thao tác người dùng cá nhân thành các cuộc tấn công tiềm năng chống lại toàn bộ protocol.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét hệ thống rút tiền dễ bị tấn công này sử dụng PDA dựa trên mint để ký:
+
+```rust
+#[program]
+pub mod insecure_withdraw{
+    use super::*;
+    //..
+
+    pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+        let amount = ctx.accounts.vault.amount;
+        
+        let seeds = &[
+            ctx.accounts.pool.withdraw_destination.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+
+        transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.withdraw_destination.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+            ),
+            &amount,
+            seeds,
+        )?;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(has_one = vault, has_one = withdraw_destination)]
+    pool: Account<'info, TokenPool>,
+    vault: Account<'info, TokenAccount>,
+    withdraw_destination: Account<'info, TokenAccount>,
+    /// CHECK: This is the PDA that signs for the transfer
+    authority: UncheckedAccount<'info>,
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool {
+    pub vault: Pubkey,
+    pub mint: Pubkey,
+    pub withdraw_destination: Pubkey,
+    pub bump: u8,
+}
+```
+
+Mã này có một lỗ hổng nghiêm trọng: PDA được derive chỉ sử dụng địa chỉ mint. Điều này có nghĩa là tất cả pool cho cùng kiểu token chia sẻ cùng signing authority, tạo ra một vector tấn công nguy hiểm.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Tạo TokenPool riêng của họ cho cùng mint
+- Đặt địa chỉ riêng của họ làm `withdraw_destination`
+- Sử dụng PDA authority được chia sẻ để rút token từ bất kỳ vault nào sử dụng cùng mint
+- Rút cạn tiền của người dùng khác đến đích của họ
+
+Cuộc tấn công thành công vì PDA authority không phân biệt giữa các pool instance khác nhau, nó chỉ quan tâm đến kiểu mint, không phải user hoặc pool cụ thể nên có quyền truy cập vào những khoản tiền đó.
+
+Cải tiến đầu tiên là làm cho PDA cụ thể cho từng user hoặc destination riêng lẻ và sử dụng ràng buộc seed và bump của Anchor để xác thực PDA derivation:
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        seeds = [withdraw_destination.key().as_ref()],
+        bump = pool.bump,                             
+        has_one = vault,                              
+        has_one = withdraw_destination,              
+    )]
+    pool: Account<'info, TokenPool>,
+    #[account(mut)]
+    vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    withdraw_destination: Account<'info, TokenAccount>,
+    token_program: Program<'info, Token>,
+}
+```

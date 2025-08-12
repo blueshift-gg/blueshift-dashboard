@@ -1,0 +1,141 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Arbitrary CPI
+
+Các cuộc tấn công Arbitrary Cross Program Invocation (CPI) xảy ra khi các chương trình mù quáng gọi bất kỳ chương trình nào được truyền vào như một tham số, thay vì xác thực rằng chúng đang gọi chương trình dự định.
+
+Điều này biến chương trình an toàn của bạn thành một nơi chạy của mã độc hại, cho phép kẻ tấn công chiếm quyền authority của chương trình bạn và thực thi các thao tác trái phép dưới danh tính chương trình của bạn.
+
+Nguy hiểm nằm ở mô hình account linh hoạt của Solana. Vì người gọi có thể truyền bất kỳ program ID nào vào danh sách account của instruction bạn, việc không xác thực địa chỉ chương trình có nghĩa là chương trình của bạn trở thành proxy cho việc thực thi mã tùy ý.
+
+Kẻ tấn công có thể thay thế một chương trình độc hại bắt chước interface mong đợi nhưng thực hiện các thao tác hoàn toàn khác—như đảo ngược transfer, rút cạn account, hoặc thao tác state theo những cách bất ngờ.
+
+Cái làm cho điều này đặc biệt nguy hiểm là cuộc tấn công thành công ngay cả khi tất cả các kiểm tra bảo mật khác đều vượt qua. Chương trình của bạn có thể xác thực đúng cách account ownership, kiểm tra chữ ký, và xác minh cấu trúc dữ liệu, nhưng vẫn kết thúc bằng việc gọi code độc hại vì nó không bao giờ xác nhận rằng nó đang nói chuyện với chương trình đúng.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này thực hiện token transfer:
+
+```rust
+#[program]
+pub mod insecure_cpi{
+    use super::*;
+    //..
+
+    pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+        solana_program::program::invoke(
+            &spl_token::instruction::transfer(
+                ctx.accounts.token_program.key,
+                ctx.accounts.source.key,
+                ctx.accounts.destination.key,
+                ctx.accounts.authority.key,
+                &[],
+                amount,
+            )?,
+            &[
+                ctx.accounts.source.clone(),
+                ctx.accounts.destination.clone(),
+                ctx.accounts.authority.clone(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    /// CHECK: This account will not be checked by Anchor
+    pub token_program: UncheckedAccount<'info>,
+}
+```
+
+Mã này thoạt nhìn có vẻ an toàn. Source và destination được xác thực đúng cách là các token account, và authority phải ký giao dịch. Tuy nhiên, trường `token_program` là một `UncheckedAccount`, có nghĩa là Anchor không thực hiện validation nào trên nó cả.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Tạo một chương trình độc hại với instruction transfer có cùng interface như transfer của SPL Token
+- Thay vì chuyển token từ source đến destination, chương trình độc hại của họ làm ngược lại, hoặc tệ hơn
+- Truyền chương trình độc hại của họ làm tham số `token_program`
+- Chương trình của bạn vô tình gọi code của kẻ tấn công với toàn quyền authority trên giao dịch
+
+Cuộc tấn công thành công vì trong khi các token account là hợp pháp, chương trình thực hiện thao tác thì không. Chương trình độc hại có thể chuyển token theo hướng sai, rút cạn account đến ví của kẻ tấn công, hoặc thực hiện bất kỳ thao tác nào mà các account được truyền cho phép.
+
+May mắn thay `Anchor` làm cho việc thực hiện kiểm tra này cực kỳ dễ dàng trực tiếp trong account struct bằng cách chỉ cần thay đổi `UncheckedAccount` thành `Program` và truyền kiểu `Token` tự động xác thực program ID:
+
+```rust
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Thậm chí tốt hơn, sử dụng CPI helper của Anchor xử lý program validation tự động:
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.from_token_account.to_account_info(),
+                to: ctx.accounts.to_token_account.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            },
+        ),
+        &amount,
+    )?;
+
+    Ok(())
+}
+```
+
+Để xác minh tùy chỉnh, kiểm tra rõ ràng program ID trước khi thực hiện CPI:
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    if &spl_token::ID != ctx.accounts.token_program.key {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    solana_program::program::invoke(
+        &spl_token::instruction::transfer(
+            ctx.accounts.token_program.key,
+            ctx.accounts.source.key,
+            ctx.accounts.destination.key,
+            ctx.accounts.authority.key,
+            &[],
+            amount,
+        )?,
+        &[
+            ctx.accounts.source.clone(),
+            ctx.accounts.destination.clone(),
+            ctx.accounts.authority.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, xác minh thủ công là bắt buộc vì không có kiểm tra chương trình tự động:
+
+```rust
+if self.accounts.token_program.pubkey() != &spl_token::ID {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```
+
+
+
+
+

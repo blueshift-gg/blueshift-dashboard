@@ -1,0 +1,327 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Pinocchio Vault Challenge](/graphics/challenge-banners/pinocchio-vault.png)
+
+# Vault
+
+Vault cho phép người dùng lưu trữ tài sản của họ một cách an toàn. Vault là một khối xây dựng cơ bản trong DeFi, về cốt lõi, cho phép người dùng lưu trữ tài sản của họ một cách an toàn (trong trường hợp này là lamport) mà chỉ chính người dùng đó mới có thể rút ra sau này.
+
+Trong thử thách này, chúng ta sẽ xây dựng một vault lamport đơn giản để minh họa cách làm việc với các tài khoản cơ bản, Program Derived Addresses (PDA), và Cross-Program Invocation (CPI). Nếu bạn chưa quen với Pinocchio, bạn nên bắt đầu bằng cách đọc [Giới thiệu về Pinocchio](/vi/courses/introduction-to-pinocchio) để làm quen với các khái niệm cốt lõi mà chúng ta sẽ sử dụng trong chương trình này.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Trước khi bắt đầu, hãy đảm bảo Rust và Pinocchio đã được cài đặt. Sau đó trong terminal của bạn chạy:
+
+<Codeblock lang="terminal">
+```bash
+# tạo workspace
+cargo new blueshift_vault --lib --edition 2021
+cd blueshift_vault
+```
+</Codeblock>
+
+Thêm Pinocchio:
+
+<Codeblock lang="terminal">
+```bash
+cargo add pinocchio pinocchio-system
+```
+</Codeblock>
+
+Khai báo các loại crate trong `Cargo.toml` để tạo ra các artifact triển khai trong `target/deploy`:
+
+<Codeblock lang="toml">
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+</Codeblock>
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Hãy bắt đầu với cấu trúc chương trình cơ bản. Chúng ta sẽ triển khai mọi thứ trong `lib.rs` vì đây là một chương trình đơn giản. Đây là template ban đầu với các thành phần cốt lõi mà chúng ta sẽ cần:
+
+<Codeblock lang="rust">
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+</Codeblock>
+
+
+<ArticleSection name="Deposit" id="deposit" level="h2" />
+
+Instruction deposit thực hiện các bước sau:
+1. Xác minh vault trống (có zero lamport) để ngăn chặn việc gửi tiền hai lần
+2. Đảm bảo số tiền gửi vượt quá mức tối thiểu miễn thuê cho một tài khoản cơ bản
+3. Chuyển lamport từ owner đến vault bằng cách sử dụng CPI đến System Program
+
+Đầu tiên, hãy định nghĩa struct tài khoản cho deposit:
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Accounts Checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, _) = find_program_address(&[b"vault", owner.key()], &crate::ID);
+        if vault.key().ne(&vault_key) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Return the accounts
+        Ok(Self { owner, vault })
+    }
+}
+```
+</Codeblock>
+
+Hãy phân tích từng kiểm tra tài khoản:
+1. `owner`: Phải là signer vì họ cần ủy quyền cho giao dịch
+2. `vault`:
+   - Phải thuộc sở hữu của System Program
+   - Phải có zero lamport (đảm bảo deposit "mới")
+   - Phải được tạo từ các seed chính xác
+   - Phải khớp với địa chỉ PDA mong đợi
+
+Bây giờ hãy triển khai struct dữ liệu instruction:
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // Instruction Checks
+        if amount.eq(&0) {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+</Codeblock>
+
+Ở đây chúng ta chỉ kiểm tra rằng số tiền khác zero.
+
+Cuối cùng, hãy triển khai instruction deposit:
+
+<Codeblock lang="rust">
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        Transfer {
+            from: self.accounts.owner,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()?;
+
+        Ok(())
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Withdraw" id="withdraw" level="h2" />
+
+Instruction withdraw thực hiện các bước sau:
+1. Xác minh vault chứa lamport (không trống)
+2. Sử dụng PDA của vault để ký chuyển khoản thay mặt cho chính nó
+3. Chuyển tất cả lamport từ vault trở lại cho owner
+
+Đầu tiên, hãy định nghĩa struct tài khoản cho withdraw:
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub bumps: [u8; 1],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Basic Accounts Checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, bump) = find_program_address(&[b"vault", owner.key().as_ref()], &crate::ID);
+        if &vault_key != vault.key() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Ok(Self { owner, vault, bumps: [bump] })
+    }
+}
+```
+</Codeblock>
+
+Hãy phân tích từng kiểm tra tài khoản:
+1. `owner`: Phải là signer vì họ cần ủy quyền cho giao dịch
+2. `vault`:
+   - Phải thuộc sở hữu của System Program
+   - Phải được tạo từ các seed chính xác
+   - Phải khớp với địa chỉ PDA mong đợi
+3. `bumps`: Chúng ta lưu trữ bump seed để sử dụng trong việc ký PDA
+
+Bây giờ hãy triển khai instruction withdraw:
+
+<Codeblock lang="rust">
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+
+        Ok(Self { accounts })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Tạo PDA signer seeds
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(self.accounts.owner.key().as_ref()),
+            Seed::from(&self.accounts.bumps),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        // Chuyển tất cả lamport từ vault đến owner
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.owner,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)?;
+
+        Ok(())
+    }
+}
+```
+</Codeblock>
+
+Tính bảo mật của việc rút tiền này được đảm bảo bởi hai yếu tố:
+1. PDA của vault được tạo bằng cách sử dụng public key của owner, đảm bảo chỉ người gửi tiền ban đầu mới có thể rút
+2. Khả năng ký chuyển khoản của PDA được xác minh thông qua các seed mà chúng ta cung cấp cho `invoke_signed`
+
+<ArticleSection name="Kết luận" id="conclusion" level="h2" />
+
+Bây giờ bạn có thể kiểm tra chương trình của mình với các unit test của chúng tôi và nhận NFT!
+
+Bắt đầu bằng cách build chương trình của bạn bằng lệnh sau trong terminal:
+
+<Codeblock lang="terminal">
+```bash
+cargo build-sbf
+```
+</Codeblock>
+
+Điều này tạo ra một file `.so` trực tiếp trong thư mục `target/deploy` của bạn.
+
+Bây giờ hãy nhấp vào nút `làm thử thách` và thả file vào đó!

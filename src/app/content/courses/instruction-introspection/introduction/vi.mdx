@@ -1,0 +1,104 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instruction Introspection
+
+Instruction introspection là một khả năng mạnh mẽ trên Solana cho phép một chương trình phân tích các instruction khác trong cùng một transaction, bao gồm cả những instruction chưa được thực thi. Điều này cho phép bạn phản hồi động hoặc bổ sung cho các instruction này — ví dụ như chèn các biện pháp bảo vệ, xác thực hành vi, hoặc tích hợp các instruction từ chương trình bên ngoài vào logic của riêng bạn.
+
+Điều này được thực hiện nhờ một tài khoản hệ thống đặc biệt gọi là `Instructions` sysvar. Sysvars là các tài khoản chỉ đọc được duy trì bởi Solana runtime để hiển thị trạng thái nội bộ cho các chương trình (ví dụ: clock, rent, epoch schedule, v.v.). Instructions sysvar cụ thể hiển thị danh sách đầy đủ các instruction trong transaction hiện tại, cùng với metadata và dữ liệu đã được serialize của chúng.
+
+Đây là cách Solana serialize thông tin này trong runtime:
+
+```rust
+// First encode the number of instructions:
+//  0..2 - num_instructions
+//
+// Then a table of offsets of where to find them in the data
+//  3..2 * num_instructions table of instruction offsets
+//
+// Each instruction is then encoded as:
+//   0..2 - num_accounts
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
+//   3..35 - pubkey - 32 bytes
+//   35..67 - program_id
+//   67..69 - data len - u16
+//   69..data_len - data
+#[cfg(not(target_os = "solana"))]
+fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
+    // 64 bytes is a reasonable guess, calculating exactly is slower in benchmarks
+    let mut data = Vec::with_capacity(instructions.len() * (32 * 2));
+    append_u16(&mut data, instructions.len() as u16);
+    for _ in 0..instructions.len() {
+        append_u16(&mut data, 0);
+    }
+
+    for (i, instruction) in instructions.iter().enumerate() {
+        let start_instruction_offset = data.len() as u16;
+        let start = 2 + (2 * i);
+        data[start..start + 2].copy_from_slice(&start_instruction_offset.to_le_bytes());
+        append_u16(&mut data, instruction.accounts.len() as u16);
+        for account_meta in &instruction.accounts {
+            let mut account_meta_flags = InstructionsSysvarAccountMeta::empty();
+            if account_meta.is_signer {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_SIGNER;
+            }
+            if account_meta.is_writable {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_WRITABLE;
+            }
+            append_u8(&mut data, account_meta_flags.bits());
+            append_slice(&mut data, account_meta.pubkey.as_ref());
+        }
+
+        append_slice(&mut data, instruction.program_id.as_ref());
+        append_u16(&mut data, instruction.data.len() as u16);
+        append_slice(&mut data, instruction.data);
+    }
+    data
+}
+```
+
+Điều này có nghĩa là bằng cách đọc tài khoản `Instructions` sysvar bên trong chương trình của bạn, bạn có thể truy cập tất cả các instruction được bao gồm trong transaction hiện tại.
+
+Bạn không cần phải phân tích các byte thô bằng tay. Solana cung cấp các hàm để hỗ trợ điều đó:
+- `load_current_index_checked`: trả về chỉ số của instruction hiện đang được thực thi.
+- `load_instruction_at_checked`: cho phép bạn tải một instruction cụ thể theo chỉ số của nó ở định dạng đã được phân tích và deserialize.
+
+<ArticleSection name="Nó hoạt động như thế nào?" id="how-does-it-work" level="h2" />
+
+Mỗi instruction Solana chứa:
+- program ID mà nó nhắm đến,
+- các tài khoản mà nó tương tác (bao gồm metadata như signer/writable),
+- và dữ liệu (thường là một discriminator + các tham số).
+
+Và đây chính xác là những gì hàm `load_instruction_at_checked` từ Instructions sysvar cung cấp cho bạn:
+- program_id: chương trình mà instruction này đang gọi.
+- accounts: danh sách các tài khoản liên quan với metadata.
+- data: dũ liệu đầu vào thô (nếu chúng ta đang introspect một anchor instruction, nó thường bắt đầu với một discriminator 8-byte theo sau là các tham số).
+
+Để introspect các instruction khác một cách an toàn và hiệu quả, hãy làm theo các bước sau:
+- Xác định Chỉ số Instruction Hiện tại: Sử dụng `load_current_index_checked` để tìm chỉ số của instruction hiện đang được thực thi.
+> Hãy nhớ: instruction của bạn có thể không phải là instruction đầu tiên (chỉ số 0) trong transaction.
+
+- Tải một Instruction Mục tiêu để Phân tích: Với chỉ số trong tay, sử dụng `load_instruction_at_checked(index)` để tải một instruction khác trong cùng transaction có thể là instruction trước đó, sau đó, hoặc tại một vị trí cụ thể.
+> Điều này hữu ích để xác thực hành vi, đảm bảo các đầu vào mong đợi, hoặc kết hợp một cách an toàn giữa các chương trình.
+
+- Xây dựng Ràng buộc để Ngăn chặn Hành vi Độc hại: Instruction introspection rất mạnh mẽ, nhưng nó cũng tạo ra các cách tấn công mới. Hãy đảm bảo: xác thực rằng instruction được introspect đang nhắm đến chương trình mong đợi, xác nhận rằng địa chỉ tài khoản và dữ liệu khớp với các mẫu mong đợi, và tránh các giả định về thứ tự instruction trừ khi được thực thi một cách rõ ràng.
+
+Bằng cách thực hiện những biện pháp phòng ngừa này, bạn có thể tận dụng instruction introspection một cách an toàn để xây dựng các chương trình Solana mạnh mẽ, có thể kết hợp và bảo mật.
+
+<ArticleSection name="Các Ràng buộc Thông thường cho Introspection" id="common-constraints-for-introspection" level="h2" />
+
+Khi sử dụng instruction introspection, việc áp dụng các ràng buộc nghiêm ngặt là rất quan trọng để ngăn chặn hành vi độc hại hoặc bất ngờ. Những biện pháp bảo vệ phổ biến nhất bao gồm:
+
+- Instruction Verification: Xác minh ID chương trình và discriminator của instruction để đảm bảo rằng đó là nó đúng. Discriminator (thường là 1, 4 hoặc 8 byte đầu tiên của dữ liệu instruction) định danh một cách độc nhất các hàm được gọi.
+
+> Bước này đảm bảo rằng bạn đang kiểm tra đúng instruction và không phải là một instruction giả mạo hoặc bị hỏng.
+
+- Variable Validation: Sau discriminator, phân tích và kiểm tra các biến quan trọng được sử dụng bởi instruction. Điều này có thể bao gồm số lượng, hướng (ví dụ: long/short) hoặc ID, và bạn luôn phải xác nhận rằng các trường này phù hợp với logic mong đợi của tích hợp hoặc biện pháp bảo vệ của bạn.
+- Account Verification: Xác minh cấu trúc và danh tính của các tài khoản trong instruction. Kiểm tra các tài khoản mong đợi xuất hiện ở các vị trí cụ thể (ví dụ: signer, vault, collateral) và đảm bảo rằng vai trò như signer/writable status khớp với các giả định của bạn.
+
+Bằng cách áp dụng những ràng buộc này, bạn đảm bảo rằng chương trình của bạn chỉ phản hồi với các instruction hợp lệ và đáng tin cậy, làm cho logic của bạn mạnh mẽ hơn, có thể kết hợp và bảo mật hơn.
+
+Cùng với tính nguyên tử của transaction, những kiểm tra này cho phép bạn xây dựng logic mạnh mẽ, có thể kết hợp mà có thể tương tác an toàn với các chương trình và instruction khác trong cùng transaction.
+
+> Nhớ rằng transaction trong Solana là nguyên tử. Nếu bất kỳ instruction nào thất bại, toàn bộ transaction sẽ được rollback.

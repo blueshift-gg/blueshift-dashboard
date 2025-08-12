@@ -1,0 +1,176 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Chương trình Token2022
+
+Chương trình Token2022, còn được gọi là Token Extensions, là một superset của chức năng được cung cấp bởi Token Program.
+
+Nếu bạn muốn tìm hiểu thêm về những chức năng bổ sung có sẵn và sự khác biệt với legacy token program, hãy theo dõi [khóa học này](/vi/courses/token-2022-program)
+
+Hãy bắt đầu bằng cách cài đặt gói cần thiết để làm việc với SPL Token program sử dụng Web3.js:
+
+```
+npm i @solana/spl-token
+```
+
+<ArticleSection name="Mint và Token Account" id="mint-and-token-accounts" level="h2" />
+
+Nếu bạn quen thuộc với việc tạo `Mint` account, `Associated Token` account, hoặc `Token` account sử dụng TypeScript, bạn sẽ thấy rằng Token2022 tuân theo một pattern rất tương tự.
+
+Sự khác biệt chính nằm ở việc khởi tạo account, vì các extension yêu cầu không gian bổ sung và phải được cấu hình trước khi mint được hoàn thiện.
+
+### Mint Account với Extension
+
+Khi thêm extension vào `Mint`, chúng ta cần:
+- Tính toán không gian bổ sung cần thiết cho dữ liệu extension
+- Khởi tạo từng extension với cấu hình cụ thể của nó
+- Đảm bảo thứ tự đúng của các instruction khởi tạo
+
+Đây là cách tạo mint với phần mở rộng Transfer Fee:
+
+```ts
+import {
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.TransferFeeConfig]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Transfer Fee extension
+const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    500,
+    BigInt(1e6),
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTransferFeeConfig, // Extension must be initialized before mint
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Như bạn có thể thấy, nó khá đơn giản:
+- Tạo `Mint` keypair sử dụng hàm `Keypair.generate()`.
+- Tính toán độ dài của `Mint` account với extension cụ thể sử dụng hàm `getMintLen()`
+- Tính toán lamport tối thiểu cần thiết sử dụng `connection.getMinimumBalanceForRentExemption(mintLen)`
+- Tạo account với không gian, phí thuê và owner phù hợp
+- Khởi tạo phần mở rộng bạn muốn trên `Mint` account với các chức năng tương ứng
+- Khởi tạo `Mint` account
+
+> Mint account cơ bản khi không có phần mở rộng có cùng kích thước với legacy `Mint`. Các phần mở rộng thêm yêu cầu về dữ liệu cụ thể của chúng lên trên kích thước cơ bản này, cùng với padding và discriminator xác định account là Token2022 `Mint`.
+
+### Associated Token Account với Extension
+
+`Associated Token` account đi kèm với extension `ImmutableOwner` theo mặc định. Vì vậy sự khác biệt duy nhất giữa việc tạo Legacy hoặc Token2022 `Token Account` chỉ là owner program.
+
+Đây là cách tạo `Associated Token` account:
+
+```ts
+const ata = await getAssociatedTokenAddress(
+    mint.publicKey,
+    keypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+);
+
+// Create ATA creation instructions for all accounts
+const createAtaInstructions = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    ata, // associated token account address
+    keypair.publicKey, // owner
+    mint.publicKey, // mint
+    TOKEN_2022_PROGRAM_ID
+)
+```
+
+### Token Account với Extension
+
+Cơ chế tạo `Token` account với extension tương tự như những gì chúng ta đã làm với `Mint` account:
+- Tính toán không gian bổ sung cần thiết cho dữ liệu extension
+- Khởi tạo từng extension với cấu hình cụ thể của nó
+- Đảm bảo thứ tự đúng của các instruction khởi tạo
+
+Đây là cách tạo `Token` account với extension `CpiGuard`:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+// Size of Token Account with extensions
+const accountLen = getAccountLen([ExtensionType.CpiGuard]);
+
+// Minimum lamports required for Token Account
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount.publicKey,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableCpiGuardInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {commitment: "finalized"});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

@@ -1,0 +1,84 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Duplicate Mutable Account 
+
+Các cuộc tấn công duplicate mutable account (Các tài khoản có thể thay đổi bị trùng lặp) khai thác các chương trình chấp nhận nhiều ccount có thể thay đổi cùng kiểu bằng cách truyền cùng một account hai lần, khiến chương trình vô tình ghi đè các thay đổi của chính nó. Điều này tạo ra race condition trong một instruction duy nhất nơi các tahy đổi sau có thể âm thầm hủy bỏ các thay đổi trước đó.
+
+Lỗ hổng này chủ yếu ảnh hưởng đến các instruction sửa đổi dữ liệu trong các account thuộc sở hữu chương trình, không phải các thao tác hệ thống như chuyển lamport. Cuộc tấn công thành công vì runtime của Solana không ngăn chặn cùng một account được truyền nhiều lần cho các tham số khác nhau; trách nhiệm của chương trình là phát hiện và xử lý các bản sao.
+
+Nguy hiểm nằm ở bản chất tuần tự của việc thực thi instruction. Khi cùng một account được truyền hai lần, chương trình thực hiện thay đổi đầu tiên, sau đó ngay lập tức ghi đè nó bằng thay đổi thứ hai, khiến cho account ở trạng thái bất ngờ có thể không phản ánh ý định của người dùng hoặc logic của chương trình.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này cập nhật các trường ownership trên hai program account:
+
+```rust
+#[program]
+pub mod unsafe_update_account{
+    use super::*;
+    
+    //..
+
+    pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+        ctx.accounts.program_account_1.owner = pubkey_a;
+        ctx.accounts.program_account_2.owner = pubkey_b;
+        
+        Ok(())
+    }
+
+    //..
+
+}
+
+#[derive(Accounts)]
+pub struct UpdateAccount<'info> {
+   #[account(mut)]
+    pub program_account_1: Account<'info, ProgramAccount>,
+    #[account(mut)]
+    pub program_account_2: Account<'info, ProgramAccount>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Mã này có một lỗ hổng nghiêm trọng: nó không bao giờ xác minh rằng `program_account_1` và `program_account_2` là các account khác nhau.
+
+Kẻ tấn công có thể khai thác điều này bằng cách truyền cùng một account cho cả hai tham số. Đây là những gì xảy ra:
+- Chương trình đặt `program_account_1.owner = pubkey_a`
+- Vì cả hai tham số đều tham chiếu đến cùng một account, chương trình ngay lập tức ghi đè điều này bằng `program_account_2.owner = pubkey_b`
+
+Kết quả cuối cùng: owner của account được đặt thành `pubkey_b`, hoàn toàn bỏ qua `pubkey_a`
+
+Điều này có thể có vẻ vô hại, nhưng hãy xem xét các tác động. Một người dùng mong đợi cập nhật hai account khác nhau với các phân công ownership cụ thể phát hiện ra rằng chỉ một account được sửa đổi, và không theo cách họ dự định. Trong các protocol phức tạp, điều này có thể dẫn đến trạng thái không nhất quán, các thao tác nhiều bước thất bại, hoặc thậm chí tổn thất tài chính.
+
+Giải pháp rất đơn giản. Bạn chỉ cần xác minh rằng các account là duy nhất trước khi tiếp tục:
+
+```rust
+pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+    if ctx.accounts.program_account_1.key() == ctx.accounts.program_account_2.key() {
+        return Err(ProgramError::InvalidArgument)
+    }
+
+    ctx.accounts.program_account_1.owner = pubkey_a;
+    ctx.accounts.program_account_2.owner = pubkey_b;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, cùng một pattern validation được áp dụng:
+
+```rust
+if self.accounts.program_account_1.key() == ctx.accounts.program_account_2.key() {
+    return Err(ProgramError::InvalidArgument)
+}
+```
+
+
+
+

@@ -2,6 +2,10 @@ import createMDX from "@next/mdx";
 import rehypePrettyCode from "rehype-pretty-code";
 import createNextIntlPlugin from "next-intl/plugin";
 import redirects from "./redirects.mjs";
+import { createHighlighter, bundledLanguages } from "shiki";
+
+import sbpfGrammar from "./src/lib/shiki/sbpf-grammar.json" with { type: "json" };
+import blueshiftTheme from "./src/lib/shiki/blueshift-theme.json" with { type: "json" };
 
 const nextConfig = {
   async redirects() {
@@ -33,20 +37,35 @@ const nextConfig = {
 const withMDX = createMDX({
   extension: /\.mdx?$/,
   options: {
-    remarkPlugins: [
-      remarkGfm
-    ],
+    remarkPlugins: [remarkGfm],
     rehypePlugins: [
       [
         rehypePrettyCode,
         {
-          theme: "dracula-soft",
+          getHighlighter: (options) => {
+            return createHighlighter({
+              ...options,
+              langs: [
+                ...Object.values(bundledLanguages),
+                {
+                  name: "sbpf-asm",
+                  aliases: ["sbpf", "sbpfasm", "sbf", "ebpf"],
+                  ...sbpfGrammar,
+                },
+              ],
+              themes: [blueshiftTheme],
+            });
+          },
+          theme: "blueshift",
           // aurora-x
           keepBackground: false,
           transformers: [
             {
               span(node) {
-                if (this.options.lang === "bash" || this.options.lang === "sh") {
+                if (
+                  this.options.lang === "bash" ||
+                  this.options.lang === "sh"
+                ) {
                   delete node.properties.style;
                 }
               },
