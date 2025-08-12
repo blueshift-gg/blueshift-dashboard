@@ -1,0 +1,308 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# Інструкції & CPI
+
+Інструкції – це будівельні блоки програм Solana, що визначають дії, які можна виконати. В Anchor інструкції реалізовані як функції з певними атрибутами та обмеженнями. Давайте розглянемо, як ефективно з ними працювати.
+
+<ArticleSection name="Структура Інструкції" id="instruction-structure" level="h2" />
+
+В Anchor інструкції визначаються за допомогою модуля `#[program]` та окремих функцій інструкцій. Ось базова структура:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>, data: u64) -> Result<()> {
+        // Логіка інструкцій тут
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Контекст Інструкції" id="instruction-context" level="h3" />
+
+Кожна функція інструкції отримує структуру `Context` як свій перший параметр. Цей контекст містить:
+- `accounts`: Облікові записи, що передаються інструкції
+- `program_id`: Відкритий ключ програми
+- `remaining_accounts`: Будь-які додаткові облікові записи, які явно не визначені в структурі контексту
+- `bumps`: Поле `bumps` особливо корисне під час роботи з КПК, оскільки воно надає початкові значення bump, які використовувалися для отримання адрес КПК (лише якщо ви отримуєте їх у структурі account)
+
+Доступ до цього можна отримати, виконавши такі дії:
+
+```rust
+// Доступ до аккаунтів
+ctx.accounts.account_1
+ctx.accounts.account_2
+
+// Доступ до ID програми
+ctx.program_id
+
+// Доступ до залишкових аккаунтів
+for remaining_account in ctx.remaining_accounts {
+    // Логіка для обробки залишкових аккаунтів
+}
+
+// Доступ до bumps для PDAs
+let bump = ctx.bumps.pda_account;
+```
+
+<ArticleSection name="Дискримінатор Інструкцій" id="instruction-discriminator" level="h3" />
+
+Як і облікові записи, інструкції в Anchor використовують дискримінатори для ідентифікації різних типів інструкцій. Дискримінатором за замовчуванням є 8-байтовий префікс, згенерований за допомогою `sha256("global:<назва_інструкції>")[0..8]`. Назва інструкції має бути у snake_case.
+
+<AnchorDiscriminatorCalculator value={"initialize_account"} displayMode="instruction" />
+
+<ArticleSection name="Користувацький Дискримінатор Інструкції" id="custom-instruction-discriminator" level="h3" />
+
+Ви також можете вказати власний дискримінатор для своїх інструкцій:
+
+```rust
+#[instruction(discriminator = 1)]
+pub fn custom_discriminator(ctx: Context<Custom>) -> Result<()> {
+    // Логіка Інструкції
+    Ok(())
+}
+```
+
+<ArticleSection name="Спорудження Інструкції" id="instruction-scaffold" level="h2" />
+
+Ви можете написати свої інструкції по-різному, у цьому розділі ми навчимо вас деяким стилям та способам їхнього налаштування.
+
+<ArticleSection name="Логіка Інструкції" id="instruction-logic" level="h3" />
+Логіку інструкцій можна організувати по-різному, залежно від складності вашої програми та бажаного стилю кодування. Ось основні підходи:
+
+1. **Вбудована логіка інструкцій**
+
+Для простих інструкцій ви можете записати логіку безпосередньо у функції інструкції:
+
+```rust
+pub fn initialize(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Логіка передачі токенів
+
+    // Логіка закриття аккаунта
+    
+    Ok(())
+}
+```
+2. **Реалізація окремих модулів**
+
+Для дуже складних програм можна організувати логіку в окремих модулях:
+
+```rust
+// В окремому файлі: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Логіка передачі токенів
+
+    // Логіка закриття аккаунта
+ 
+    Ok(())
+}
+
+// У твоїй lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+3. **Реалізація окремого контексту**
+
+Для складніших інструкцій можна перенести логіку до реалізації структури контексту:
+
+```rust
+// В окремому файлі: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    ctx.accounts.transfer_tokens(amount)?;
+    ctx.accounts.close_token_account()?;
+ 
+    Ok(())
+}
+
+impl<'info> Transfer<'info> {
+    /// Передача токенів від аккаунта відправника до аккаунта отримувача
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Логіка передачі токенів
+
+        Ok(())
+    }
+
+    /// Закриваємо вихідний токен-рахунок після переказу
+    pub fn close_token_account(&mut self) -> Result<()> {
+        // Орніка щакриття аккаунта
+
+    }
+}
+
+// В твоїй lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+<ArticleSection name="Параметри Інструкції" id="instruction-parameters" level="h3" />
+Інструкції можуть приймати параметри поза контекстом. Ці параметри автоматично серіалізуються та десеріалізуються Anchor. Ось ключові моменти щодо параметрів інструкцій:
+
+1. **Основні типи**
+
+Anchor підтримує всі примітивні типи Rust та поширені типи Solana:
+
+```rust
+pub fn complex_instruction(
+    ctx: Context<Complex>,
+    amount: u64,
+    pubkey: Pubkey,
+    vec_data: Vec<u8>,
+) -> Result<()> {
+    // Логіка інструкції
+    Ok(())
+}
+```
+2. **Користувацькі типи**
+
+Ви можете використовувати користувацькі типи як параметри, але вони повинні реалізовувати `AnchorSerialize` та `AnchorDeserialize`:
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct InstructionData {
+    pub field1: u64,
+    pub field2: String,
+}
+
+pub fn custom_type_instruction(
+    ctx: Context<Custom>,
+    data: InstructionData,
+) -> Result<()> {
+    // Логіка Інструкції
+    Ok(())
+}
+```
+
+<ArticleSection name="Кразі Практики" id="instruction-discriminator" level="h3" />
+
+1. **Зосередьтеся на інструкціях**: Кожна інструкція повинна добре виконувати одну річ. Якщо інструкція виконує забагато завдань, подумайте про її розділення на кілька інструкцій.
+
+2. **Використовуйте контекстну реалізацію**: Для складних інструкцій використовуйте підхід контекстної реалізації, щоб:
+- Зберегти код упорядкованим
+- Спростити тестування
+- Покращити можливість повторного використання
+- Додати належну документацію
+
+3. **Обробка помилок**: Завжди використовуйте належну обробку помилок та повертайте змістовні повідомлення про помилки:
+
+```rust
+#[error_code]
+pub enum TransferError {
+    #[msg("Insufficient balance")]
+    InsufficientBalance,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+
+impl<'info> Transfer<'info> {
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        require!(amount > 0, TransferError::InvalidAmount);
+        require!(
+            self.source.amount >= amount,
+            TransferError::InsufficientBalance
+        );
+
+        // Логіка передачі токенів
+        Ok(())
+    }
+}
+```
+
+4. **Документація**: Завжди документуйте логіку інструкцій, особливо під час використання контекстної реалізації:
+```rust
+impl<'info> Transfer<'info> {
+    /// # Передача Токенів
+    /// 
+    /// Ця функція передає токени від одного аккаунта до іншого.
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Реалізація
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Cross-Program Invocations (CPIs)" id="cross-program-invocations" level="h2" />
+
+Cross Program Invocations (CPI) стосуються процесу виклику однією програмою інструкцій іншої програми, що забезпечує компонування програм Solana. Anchor надає зручний спосіб створення CPI через `CpiContext` та специфічні для програми конструктори.
+
+**Примітка**: Ви можете знайти всі CPI системної програми, використовуючи головний крейт anchor та виконавши команду: `use anchor_lang::system_program::*`; а для того, що стосується програми токена SPL, нам потрібно буде імпортувати крейт anchor_spl та виконати команду: `use anchor_spl::token::*`
+
+<ArticleSection name="Базова структура CPI" id="basic-cpi-structure" level="h3" />
+
+Ось як створити базовий ІСЦ:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport(ctx: Context<TransferLamport>, amount: u64) -> Result<()> {
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.from.to_account_info(),
+        to: ctx.accounts.to.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="CPI з PDA Підписниками" id="cpi-with-pda-signers" level="h3" />
+
+Під час створення CPI, що вимагають підписів PDA, використовуйте `CpiContext::new_with_signer`:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport_with_pda(ctx: Context<TransferLamportWithPda>, amount: u64) -> Result<()> {
+    let seeds = &[
+        b"vault".as_ref(),
+        &[ctx.bumps.vault],
+    ];
+    let signer = &[&seeds[..]];
+    
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault.to_account_info(),
+        to: ctx.accounts.recipient.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Обробка Помилок" id="error-handling" level="h2" />
+
+Anchor надає надійну систему обробки помилок для інструкцій. Ось як реалізувати власні помилки та обробляти їх у ваших інструкціях:
+
+```rust
+#[error_code]
+pub enum MyError {
+    #[msg("Custom error message")]
+    CustomError,
+    #[msg("Another error with value: {0}")]
+    ValueError(u64),
+}
+
+pub fn handle_errors(ctx: Context<HandleErrors>, value: u64) -> Result<()> {
+    require!(value > 0, MyError::CustomError);
+    require!(value < 100, MyError::ValueError(value));
+    
+    Ok(())
+}
+```
+
