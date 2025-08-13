@@ -1,0 +1,105 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Program Example 
+
+Now let's see how registers (r0-r10), memory regions, and instructions work together in an actual program. We'll start with the simplest possible sBPF program to understand the fundamental execution flow.
+
+<ArticleSection name="NoOp-program" id="noop-program" level="h2" />
+
+A "NoOp" (No Operation) program is perfect for learning because it demonstrates the essential program structure without any complexity:
+- How programs receive input (in register r1)
+- How they return results (in register r0)
+- The basic entry/exit flow every sBPF program follows
+- How Rust compiles to sBPF assembly
+
+Even though it does "nothing," it shows you the foundation that every Solana program builds on.
+
+Now that we know the basic sBPF operations, let’s see what they look like in a real (even if tiny) program.
+
+<ArticleSection name="Pinocchio NoOp" id="pinocchio-noop" level="h2" />
+
+Below is a high-performance "noop" written with Pinocchio. All it does is return success:
+
+```rust
+#![no_std]
+use pinocchio::{entrypoint::InstructionContext, lazy_program_entrypoint, no_allocator, nostd_panic_handler, ProgramResult};
+
+lazy_program_entrypoint!(process_instruction);
+
+nostd_panic_handler!();
+no_allocator!();
+
+fn process_instruction(
+    _context: InstructionContext, // wrapper around the input buffer
+ ) -> ProgramResult {
+    Ok(())
+}
+```
+
+If we build this code with `cargo build-sbf --dump`, we will get an ELF dump that gives us information about our binary in the `/target/deploy/` directory.
+
+We will then want to look for the `.text` section; the part of our binary where executable code is stored.
+
+```pinocchio_noop-dump.txt
+Disassembly of section .text
+0000000000000120 <entrypoint>
+     120 b7 00 00 00 00 00 00 00      	mov64 r0, 0x0
+     128 95 00 00 00 00 00 00 00      	exit
+```
+
+Let's break down what these hex bytes actually mean using the instruction format we learned:
+
+This is the first instruction: `120 b7 00 00 00 00 00 00 00`
+- Address: `0x120` (within the text region starting at 0x100000000)
+- Opcode: `0xb7` = `mov64` with immediate value
+- dst: `0x00` = register `r0`
+- src: `0x00` = unused (immediate operation)
+- offset: `0x0000` = unused
+- imm: `0x00000000` = immediate value 0
+
+And this is the second instruction: `128 95 00 00 00 00 00 00 00`
+- Address: `0x128` (8 bytes after the first instruction)
+- Opcode: `0x95` = exit/return
+- All other fields: `0x00` = unused for exit
+
+> The `0x120` offset it's where the linker decided to place the entrypoint function within the ELF file's `.text` section. The ELF file starts with headers, section tables, and other metadata that take up the first ~`0x120` bytes (288 bytes). The actual executable code comes after all that bookkeeping information.
+
+<ArticleSection name="Assembly NoOp" id="assembly-noop" level="h2" />
+
+If we were to disassemble the binary to turn it back into compilable sBPF Assembly, the code would look like this:
+
+```sbpf
+.globl entrypoint:
+    mov64 r0, 0x00   ; r0 <- success
+    exit             ; finish, return r0
+```
+
+Let's break down the code:
+- `.globl entrypoint`: This is an assembler directive that tells the linker to make the entrypoint symbol globally visible. The Solana runtime looks for this symbol to know where to start executing your program.
+- `entrypoint`:: This is a label that marks the memory address where program execution begins. When the runtime loads your program, it jumps to this address.
+- `mov64 r0, 0x00`: Move the immediate value 0 into register r0. Since r0 is the return register, this sets up a success return code.
+- `exit`: Terminate program execution and return the value in r0 to the runtime.
+
+> returning 0 means we're returning success for the program.
+
+This is an extremely small program, with just 2 instructions consuming only 2 compute units (CUs) to execute that maps perfectly to our Rust code:
+- We defined an entrypoint function
+- We return Ok(()) which evaluates to 0
+- The compiler generated the appropriate `mov64` and `exit` instructions
+
+<ArticleSection name="Optimized Assembly NoOp" id="optimized-assembly-noop" level="h2" />
+
+However, we can optimize this further. Since the Solana runtime initializes `r0` to 0 by default, we can eliminate the redundant `mov64` instruction:
+
+```sbpf
+.globl entrypoint:
+    exit
+```
+
+This optimized version:
+- Costs only 1 compute unit (50% reduction!)
+- Produces identical results (`r0` still contains 0)
+
+> This is why understanding assembly helps with optimization!
+
+This optimization is possible because we know the initial register states; something the Rust compiler doesn't always take advantage of. Understanding sBPF assembly lets you identify and eliminate such inefficiencies in performance-critical code.

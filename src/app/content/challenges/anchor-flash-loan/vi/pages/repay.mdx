@@ -1,0 +1,53 @@
+# Repay
+
+Instruction repay hoàn thành chu kỳ flash loan bằng cách đảm bảo các khoản tiền vay được trả lại cùng với phí phù hợp. Instruction này thực hiện hai bước thiết yếu:
+1. Trích xuất số tiền vay: Sử dụng instruction introspection để lấy `amount_borrowed` gốc từ dữ liệu của instruction borrow
+2. Chuyển tiền trở lại: Tính toán `fee` và chuyển số tiền vay cộng phí trở lại protocol
+
+<ArticleSection name="Instruction Introspection" id="instruction-introspection" level="h2" />
+
+Đầu tiên, chúng ta cần kiểm tra instruction đầu tiên trong transaction để trích xuất số tiền vay gốc:
+
+<Codeblock lang="rust">
+```rust
+let ixs = ctx.accounts.instructions.to_account_info();
+
+let mut amount_borrowed: u64;
+
+if let Ok(borrow_ix) = load_instruction_at_checked(0, &ixs) {
+    // Check the amount borrowed:
+    let mut borrowed_data: [u8;8] = [0u8;8];
+    borrowed_data.copy_from_slice(&borrow_ix.data[8..16]);
+    amount_borrowed = u64::from_le_bytes(borrowed_data)
+
+} else {
+    return Err(ProtocolError::MissingBorrowIx.into());
+}
+```
+</Codeblock>
+
+> Chúng ta không kiểm tra rằng đây là `borrow_ix` thực tế bằng cách sử dụng program ID và discriminator vì không quan trọng nếu họ thực sự tạo một instruction "giả"; điều này an toàn cho protocol vì nó chỉ được trả tiền. Đồng thời, nếu chúng ta đã cho vay tiền, chúng ta biết rằng nó sẽ là instruction đầu tiên và `amount_borrowed` sẽ ở đó.
+
+<ArticleSection name="Chuyển tiền" id="transfer-funds" level="h2" />
+
+Tiếp theo, chúng ta tính phí protocol và chuyển tổng số tiền trở lại:
+
+<Codeblock lang="rust">
+```rust
+// Add the fee to the amount borrowed (In our case we hardcoded it to 500 basis point)
+let fee = (amount_borrowed as u128).checked_mul(500).unwrap().checked_div(10_000).ok_or(ProtocolError::Overflow)? as u64;
+amount_borrowed = amount_borrowed.checked_add(fee).ok_or(ProtocolError::Overflow)?;
+
+// Transfer the funds from the protocol to the borrower
+transfer(
+    CpiContext::new(ctx.accounts.token_program.to_account_info(), Transfer {
+        from: ctx.accounts.borrower_ata.to_account_info(),
+        to: ctx.accounts.protocol_ata.to_account_info(),
+        authority: ctx.accounts.borrower.to_account_info(),
+    }),
+    amount_borrowed
+)?;
+```
+</Codeblock>
+
+Phí của chúng ta được hardcode thành 500 basis point, và chúng ta thực hiện phép toán "checked" để đảm bảo rằng số tiền không bị overflow có thể bị khai thác với các số rất lớn. Ngoài ra, chúng ta chuyển đổi số tiền thành kiểu `u128` cho phép nhân để ngăn overflow trung gian, sau đó chúng ta safely cast trở lại kiểu `u64`

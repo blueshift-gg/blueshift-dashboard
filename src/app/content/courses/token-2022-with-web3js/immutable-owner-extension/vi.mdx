@@ -1,0 +1,72 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Immutable Owner Extension
+
+Phần mở rộng `ImmutableOwner` là một `Token` account extension ngăn chặn bất kỳ thay đổi nào trong quyền sở hữu của `Token` account. Điều này bảo vệ account chống lại truy cập trái phép và các nỗ lực transfer.
+
+> Tất cả ATA của `Token` Extensions Program đều có immutable owner được bật theo mặc định
+
+<ArticleSection name="Khởi tạo Token Account" id="initializing-the-token-account" level="h2" />
+
+Để khởi tạo extension `ImmutableOwner` trên `Token` account, chúng ta sẽ cần hàm `initializeImmutableOwner()`.
+
+Đây là cách tạo mint với phần mở rộng Immutable Owner:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createInitializeImmutableOwnerInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calculate the size needed for a Token account with Transfer Fee extension
+const accountLen = getAccountLen([ExtensionType.ImmutableOwner]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Immutable Owner extension
+const initializeImmutableOwnerInstruction = createInitializeImmutableOwnerInstruction(
+    tokenAccount.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the Token account itself
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeImmutableOwnerInstruction,
+    initializeAccountInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Như đã được đề cập, nếu chúng ta muốn thêm phần mở rộng này vào một account `Associated Token`, chúng ta chỉ cần khởi tạo nó với chương trình Token2022.

@@ -1,0 +1,140 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Type Cosplay 
+
+Các cuộc tấn công type cosplay (giả mạo kiểu) khai thác các chương trình không xác minh kiểu account, cho phép kẻ tấn công thay thế các account với cấu trúc dữ liệu giống hệt nhưng mục đích dự định khác nhau. Vì Solana lưu trữ tất cả dữ liệu account dưới dạng raw byte, một chương trình không kiểm tra kiểu account có thể bị lừa để xử lý `VaultConfig` như `AdminSettings` với kết quả có thể dẫn đến bi kịch.
+
+Lỗ hổng xuất phát từ sự mơ hồ về cấu trúc. Khi nhiều kiểu account chia sẻ cùng bố cục dữ liệu (như cả hai đều có trường `owner: Pubkey`), kiểm tra owner và validation dữ liệu một mình không đủ để phân biệt giữa chúng. Kẻ tấn công kiểm soát một kiểu account có thể giả mạo làm owner của một kiểu account hoàn toàn khác, bỏ qua logic authorization được thiết kế xung quanh mục đích account cụ thể.
+
+Không có discriminator (định danh duy nhất phân biệt kiểu account), chương trình của bạn trở nên dễ bị tấn công mạo danh tinh vi nơi các tác nhân độc hại có thể khai thác khoảng cách giữa sự tương đồng cấu trúc và ý định logic.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này thực hiện các thao tác admin dựa trên ownership account:
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let program_account_one = ctx.accounts.program_account_one.to_account_info();
+        if program_account_one.owner != ctx.program_id {
+            return Err(ProgramError::IllegalOwner.into());
+        }
+        if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        //..do something
+    
+        Ok(())
+
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: UncheckedAccount<'info>,
+
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+Mã này trông an toàn: nó kiểm tra tính sở hữu của program và xác thực admin authority. Nhưng có một lỗ hổng chết người: nó không bao giờ xác minh rằng `program_account_one` thực sự là `ProgramAccountOne` chứ không phải kiểu account khác với cùng cấu trúc dữ liệu.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Tạo hoặc kiểm soát một account `ProgramAccountTwo`
+- Đặt chính họ làm owner trong dữ liệu của account đó
+- Truyền `ProgramAccountTwo` của họ làm tham số `program_account_one`
+- Vì cả hai kiểu account đều có cấu trúc `owner: Pubkey` giống hệt nhau, deserialization thành công
+- Kẻ tấn công trở thành "admin" cho các thao tác chỉ dành cho owner của `ProgramAccountOne`
+
+Solana sử dụng discriminator để giải quyết vấn đề này:
+- Discriminator 8-byte của Anchor (mặc định): Được derive từ tên account, tự động thêm vào các account được đánh dấu với #[account]. (từ anchor `0.31.0` có thể triển khai discriminator "tùy chỉnh")
+- Length-based discrimination: Được sử dụng bởi Token Program để phân biệt giữa Token và Mint account (mặc dù Token2022 hiện sử dụng discriminator rõ ràng)
+
+Cách khắc phục đơn giản nhất là sử dụng type validation tích hợp của Anchor:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: Account<'info, ProgramAccountOne>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: Account<'info, ProgramAccountTwo>,
+
+}
+
+#[account]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[account]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+Hoặc để tùy chỉnh xác minh, bạn có thể thêm kiểm tra discriminator rõ ràng:
+
+```rust
+pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+    let program_account_one = ctx.accounts.program_account_one.to_account_info();
+    if program_account_one.owner != ctx.program_id {
+        return Err(ProgramError::IllegalOwner.into());
+    }
+    if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+    let data = program_account_one.data.borrow();
+    // Assume ProgramAccountOne has a discriminator of 8 bytes
+    let discriminator = &data[..8];
+    if discriminator != ProgramAccountOne::DISCRIMINATOR {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    //..do something
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, triển khai kiểm tra discriminator thủ công:
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] != DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```
+
+
+
+
+

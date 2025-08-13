@@ -1,0 +1,95 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Phần mở rộng CPI Guard
+
+Phần mở rộng `CpiGuard` là một `Token` account extension ngăn chặn một số hành động bên trong cross-program invocation, bảo vệ người dùng khỏi các chương trình độc hại có thể cố gắng thao tác token account của họ mà không có sự đồng ý rõ ràng.
+
+<ArticleSection name="Khởi tạo Token Account" id="initializing-the-token-account" level="h2" />
+
+Để khởi tạo extension `CpiGuard` trên `Token` account, chúng ta sẽ cần hàm `enableCpiGuard()`.
+
+Đây là cách tạo mint với phần mở rộng Cpi Guard:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createInitializeImmutableOwnerInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calculate the size needed for a Token account with Transfer Fee extension
+const accountLen = getAccountLen([ExtensionType.ImmutableOwner]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Cpi Guard extension
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount.publicKey,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the Token account itself
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableCpiGuardInstruction
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Vô hiệu hóa CPI Guard" id="disabling-the-cpi-guard" level="h2" />
+
+Khi chúng ta muốn tái kích hoạt một số hành vi bị chặn bởi Cpi guard, chúng ta có thể dễ dàng vô hiệu hóa guard bằng cách sử dụng instruction `disableCpiGuard` như thế này:
+
+```ts
+const disableCpiGuardInstruction = createDisableCpiGuardInstruction(
+    tokenAccount,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```
+
+Và khi chúng ta hoàn thành và muốn thêm lại lớp bảo mật, chúng ta có thể kích hoạt lại bằng cách sử dụng instruction `enableCpiGuard` như thế này:
+
+```ts
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```
+

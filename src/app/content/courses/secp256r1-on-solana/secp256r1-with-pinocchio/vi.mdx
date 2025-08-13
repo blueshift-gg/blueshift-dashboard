@@ -1,0 +1,128 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Secp256r1 với Pinocchio
+
+[Dean](https://x.com/deanmlittle) từ team Blueshift đã phát hành crate đầu tiên tương thích với Pinocchio cho phép xác minh các instruction thực thi `Secp256r1`.
+
+Điều này đặc biệt hữu ích để triển khai các phương pháp xác thực hiện đại như passkey trong các chương trình Pinocchio.
+
+<ArticleSection name="Giới thiệu" id="introduction" level="h2" />
+
+SDK cung cấp các abstraction rõ ràng thông qua các cấu trúc dữ liệu cốt lõi:
+
+```rust
+// 33-byte compressed public key (1 byte parity + 32 byte x-coordinate)
+pub type Secp256r1Pubkey = [u8; 33];
+// 64-byte signature (r,s values)
+pub type Secp256r1Signature = [u8; 64];
+
+// Main instruction parser
+pub struct Secp256r1Instruction<'a> {
+    header: Secp256r1InstructionHeader,    // Number of signatures
+    offsets: &'a [Secp256r1SignatureOffsets], // Data location pointers
+    data: &'a [u8],                        // Raw instruction data
+}
+```
+
+Struct `Secp256r1SignatureOffsets` hoạt động như một memory map, chứa các byte offset trỏ đến nơi mỗi thành phần tương ứng tồn tại trong instruction payload:
+
+```rust
+pub struct Secp256r1SignatureOffsets {
+    pub signature_offset: u16,
+    pub signature_instruction_index: u16,
+    pub public_key_offset: u16,
+    pub public_key_instruction_index: u16,
+    pub message_data_offset: u16,
+    pub message_data_size: u16,
+    pub message_instruction_index: u16,
+}
+```
+
+Trong dữ liệu, chúng ta tìm thấy ba thành phần quan trọng được tham chiếu bởi cấu trúc offset:
+- Publickey: 33-byte khóa công khai `Secp256r1`. Khi được sử dụng với các phương pháp xác thực hiện đại như passkey, điều này đại diện cho danh tính về mặt mật mã của thiết bị/người dùng xác thực.
+- Signature: 64-byte  chữ ký `ECDSA` (giá trị r,s) được tạo bởi khóa riêng. Điều này chứng minh rằng người giữ khóa riêng tương ứng đã ủy quyền cho thông điệp cụ thể.
+- Message Data: Các byte tùy ý đã được ký về mặt mật mã. Trong thực tế, cái này chứa dữ liệu cụ thể ứng dụng như chi tiết giao dịch, timestamp, hoặc định danh người dùng ngăn chặn replay attack và đảm bảo chữ ký được ràng buộc theo ngữ cảnh.
+
+Như bạn có thể thấy, publickey dài 33 byte vì nó sử dụng để biểu diễn điểm nén; một cách mã hóa tiết kiệm không gian của các điểm trên đường cong elliptic.
+
+Trên Secp256r1, một khóa công khai về mặt toán học là một điểm (x,y) nơi cả hai tọa độ đều là 32 byte (tổng cộng 64 byte).
+
+Tuy nhiên, với bất kỳ tọa độ x nào, chỉ có hai tọa độ y có thể thỏa mãn phương trình đường cong.
+
+Định dạng nén lưu trữ 32-byte tọa độ x  cộng với một byte xác định chẵn lẻ duy nhất (0x02 cho y chẵn, 0x03 cho y lẻ), cho phép tái tạo điểm đầy đủ với ít không gian lưu trữ hơn 48%.
+
+<ArticleSection name="Triển khai" id="implementation" level="h2" />
+
+Để xác minh chữ ký `Secp256r1`, chúng ta cần hai thành phần chính:
+1. Instruction sysvar: Cái này cho phép chúng ta xem xét chữ ký `Secp256r1`
+2. Crate `pinocchio-secp256r1-instruction`: cái này cung cấp các công cụ để giải tuần tự hóa instruction
+
+Instruction sysvar đã được bao gồm trong crate Pinocchio, vì vậy không cần cài đặt bổ sung.
+
+Tuy nhiên, chúng ta cần thêm crate `pinocchio-secp256r1-instruction` vào chương trình Pinocchio của chúng ta:
+
+```
+cargo add pinocchio-secp256r1-instruction
+```
+
+Để triển khai xác minh, chúng ta cần:
+1. Bao gồm chương trình Instruction Sysvar (`Sysvar1nstructions1111111111111111111111111`, mà chúng ta sẽ gọi là `instructions`)
+2. Đặt instruction `Secp256r1` sau instruction hiện tại của chúng ta
+
+Đây là cách truy cập và deserialize các instruction:
+
+```rust
+// Deserialize the instructions sysvar
+let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+// Get the instruction that follows our current one
+let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+```
+
+Next, we deserialize the `Secp256r1` instruction:
+
+```rust
+// Deserialize the Secp256r1 instruction
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+```
+
+Sau đó chúng ta thực hiện một số kiểm tra bảo mật.
+
+Điều quan trọng là triển khai một số kiểm tra bảo mật:
+1. **Authority Check**: Đảm bảo rằng chỉ những người nhận đã được ủy quyền mới có thể nhận tiền từ PDA mà bao bọc khóa công khai Secp256r1. Điều này ngăn chặn các cuộc tấn công MEV nơi ai đó có thể chặn giao dịch, bắt chữ ký hợp lệ, và thay thế người nhận dự định.
+2. **Expiry Check**: Thực thi giới hạn thời gian về tính hợp lệ của chữ ký. Vì các chữ ký đã xác thực vẫn hợp lệ vô thời hạn, việc triển khai timestamp hết hạn ngăn chặn replay attack.
+
+Chúng ta thực hiện những kiểm tra này bằng cách đặt dữ liệu này trong thông điệp của chữ ký.
+
+Đây là cách triển khai những kiểm tra bảo mật này:
+
+```rust
+// Verify the fee payer is authorized
+let (receiver, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32).ok_or(ProgramError::InvalidInstructionData)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+
+// Check signature expiration
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Cuối cùng, chúng ta có thể dẫn xuất Program Derived Address (PDA) trực tiếp từ khóa công khai Secp256r1, tạo ra các địa chỉ account xác định mà người dùng có thể kiểm soát thông qua các phương pháp xác thực hiện đại:
+
+```rust
+// Verify the first signature matches our PDA owner
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+// Create signer seeds for CPI
+let seeds = [
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+];
+let signers = [Signer::from(&seeds)];
+```
+
+> Chúng ta cần chia pubkey thành 2 phần khác nhau vì seed chấp nhận tối đa 32 byte.
+

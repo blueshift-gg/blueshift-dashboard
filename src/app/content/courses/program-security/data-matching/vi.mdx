@@ -1,0 +1,123 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Data Matching
+
+Data matching là việc bảo mật xác thực rằng dữ liệu account chứa các giá trị mong đợi trước khi tin tưởng nó trong logic chương trình của bạn. Trong khi kiểm tra `owner` xác minh ai kiểm soát một account và kiểm tra `signer` xác minh ủy quyền, data matching đảm bảo trạng thái bên trong của account phù hợp với các giả định của chương trình bạn.
+
+Điều này trở nên quan trọng khi bộ xử lý instruction phụ thuộc vào mối quan hệ giữa các account hoặc khi các giá trị dữ liệu cụ thể xác định hành vi chương trình. Không có các xác minh dữ liệu thích hợp, kẻ tấn công có thể can thiệp vào luồng chương trình bằng cách tạo các account với các kết hợp dữ liệu bất ngờ, ngay cả khi những account đó vượt qua các kiểm tra ownership và authorization cơ bản.
+
+Nguy hiểm nằm ở khoảng cách giữa việc xác minh về mặt cấu trúc và xác minh về mặt logic. Chương trình của bạn có thể xác minh chính xác rằng một account có đúng kiểu và được sở hữu bởi chương trình đúng, nhưng vẫn đưa ra các giả định không chính xác về mối quan hệ giữa các phần dữ liệu khác nhau.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này cập nhật ownership của một program account:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(mut)]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Mã này thoạt nhìn có vẻ an toàn. `owner` được đánh dấu đúng cách là `Signer`, đảm bảo họ đã ủy quyền cho giao dịch. `program_account` được gõ chính xác và được sở hữu bởi chương trình. Tất cả các kiểm tra bảo mật cơ bản đều vượt qua.
+
+Nhưng có một lỗ hổng nghiêm trọng: chương trình không bao giờ xác thực rằng `owner` đã ký giao dịch thực sự giống với `owner` được lưu trữ trong dữ liệu `program_account`.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Tạo keypair riêng của họ (gọi là `attacker_keypair`)
+- Tìm bất kỳ program account nào họ muốn chiếm đoạt
+- Tạo một giao dịch nơi: `owner` là `attacker_keypair` (mà họ kiểm soát và có thể ký với); `new_owner` là public key chính của họ và `program_account` là account của nạn nhân
+
+Giao dịch thành công vì `attacker_keypair` ký đúng cách, nhưng chương trình không bao giờ kiểm tra xem `attacker_keypair` có khớp với `owner` thực tế được lưu trữ trong `program_account.owner` hay không. Kẻ tấn công thành công chuyển ownership của account của người khác cho chính họ.
+
+May mắn thay `Anchor` làm cho việc thực hiện kiểm tra này cực kỳ dễ dàng trực tiếp trong account struct bằng cách thêm ràng buộc `has_one` như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(mut, has_one = owner)]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Hoặc chúng ta có thể quyết định thay đổi thiết kế của chương trình và làm cho `program_account` thành một PDA được derive từ `owner` như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        seeds = [owner.key().as_ref()],
+        bump
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Hoặc bạn có thể chỉ cần kiểm tra dữ liệu đó trong instruction bằng cách sử dụng kiểm tra `ctx.accounts.program_account.owner` như thế này:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.owner != ctx.accounts.owner.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+    Ok(())
+}
+```
+
+Bằng cách thêm kiểm tra này, bộ xử lý instruction sẽ chỉ tiếp tục nếu account có `owner` đúng. Nếu `owner` không đúng, giao dịch sẽ thất bại.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, vì chúng ta không có khả năng thêm kiểm tra bảo mật trực tiếp bên trong account struct, chúng ta buộc phải làm như vậy trong logic instruction.
+
+Chúng ta có thể làm điều đó bằng cách deserialize dữ liệu của account và kiểm tra giá trị `owner`:
+
+```rust
+let account_data = ctx.accounts.program_account.try_borrow_data()?;
+let mut account_data_slice: &[u8] = &account_data;
+let account_state = ProgramAccount::try_deserialize(&mut account_data_slice)?;
+
+if account_state.owner != self.accounts.owner.key() {
+    return Err(ProgramError::InvalidAccountData.into());
+}
+```
+
+> Bạn sẽ cần tạo hàm `ProgramAccount::try_deserialize()` của mình vì Pinocchio cho phép chúng ta xử lý deserialization và serialization như chúng ta muốn
+
+
+
+
+

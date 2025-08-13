@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Chương trình Token2022
+
+Chương trình Token2022, còn được gọi là Token Extensions, là một superset của chức năng được cung cấp bởi Token Program.
+
+Legacy Token Program phục vụ hầu hết nhu cầu cho fungible và non-fungible token thông qua một tập hợp interface và cấu trúc bất khả tri đơn giản. Tuy nhiên, nó thiếu các chức năng và triển khai tùy biến mà giúp developer tạo hành vi tùy chỉnh với interface chung, làm cho việc phát triển nhanh hơn và an toàn hơn.
+
+Chính vì lý do này, một Token Program mới được gọi là `Token2022` đã được tạo ra với một tập hợp các chức năng mới được gọi là `Token Extensions`. Những phần mở rộng này cung cấp các hành vi cụ thể, có thể tùy chỉnh có thể được gắn vào `Token Account` hoặc `Mint Account`.
+
+> `SPL-Token Program` (thường được developer gọi là `Tokenkeg`, vì địa chỉ chương trình là: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`) và `Token2022 Program` là hai chương trình hoàn toàn khác nhau có chung "điểm khởi đầu". Điều này có nghĩa là token `Tokenkeg` có thể deserialize với `Token2022` nhưng chúng không thể được sử dụng bên trong chương trình Token2022 để thêm các extension.
+
+<ArticleSection name="Mint và Token Account" id="mint-and-token-accounts" level="h2" />
+
+Trong phần trước, chúng ta đã nói về việc sự khác biệt chính giữa chương trình `Tokenkeg` và `Token2022` là **Token Extensions**.
+
+Để có thể thực thi được, những phần mở rộng này cần tồn tại trực tiếp bên trong `Mint` và `Token` account, vì đây là cách duy nhất để đảm bảo rằng bộ quy tắc có thể được thực thi khi hoạt động trực tiếp trên token program.
+
+Vì lý do này, hãy xem xét những khác biệt chính giữa legacy và token program mới trên những account này.
+
+**Legacy Token Account**
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Optional authority used to mint new tokens. The mint authority may only
+    /// be provided during mint creation. If no mint authority is present
+    /// then the mint has a fixed supply and no further tokens may be
+    /// minted.
+    pub mint_authority: COption<Pubkey>,
+    /// Total supply of tokens.
+    pub supply: u64,
+    /// Number of base 10 digits to the right of the decimal place.
+    pub decimals: u8,
+    /// Is `true` if this structure has been initialized
+    pub is_initialized: bool,
+    /// Optional authority to freeze token accounts.
+    pub freeze_authority: COption<Pubkey>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// The mint associated with this account
+    pub mint: Pubkey,
+    /// The owner of this account.
+    pub owner: Pubkey,
+    /// The amount of tokens this account holds.
+    pub amount: u64,
+    /// If `delegate` is `Some` then `delegated_amount` represents
+    /// the amount authorized by the delegate
+    pub delegate: COption<Pubkey>,
+    /// The account's state
+    pub state: AccountState,
+    /// If `is_native.is_some`, this is a native token, and the value logs the
+    /// rent-exempt reserve. An Account is required to be rent-exempt, so
+    /// the value is used by the Processor to ensure that wrapped SOL
+    /// accounts do not drop below this threshold.
+    pub is_native: COption<u64>,
+    /// The amount delegated
+    pub delegated_amount: u64,
+    /// Optional authority to close the account.
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+Như bạn có thể thấy, đối với những account này không có discriminator. Điều này là vì các trường đều có độ dài cố định và sự khác biệt về không gian đủ lớn để phân biệt giữa những loại account khác nhau này chỉ bằng cách so sánh độ dài khác nhau của chúng.
+
+Vấn đề với Token Extension Program là bất kỳ dữ liệu bổ sung nào cần thiết cho phần mở rộng đều được nằm ở cuối `Mint` và `Token` account mà chúng ta quen thuộc.
+
+Điều này có nghĩa là việc phân biệt theo độ dài sẽ không đủ vì chúng ta có thể có một `Mint` với 3-4 extension được gắn vào nó vượt quá độ dài của `Token` Account. Vì lý do này, khi `Mint` và `Token` account có thêm phần mở rộng, một discriminator được thêm vào chúng như thế này:
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Legacy Token Program data
+    /// ...
+    /// Padding (83 empty bytes)
+    pub padding: [u8; 83]
+    /// Discriminator (1)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// Legacy Token Program data
+    /// ...
+    /// Discriminator (2)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+```
+
+Để duy trì legacy struct, discriminator không tồn tại ở byte đầu tiên như thường lệ, mà tồn tại ở byte `166`.
+
+Điều này là vì độ dài `Token` account là 165 byte, có nghĩa là discriminator được thêm vào sau độ dài cơ sở. Đối với `Mint` account, điều này có nghĩa là chúng ta phải thêm 83 byte đệm để đảm bảo rằng hai account có cùng độ dài cơ sở.
+
+Vì vậy để phân biệt giữa hai account, chúng ta chỉ cần kiểm tra byte thứ 166 (data[165] nếu bạn đếm từ 0) và di chuyển tương ứng.
+
+<ArticleSection name="Token Extension" id="token-extensions" level="h2" />
+
+Trong phần tiếp theo, chúng ta sẽ nói về những ưu điểm và các Token Extension khác nhau hiện có trên Solana, nhưng trong phần giới thiệu này, chúng ta chỉ nói về cách chúng được serialize và thêm vào hai state account mà chúng ta đã nói trước đó.
+
+Mỗi extension có một discriminator được lưu với kích thước của extension đó trực tiếp trên account. Chúng ta sẽ gọi đây là "header" của extension và nó trông như thế này:
+
+```rust
+pub struct ExtensionHeader {
+    /// Extension Discriminator
+    pub discriminator: u16
+    /// Length of the Disriminator
+    pub length: u16
+}
+```
+
+Điều này làm cho việc biết phần mở rộng nào có trên token và deserialize dữ liệu chỉ của những extension mà chúng ta cần trở nên cực kỳ dễ dàng, vì chúng ta có thể lấy discriminator và sau đó nhảy đến phần mở rộng tiếp theo để kiểm tra có gì ở đó hay không.

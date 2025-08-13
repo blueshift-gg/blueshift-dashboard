@@ -1,0 +1,96 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Assembly Memo Challenge](/graphics/challenge-banners/assembly-memo.png)
+
+# Assembly Memo
+
+In this unit we'll use sBPF Assembly to create a logging mechanism for our prgram.
+
+The simplicity of a bite-size memo program is the perfect starting point for your sBPF assembly journey!
+
+If you're unfamiliar with assembly programming, follow the [introduction to Assembly course](/en/courses/introduction-to-assembly)
+
+<ArticleSection name="Program Design" id="program-design" level="h2" />
+
+Our program will simply put the right memory location into the right register and then perform the `sol_log_` syscall. It will look like this:
+
+<Codeblock lang="assembly">
+```sbpf
+.equ NUM_ACCOUNTS, 0x00
+.equ DATA_LEN, 0x08
+.equ DATA, 0x10
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]
+  ldxdw r2, [r1+DATA_LEN]
+  add64 r1, DATA
+  call sol_log_
+  exit
+```
+</Codeblock>
+
+<ArticleSection name="Memory Offsets" id="memory-offsets" level="h2" />
+
+The program begins by declaring three `.equ` constants that define the memory layout of our instruction data:
+
+<Codeblock lang="assembly">
+```sbpf
+.equ NUM_ACCOUNTS, 0x00  ; Offset for number of accounts
+.equ DATA_LEN, 0x08      ; Offset for data length
+.equ DATA, 0x10          ; Offset for actual data
+```
+</Codeblock>
+
+These constants mark the byte-offsets relative to the entry-buffer pointer in `r1`:
+- `NUM_ACCOUNTS` (0x0000): Points to the account count in the instruction data header for validation
+- `DATA_LEN` (0x08): Points to the instruction data lenght in the instruction data header
+- `DATA` (0x10): Points to the instruction data in the instruction data header
+
+Unlike high-level languages that abstract memory layout, assembly requires knowing exactly where every piece of data lives.
+
+<ArticleSection name="Entrypoint and Initial Validation" id="entrypoint-and-validations" level="h2" />
+
+<Codeblock lang="assembly">
+```sbpf
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]   ; Load number of accounts into r0
+```
+</Codeblock>
+
+Every sBPF program starts at a global `.entrypoint` symbol. The Solana runtime provides account and instruction data through register `r1`.
+
+This first instruction then loads the number of accounts into `r0`. Since `r0` is the register the VM reads on exit, this serves two purposes:
+1. It loads the account count for our use
+2. It ensures the program will fail automatically if any accounts are passed (non-zero value in r0)
+
+<ArticleSection name="Sol Log Syscall" id="sol-log-syscall" level="h2" />
+
+Next, we prepare the arguments for the `sol_log_` syscall:
+
+<Codeblock lang="assembly">
+```sbpf
+ldxdw r2, [r1+DATA_LEN]   ; Load length of memo into r2
+add64  r1, DATA           ; Adjust r1 to point to memo bytes
+```
+</Codeblock>
+
+These instructions set up the arguments for `sol_log_`:
+- `r2` receives the length of the memo data
+- `r1` is adjusted to point directly to the memo bytes
+
+And after that, we call `sol_log_` and exit:
+
+<Codeblock lang="assembly">
+```sbpf
+call 16   ; Call sol_log_ (helper ID 16)
+exit      ; Return using r0 value
+```
+</Codeblock>
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+
+The program:
+1. Calls 16 (`sol_log_`) to print the memo to the validator log
+2. Exits using the value in `r0`

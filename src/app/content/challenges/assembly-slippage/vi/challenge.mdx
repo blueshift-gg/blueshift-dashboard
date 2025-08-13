@@ -1,0 +1,128 @@
+import ArticleSection from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Thử thách Assembly Slippage](/graphics/challenge-banners/assembly-slippage.png)
+
+# Assembly Slippage
+
+Trong bài học này chúng ta sẽ sử dụng sBPF Assembly để tạo một instruction kiểm tra slippage cơ bản. Bằng cách bao gồm một instruction như vậy ở chỉ mục cuối cùng trong mảng instruction của chúng ta, chúng ta có thể tạo ra một lớp bảo vệ bổ sung chống lại các lỗi trong hợp đồng thông minh hoặc các hợp đồng đảo bit.
+
+
+Có một vài lý do khiến kiểm tra slippage trở thành một ứng cử viên lý tưởng cho assembly:
+
+- Các trường hợp đơn hoặc bị ràng buộc
+- Không cần thực hiện các kiểm tra signer/account
+- Chỉ cần cải thiện tính bảo mật
+
+
+Nếu bạn không quen thuộc với việc viết chương trình assembly, bạn nên bắt đầu bằng cách đọc bài [Giới thiệu về Assembly](/vi/courses/introduction-to-assembly).
+
+
+<ArticleSection name="Thiết kế chương trình" id="program-design" level="h2" />
+
+Chương trình của chúng ta sẽ thực hiện một việc đơn giản nhưng rất quan trọng: kiểm tra xem một tài khoản token có đủ số dư trước khi thực hiện một giao dịch. Mẫu này xuất hiện ở khắp mọi nơi trong DeFi - từ các giao dịch swap AMM cho đến các giao thức cho vay.
+
+
+Chương trình của chúng ta sẽ cần:
+- Một tài khoản token SPL duy nhất trong mảng tài khoản
+- Một số lượng ở dạng 8-byte được truyền trong dữ liệu instruction
+- Trả về thành công nếu số dư ≥ số lượng được truyền vào, ngược lại trả về lỗi
+
+<ArticleSection name="Độ lệch bộ nhớ" id="memory-offsets" level="h2" />
+
+Chương trình sBPF nhận dữ liệu tài khoản dưới dạng các vùng nhớ liên tục. Các hằng số này xác định các độ lệch byte. Bằng cách giả định rằng chương trình của chúng ta chỉ nhận một tài khoản, và đó là một tài khoản token SPL, chúng ta có thể gán tĩnh các độ lệch này như sau:
+
+<Codeblock lang="sbpf">
+```sbpf
+.equ TOKEN_ACCOUNT_BALANCE, 0x00a0
+.equ MINIMUM_BALANCE, 0x2918
+```
+</Codeblock>
+
+- `TOKEN_ACCOUNT_BALANCE (0x00a0)`: trỏ đến trường số dư trong dữ liệu của SPL Token account. Các token account tuân theo một bố cụng chuẩn mà số dư (8 bytes, little-endian) nằm ở offset 160.
+
+- `MINIMUM_BALANCE (0x2918)`: xác định nơi Solana đặt bố cục dữ liệu của instruction. Độ lệch này là một phần của cấu trúc thông tin tài khoản của runtime.
+
+> Bạn có thể tạo ra các độ lệch này bằng cách sử dụng công cụ của chúng tôi tại [sbpf.xyz](https://sbpf.xyz).
+
+Không giống như những ngôn ngữ bậc cao khác trừu tượng hóa bố cục bộ nhớ, assembly yêu cầu bạn phải biết chính xác vị trí của từng dữ liệu. 
+
+<ArticleSection name="Điểm đầu vào và Xác thực ban đầu" id="entrypoint-and-validations" level="h2" />
+
+<Codeblock lang="sbpf">
+```sbpf
+.globl entrypoint
+entrypoint:
+    ldxdw r3, [r1+MINIMUM_BALANCE]      // Get amount from IX data
+    ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE] // Get balance from token account
+```
+</Codeblock>
+
+Mỗi chương trình sBPF bắt đầu bởi một ký hiệu toàn cục `.entrypoint`. Runtime Solana cung cấp các tài khoản và dữ liệu instruction thông qua thanh ghi `r1`.
+
+instruction `ldxdw` tải lên (`ldx`) một giá trị 8-byte (double word, `dw`) từ bộ nhớ vào thanh ghi. Đây là những gì xảy ra:
+- `ldxdw r3, [r1+MINIMUM_BALANCE]`: tính toán địa chỉ vùng nhớ bao gồm giá trị số lượng được yêu cầu và tải giá trị đó vào `r3`.
+- `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`: trỏ đến trường số dư trong dữ liệu của SPL Token account. Đây là một giá trị 64-bit nằm ở thanh ghi `r4`.
+
+Cả 2 hành động đều là zero-copy: chúng ta đang đọc trực tiếp từ dữ liệu tài khoản mà không cần deserialize.
+
+<ArticleSection name="Logic điều kiện và phân nhánh" id="conditional-logic-and-branching" level="h2" />
+
+<Codeblock lang="sbpf">
+```sbpf
+jge r3, r4, end         // Skip to exit if balance is valid
+```
+</Codeblock>
+
+
+Instruction `jge` (jump if greater or equal) (thoát ra nếu lớn hơn hoặc bằng)  compares `r3` (số lượng được yêu cầu) với `r4` (số dư trong tài khoản token). nếu `r3 >= r4`, chúng ta nhảy đến nhãn `end`; giống như một lệnh thoát sớm.
+
+Nếu điều kiện không thỉa, thực thi tiếp tục đến đường dẫn xử lý lỗi. Đầy là cách assembly triển khai logic if/else.
+
+<ArticleSection name="Xử lý lỗi và ghi log" id="error-handling-and-logging" level="h2" />
+
+<Codeblock lang="sbpf">
+```sbpf
+lddw r1, e              // Load error message address
+lddw r2, 17             // Load length of error message  
+call sol_log_           // Log out error message
+lddw r0, 1              // Return error code 1
+```
+</Codeblock>
+
+Khi kiểm tra thất bại, chúng ta ghi log một thông báo lỗi có thể đọc được trước khi kết thúc chương trình:
+- `lddw` tải vào các giá trị ngay lập tức, trong trường hợp này là địa chỉ của chuỗi thông báo lỗi của chúng ta, nằm trong phần `.rodata`, và độ dài của chuỗi thông báo lỗi (17 byte cho "Slippage exceeded").
+- `call sol_log_` để gọi syscall của Solana. Runtime đọc thông báo từ bộ nhớ và thêm nó vào nhật ký giao dịch.
+- Chúng ta sau đó tải giá trị `1` vào `r0` để đánh dấu lỗi chương trình. Runtime sẽ hủy bỏ giao dịch và trả về mã lỗi này.
+
+<ArticleSection name="Kết thúc chương trình" id="program-termination" level="h2" />
+
+<Codeblock lang="sbpf">
+```sbpf
+end:
+    exit
+```
+</Codeblock>
+
+Instruction `exit` ngắt thực thi chương trình và trả quyền kiểm soát cho runtime Solana. Giá trị trong `r0` trở thành mã thoát của chương trình (0 nếu thành công, giá trị khác 0 nếu lỗi).
+
+Không giống như những ngôn ngữ bậc cao khác có xử lý dọn dẹp tự động, các chương trình assembly phải kết thúc một cách rõ ràng. Trong assembly, việc rời khỏi phần cuối mã của bạn là hành vi không xác định.
+
+## Dữ liệu chỉ đọc
+
+<Codeblock lang="sbpf">
+```sbpf
+.rodata
+    e: .ascii "Slippage exceeded"
+```
+</Codeblock>
+
+Phần `.rodata` (read-only data) (dữ liệu chỉ đọc) bao gồm chuỗi thông báo lỗi của chúng ta.
+
+<ArticleSection name="Kết luận" id="conclusion" level="h2" />
+  
+Chương trình nhỏ này thực hiện được nhưng việc tương tự mà Rust phải tốn hàng chục đơn vị tính toán với chỉ `4 CUs` trong trường hợp thành công, `6 CUs` trong trường hợp thất bại, hoặc `106 CUs` trong trường hợp thất bại và ghi log thông báo lỗi.
+
+Ta phải đánh đổi bằng việc hiểu rõ bố cục bộ nhớ, các quy ước gọi hàm, và xử lý lỗi ở mức độ thấp nhất. Nhưng đối với các hoạt động quan trọng về hiệu suất, lợi ích thường có giá trị hơn so với chi phí.
+
+> Mã này không phải là "an toàn" nếu sử dụng đơn lẻ. Chúng ta không kiểm tra bất kỳ điều gì về các tài khoản được chuyển vào. Nhưng mục đích của nó là để thêm một instruction vào chương trình của bạn, vì vậy nó sẽ được chạy trong một tình huống tốt.

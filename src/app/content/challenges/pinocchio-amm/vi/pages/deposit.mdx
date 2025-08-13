@@ -1,0 +1,174 @@
+# Deposit
+
+Instruction `deposit` thực hiện ba nhiệm vụ chính:
+- Deposit token `mint_x` và `mint_y` vào pool dựa trên số lượng LP mà người dùng muốn `mint`.
+- Tính toán số lượng token `mint_x` và `mint_y` cần deposit và kiểm tra rằng số lượng không vượt quá `max_x` và `max_y` được chỉ định bởi người dùng.
+- Đúc đúng số lượng token `mint_lp` vào tài khoản liên kết của người dùng. 
+
+> Như đã nhắc đến ở phần `initialize`, chúng ta sẽ khởi tạo tất cả các tài khoản liên kết (`Associated Token Accounts`) bên ngoài instruction để tối ưu hóa.
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+
+Bên dưới là các tài khoản cần thiết cho ngữ cảnh này:
+- `user`: Tài khoản của người dùng đang thực hiện deposit vào thanh khoản của AMM. Đây phải là `signer`.
+- `mint_lp`: Tài khoản Mint đại diện cho thanh khoản của pool. Phải là `mutable`.
+- `vault_x`: Tài khoản chứa số lượng token X đã được deposit vào pool. Phải là `mutable`.
+- `vault_y`: Tài khoản chứa số lượng token Y đã được deposit vào pool. Phải là `mutable`.
+- `user_x_ata`: Tài khoản token liên kết của người dùng cho token X. Đây là tài khoản nguồn từ đó số lượng token X của người dùng sẽ được chuyển vào pool. Phải là `mutable`.
+- `user_y_ata`: Tài khoản token liên kết của người dùng cho token Y. Đây là tài khoản nguồn từ đó số lượng token Y của người dùng sẽ được chuyển vào pool. Phải là `mutable`.
+- `config`: Tài khoản cấu hình cho pool AMM. Lưu trữ tất cả các tham số và trạng thái liên quan đến pool.
+- `token program`: Tài khoản chương trình SPL Token. Đây là tài khoản cần thiết để thực hiện các hoạt động liên quan đến token như chuyển và đúc. Phải là `executable`.
+
+Ở đây, tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
+    pub user_lp_ata: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //.. 
+  }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Đây là những dữ liệu chúng ta cần truyền vào cho instruction `deposit`:
+- `amount`: Số lượng LP token mà người dùng muốn nhận. Phải là `[u64]`
+- `max_x`: Số lượng tối đa của token X mà người dùng sẵn sàng deposit. Phải là `[u64]`
+- `max_y`: Số lượng tối đa của token Y mà người dùng sẵn sàng deposit. Phải là `[u64]`
+- `expiration`: Thời gian hết hạn của lệnh này. Quan trọng để đảm bảo rằng giao dịch phải được thực hiện trong một khoảng thời gian nhất định. Phải là `[i64]`
+
+Chúng ta sẽ xử lý việc triển khai cho `DepositInstructionData` như khi khởi tạo. Vì vậy, tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+    pub max_x: u64,
+    pub max_y: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+</Codeblock>
+
+> Đảm bảo rằng bất kỳ số lượng nào, như `amount`, `max_y` và `max_x` đều lớn hơn zero và lệnh này chưa hết hạn bằng cách sử dụng `Clock` sysvar.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách deserialize cả `instruction_data` và `accounts`.
+
+Chúng ta cần phải:
+- Load tài khoản `Config` để lấy tất cả dữ liệu bên trong nó. Chúng ta có thể làm điều này bằng cách sử dụng hàm hỗ trợ `Config::load()`.
+- Xác định rằng trạng thái của AMM là hợp lệ (nghĩa là nó phải bằng `AmmState::Initialized`).
+- Kiểm tra tài khoản `vault_x` và `vault_y` là các tài khoản token liên kết hợp lệ như thế này:
+<Codeblock lang="rust">
+```rust
+// Check if the vault_x is valid
+let (vault_x, _) = find_program_address(
+    &[
+        self.accounts.config.key(),
+        self.accounts.token_program.key(),
+        config.mint_x(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+
+if vault_x.ne(self.accounts.vault_x.key()) {
+    return Err(ProgramError::InvalidAccountData);
+}
+```
+</Codeblock>
+- Deserialize các tài khoản liên quan đến token và sử dụng dữ liệu bên trong chúng để tính toán số lượng token cần deposit sử dụng crate `constant-product-curve` và kiểm tra slippage như thế này: 
+<Codeblock lang="rust">
+```rust
+// Deserialize the token accounts
+let mint_lp = unsafe { Mint::from_account_info_unchecked(self.accounts.mint_lp)? };
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+// Grab the amounts to deposit
+let (x, y) = match mint_lp.supply() == 0 && vault_x.amount() == 0 && vault_y.amount() == 0 {
+    true => (self.instruction_data.max_x, self.instruction_data.max_y),
+    false => {
+        let amounts = ConstantProduct::xy_deposit_amounts_from_l(
+            vault_x.amount(),
+            vault_y.amount(),
+            mint_lp.supply(),
+            self.instruction_data.amount,
+            6,
+        )
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+        (amounts.x, amounts.y)
+    }
+};
+
+// Check for slippage
+if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+</Codeblock>
+
+> Nếu đó là lần đầu thực hiện deposit, chúng ta có thể bỏ qua việc tính toán số lượng LP token và số lượng deposit và chỉ sử dụng giá trị mà người dùng đề xuất
+
+- Chuyển số lượng token từ các tài khoản token của người dùng vào các vault và đúc số lượng LP token thích hợp vào tài khoản token của người dùng
+
+Bạn đủ khả năng triển khai logic này, vì vậy tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        // Return the initialized struct
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+    
+      Ok(())
+    }
+}
+```
+</Codeblock>

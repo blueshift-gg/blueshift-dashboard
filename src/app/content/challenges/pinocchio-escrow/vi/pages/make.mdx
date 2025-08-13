@@ -1,0 +1,207 @@
+# Make
+
+Instruction `make` thực hiện ba nhiệm vụ:
+- Khởi tạo bản ghi Escrow và lưu trữ tất cả điều khoản giao dịch.
+- Tạo Vault (một ATA cho `mint_a` thuộc sở hữu của `escrow`).
+- Chuyển Token A của maker vào vault đó thông qua CPI đến chương trình SPL-Token.
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+
+Dưới đây là các tài khoản mà context cần:
+
+- maker: người tạo escrow. Phải là signer và mutable
+- escrow: tài khoản escrow mà chúng ta đang khởi tạo. Phải là mutable
+- mint_a: token mà chúng ta đang gửi vào escrow
+- mint_b: token mà chúng ta muốn nhận
+- maker_ata_a: tài khoản token liên kết thuộc sở hữu của maker. Phải là mutable
+- vault: tài khoản token liên kết thuộc sở hữu của escrow. Phải là mutable
+- system_program: chương trình hệ thống. Phải là executable
+- token_program: chương trình token. Phải là executable
+
+**Lưu ý**: Chúng ta sẽ sử dụng các kiểu được giới thiệu trong [Giới thiệu về Pinocchio](/vi/courses/introduction-to-pinocchio/pinocchio-accounts).
+
+Trong code, điều này trông như sau:
+
+<Codeblock lang="rust">
+```rust
+pub struct MakeAccounts<'a> {
+  pub maker: &'a AccountInfo,
+  pub escrow: &'a AccountInfo,
+  pub mint_a: &'a AccountInfo,
+  pub mint_b: &'a AccountInfo,
+  pub maker_ata_a: &'a AccountInfo,
+  pub vault: &'a AccountInfo,
+  pub system_program: &'a AccountInfo,
+  pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for MakeAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    let [maker, escrow, mint_a, mint_b, maker_ata_a, vault, system_program, token_program, _] = accounts else {
+      return Err(ProgramError::NotEnoughAccountKeys);
+    };
+
+    // Basic Accounts Checks
+    SignerAccount::check(maker)?;
+    MintInterface::check(mint_a)?;
+    MintInterface::check(mint_b)?;
+    AssociatedTokenAccount::check(maker_ata_a, maker, mint_a, token_program)?;
+
+    // Return the accounts
+    Ok(Self {
+      maker,
+      escrow,
+      mint_a,
+      mint_b,
+      maker_ata_a,
+      vault,
+      system_program,
+      token_program,
+    })
+  }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Đây là dữ liệu instruction mà chúng ta cần truyền vào:
+- seed: số ngẫu nhiên được sử dụng trong quá trình tạo seed. Phải là u64
+- receive: số lượng mà maker muốn nhận. Phải là u64
+- amount: số lượng mà maker muốn gửi. Phải là u64
+
+Chúng ta sẽ kiểm tra để đảm bảo `amount` không phải là zero, vì điều đó sẽ không có ý nghĩa đối với một escrow.
+
+Đây là cách nó trông trong code:
+
+<Codeblock lang="rust">
+```rust
+pub struct MakeInstructionData {
+  pub seed: u64,
+  pub receive: u64,
+  pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for MakeInstructionData {
+  type Error = ProgramError;
+
+  fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+    if data.len() != size_of::<u64>() * 3 {
+      return Err(ProgramError::InvalidInstructionData);
+    }
+
+    let seed = u64::from_le_bytes(data[0..8].try_into().unwrap());
+    let receive = u64::from_le_bytes(data[8..16].try_into().unwrap());
+    let amount = u64::from_le_bytes(data[16..24].try_into().unwrap());
+
+    // Instruction Checks
+    if amount == 0 {
+      return Err(ProgramError::InvalidInstructionData);
+    }
+
+    Ok(Self {
+      seed,
+      receive,
+      amount,
+    })
+  }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách khởi tạo các tài khoản cần thiết trong việc triển khai `TryFrom`, sau khi chúng ta đã deserialize cả `instruction_data` và `accounts`.
+
+Đối với bước này, chúng ta tạo tài khoản `Escrow` bằng cách sử dụng trait `ProgramAccount::init::<Escrow>` từ các hàm hỗ trợ được giới thiệu trong [Giới thiệu về Pinocchio](/vi/courses/introduction-to-pinocchio/pinocchio-accounts). Tương tự, chúng ta khởi tạo tài khoản Vault vì nó cần được tạo mới:
+
+<Codeblock lang="rust">
+```rust
+pub struct Make<'a> {
+  pub accounts: MakeAccounts<'a>,
+  pub instruction_data: MakeInstructionData,
+  pub bump: u8,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Make<'a> {
+  type Error = ProgramError;
+  
+  fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+    let accounts = MakeAccounts::try_from(accounts)?;
+    let instruction_data = MakeInstructionData::try_from(data)?;
+
+    // Initialize the Accounts needed
+    let (_, bump) = find_program_address(&[b"escrow", accounts.maker.key(), &instruction_data.seed.to_le_bytes()], &crate::ID);
+
+    let seed_binding = instruction_data.seed.to_le_bytes();
+    let bump_binding = [bump];
+    let escrow_seeds = [
+      Seed::from(b"escrow"),
+      Seed::from(accounts.maker.key().as_ref()),
+      Seed::from(&seed_binding),
+      Seed::from(&bump_binding),
+    ];
+
+    ProgramAccount::init::<Escrow>(
+      accounts.maker,
+      accounts.escrow,
+      &escrow_seeds,
+      Escrow::LEN
+    )?;
+
+    // Initialize the vault
+    AssociatedTokenAccount::init(
+      accounts.vault,
+      accounts.mint_a,
+      accounts.maker,
+      accounts.escrow,
+      accounts.system_program,
+      accounts.token_program,
+    )?;
+
+    Ok(Self {
+      accounts,
+      instruction_data,
+      bump,
+    })
+  }
+}
+```
+</Codeblock>
+
+Bây giờ chúng ta có thể tập trung vào logic chính, đó là điền thông tin vào tài khoản escrow và sau đó chuyển token vào vault.
+
+<Codeblock lang="rust">
+```rust
+impl<'a> Make<'a> {
+  pub const DISCRIMINATOR: &'a u8 = &0;
+
+  pub fn process(&mut self) -> ProgramResult {
+    // Populate the escrow account
+    let mut data = self.accounts.escrow.try_borrow_mut_data()?;
+    let escrow = Escrow::load_mut(data.as_mut())?;
+
+    escrow.set_inner(
+      self.instruction_data.seed,
+      *self.accounts.maker.key(),
+      *self.accounts.mint_a.key(),
+      *self.accounts.mint_b.key(),
+      self.instruction_data.receive,
+      [self.bump],
+    );
+
+    // Transfer tokens to vault
+    Transfer {
+      from: self.accounts.maker_ata_a,
+      to: self.accounts.vault,
+      authority: self.accounts.maker,
+      amount: self.instruction_data.amount
+    }.invoke()?;
+
+    Ok(())
+  }
+}
+```
+</Codeblock>

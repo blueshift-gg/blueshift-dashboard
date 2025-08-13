@@ -1,0 +1,99 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Permanent Delegate Extension
+
+Phần mở rộng `PermanentDelegate` là một Mint account extension cho phép ủy nhiệm vĩnh viễn đối với tất cả token của mint có khả năng transfer hoặc burn bất kỳ token nào của mint đó, từ bất kỳ token account nào.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Để khởi tạo extension `PermanentDelegate` trên `Mint` account, chúng ta sẽ cần hàm `initializePermanentDelegate()`.
+
+Đây là cách tạo mint với Mint Close extension:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializePermanentDelegateInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.MintCloseAuthority]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Permanent Delegate extension
+const initializePermanentDelegate = createInitializePermanentDelegateInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializePermanentDelegate,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Đóng Mint Account" id="closing-the-mint-account" level="h2" />
+
+Nếu `Mint` account có supply bằng không, `CloseMint Authority` có thể lấy lại rent trên account đó bằng cách sử dụng instruction `closeAccount` như thế này:
+
+```ts
+const closeMintInstruction = createCloseAccountInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    [],
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(closeMintInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: false});
+
+console.log(`Mint closed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Các hành động được phép" id="permissioned-actions" level="h2" />
+
+Không giống như ủy nhiệm thông thường có thể bị thu hồi, ủy nhiệm này là vĩnh viễn và bất biến.
+
+Điều này có nghĩa là mọi hành động bình thường như `transfer()`, `burn()`, `approve()` và `freeze()` có thể được thực thi bất cứ khi nào cần thiết trực tiếp bởi authority mà không cần chữ ký của chủ sở hữu thực tế.
+
+Điều này có nghĩa là chúng ta chỉ cần sử dụng instruction `transferChecked()`, `burnChecked()`, ... bình thường và truyền vào authority `PermanetDelegate` trong field `authority`.

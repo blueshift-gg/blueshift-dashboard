@@ -1,0 +1,93 @@
+# Borrow
+
+Instruction borrow là nửa đầu của hệ thống flash loan. Nó thực hiện ba bước quan trọng để đảm bảo việc cho vay an toàn và atomic:
+1. Chuyển tiền: Di chuyển `borrow_amount` được yêu cầu từ kho bạc của protocol đến account của người vay
+2. Xác minh việc trả nợ: Sử dụng instruction introspection để xác nhận rằng một instruction trả nợ hợp lệ tồn tại ở cuối transaction
+
+<ArticleSection name="Chuyển tiền" id="fund-transfer" level="h2" />
+
+Đầu tiên, chúng ta triển khai việc chuyển tiền thực tế với validation phù hợp:
+
+<Codeblock lang="rust">
+```rust
+// Make sure we're not sending in an invalid amount that can crash our Protocol
+require!(borrow_amount > 0, ProtocolError::InvalidAmount);
+
+// Derive the Signer Seeds for the Protocol Account
+let seeds = &[
+    b"protocol".as_ref(),
+    &[ctx.bumps.protocol]
+];
+let signer_seeds = &[&seeds[..]];
+
+// Transfer the funds from the protocol to the borrower
+transfer(
+    CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(), 
+        Transfer {
+            from: ctx.accounts.protocol_ata.to_account_info(),
+            to: ctx.accounts.borrower_ata.to_account_info(),
+            authority: ctx.accounts.protocol.to_account_info(),
+        }, 
+        signer_seeds
+    ), 
+    borrow_amount
+)?;
+```
+</Codeblock>
+
+Mã này đảm bảo chúng ta đang chuyển một số tiền hợp lệ và sử dụng Program Derived Address (PDA) của protocol để ủy quyền chuyển tiền.
+
+<ArticleSection name="Instruction Introspection" id="instruction-introspection" level="h2" />
+
+Bây giờ đến phần quan trọng về bảo mật: sử dụng instruction introspection để xác minh cấu trúc transaction và đảm bảo flash loan sẽ được trả lại.
+
+Chúng ta bắt đầu bằng cách truy cập `instructions` sysvar, chứa thông tin về tất cả instruction trong transaction hiện tại:
+
+
+<Codeblock lang="rust">
+```rust
+/*
+    Instruction Introspection
+
+    This is the primary means by which we secure our program,
+    enforce atomicity while making a great UX for our users.
+*/
+
+let ixs = ctx.accounts.instructions.to_account_info();
+```
+</Codeblock>
+
+Cuối cùng, chúng ta thực hiện kiểm tra quan trọng nhất: đảm bảo rằng instruction cuối cùng trong transaction là một instruction trả nợ hợp lệ:
+- Chúng ta bắt đầu bằng cách kiểm tra số lượng instruction và đảm bảo rằng chúng ta đang load instruction cuối cùng của transaction
+- Sau đó chúng ta xác minh rằng đó là instruction repay bằng cách kiểm tra program ID và discriminator của instruction
+- Chúng ta kết thúc bằng cách xác minh rằng các ATA được truyền trong instruction repay giống với những gì chúng ta đang truyền trong instruction `Borrow`
+
+<Codeblock lang="rust">
+```rust
+/*
+    Repay Instruction Check
+
+    Make sure that the last instruction of this transaction is a repay instruction
+*/
+
+// Check how many instruction we have in this transaction
+let instruction_sysvar = ixs.try_borrow_data()?;
+let len = u16::from_le_bytes(instruction_sysvar[0..2].try_into().unwrap());
+
+// Ensure we have a repay ix
+if let Ok(repay_ix) = load_instruction_at_checked(len as usize - 1, &ixs) {
+
+    // Instruction checks
+    require_keys_eq!(repay_ix.program_id, ID, ProtocolError::InvalidProgram);
+    require!(repay_ix.data[0..8].eq(instruction::Repay::DISCRIMINATOR), ProtocolError::InvalidIx);
+
+    // We could check the Wallet and Mint separately but by checking the ATA we do this automatically
+    require_keys_eq!(repay_ix.accounts.get(3).ok_or(ProtocolError::InvalidBorrowerAta)?.pubkey, ctx.accounts.borrower_ata.key(), ProtocolError::InvalidBorrowerAta);
+    require_keys_eq!(repay_ix.accounts.get(4).ok_or(ProtocolError::InvalidProtocolAta)?.pubkey, ctx.accounts.protocol_ata.key(), ProtocolError::InvalidProtocolAta);
+
+} else {
+    return Err(ProtocolError::MissingRepayIx.into());
+}
+```
+</Codeblock>

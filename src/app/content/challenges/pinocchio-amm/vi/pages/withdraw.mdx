@@ -1,0 +1,154 @@
+# Withdraw
+
+Instruction `withdraw` thực hiện hai nhiệm vụ chính:
+- Rút token `mint_x` và `mint_y` dựa trên số lượng LP mà người dùng muốn `burn`.
+- Tính toán số lượng cần rút và kiểm tra rằng số lượng không ít hơn `mint_x` và `mint_y` được người dùng chỉ định.
+- Đốt đúng số lượng `mint_lp` từ ata của người dùng.
+
+> Như đã đề cập trong phần instruction `initialize`; chúng ta sẽ khởi tạo tất cả `Associated Token Accounts` bên ngoài instruction của chúng ta vì mục đích tối ưu hóa.
+
+<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+
+Dưới đây là các tài khoản cần thiết cho context này:
+- `user`: Người dùng đang rút token từ thanh khoản của AMM. Phải là `signer`.
+- `mint_lp`: Tài khoản mint đại diện cho thanh khoản của pool. Phải là `mutable`.
+- `vault_x`: Tài khoản token chứa tất cả token X được gửi vào pool. Phải được truyền vào như `mutable`.
+- `vault_y`: Tài khoản token chứa tất cả token Y được gửi vào pool. Phải được truyền vào như `mutable`.
+- `user_x_ata`: Tài khoản token liên kết của người dùng cho token X. Đây là tài khoản đích mà token X của người dùng sẽ được chuyển từ pool. Phải được truyền vào như `mutable`.
+- `user_y_ata`: Tài khoản token liên kết của người dùng cho token Y. Đây là tài khoản đích mà token Y của người dùng sẽ được chuyển từ pool. Phải được truyền vào như `mutable`.
+- `config`: Tài khoản cấu hình cho AMM pool. Lưu trữ tất cả các tham số và trạng thái pool liên quan.
+- `token program`: Tài khoản chương trình SPL Token. Điều này cần thiết để thực hiện các hoạt động token như chuyển khoản và minting. Phải là `executable`.
+
+Ở đây, một lần nữa, tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
+    pub user_lp_ata: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        //.. 
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Đây là dữ liệu cho instruction mà chúng ta cần truyền vào:
+- `amount`: Số lượng LP token mà người dùng muốn đốt. Phải là `[u64]`
+- `min_x`: Số lượng tối thiểu của token X mà người dùng sẵn sàng rút. Phải là `[u64]`
+- `min_y`: Số lượng tối thiểu của token Y mà người dùng sẵn sàng rút. Phải là `[u64]`
+- `expiration`: Thời gian hết hạn của lệnh này. Quan trọng để đảm bảo rằng giao dịch phải được thực hiện trong một khoảng thời gian nhất định. Phải là `[i64]`
+
+Chúng ta sẽ xử lý việc triển khai cho `WithdrawInstructionData` như khởi tạo. Vì vậy tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawInstructionData {
+    pub amount: u64,
+    pub min_x: u64,
+    pub min_y: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for WithdrawInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+</Codeblock>
+
+> Đảm bảo rằng bất kỳ số lượng nào, như `amount`, `min_y` và `min_x` đều lớn hơn zero và lệnh chưa hết hạn bằng cách sử dụng sysvar `Clock`.
+
+<ArticleSection name="Logic Instruction" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách deserialize cả `instruction_data` và `accounts`.
+
+Sau đó chúng ta cần:
+- Tải tài khoản `Config` để lấy tất cả dữ liệu bên trong nó. Chúng ta có thể làm điều này bằng cách sử dụng helper `Config::load()`.
+- Xác minh rằng `AmmState` hợp lệ (vì vậy nếu nó không bằng `AmmState::Disabled`).
+- Kiểm tra việc tạo `vault_x` và `vault_y` để trở thành Associated Token Accounts.
+- Deserialize tất cả các tài khoản token liên quan và sử dụng dữ liệu bên trong chúng để tính toán số lượng cần rút bằng cách sử dụng crate `constant-product-curve` và kiểm tra slippage như thế này:
+<Codeblock lang="rust">
+```rust
+let mint_lp = unsafe { Mint::from_account_info_unchecked(self.accounts.mint_lp)? };
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+let (x, y) = match mint_lp.supply() == self.instruction_data.amount {
+    true => (vault_x.amount(), vault_y.amount()),
+    false => {
+        let amounts = ConstantProduct::xy_withdraw_amounts_from_l(
+            vault_x.amount(),
+            vault_y.amount(),
+            mint_lp.supply(),
+            self.instruction_data.amount,
+            6,
+        )
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+        (amounts.x, amounts.y)
+    }
+};
+
+// Kiểm tra slippage
+if !(x <= self.instruction_data.min_x && y <= self.instruction_data.min_y) {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+</Codeblock>
+- Chuyển số lượng từ các vault đến tài khoản token của người dùng và burn số lượng LP token thích hợp từ tài khoản token của người dùng
+
+> `authority` của `vault_x` và `vault_y` là tài khoản `config`
+
+Bạn đủ khả năng triển khai logic này, vì vậy tôi sẽ để việc triển khai cho bạn:
+
+<Codeblock lang="rust">
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+    pub instruction_data: WithdrawInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+        let instruction_data = WithdrawInstructionData::try_from(data)?;
+
+        // Trả về struct đã khởi tạo
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &2;
+
+    pub fn process(&mut self) -> ProgramResult {
+        //..
+        
+        Ok(())
+    }
+}
+```
+</Codeblock>

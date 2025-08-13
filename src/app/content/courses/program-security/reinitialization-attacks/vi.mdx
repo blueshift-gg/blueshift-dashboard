@@ -1,0 +1,115 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Reinitialization Attack 
+
+Các cuộc tấn công reinitialization (tái khởi tạo) khai thác các chương trình không kiểm tra xem một account đã được khởi tạo hay chưa, cho phép kẻ tấn công ghi đè dữ liệu hiện có và chiếm quyền kiểm soát các account có giá trị.
+
+Trong khi thao tác initialization hợp lệ thiết lập các account mới để sử dụng lần đầu, reinitialization độc hại đặt lại các account hiện có về trạng thái được kiểm soát bởi kẻ tấn công.
+
+Không có các kiểm tra việc khởi tạo thích hợp, kẻ tấn công có thể gọi các hàm initialization trên các account đã được sử dụng, thực hiện một cuộc chiếm đoạt thù địch trạng thái chương trình đã thiết lập. Điều này đặc biệt có hại trong các protocol như escrow, vault, hoặc bất kỳ hệ thống nào mà ownership account xác định quyền kiểm soát các tài sản có giá trị.
+
+Initialization đặt dữ liệu của một account mới lần đầu tiên. Điều cần thiết là kiểm tra xem một account đã được khởi tạo hay chưa để ngăn chặn ghi đè dữ liệu hiện có.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này khởi tạo một program account:
+
+```rust
+#[program]
+pub mod unsafe_initialize_account{
+    use super::*;
+    
+    //..
+
+    pub fn unsafe_initialize_account(ctx: Context<InitializeAccount>) -> Result<()> {
+        let mut writer: Vec<u8> = vec![];
+        
+        let program_account = ProgramAccount {
+            owner: ctx.accounts.owner.key()
+        }.try_serialize(&mut writer)?;
+
+        sol_memcpy(&mut data, &writer, writer.len());
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Mã này có một lỗ hổng chết người: nó không bao giờ kiểm tra xem account đã được khởi tạo hay chưa. Mỗi khi instruction này được gọi, nó vô điều kiện ghi đè dữ liệu account và đặt người gọi làm owner mới, bất kể trạng thái trước đó của account.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Xác định một account đã khởi tạo có giá trị (như escrow PDA kiểm soát token account)
+- Gọi `unsafe_initialize_account` với account hiện có đó
+- Trở thành "owner" mới bằng cách ghi đè dữ liệu owner trước đó
+- Sử dụng ownership mới tìm thấy để rút cạn bất kỳ tài sản nào được kiểm soát bởi account đó
+
+Cuộc tấn công này đặc biệt nguy hại trong các kịch bản escrow. Hãy tưởng tượng một escrow PDA sở hữu các token account chứa tài sản trị giá hàng nghìn đô la. Việc khởi tạo escrow ban đầu đã thiết lập đúng cách account với các bên tham gia hợp pháp. Nhưng nếu kẻ tấn công có thể gọi hàm reinitialization, họ có thể ghi đè dữ liệu escrow, đặt chính họ làm owner, và giành quyền kiểm soát tất cả các token được ký gửi.
+
+May mắn thay `Anchor` làm cho việc thực hiện kiểm tra này cực kỳ dễ dàng trực tiếp trong account struct bằng cách chỉ cần sử dụng ràng buộc `init` khi khởi tạo account như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + ProgramAccount::INIT_SPACE
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Hoặc bạn có thể chỉ cần kiểm tra rằng account đã được khởi tạo trong instruction bằng cách sử dụng kiểm tra `ctx.accounts.program_account.is_initialized` như thế này:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.is_initialized {
+        return Err(ProgramError::AccountAlreadyInitialized.into());
+    }
+
+    Ok(())
+}
+```
+
+> Ràng buộc `init_if_needed` của Anchor, được bảo vệ bởi feature flag, nên được sử dụng với sự thận trọng tối đa. Trong khi nó thuận tiện khởi tạo một account chỉ khi nó chưa được khởi tạo, nó tạo ra một cái bẫy nguy hiểm: nếu account đã được khởi tạo, instruction handler tiếp tục thực thi bình thường. Điều này có nghĩa là chương trình của bạn có thể vô tình hoạt động trên các account hiện có, có thể ghi đè dữ liệu quan trọng hoặc cho phép truy cập trái phép.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, vì chúng ta không có khả năng thêm kiểm tra bảo mật trực tiếp bên trong account struct, chúng ta buộc phải làm như vậy trong logic instruction.
+
+Chúng ta có thể làm điều đó bằng cách kiểm tra xem account có discriminator đúng hay không:
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] == DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```
+
+
+
+
+

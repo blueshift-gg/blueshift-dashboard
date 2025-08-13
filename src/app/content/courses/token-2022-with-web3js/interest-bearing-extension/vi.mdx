@@ -1,0 +1,140 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Interest Bearing Extension
+
+Phần mở rộng `InterestBearing` là một `Mint` account extension cho phép người dùng áp dụng lãi suất cho token của họ và lấy tổng được cập nhật, bao gồm lãi, tại bất kỳ thời điểm nào.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Để khởi tạo extension `InterestBearing` trên `Mint` account, chúng ta sẽ cần hàm `interestBearingMint()`.
+
+Đây là cách tạo mint với Interest Bearing extension:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeMintCloseAuthorityInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.MintCloseAuthority]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Interest Bearing extension
+const initializeMintInterestBearing = createInitializeInterestBearingMintInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    500,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintNonTransferable,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Tính toán lãi suất" id="calculating-the-interest" level="h2" />
+
+Phần mở rộng `InterestBearing` không tạo ra token mới; số lượng hiển thị chỉ đơn giản bao gồm lãi tích lũy thông qua hàm `amount_to_ui_amount`, làm cho thay đổi hoàn toàn mang tính thẩm mỹ.
+
+Vì vậy sau khi `unpack` `Token` account mà chúng ta muốn tính lãi từ đó, thật dễ dàng để có được tất cả thông tin mà chúng ta cần để thực hiện tính toán để có được số lượng lãi.
+
+May mắn cho chúng ta, chúng ta thậm chí không cần làm như vậy vì chúng ta có thể sử dụng hàm `amountToUiAmount` như thế này:
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="Cập nhật Interest Bearing Extension" id="updating-the-interest-bearing-extension" level="h2" />
+
+Với phần mở rộng `InterestBearing`, có thể thay đổi lãi suất được tạo ra bởi token account nhờ vào cách dữ liệu của nó được cấu trúc:
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+Để làm như vậy, chúng ta có thể sử dụng hàm `updateRateInterestBearingMint` như thế này:
+
+```ts
+const updateRateInstruction = await createUpdateRateInterestBearingMintInstruction(
+    mint.publicKey,
+    newRateAuthority.publicKey,
+    1000, // updated rate
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```
+
+Và nếu chúng ta muốn, chúng ta có thể thay đổi authority để đặt lãi suất bằng cách sử dụng hàm `setAuthority` và truyền vào `AuthorityType` đúng như thế này:
+
+```ts
+const setAuthorityInstruction = await createSetAuthorityInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    AuthorityType.InterestRate,
+    newRateAuthority.publicKey,
+    [],
+    TOKEN_2022_PROGRAM_ID,
+);
+```

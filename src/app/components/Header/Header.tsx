@@ -7,7 +7,7 @@ import { useState, useRef, RefObject } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { useOnClickOutside } from "usehooks-ts";
 import { useRouter, usePathname, Link } from "@/i18n/navigation";
-import { routing } from "@/i18n/routing";
+import { localeNames, routing } from "@/i18n/routing";
 import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
 
 import Logo from "../Logo/Logo";
@@ -21,6 +21,7 @@ export default function HeaderContent() {
   const t = useTranslations();
   const currentLocale = useLocale();
   const { locales } = routing;
+
   const router = useRouter();
   const languageDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -158,7 +159,7 @@ export default function HeaderContent() {
                             : "text-secondary"
                         )}
                       >
-                        {t(`locales_native_name.${locale}`)}
+                        {localeNames[locale]}
                       </span>
                     </button>
                   ))}

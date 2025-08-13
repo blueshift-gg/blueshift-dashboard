@@ -1,0 +1,83 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+#  sBPF Assembly 101
+
+To understand sBPF Assembly and its role in Solana programs, we first need to understand assembly language and how it bridges high-level code with machine execution.
+
+<ArticleSection name="The Assembly Langauge" id="the-assembly-language" level="h2" />
+
+Assembly is the human-readable form of machine code: the actual instructions processors execute. It serves as the bridge between high-level programming languages and the binary code computers understand.
+
+When you write Rust code like:
+
+```rust
+let result = a + b;
+```
+
+The compiler translates this through several stages:
+1. Rust source → parsed and analyzed
+2. Intermediate representation → optimized
+3. Assembly code → human-readable instructions
+4. Machine code → binary that the processor executes
+
+Assembly occupies stage 3: the final human-readable form before conversion to binary. Each assembly instruction corresponds to exactly one processor operation: add numbers, load memory, or jump to different code sections.
+
+<ArticleSection name="The sBPF Virtual Machine" id="the-sbpf-virtual-machine" level="h2" />
+
+Solana sBPF is Solana's custom variant of the extended Berkeley Packet Filter (eBPF) instruction set and virtual machine that executes every on-chain program. It creates a specialized execution environment: a 64-bit register machine that sits between your program and the validator's native CPU.
+
+Think of sBPF as a purpose-built computer designed for blockchain execution: fast enough for high-throughput transactions, yet constrained enough to guarantee security and determinism across thousands of validators.
+
+Unlike native assembly that runs directly on your CPU, sBPF code executes within a controlled virtual machine environment. This virtual machine guarantees safety by verifying every instruction before execution, preventing crashes, infinite loops, and unauthorized memory access.
+
+Despite these safety constraints, sBPF maintains high performance through `just-in-time` compilation that achieves near-native execution speeds.
+
+The virtual machine also ensures deterministic execution: identical programs with identical inputs produce identical results across all validators worldwide. This consistency is crucial for blockchain consensus. 
+
+Additionally, sBPF includes syscalls for account access, cross-program calls, and runtime interaction.
+
+### Why Understanding sBPF Assembly Matters
+
+While the Rust compiler efficiently translates high-level code into sBPF instructions, understanding assembly provides several advantages:
+**Understanding Compute Costs**: Every sBPF instruction consumes compute units (CUs). A single line of Rust can compile to hundreds of instructions—assembly reveals why certain operations are expensive.
+**Smaller Program Sizes**: Programs written directly in sBPF assembly are dramatically smaller than compiled Rust equivalents, reducing deployment costs and improving load times.
+**Optimization Opportunities**: The Rust compiler generates safe, correct code but not always the most efficient. Assembly exposes redundant safety checks and suboptimal instruction sequences.
+**Debugging and Analysis**: When programs behave unexpectedly, assembly provides ground truth. You can trace exactly which instructions executed and identify failure points.
+
+### Architecture
+
+sBPF uses a load-store architecture with 10 general-purpose registers, one read-only stack pointer, and no complex addressing modes.
+
+This simplicity is intentional: fewer instruction variants enable faster verification, faster JIT compilation, and more predictable performance. 
+
+Everytime an eBPF program is loaded into the kernel, its bytecode is translated into native machine instructions specific to the host CPU architecture by the JIT compiler and is then executed by the VM.
+
+### Execution
+
+sBPF programs execute through a straightforward process. The Program Counter (`PC`) tracks which instruction to execute next, like a bookmark in your instruction list.
+
+The execution cycle follows these steps:
+1. **Fetch**: Read the instruction at the program counter
+2. **Decode**: Interpret the instruction format and operands
+3. **Execute**: Perform the operation (modify registers, access memory, or change control flow)
+4. **Advance**: Move the program counter to the next instruction (or jump for branches)
+5. **Repeat**: Continue until the program exits
+
+Each instruction performs exactly one operation: arithmetic, memory access, comparison, or function call. This one-instruction-per-operation design makes sBPF programs predictable and analyzable.
+
+<ArticleSection name="The JIT Compiler Pipeline" id="the-jit-compiler-pipeline" level="h2" />
+
+sBPF programs achieve high performance through Just-In-Time (JIT) compilation.
+
+When you deploy a program to Solana, the runtime performs two operations:
+- **Verification**: Ensures program safety by checking for infinite loops, invalid memory access, and potential crashes. The verifier analyzes every possible execution path to guarantee safe operation.
+- **Compilation**: Converts sBPF instructions into native machine code that runs directly on the validator's CPU. Simple operations like `add64 r1, r2` become single native add instructions, while complex operations receive additional safety checks but still compile to efficient native code.
+
+This approach trades deployment time for execution speed. Programs are verified and compiled once during deployment but executed thousands of times, making this an excellent tradeoff for blockchain performance.
+
+The JIT verification process walks through every possible program path, checking that memory accesses stay within bounds, jumps target valid addresses, and execution terminates within compute limits.
+
+The JIT compilation process translates each sBPF instruction to equivalent native CPU instructions. Since most execution happens in native code, virtual machine overhead is minimal.
+
+> Understanding that sBPF compiles to native code explains why arithmetic operations are fast while syscalls that cross into the runtime have overhead. This knowledge guides optimization decisions.

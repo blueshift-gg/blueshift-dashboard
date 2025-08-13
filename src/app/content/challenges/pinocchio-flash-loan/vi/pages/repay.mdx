@@ -1,0 +1,121 @@
+# Hoàn trả (Repay)
+
+Lệnh `repay` (hoàn trả) là nửa thứ hai của hệ thống flash loan. Nhờ vào thiết kế của lệnh `loan`, logic cho `repay` khá đơn giản, vì nó chỉ cần:
+1. Kiểm tra rằng tất cả số dư đã được hoàn trả đúng cách bằng cách sử dụng tài khoản `loan`.
+2. Đóng tài khoản `loan`, vì nó không còn cần thiết nữa.
+
+<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+- `borrower`: Người dùng đã yêu cầu flash loan. Họ cung cấp lamports để tạo tài khoản `loan`. Phải có thể thay đổi (mutable).
+- `loan`: Tài khoản tạm thời được sử dụng để lưu trữ `protocol_token_account` và `balance` cuối cùng được yêu cầu. Phải có thể thay đổi (mutable) vì nó sẽ được đóng ở cuối lệnh.
+
+Đây là cách triển khai:
+
+<Codeblock lang="rust">
+```rust
+pub struct RepayAccounts<'a> {
+    pub borrower: &'a AccountInfo,
+    pub loan: &'a AccountInfo,
+    pub token_accounts: &'a [AccountInfo],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for RepayAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [borrower, loan, token_accounts @ ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        Ok(Self {
+            borrower,
+            loan,
+            token_accounts,
+        })
+    }
+}
+```
+</Codeblock>
+
+Trường `token_accounts` là một mảng động các tài khoản đại diện cho các tài khoản token giao thức liên quan đến khoản vay của người vay.
+
+<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+
+Không cần dữ liệu cho Instruction nào vì chúng ta sử dụng trường `balance` trong tài khoản `loan` để xác minh xem khoản vay đã được hoàn trả hay chưa.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+
+Chúng ta bắt đầu bằng cách phân tích các tài khoản thành struct `RepayAccounts`.
+
+<Codeblock lang="rust">
+```rust
+pub struct Repay<'a> {
+    pub accounts: RepayAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Repay<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let accounts = RepayAccounts::try_from(accounts)?;
+
+        Ok(Self { accounts })
+    }
+}
+
+```
+</Codeblock>
+
+Tiếp theo, chúng ta kiểm tra xem tất cả các khoản vay đã được hoàn trả hay chưa. Chúng ta thực hiện điều này bằng cách lấy số lượng khoản vay từ tài khoản `loan` và lặp qua chúng. Đối với mỗi khoản vay, chúng ta xác minh rằng `protocol_token_account` là đúng và số dư của nó lớn hơn hoặc bằng số tiền đã vay.
+
+<Codeblock lang="rust">
+```rust
+impl<'a> Repay<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        let loan_data = self.accounts.loan.try_borrow_data()?;
+        let loan_num = loan_data.len() / size_of::<LoanData>();
+
+        if loan_num.ne(&self.accounts.token_accounts.len()) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Process each pair of token accounts (protocol, borrower) with corresponding amounts
+        for i in 0..loan_num {
+            // Validate that protocol_ata is the same as the one in the loan account
+            let protocol_token_account = &self.accounts.token_accounts[i];
+
+            if unsafe { *(loan_data.as_ptr().add(i * size_of::<LoanData>()) as *const [u8; 32]) } != *protocol_token_account.key() {
+                return Err(ProgramError::InvalidAccountData);
+            }
+
+            // Check if the loan is already repaid
+            let balance = get_token_amount(&protocol_token_account.try_borrow_data()?);
+            let loan_balance = unsafe { *(loan_data.as_ptr().add(i * size_of::<LoanData>() + size_of::<[u8; 32]>()) as *const u64) };
+
+            if balance < loan_balance {
+                return Err(ProgramError::InvalidAccountData);
+            }
+        }
+
+        //..
+    }
+}
+```
+</Codeblock>
+
+Sau đó chúng ta có thể tiến hành đóng tài khoản `loan` và thu hồi tiền thuê, vì nó không còn cần thiết nữa:
+
+<Codeblock lang="rust">
+```rust
+drop(loan_data);
+// Close the loan account and give back the lamports to the borrower
+unsafe {
+    *self.accounts.borrower.borrow_mut_lamports_unchecked() += *self.accounts.loan.borrow_lamports_unchecked();
+    // There is no need to manually zero out lamports in the loan account because it is done in the close_unchecked function
+    self.accounts.loan.close_unchecked();
+}
+```
+</Codeblock>
+
+> Như bạn có thể thấy, vì mục đích tối ưu hóa và theo thiết kế, việc hoàn trả không xảy ra trong lệnh này. Điều này là do `borrower` có thể chọn hoàn trả tài khoản token trong một lệnh khác, chẳng hạn như khi thực hiện swap hoặc thực thi một loạt CPI từ chương trình arbitrage của họ.

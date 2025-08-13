@@ -1,0 +1,369 @@
+![Pinocchio Amm Challenge](/graphics/challenge-banners/pinocchio-amm.png)
+
+# AMM
+
+Automated Market Maker (AMM) là một khối xây dựng cơ bản của tài chính phi tập trung, cho phép người dùng hoán đổi token trực tiếp với hợp đồng thông minh thay vì dựa vào sổ lệnh truyền thống hoặc sàn giao dịch tập trung.
+
+Hãy nghĩ về AMM như một bể thanh khoản (liquidity pool) tự vận hành: người dùng gửi các cặp token, và AMM sử dụng công thức toán học để xác định giá và tạo điều kiện hoán đổi giữa chúng. Điều này cho phép bất kỳ ai giao dịch token ngay lập tức, bất cứ lúc nào, mà không cần đối tác giao dịch.
+
+Nếu bạn quan sát kỹ, bạn sẽ nhận thấy rằng AMM không gì khác một Escrow với các bước, tính toán và logic bổ sung. Vì vậy nếu bạn bỏ lỡ, hãy xem qua [Thử thách Pinocchio Escrow](/vi/challenges/pinocchio-escrow) trước khi thực hiện khóa học này.
+
+Trong thử thách này, bạn sẽ triển khai một AMM đơn giản với bốn instruction cốt lõi:
+- **Initialize**: Thiết lập AMM bằng cách tạo configuration account và mint LP (liquidity provider) token đại diện cho cổ phần trong pool.
+- **Deposit**: Cho phép người dùng gửi `token_x` và `token_y` vào pool. Họ sẽ nhận được một lượng LP token đại diện cho cổ phần của họ trong pool.
+- **Withdraw**: Cho phép người dùng đổi LP token để rút cổ phần `token_x` và `token_y` từ pool, thực sự loại bỏ liquidity của họ.
+- **Swap**: Cho phép bất kỳ ai giao dịch token_x lấy `token_y` (hoặc ngược lại) bằng cách sử dụng pool, với một khoản phí nhỏ trả cho các liquidity provider.
+
+**Lưu ý**: Nếu bạn chưa quen với Pinocchio, bạn nên bắt đầu bằng cách đọc [Giới thiệu về Pinocchio](/vi/courses/introduction-to-pinocchio) để làm quen với các khái niệm cốt lõi mà chúng ta sẽ sử dụng trong chương trình này.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Hãy bắt đầu bằng cách tạo một môi trường Rust mới:
+
+<Codeblock lang="terminal">
+```bash
+# create workspace
+cargo new blueshift_native_amm --lib --edition 2021
+cd blueshift_native_amm
+```
+</Codeblock>
+
+Thêm `pinocchio`, `pinocchio-system`, `pinocchio-token`, `pinocchio-associated-token-account` và `constant-product-curve` được tạo bởi [Dean](https://x.com/deanmlittle) để xử lý tất cả tính toán cho AMM của chúng ta:
+
+<Codeblock lang="terminal">
+```bash
+cargo add pinocchio pinocchio-system pinocchio-token pinocchio-associated-token-account
+cargo add --git="https://github.com/deanmlittle/constant-product-curve" constant-product-curve
+```
+</Codeblock>
+
+Khai báo các crate type trong `Cargo.toml` để tạo deployment artifact trong `target/deploy`:
+
+<Codeblock lang="toml">
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+</Codeblock>
+
+Bây giờ bạn đã sẵn sàng để viết chương trình AMM của mình.
+
+<ArticleSection name="Constant Product Curve" id="constant-product-curve" level="h2" />
+
+Trung tâm của hầu hết các AMM là một công thức đơn giản nhưng mạnh mẽ được gọi là constant product curve. Công thức này đảm bảo rằng tích của hai token dự trữ trong pool luôn không đổi, ngay cả khi người dùng giao dịch hoặc cung cấp liquidity.
+
+### Công thức
+
+Công thức AMM phổ biến nhất là: `x * y = k` trong đó:
+- `x` = số lượng token X trong pool
+- `y` = số lượng token Y trong pool
+- `k` = một hằng số (không bao giờ thay đổi)
+
+Bất cứ khi nào ai đó hoán đổi một token lấy token khác, pool sẽ điều chỉnh reserve để tích `k` không thay đổi. Điều này tạo ra một đường cong giá tự động điều chỉnh dựa trên cung và cầu.
+
+### Ví dụ
+
+Giả sử pool bắt đầu với 100 token X và 100 token Y: `100 * 100 = 10,000`.
+
+Nếu một người dùng muốn hoán đổi 10 token X lấy token Y, pool phải giữ `k = 10,000`. Vậy, nếu `x_new` = 110 (sau khi gửi), tìm ra `y_new` sao cho: `110 * y_new = 10,000` nên `y_new = 10,000 / 110 ≈ 90.91`.
+
+Người dùng sẽ nhận được `100 - 90.91 = 9.09` token Y (trừ đi các khoản phí).
+
+### Cung cấp Liquidity
+
+Khi người dùng gửi cả hai token vào pool, họ trở thành nhà cung cấp thanh khoản liquidity provider (LP). Đổi lại, họ nhận được LP token đại diện cho cổ phần chia sẻ của họ trong pool.
+- LP token được mint tỷ lệ với lượng liquidity bạn thêm vào.
+- Khi bạn rút tiền, bạn burn LP token để lấy lại phần chia sẻ của cả hai token (cộng với phần chia sẻ phí thu được từ các giao dịch hoán đổi).
+
+Liquidity provider đầu tiên thiết lập tỷ lệ ban đầu. Ví dụ, nếu bạn gửi 100 X và 100 Y, bạn có thể nhận được 100 LP token.
+
+Sau đó, nếu pool đã có 100 X và 100 Y, và bạn thêm 10 X và 10 Y, bạn nhận được LP token tỷ lệ với đóng góp của mình: `share = deposit_x / total_x = 10 / 100 = 10%` vậy AMM sẽ mint cho ví người dùng 10% tổng LP supply.
+
+### Phí
+
+Mỗi giao dịch hoán đổi thường tính một khoản phí nhỏ (ví dụ: 0.3%), được thêm vào pool. Điều này có nghĩa là các LP kiếm được một phần phí giao dịch, tăng giá trị LP token của họ theo thời gian và khuyến khích mọi người cung cấp liquidity.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Lần này chúng ta sẽ chia chương trình thành các module nhỏ, tập trung thay vì nhồi nhét mọi thứ vào `lib.rs`. Cây thư mục sẽ trông như thế này:
+
+```
+src
+├── instructions
+│       ├── deposit.rs
+│       ├── initialize.rs
+│       ├── mod.rs
+│       ├── swap.rs
+│       └── withdraw.rs
+├── lib.rs
+└── state.rs
+```
+
+Entrypoint, nằm trong file `lib.rs` sẽ trông như thế này:
+
+<Codeblock lang="rust">
+```rust
+use pinocchio::{
+    account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey,
+    ProgramResult,
+};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+pub mod state;
+pub use state::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Initialize::DISCRIMINATOR, data)) => {
+            Initialize::try_from((data, accounts))?.process()
+        }
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, data)) => Withdraw::try_from((data, accounts))?.process(),
+        Some((Swap::DISCRIMINATOR, data)) => Swap::try_from((data, accounts))?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+</Codeblock>
+
+<ArticleSection name="State" id="state" level="h2" />
+
+Chúng ta sẽ chuyển vào `state.rs` nơi tất cả dữ liệu cho `AMM` của chúng ta tồn tại.
+
+Hãy chia điều này thành ba phần: định nghĩa struct, các hàm hỗ trợ đọc và ghi.
+
+Đầu tiên, hãy xem định nghĩa struct:
+
+<Codeblock lang="rust">
+```rust
+use core::mem::size_of;
+use pinocchio::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
+
+#[repr(C)]
+pub struct Config {
+    state: u8,
+    seed: [u8; 8],
+    authority: Pubkey,
+    mint_x: Pubkey,
+    mint_y: Pubkey,
+    fee: [u8; 2],
+    config_bump: [u8; 1],
+}
+
+#[repr(u8)]
+pub enum AmmState {
+    Uninitialized = 0u8,
+    Initialized = 1u8,
+    Disabled = 2u8,
+    WithdrawOnly = 3u8,
+}
+
+impl Config {
+    pub const LEN: usize = size_of::<u8>()
+        + size_of::<u64>()
+        + size_of::<Pubkey>() * 3
+        + size_of::<u16>()
+        + size_of::<u8>();
+
+    //...
+}
+```
+</Codeblock>
+
+Thuộc tính `#[repr(C)]` đảm bảo rằng cấu trúc của chúng ta có thể dự đoán được, bố cục của bộ nhớ tương thích với C duy trì tính nhất quán trên các nền tảng và các phiên bản biên dịch khác nhau của Rust. Điều này rất quan trọng đối với các chương trình on-chain vì dữ liệu phải được serialized và deserialized một cách đáng tin cậy.
+
+Chúng ta lưu trữ `seed` (u64) và `fee` (u16) ở dạng một mảng byte thay vì ở dạng kiểu dữ liệu native để đảm bảo tính an toàn khi deserialization. Khi dữ liệu được đọc từ độ nhớ tài khoản, không có gì đảm bảo rằng việc căn chỉnh bộ nhớ và việc đọc `u64` từ một địa chỉ bộ nhớ không được căn chỉnh có thể gây ra hành vi không xác định. Bằng cách sử dụng mảng byte và chuyển đổi với `from_le_bytes()`, chúng ta đảm bảo dữ liệu có thể được đọc an toàn bất kể căn chỉnh, đồng thời đảm bảo thứ tự byte little-endian nhất quán trên mọi nền tảng. 
+
+
+Mỗi trường trong cấu trúc `Config` phục cho cho các mục đích sau:
+- **state**: Theo dõi trạng thái hiện tại của AMM (e.g., uninitialized, initialized, disabled, or withdraw-only). 
+- **seed**: Một giá trị duy nhất được sử dụng cho việc tạo ra PDA, cho phép nhiều AMM tồn tại với các cấu hình khác nhau.
+- **authority**: Public key để quản trị AMM (e.g., dừng hoặc cập nhật các pool). Có thể không cho phép thay đổi bằng cách set giá trị `[0u8; 32]`.
+- **mint_x**: Địa chỉ mint của token X trong pool.
+- **mint_y**: Địa chỉ mint của token Y trong pool.
+- **fee**: Phí chuyển đổi, thể hiện dưới dạng basis points (1 basis point = 0.01%), được thu trên mỗi giao dịch và phân phối cho các nhà cung cấp thanh khoản.
+- **config_bump**: Số bump được sử dụng trong quá trình tìm PDA để đảm bảo địa chỉ tài khoản cấu hình là hợp lệ và duy nhất. Được lưu lại để quá trình tìm PDA hiệu quả hơn.
+
+Enum `AmmState` định nghĩa các trạng thái có thể của AMM, nó khiến chúng ta dễ dàng quản lý vòng đời của pool và ngăn chặn một số hành động dựa trên trạng thái của nó.
+
+### Các hàm hỗ trợ đọc
+
+Các hàm hỗ trợ đọc cung cấp một cách truy cập vào dữ liệu `Config` một cách an toàn và hiệu quả với những kiểm tra phù hợp:
+
+<Codeblock lang="rust">
+```rust
+impl Config {
+    //...
+
+    #[inline(always)]
+    pub fn load(account_info: &AccountInfo) -> Result<Ref<Self>, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(Ref::map(account_info.try_borrow_data()?, |data| unsafe {
+            Self::from_bytes_unchecked(data)
+        }))
+    }
+
+    #[inline(always)]
+    pub unsafe fn load_unchecked(account_info: &AccountInfo) -> Result<&Self, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner() != &crate::ID {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(Self::from_bytes_unchecked(
+            account_info.borrow_data_unchecked(),
+        ))
+    }
+
+    /// Return a `Config` from the given bytes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `bytes` contains a valid representation of `Config`, and
+    /// it is properly aligned to be interpreted as an instance of `Config`.
+    /// At the moment `Config` has an alignment of 1 byte.
+    /// This method does not perform a length validation.
+    #[inline(always)]
+    pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
+        &*(bytes.as_ptr() as *const Config)
+    }
+
+    /// Return a mutable `Config` reference from the given bytes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `bytes` contains a valid representation of `Config`.
+    #[inline(always)]
+    pub unsafe fn from_bytes_unchecked_mut(bytes: &mut [u8]) -> &mut Self {
+        &mut *(bytes.as_mut_ptr() as *mut Config)
+    }
+
+    // Getter methods for safe field access
+    #[inline(always)]
+    pub fn state(&self) -> u8 { self.state }
+
+    #[inline(always)]
+    pub fn seed(&self) -> u64 { u64::from_le_bytes(self.seed) }
+
+    #[inline(always)]
+    pub fn authority(&self) -> &Pubkey { &self.authority }
+
+    #[inline(always)]
+    pub fn mint_x(&self) -> &Pubkey { &self.mint_x }
+
+    #[inline(always)]
+    pub fn mint_y(&self) -> &Pubkey { &self.mint_y }
+
+    #[inline(always)]
+    pub fn fee(&self) -> u16 { u16::from_le_bytes(self.fee) }
+
+    #[inline(always)]
+    pub fn config_bump(&self) -> [u8; 1] { self.config_bump }
+}
+```
+</Codeblock>
+
+Chức năng chính của các hàm hỗ trợ đọc:
+- Safe Borrowing: Phương thức `load` trả về một `Ref<Self>` quản lý việc vay mượn dữ liệu tài khoản một cách an toàn, ngăn chặn tình trạng chạy đua dữ liệu (data race) và đảm bảo an toàn bộ nhớ.
+- Validation: Cả 2 phương thức `load` và `load_unchecked` đều kiểm tra độ dài của dữ liệu và chủ sở hữu trước khi cho phép truy cập vào cấu trúc.
+- Getter Methods: Tất cả các trường được truy cập thông qua các phương thức get, các phương thức này xử lý việc chuyển đổi từ các mảng byte sang các kiểu dữ liệu phù hợp (ví dụ: `u64::from_le_bytes` cho `seed`).
+
+### Các hàm hỗ trợ ghi
+
+Các hàm hỗ trợ ghi cung cấp các phương thức an toàn và được kiểm tra cho việc thay đổi dữ liệu `Config`:
+
+<Codeblock lang="rust">
+```rust
+impl Config {
+    //...
+
+    #[inline(always)]
+    pub fn load_mut(account_info: &AccountInfo) -> Result<RefMut<Self>, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(RefMut::map(account_info.try_borrow_mut_data()?, |data| unsafe {
+            Self::from_bytes_unchecked_mut(data)
+        }))
+    }
+
+    #[inline(always)]
+    pub fn set_state(&mut self, state: u8) -> Result<(), ProgramError> {
+        if state.ge(&(AmmState::WithdrawOnly as u8)) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        self.state = state as u8;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn set_fee(&mut self, fee: u16) -> Result<(), ProgramError> {
+        if fee.ge(&10_000) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        self.fee = fee.to_le_bytes();
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn set_inner(
+        &mut self,
+        seed: u64,
+        authority: Pubkey,
+        mint_x: Pubkey,
+        mint_y: Pubkey,
+        fee: u16,
+        config_bump: [u8; 1],
+    ) -> Result<(), ProgramError> {
+        self.set_state(AmmState::Initialized as u8)?;
+        self.set_seed(seed);
+        self.set_authority(authority);
+        self.set_mint_x(mint_x);
+        self.set_mint_y(mint_y);
+        self.set_fee(fee)?;
+        self.set_config_bump(config_bump);
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn has_authority(&self) -> Option<Pubkey> {
+        let bytes = self.authority();
+        let chunks: &[u64; 4] = unsafe { &*(bytes.as_ptr() as *const [u64; 4]) };
+        if chunks.iter().any(|&x| x != 0) {
+            Some(self.authority)
+        } else {
+            None
+        }
+    }
+}
+```
+</Codeblock>
+
+Các tính năng chính của các hàm hỗ trợ ghi:
+- Mutable Borrowing: Phương thức `load_mut` trả về `RefMut<Self>` quản lý an toàn việc mutable borrowing từ account data.
+- Input Validation: Các phương thức như `set_state` và `set_fee` bao gồm validation để đảm bảo chỉ các giá trị hợp lệ được lưu trữ (ví dụ: fee không thể vượt quá 10,000 basis point).
+- Atomic Update: Phương thức `set_inner` cho phép cập nhật atomic hiệu quả tất cả các field của struct cùng một lúc, giảm thiểu rủi ro trạng thái không nhất quán.
+- Authority Checking: Phương thức `has_authority` cung cấp cách hiệu quả để kiểm tra xem authority có được xác định (khác không) hay AMM là bất biến (tất cả đều bằng không).
+- Byte Conversion: Các giá trị multi-byte được chuyển đổi đúng cách thành little-endian byte array bằng các phương thức như `to_le_bytes()` để đảm bảo hành vi nhất quán trên các nền tảng.

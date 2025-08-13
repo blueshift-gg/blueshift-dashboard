@@ -1,0 +1,456 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Pinocchio Secp256r1 Vault Challenge](/graphics/challenge-banners/pinocchio-secp256r1-vault.png)
+
+# Secp256r1 Vault
+
+Vault là một khối xây dựng cơ bản trong DeFi cung cấp cách thức an toàn cho người dùng lưu trữ tài sản của họ.
+
+Trong thử thách này, chúng ta sẽ xây dựng một vault sử dụng chữ ký Secp256r1 để xác minh giao dịch. Điều này đặc biệt thú vị vì Secp256r1 là cùng một đường cong elliptic được sử dụng bởi các phương thức xác thực hiện đại như passkey, cho phép người dùng ký giao dịch bằng xác thực sinh trắc học (như Face ID hoặc Touch ID) thay vì chữ ký dựa trên ví truyền thống.
+
+Đổi mới chính ở đây là chúng ta đang tách rời việc thanh toán phí giao dịch khỏi xác thực người dùng thực tế. Điều này có nghĩa là trong khi người dùng có thể xác thực giao dịch bằng chữ ký Secp256r1 của họ (có thể được tạo thông qua các phương thức xác thực hiện đại), phí giao dịch thực tế có thể được thanh toán bởi nhà cung cấp dịch vụ. Điều này tạo ra trải nghiệm người dùng mượt mà hơn trong khi vẫn duy trì tính bảo mật.
+
+Trong thử thách này, chúng ta sẽ cập nhật vault lamport đơn giản mà chúng ta đã xây dựng trong [Thử thách Pinocchio Vault](/vi/challenges/pinocchio-vault) để cho phép chữ ký Secp256r1 như một phương thức xác minh cho các giao dịch.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Trước khi bắt đầu, hãy đảm bảo Rust và Pinocchio đã được cài đặt. Sau đó trong terminal của bạn chạy:
+
+<Codeblock lang="terminal">
+```bash
+# create workspace
+cargo new blueshift_secp256r1_vault --lib --edition 2021
+cd blueshift_secp256r1_vault
+```
+</Codeblock>
+
+Thêm crate Pinocchio và Pinocchio-compatible `Secp256r1`
+<Codeblock lang="terminal">
+```bash
+cargo add pinocchio pinocchio-system pinocchio-secp256r1-instruction
+```
+</Codeblock>
+
+Khai báo các loại crate trong `Cargo.toml` để tạo ra các artifact triển khai trong `target/deploy`:
+
+<Codeblock lang="toml">
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+</Codeblock>
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Hãy bắt đầu với cấu trúc chương trình cơ bản. Chúng ta sẽ triển khai mọi thứ trong `lib.rs` vì đây là một chương trình đơn giản. Đây là template ban đầu với các thành phần cốt lõi mà chúng ta sẽ cần:
+
+<Codeblock lang="rust">
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+</Codeblock>
+
+
+<ArticleSection name="Deposit" id="deposit" level="h2" />
+
+Instruction `deposit` thực hiện các bước sau:
+1. Xác minh vault trống (có zero lamport) để ngăn chặn deposit kép
+2. Đảm bảo số tiền deposit vượt quá mức tối thiểu phí thuê cho tài khoản cơ bản
+3. Chuyển lamport từ payer đến vault bằng lệnh CPI gọi đến System Program
+
+Sự khác biệt chính giữa một vault thông thường và một vault Secp256r1 là cách chúng ta derive PDA và ai được coi là "owner".
+
+Bởi vì với chữ ký Secp256r1, chủ sở hữu của ví thực tế không cần phải trả phí giao dịch, chúng ta thay đổi tài khoản `owner` thành một quy ước đặt tên chung hơn như `payer`.
+
+Nên cấu trúc của tài khoản `deposit` sẽ trông như thế này: 
+
+<Codeblock lang="rust">
+```rust
+pub struct DepositAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Accounts Checks
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Return the accounts
+        Ok(Self { payer, vault })
+    }
+}
+```
+</Codeblock>
+
+Hãy phân tích từng mã kiểm tra tài khoản:
+1. `payer`: phải là signer vì họ cần ủy quyền cho chuyển tiền lamport.
+2. `vault`: 
+   - Phải thuộc sở hữu của System Program
+   - Phải có zero lamport (đảm bảo deposit "mới")
+
+Đối với `vault`, chúng ta sẽ kiểm tra xem:
+- Nó được suy ra từ các seed chính xác.
+- Trùng khớp với địa chỉ PDA mong đợi.
+Bởi vì phần seed nằm trong `instruction_data`, chúng ta sẽ không truy cập vào nó lúc này.
+
+Bây giờ hãy triển khai struct dữ liệu cho instruction: 
+
+<Codeblock lang="rust">
+```rust
+#[repr(C, packed)]
+pub struct DepositInstructionData {
+    pub pubkey: Secp256r1Pubkey,
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<Self>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let (pubkey_bytes, amount_bytes) = data.split_at(size_of::<Secp256r1Pubkey>());
+
+        Ok(Self {
+            pubkey: pubkey_bytes.try_into().unwrap(),
+            amount: u64::from_le_bytes(amount_bytes.try_into().unwrap()),
+      })
+    }
+}
+```
+</Codeblock>
+
+Chúng ta giải tuần tự hóa dữ liệu instruction vào một struct `DepositInstructionData` bao gồm:
+- `pubkey`: public key Secp256r1 của người dùng thực hiện deposit
+- `amount`: Số lượng lamport để deposit
+
+Thông thường, unwrap không được khuyến khích sử dụng trong mã production, nhưng trong trường hợp này, unwrap được sử dụng an toàn vì chúng ta đã xác minh độ dài dữ liệu trong phương thức `try_from`. Nếu độ dài dữ liệu không khớp, một lỗi sẽ được trả về trước khi đến điểm này.
+
+Cuối cùng, hãy triển khai instruction deposit:
+
+<Codeblock lang="rust">
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Check vault address
+        let (vault_key, _) = find_program_address(
+            &[
+                b"vault",
+                &self.instruction_data.pubkey[..1],
+                &self.instruction_data.pubkey[1..33]
+            ],
+            &crate::ID
+        );
+        if vault_key.ne(self.accounts.vault.key()) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Transfer {
+            from: self.accounts.payer,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()
+    }
+}
+```
+</Codeblock>
+
+Như đã nhắc đến trước đó, chúng ta cần xác minh rằng PDA của vault được derive từ các seed chính xác. Trong vault dựa trên Secp256r1 này, chúng ta sử dụng `Secp256r1Pubkey` làm một phần của các seed thay vì public key của chủ sở hữu truyền thống. Đây là một biện pháp bảo mật quan trọng đảm bảo chỉ người nắm giữ khóa Secp256r1 tương ứng mới có thể truy cập vào vault.
+
+`Secp256r1Pubkey` được biểu diễn dưới dạng mảng byte có độ dài 33 bởi vì nó dùng để đại diện cho một điểm trên đường cong elliptic Secp256r1. Định dạng này bao gồm:
+- 1 byte thể hiện tính chẵn lẻ của điểm (xác định xem tọa độ y là chẵn hay lẻ)
+- 32 bytes cho tọa độ x
+
+Bởi vì hàm `find_program_address` của Solana có giới hạn là 32 byte cho mỗi seed, chúng ta cần chia `Secp256r1Pubkey` thành hai phần:
+1. Byte tính chẵn lẻ (`pubkey[..1]`)
+2. Các byte biểu diễn của tọa độ x (`pubkey[1..33]`)
+
+
+<ArticleSection name="Withdraw" id="withdraw" level="h2" />
+
+Widthdraw instruction thực hiện các bước sau:
+1. Xác minh vault chứa lamport (không trống)
+2. Sử dụng PDA của vault để ký chuyển khoản thay mặt cho chính nó
+3. Chuyển tất cả lamport từ vault trở lại cho người dùng
+
+
+Đầu tiên, hãy định nghĩa struct tài khoản cho withdraw:
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub instructions: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, instructions, _system_program] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(Self { payer, vault, instructions })
+    }
+}
+```
+</Codeblock>
+
+Bây giờ hãy triển khai struct dữ liệu cho instruction: 
+
+<Codeblock lang="rust">
+```rust
+pub struct WithdrawInstructionData {
+    pub bump: [u8;1]
+}
+
+impl<'a> TryFrom<&'a [u8]> for WithdrawInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            bump: [*data.first().ok_or(ProgramError::InvalidInstructionData)?],
+        })
+    }
+}
+```
+</Codeblock>
+
+Như bạn thấy, để tối ưu hóa chúng ta đã truyền bump vào trong dữ liệu instruction để không phải derive nó trong `process()` việc này khá "nặng" vì chúng ta phải kiểm tra nhiều thứ khác.
+
+Cuối cùng, hãy triển khai instruction `withdraw`:
+
+<Codeblock lang="rust">
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+    pub instruction_data: WithdrawInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+        let instruction_data = WithdrawInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Deserialize our instructions
+        let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+        // Get instruction directly after this one
+        let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+        // Get Secp256r1 instruction
+        let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+        // Enforce that we only have one signature
+        if secp256r1_ix.num_signatures() != 1 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        // Enforce that the signer of the first signature is our PDA owner
+        let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+
+        // Check that our fee payer is the correct 
+        let (payer, expiry) = secp256r1_ix
+            .get_message_data(0)?
+            .split_at_checked(32)
+            .ok_or(ProgramError::InvalidInstructionData)?;
+
+        if self.accounts.payer.key().ne(payer) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Get current timestamp
+        let now = Clock::get()?.unix_timestamp;
+        // Get signature expiry timestamp
+        let expiry = i64::from_le_bytes(
+            expiry
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?
+        );
+        if now > expiry {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        
+        // Create signer seeds for our CPI
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(signer[..1].as_ref()),
+            Seed::from(signer[1..].as_ref()),
+            Seed::from(&self.instruction_data.bump),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.payer,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)
+    }
+}
+```
+</Codeblock>
+
+Quá trình withdraw đòi hỏi một vài bước kiểm tra bảo mật để đảm bảo rằng giao dịch là hợp lệ. Hãy xem chúng ta làm thế nào để xác minh chữ ký Secp256r1 và bảo vệ trước các cuộc tấn công tiềm năng:
+
+1. **Instruction Introspection**
+- Chúng ta sử dụng instruction sysvar để kiểm tra instruction tiếp theo trong transaction
+- Điều này cho phép chúng ta xác minh chữ ký Secp256r1, chứng minh quyền sở hữu của khóa ký
+- Xác minh chữ ký Secp256r1 luôn xảy ra trong một instruction riêng biệt
+
+2. **Xác minh chữ ký**
+```rust
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+if secp256r1_ix.num_signatures() != 1 {
+    return Err(ProgramError::InvalidInstructionData);
+}
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+```
+- Chúng ta kiểm tra xem có đúng một chữ ký hay không
+- Chúng ta trích xuất public key của người ký, nó phải khớp với khóa được sử dụng để tạo PDA của vault vì mục đích xác minh
+
+3. **Message Validation**
+```rust
+let (payer, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+```
+- Thông điệp được ký chứa hai thông tin quan trọng:
+    - Địa chỉ của người nhận (32 bytes)
+    - Thời gian hết hạn của chữ ký (8 bytes)
+- Điều này ngăn chặn các cuộc tấn công MEV mà ai đó có thể chặn và tái sử dụng một chữ ký hợp lệ bằng cách chuyển một `payer` khác và lấy đi số lượng lamport trong vault
+
+4. **Kiểm tra thời hạn**
+```rust
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into()?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+- Chúng ta xác minh chữ ký chưa hết hạn
+- Việc này thêm vào một lớp bảo mật dựa trên thời gian để ngăn chặn việc tái sử dụng chữ ký
+- Thời gian hết hạn phải được xem xét là một "refractory period"; không thể tạo vault mới cho đến khi hết hạn hoặc nó có thể được tái sử dụng mà không cần sự đồng ý của chủ sở hữu thực tế.
+
+5. **PDA Signing**
+```rust
+let seeds = [
+    Seed::from(b"vault"),
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+    Seed::from(&self.instruction_data.bump),
+];
+```
+- Cuối cùng, chúng ta sử dụng khóa công khai đã xác minh để tạo các seed PDA
+- Điều này đảm bảo chỉ người nắm giữ khóa Secp256r1 hợp lệ mới có thể ký giao dịch rút tiền
+
+
+<ArticleSection name="Kết luận" id="conclusion" level="h2" />
+
+Bạn có thể kiểm tra chương trình của mình với các bài kiểm tra đơn vị của chúng tôi và yêu cầu NFT của mình!
+
+Bắt đầu bằng cách build chương trình của bạn bằng lệnh sau trong terminal:
+
+<Codeblock lang="terminal">
+```bash
+cargo build-sbf
+```
+</Codeblock>
+
+Điều này tạo ra một file `.so` trực tiếp trong thư mục `target/deploy` của bạn.
+
+Bây giờ hãy nhấp vào nút `làm thử thách` và thả file vào đó!

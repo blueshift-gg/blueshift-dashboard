@@ -1,0 +1,81 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instruction Introspection với Anchor
+
+Anchor không có các hàm hỗ trợ tích hợp sẵn cho `Instruction` sysvar, nhưng tất cả các kiểu và hàm từ crate `solana_program` đều được hỗ trợ tự nhiên trong Anchor.
+
+Để sử dụng Instruction Introspection trong Anchor, bạn sẽ cần thêm crate `solana_program` vào dự án của mình:
+
+```sh
+cargo add solana-program
+```
+
+Sau khi thêm crate, bạn có thể truy cập các hàm cần thiết bằng cách import chúng:
+
+```rust
+use solana_program::sysvar::instructions::{
+    self,
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="Cách sử dụng Introspection" id="how-to-use-introspection" level="h2" />
+
+Như đã đề cập trong phần giới thiệu, Instruction Introspection hoạt động bằng cách deserialize dữ liệu từ tài khoản `Instruction` sysvar để cung cấp chi tiết về các instruction trong một transaction.
+
+Mặc dù hàm `load_instruction_at_checked` xác minh rằng tài khoản đang được deserialize là tài khoản đúng, nhưng việc thêm một kiểm tra bổ sung vào account struct của bạn là một cách làm tốt:
+
+```rust
+#[account(address = instructions::ID)]
+/// CHECK: InstructionsSysvar account
+instructions: UncheckedAccount<'info>,
+```
+
+Bây giờ bạn có thể bắt đầu làm việc với Instruction Introspection.
+
+Đầu tiên, kiểm tra chỉ số của instruction hiện tại bằng hàm `load_current_index_checked`:
+
+```rust
+// Check the index of the currently executing instruction. This could be in a different position than [0]).
+let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
+```
+
+Tiếp theo, bạn có thể kiểm tra một instruction tại chỉ số tương đối bằng `load_instruction_at_checked`. Ở đây, chúng ta sẽ kiểm tra instruction ngay sau instruction hiện tại:
+
+```rust
+// Load the next instruction to check its input.
+let ix = load_instruction_at_checked(index as usize + 1, &ctx.accounts.instructions.to_account_info())?;
+```
+
+Trước khi chuyển sang bước tiếp theo, điều quan trọng là phải xem xét thông tin nào là cần thiết để ngăn chặn một cuộc tấn công độc hại.
+
+Chúng ta thường bắt đầu bằng cách kiểm tra xem chương trình được gọi có phải là chương trình mong đợi hay không. Trong ví dụ này, chúng ta đang introspect một instruction khác từ cùng một chương trình:
+
+```rust
+require_keys_eq!(ix.program_id, ID, EscrowError::InvalidProgram);
+```
+
+Tiếp theo, kiểm tra xem instruction có phải là instruction bạn mong đợi hay không. Để làm điều này, so sánh discriminator của instruction với discriminator mong đợi. Trong trường hợp này, vì đó là một instruction Anchor khác, bạn có thể làm như sau:
+
+```rust
+require!(ix.data[0..8].eq(instruction::TakeEnd::DISCRIMINATOR.as_slice()), EscrowError::InvalidIx);
+```
+
+> Anhor làm điều này dễ dàng hơn nhờ vào việc cung cấp trait `Discriminator` `anchor_lang::Discriminator` trực tiếp trên instruction.
+
+Sau đó bạn có thể thực hiện các kiểm tra cụ thể cho chương trình dựa trên logic của instruction đang được kiểm tra.
+
+Trong ví dụ này, chúng ta kiểm tra rằng dữ liệu instruction (một số lượng) là chính xác. Dữ liệu instruction luôn được deserialize sau discriminator, vì vậy bạn có thể làm như thế này:
+
+```rust
+require!(ix.data[8..16].eq(&escrow.take_amount.to_le_bytes()), EscrowError::InvalidAmount);
+```
+
+Cuối cùng, kiểm tra các tài khoản có mặt trong instruction được introspect. Bước này yêu cầu bạn phải biết cấu trúc chính xác của struct `Account`, vì bạn sẽ yêu cầu dữ liệu hoặc public key của một tài khoản tại một chỉ số cụ thể:
+
+```rust
+let maker_ata = get_associated_token_address(&ctx.accounts.maker.key(), &escrow.mint_b);
+require_keys_eq!(ix.accounts.get(3).unwrap().pubkey, maker_ata, EscrowError::InvalidMakerATA);
+```

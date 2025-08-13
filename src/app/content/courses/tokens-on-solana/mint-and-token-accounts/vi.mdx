@@ -1,0 +1,102 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mint và Token Account
+
+Như chúng ta đã nói trong phần trước, các khối xây dựng của chương trình `SPL Token` là các account: mint account đại diện cho tất cả thông tin về token và token account đại diện cho tất cả thông tin về quyền sở hữu của những token cụ thể đó.
+
+Đối với mỗi mint duy nhất, có hàng nghìn token account khác nhau đại diện cho có bao nhiêu người nắm giữ token đó trong sổ cái.
+
+Trong phần này, chúng ta sẽ nói sâu hơn về những account khác nhau này:
+
+<ArticleSection name="Mint Account" id="the-mint-account" level="h2" />
+
+Token trên Solana được xác định duy nhất bởi địa chỉ của Mint Account thuộc sở hữu của Token Program. Account này hoạt động như một bộ đếm toàn cầu cho một token cụ thể và lưu trữ dữ liệu như:
+- Supply: Tổng cung của token
+- Decimal: Độ chính xác thập phân của token
+- Mint authority: Account được ủy quyền tạo các đơn vị mới của token, tăng supply
+- Freeze authority: Account được ủy quyền đóng băng token trong Token Account, ngăn chúng được chuyển giao hoặc đốt
+
+Đây là cách dữ liệu đó trông như thế nào trên onchain:
+
+```rust
+pub struct Mint {
+    /// Optional authority used to mint new tokens. The mint authority may only
+    /// be provided during mint creation. If no mint authority is present
+    /// then the mint has a fixed supply and no further tokens may be
+    /// minted.
+    pub mint_authority: COption<Pubkey>,
+    /// Total supply of tokens.
+    pub supply: u64,
+    /// Number of base 10 digits to the right of the decimal place.
+    pub decimals: u8,
+    /// Is `true` if this structure has been initialized
+    pub is_initialized: bool,
+    /// Optional authority to freeze token accounts.
+    pub freeze_authority: COption<Pubkey>,
+}
+```
+
+### Metadata
+
+Trên các explorer và ví, token thường xuất hiện có thể được nhận dạng và dễ đọc hơn nhờ tên và hình ảnh cụ thể được liên kết với chúng.
+
+Chúng ta gọi tên, ký hiệu và hình ảnh đó là `Metadata` của token. Bởi vì ở dạng gốc, `Mint` account chỉ là một public key dài 32 byte không có thông tin dễ đọc nào được đính kèm.
+
+Về cơ bản, trong chương trình SPL Token ban đầu, không thể đặt metadata trực tiếp trên token. Vì lý do này, các giao thức như [Metaplex](https://www.metaplex.com/) đã phát triển chương trình [MPL-token-metadata](https://github.com/metaplex-foundation/mpl-token-metadata) để cung cấp cách cho mọi token có metadata được liên kết.
+
+> Với Token Extensions và [chương trình Token2022](/vi/courses/token-2022-program), điều này thay đổi hoàn toàn. Extension Metadata cho phép bạn nhúng metadata trực tiếp vào chính mint account, loại bỏ sự cần thiết của các chương trình bên ngoài.
+
+### Non-fungible Token
+
+Trong khi tiện ích của token được ủy quyền cụ thể cho người tạo, người có thể quyết định làm cho token cụ thể đó thành token quản trị, token tiện ích hoặc token cộng đồng, có một số đặc điểm mà chúng ta có thể tuân theo để phân biệt giữa fungible và non-fungible token:
+
+Non-fungible token cần có:
+- Supply là 1 vì chúng là duy nhất
+- 0 decimal vì chúng không thể chia
+- Không có mint authority vì chúng ta không muốn thêm token nào có cùng đặc điểm đó, vì nó sẽ "phá hủy" tính độc nhất của token
+
+Về cơ bản, không thể thực thi các đặc điểm này trong Token program. Vì lý do này, các chương trình như `MPL-token-metadata` không chỉ cung cấp triển khai cho metadata mà chúng cũng cung cấp triển khai để thực thi các ràng buộc này và dễ dàng tạo NFT.
+
+<ArticleSection name="Token Account" id="the-token-account" level="h2" />
+
+Token Program tạo Token Account để theo dõi quyền sở hữu cá nhân của từng đơn vị token. Token Account lưu trữ dữ liệu như:
+- Mint: Token mint mà Token Account giữ các đơn vị của nó
+- Owner: Account được ủy quyền chuyển token từ Token Account
+- Amount: Số lượng token mà Token Account hiện đang giữ
+
+Đây là cách dữ liệu đó trông như thế nào trên onchain:
+
+```rust
+pub struct Account {
+    /// The mint associated with this account
+    pub mint: Pubkey,
+    /// The owner of this account.
+    pub owner: Pubkey,
+    /// The amount of tokens this account holds.
+    pub amount: u64,
+    /// If `delegate` is `Some` then `delegated_amount` represents
+    /// the amount authorized by the delegate
+    pub delegate: COption<Pubkey>,
+    /// The account's state
+    pub state: AccountState,
+    /// If is_native.is_some, this is a native token, and the value logs the
+    /// rent-exempt reserve. An Account is required to be rent-exempt, so
+    /// the value is used by the Processor to ensure that wrapped SOL
+    /// accounts do not drop below this threshold.
+    pub is_native: COption<u64>,
+    /// The amount delegated
+    pub delegated_amount: u64,
+    /// Optional authority to close the account.
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+Mỗi ví cần có một token account cho mỗi token (mint) mà nó muốn giữ, với địa chỉ ví được đặt làm chủ sở hữu token account. Mỗi ví có thể sở hữu nhiều token account cho cùng một token (mint), nhưng một token account chỉ có thể có một chủ sở hữu và giữ các đơn vị của một token (mint).
+
+<ArticleSection name="Associated Token Account" id="the-associated-token-account" level="h2" />
+
+Associated Token Account đơn giản hóa quá trình tìm địa chỉ của token account cho một mint và owner cụ thể. Hãy nghĩ về Associated Token Account như token account "mặc định" cho một mint và owner cụ thể.
+
+Associated Token Account được tạo với địa chỉ được dẫn xuất từ địa chỉ của owner và địa chỉ của mint account. Điều quan trọng cần hiểu là Associated Token Account chỉ là một token account với địa chỉ cụ thể.
+
+Điều này giới thiệu một khái niệm chính trong phát triển Solana: [Program Derived Address](https://solana.com/docs/core/pda) (PDA). PDA dẫn xuất một địa chỉ một cách cụ thể bằng cách sử dụng các đầu vào được xác định trước, giúp dễ dàng tìm địa chỉ của một account.

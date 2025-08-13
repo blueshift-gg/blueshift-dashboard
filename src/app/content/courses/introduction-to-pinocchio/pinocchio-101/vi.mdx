@@ -1,0 +1,198 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Pinocchio 101
+
+![Introduction to Pinocchio](/graphics/course-banners/introduction-to-pinocchio.png)
+
+<ArticleSection name="Pinocchio là gì" id="what-is-pinocchio" level="h2" />
+
+Mặc dù hầu hết các nhà phát triển Solana dựa vào Anchor, nhưng có rất nhiều lý do chính đáng để viết chương trình mà không cần nó. Có thể bạn cần kiểm soát chi tiết hơn đối với mọi trường account, hoặc bạn đang theo đuổi hiệu suất tối đa, hoặc bạn chỉ đơn giản muốn tránh sử dụng macro.
+
+Viết các chương trình Solana mà không có framework như Anchor được gọi là **native development**. Nó đòi hỏi bạn làm nhiều hơn, nhưng trong khóa học này bạn sẽ học cách tạo ra một chương trình Solana từ đầu với Pinocchio; một thư viện nhẹ cho phép bạn bỏ qua các framework bên ngoài và sở hữu từng byte code của mình.
+
+Pinocchio là một thư viện Rust tối giản cho phép bạn tạo các chương trình Solana mà không cần sửu dụng crate `solana-program` nặng nề. Nó hoạt động bằng cách xem xét các transaction đến (account, instruction data, mọi thứ) như một byte slice duy nhất và đọc nó tại chỗ thông qua các kỹ thuật zero-copy.
+
+### Ưu điểm chính
+
+Thiết kế tối giản của nó chứa đựng ba lợi ích lớn:
+- Ít compute unit hơn. Không có thêm việc deserialization hoặc sao chép bộ nhớ.
+- Binary nhỏ hơn. code gọn gàng hơn có nghĩa là file `.so` nhẹ hơn onchain.
+- Không có nhiều dependency. Không có các crate bên ngoài để cập nhật (hoặc bị hỏng).
+
+Dự án được khởi đầu bởi [Febo](https://x.com/0x_febo) tại [Anza](https://www.anza.xyz) với sự đóng góp cốt lõi từ hệ sinh thái Solana và team Blueshift, và tồn tại [tại đây](https://github.com/anza-xyz/pinocchio).
+
+Bên cạnh crate cốt lõi, bạn sẽ tìm thấy `pinocchio-system` và `pinocchio-token`, cung cấp các hàm hỗ trợ zero-copy và tiện ích CPI cho các chương trình System và SPL-Token gốc của Solana.
+
+### Native Development
+
+Native development có thể nghe có vẻ đáng sợ, nhưng đó chính xác là lý do tại sao chương này tồn tại. Cho đến cuối cùng bạn sẽ hiểu từng byte đi qua ranh giới chương trình và cách giữ logic của bạn chặt chẽ, an toàn và nhanh chóng.
+
+Anchor sử dụng **Procedural và Derive Macro** để đơn giản hóa boilerplate của việc xử lý account, instruction data và error handling là cốt lõi của việc xây dựng Solana Program.
+
+Theo hướng Native có nghĩa là chúng ta không còn sự xa xỉ đó nữa và chúng ta sẽ cần:
+- Tạo Discriminator và Entrypoint riêng cho các Instruction khác nhau
+- Tạo logic Account, Instruction và deserialization riêng
+- Triển khai tất cả các kiểm tra bảo mật mà Anchor đã làm cho chúng ta trước đây
+
+**Lưu ý**: Chưa có "framework" nào để xây dựng các chương trình Pinocchio. Vì lý do này, chúng tôi sẽ trình bày những gì chúng tôi tin là cách tốt nhất để viết các chương trình pinocchio dựa trên kinh nghiệm của chúng tôi.
+
+<ArticleSection name="Entrypoint" id="entrypoint" level="h2" />
+
+Trong Anchor, macro `#[program]` ẩn đi rất nhiều mối nối. Bên dưới nó xây dựng một discriminator 8-byte (kích thước có thể tùy chỉnh từ phiên bản 0.31) cho mọi instruction và account
+
+<AnchorDiscriminatorCalculator value={"Test"} />
+
+Các chương trình native thường giữ mọi thứ gọn gàng hơn. Một discriminator single-byte (giá trị 0x01…0xFF) đủ cho tối đa 255 instruction, đủ cho hầu hết các trường hợp sử dụng. Nếu bạn cần nhiều hơn, bạn có thể chuyển sang biến thể two-byte, mở rộng lên 65,535 biến thể có thể.
+
+Macro `entrypoint!` là nơi việc thực thi chương trình bắt đầu. Nó cung cấp ba raw slice:
+- **program_id**: public key của chương trình đã triển khai
+- **accounts**: mọi account được truyền trong instruction
+- **instruction_data**: một byte array mờ chứa discriminator của bạn cộng với bất kỳ dữ liệu do người dùng cung cấp
+
+Điều này có nghĩa là sau entrypoint chúng ta có thể tạo một mẫu thực thi tất cả các instruction khác nhau thông qua một handler thích hợp, mà chúng ta sẽ gọi là `process_instruction`. Nó thường trông như thế này:
+
+```rust
+entrypoint!(process_instruction);
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {    
+    match instruction_data.split_first() {
+        Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
+        Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+Đằng sau hậu trường, handler này:
+1. Sử dụng `split_first()` để trích xuất discriminator byte
+2. Sử dụng `match` để xác định instruction struct nào cần khởi tạo
+3. Triển khai `try_from` của mỗi instruction  có nhiệm vụ xác thực và deserialize các đầu vào của nó
+4. Một lời gọi đến `process()` thực thi business logic
+
+### Sự khác biệt giữa `solana-program` và `pinocchio`
+
+Sự khác biệt và tối ưu hóa chính nằm ở cách `entrypoint()` hoạt động.
+- Các entrypoint Solana tiêu chuẩn sử dụng các pattern serialization truyền thống nơi runtime deserialize dữ liệu đầu vào trước, tạo các cấu trúc dữ liệu owned trong memory. Cách tiếp cận này sử dụng Borsh serialization rộng rãi, copy dữ liệu trong quá trình deserialization và phân bổ memory cho các kiểu dữ liệu có cấu trúc.
+- Các entrypoint Pinocchio triển khai các thao tác zero-copy bằng cách đọc dữ liệu trực tiếp từ input byte array mà không copy. Framework định nghĩa các kiểu zero-copy tham chiếu đến dữ liệu gốc, loại bỏ overhead serialization/deserialization và sử dụng truy cập bộ nhớ một cách trực tiếp để tránh các lớp trừ tượng.
+
+<ArticleSection name="Account và Instruction" id="accounts-and-instructions" level="h2" />
+
+Vì chúng ta không có macro, và chúng ta muốn tránh chúng để giữ chương trình gọn gàng và hiệu quả, mọi byte của instruction data và account phải được xác thực thủ công.
+
+Để giữ quá trình này có tổ chức, chúng ta sử dụng một mẫu công thái học giống kiểu Anchor mà không có macro, giữ phương thức `process()` thực tế gần như không có boilerplate bằng cách triển khai trait `TryFrom` của Rust.
+
+### Trait `TryFrom`
+
+`TryFrom` là một phần của họ các phương pháp chuyển đổi tiêu chuẩn của Rust. Không giống như `From`, giả định rằng một chuyển đổi không thể thất bại, `TryFrom` trả về một `Result`, cho phép bạn hiển thị lỗi sớm - hoàn hảo cho validation onchain.
+
+Trait được định nghĩa như thế này:
+
+```rust
+pub trait TryFrom<T>: Sized {
+    type Error;
+    fn try_from(value: T) -> Result<Self, Self::Error>;
+}
+```
+
+Trong một chương trình Solana, chúng ta triển khai `TryFrom` để chuyển đổi các raw account slice (và, khi cần thiết, cả instruction byte) thành các struct có kiểu trong khi thực thi mọi ràng buộc.
+
+<ArticleSection name="Xác thực Account" id="accounts-validation" level="h2" />
+
+Chúng ta thường xử lý tất cả các kiểm tra cụ thể không yêu cầu double borrow (borrowing cả trong account validation và có thể trong process) trong mỗi triển khai `TryFrom`. Điều này giữ hàm `process()`, nơi tất cả logic instruction xảy ra, càng gọn gàng càng tốt.
+
+Chúng ta bắt đầu bằng cách triển khai account struct cần thiết cho instruction, tương tự như `Context` của Anchor.
+
+**Lưu ý**: Không giống như Anchor, trong account struct này chúng ta chỉ bao gồm các account mà chúng ta muốn sử dụng trong process, và chúng ta đánh dấu là `_` các account còn lại tuy cần thiết trong instruction nhưng sẽ không được sử dụng (như `SystemProgram`).
+
+Đối với một cái gì đó như `Vault`, nó sẽ trông như thế này:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+```
+
+Bây giờ chúng ta biết những account nào chúng ta muốn sử dụng trong instruction của mình, chúng ta có thể sử dụng trait `TryFrom` để deserialize và thực hiện tất cả các kiểm tra cần thiết:
+
+```rust
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        // 1. Destructure the slice
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // 2. Custom checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // 3. Return the validated struct
+        Ok(Self { owner, vault })
+    }
+}
+```
+
+Như bạn có thể thấy, trong instruction này chúng ta sẽ sử dụng CPI của `SystemProgram` để chuyển lamport từ owner đến vault, nhưng chúng ta không cần sử dụng SystemProgram trong chính instruction đó. Chương trình chỉ cần được bao gồm trong instruction, vì vậy chúng ta có thể truyền nó ở dạng `_`.
+
+Sau đó chúng ta thực hiện các kiểm tra tùy chỉnh trên các account, tương tự như kiểm tra `Signer` và `SystemAccount` của Anchor, và trả về struct đã được xác thực.
+
+<ArticleSection name="Xác thực Instruction" id="instruction-validation" level="h2" />
+
+Xác thực instruction tuân theo một pattern tương tự như xác thực account. Chúng ta sử dụng trait `TryFrom` để xác thực và deserialize instruction data thành các struct strongly-typed, giữ business logic trong `process()` gọn gàng và tập trung.
+
+Hãy bắt đầu bằng cách định nghĩa struct đại diện cho instruction data của chúng ta:
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+```
+
+Sau đó chúng ta triển khai `TryFrom` để xác thực instruction data và chuyển đổi nó thành kiểu có cấu trúc của chúng ta. Điều này bao gồm:
+1. Xác minh độ dài dữ liệu khớp với kích thước mong đợi của chúng ta
+2. Chuyển đổi byte slice thành kiểu cụ thể của chúng ta
+3. Thực hiện bất kỳ kiểm tra xác thực cần thiết nào
+
+Cách triển khai trông như thế này:
+
+```rust
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        // 1. Verify the data length matches a u64 (8 bytes)
+        if data.len() != core::mem::size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        // 2. Convert the byte slice to a u64
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // 3. Validate the amount (e.g., ensure it's not zero)
+        if amount == 0 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+
+Pattern này cho phép chúng ta:
+- Xác thực instruction data trước khi nó đến business logic
+- Giữ logic xác thực tách biệt khỏi chức năng cốt lõi
+- Cung cấp thông báo lỗi rõ ràng khi xác thực thất bại
+- Duy trì type safety trong suốt chương trình

@@ -1,0 +1,66 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Instruction Introspection với Pinocchio
+
+Pinocchio sử dụng các kiểu khác với crate `solana_program`. Điều này có nghĩa là chúng ta phải tạo một SDK mới được tối ưu hóa cho Pinocchio.
+
+Với sự giúp đỡ của [Orion](https://x.com/BasedOrion_), chúng ta đã tạo ra một bộ hàm trợ giúp tôn trọng implementation "gốc" nhưng làm cho `Instruction` sysvar — một trong những sysvar đắt đỏ nhất để sử dụng — trở thành một trong những sysvar hiệu quả nhất.
+
+Vì lý do này, chúng ta có thể sử dụng *Instruction Introspection* trong Pinocchio mà không cần cài đặt bất kỳ crate bên ngoài nào và có thể truy cập tất cả thông tin chúng ta cần bằng cách import các hàm này:
+
+```rust
+use pinocchio::sysvars::instructions::{
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="Cách sử dụng Introspection" id="how-to-use-introspection" level="h2" />
+
+Như đã đề cập trước đó, Instruction Introspection đơn giản chỉ deserialize dữ liệu từ tài khoản `Instruction` sysvar để cung cấp tất cả dữ liệu chúng ta cần về các instruction của mình.
+
+Chúng ta bắt đầu bằng cách kiểm tra chỉ số hiện tại. Chúng ta có thể làm điều này bằng cách sử dụng hàm `load_current_index_checked`, như sau:
+
+```rust
+let index = load_current_index_checked(&self.accounts.sysvar_instructions)?;
+```
+
+Sau đó, chúng ta có thể kiểm tra một instruction tại chỉ số tương đối bằng `load_instruction_at_checked`. Lần này, chúng ta sẽ kiểm tra instruction ngay sau instruction đang thực hiện introspection, như sau:
+
+```rust
+// We load the next instruction, which is the one we want to check for the correct input.
+let instruction = load_instruction_at_checked(index as usize + 1, &self.accounts.sysvar_instructions)?;
+```
+
+Trước khi chuyển sang bước tiếp theo, chúng ta nên tự hỏi thông tin nào là cần thiết để ngăn chặn một cuộc tấn công độc hại.
+
+Chúng ta thường bắt đầu bằng cách kiểm tra xem chương trình được sử dụng có phải là chương trình chúng ta mong đợi hay không. Trong ví dụ này, chúng ta đang introspect một instruction khác từ system program, vì vậy chúng ta có thể làm như sau:
+
+```rust
+if instruction.get_program_id() != &pinocchio_system::ID {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Tiếp theo, chúng ta kiểm tra xem instruction có phải là instruction chúng ta mong đợi hay không. Để làm điều này, chúng ta so sánh discriminator và dữ liệu instruction với các giá trị mong đợi. Chúng ta bắt đầu bằng cách tạo một biến `instruction_data` và kiểm tra với nó, như sau:
+
+```rust
+let mut instruction_data = [0u8; 12];
+instruction_data[0..4].copy_from_slice(&2u32.to_le_bytes());
+instruction_data[4..12].copy_from_slice(&100_000_000u64.to_le_bytes());
+
+if instruction.get_instruction_data() != instruction_data {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Sau đó chúng ta có thể thực hiện các kiểm tra cụ thể cho chương trình dựa trên logic của instruction mà chúng ta đang kiểm tra.
+
+Chúng ta cũng có thể kiểm tra các tài khoản có mặt trong instruction được introspect. Bước này yêu cầu chúng ta phải biết cấu trúc chính xác của tài khoản, vì chúng ta sẽ yêu cầu dữ liệu hoặc pubkey của một tài khoản tại một chỉ số cụ thể, như thế này:
+
+```rust
+if instruction.get_account_meta_at(0)?.key() != self.accounts.from.key() {
+    return Err(ProgramError::InvalidAccountData);
+}
+```

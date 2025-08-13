@@ -45,6 +45,21 @@ const allCourses: CourseMetadata[] = withCourseNumber([
     ],
   },
   {
+    slug: "introduction-to-assembly",
+    language: "Assembly",
+    color: "0,255,255",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "assembly-101" },
+      { slug: "registers-and-memory" },
+      { slug: "instructions" },
+      { slug: "tooling" },
+      { slug: "program-example" },
+      { slug: "conclusion" },
+    ],
+  },
+  {
     slug: "program-security",
     language: "General",
     color: "0,255,255",
@@ -224,6 +239,20 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       { slug: "mollusk-101" },
       { slug: "advanced-functionalities" },
       { slug: "conclusions" },
+    ],
+  },
+  {
+    slug: "create-your-sdk-with-codama",
+    language: "General",
+    color: "0,255,255",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "introduction" },
+      { slug: "codama-from-scratch" },
+      { slug: "codama-with-anchor" },
+      { slug: "updating-codama-idl" },
+      { slug: "conclusion" },
     ],
   },
 ]);

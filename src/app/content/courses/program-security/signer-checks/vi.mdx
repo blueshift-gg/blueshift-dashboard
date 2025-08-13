@@ -1,0 +1,129 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Kiểm tra Signer
+
+Kiểm tra signer là tương đương về mặt kỹ thuật số của việc yêu cầu chữ ký viết tay, chúng chứng minh rằng chủ sở hữu account thực sự đã ủy quyền cho một giao dịch thay vì ai đó khác hành động thay mặt họ. Trong môi trường không tin cậy của Solana, bằng chứng mật mã này là cách duy nhất để xác minh ủy quyền xác thực.
+
+Điều này trở nên quan trọng khi xử lý Program Derived Account (PDA) và các thao tác được kiểm soát bởi authority. Hầu hết các program account lưu trữ một trường `authority` xác định ai có thể sửa đổi chúng, và nhiều PDA được derive từ các user account cụ thể. Không có xác minh signer, chương trình của bạn không có cách nào để phân biệt giữa chủ sở hữu hợp pháp và kẻ mạo danh độc hại.
+
+Hậu quả của việc thiếu kiểm tra signer là mất an toàn: bất kỳ account nào cũng có thể thực hiện các thao tác chỉ nên được hạn chế cho các authority cụ thể, dẫn đến truy cập trái phép, account bị rút cạn, và mất hoàn toàn kiểm soát trạng thái chương trình.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Xem xét instruction dễ bị tấn công này chuyển ownership của một program account:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Thoạt nhìn, điều này có vẻ an toàn. Ràng buộc `has_one = owner` đảm bảo rằng owner account được truyền vào instruction khớp với trường `owner` được lưu trữ trong `program_account`. Xác minh dữ liệu là hoàn hảo, nhưng có một lỗ hổng chết người.
+
+Chú ý rằng `owner` là một `UncheckedAccount`, không phải `Signer`. Điều này có nghĩa là trong khi Anchor xác minh rằng account được cung cấp khớp với owner được lưu trữ, nó không bao giờ kiểm tra xem account đó có thực sự ký giao dịch hay không.
+
+Kẻ tấn công có thể khai thác điều này bằng cách:
+- Tìm bất kỳ program account nào họ muốn chiếm đoạt
+- Đọc public key của owner hiện tại từ dữ liệu account
+- Tạo một giao dịch truyền public key của owner thật làm tham số owner
+- Đặt chính họ làm `new_owner`
+- Gửi giao dịch mà không có chữ ký của owner thật
+
+Ràng buộc `has_one` vượt qua vì các public key khớp nhau, nhưng vì không có xác minh signer, kẻ tấn công thành công chuyển ownership cho chính họ mà không có sự đồng ý của owner hợp pháp. Một khi họ kiểm soát account, họ có thể thực hiện bất kỳ thao tác nào với tư cách authority mới.
+
+May mắn thay `Anchor` làm cho việc thực hiện kiểm tra này cực kỳ dễ dàng trực tiếp trong account struct bằng cách chỉ cần thay đổi `UncheckedAccount` thành `Signer` như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Hoặc bạn có thể thêm ràng buộc account `signer` như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Hoặc bạn có thể chỉ cần thêm kiểm tra signer trong instruction bằng cách sử dụng kiểm tra `ctx.accounts.owner.is_signer` như thế này:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if !ctx.accounts.owner.is_signer {
+        return Err(ProgramError::MissingRequiredSignature.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+
+    Ok(())
+}
+```
+
+Bằng cách thêm kiểm tra này, instruction handler sẽ chỉ tiếp tục nếu authority account đã ký giao dịch. Nếu account không được ký, giao dịch sẽ thất bại.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Trong Pinocchio, vì chúng ta không có khả năng thêm kiểm tra bảo mật trực tiếp bên trong account struct, chúng ta buộc phải làm như vậy trong logic instruction.
+
+Chúng ta có thể làm điều đó rất giống với Anchor bằng cách sử dụng hàm `is_signer()` như thế này:
+
+```rust
+if !self.accounts.owner.is_signer() {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```
+
+
+
+
+

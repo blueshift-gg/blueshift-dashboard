@@ -1,0 +1,224 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Anchor Vault Challenge](/graphics/challenge-banners/anchor-vault.png)
+
+# Vault
+
+Vault cho phép người dùng lưu trữ tài sản của họ một cách an toàn. Vault là một khối xây dựng cơ bản trong DeFi, về cốt lõi cho phép người dùng lưu trữ an toàn tài sản của họ (trong trường hợp này là lamport) mà chỉ chính người dùng đó mới có thể rút ra sau này.
+
+Trong thử thách này, chúng ta sẽ xây dựng một lamport vault đơn giản để minh họa cách làm việc với các account cơ bản, Program Derived Address (PDA), và Cross-Program Invocation (CPI). Nếu bạn chưa quen với Anchor, bạn nên bắt đầu bằng cách đọc [Giới thiệu về Anchor](/vi/courses/introduction-to-anchor) để làm quen với khái niệm cốt lõi mà chúng ta sẽ sử dụng trong chương trình này.
+
+<ArticleSection name="Cài đặt" id="installation" level="h2" />
+
+Trước khi bắt đầu, hãy đảm bảo Rust và Anchor đã được cài đặt (xem [tài liệu chính thức](https://www.anchor-lang.com/docs/installation) nếu bạn cần ôn lại). Sau đó chạy lệnh sau trong terminal:
+
+<Codeblock lang="terminal">
+```bash
+anchor init blueshift_anchor_vault
+```
+</Codeblock>
+
+Chúng ta không cần thêm crate nào cho thử thách này, vì vậy bây giờ bạn có thể mở thư mục vừa tạo và sẵn sàng bắt đầu viết mã!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Hãy bắt đầu với cấu trúc chương trình cơ bản. Chúng ta sẽ triển khai mọi thứ trong `lib.rs` vì đây là một chương trình đơn giản. Đây là template ban đầu với các thành phần cốt lõi chúng ta sẽ cần:
+
+<Codeblock lang="rust">
+```rust
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_vault {
+    use super::*;
+
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        // deposit logic
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        // withdraw logic
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", signer.key().as_ref()],
+        bump,
+    )]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[error_code]
+pub enum VaultError {
+    // error enum
+}
+```
+</Codeblock>
+
+**Lưu ý**: nhớ thay đổi program ID thành `22222222222222222222222222222222222222222222` vì chúng tôi sử dụng ID này để test chương trình của bạn.
+
+<ArticleSection name="Accounts" id="accounts" level="h2" />
+
+Vì cả hai instruction đều sử dụng cùng các account, để dễ dàng và dễ đọc hơn, chúng ta có thể tạo một context gọi là `VaultAction` và sử dụng nó cho cả `deposit` và `withdraw`.
+
+Struct account `VaultAction` sẽ cần có:
+- `signer`: đây là chủ sở hữu của vault, và là người duy nhất có thể rút lamport sau khi tạo vault.
+- `vault`: một PDA được tạo từ các seed sau: `[b"vault", signer.key().as_ref()]` để giữ lamport cho signer.
+- `system_program`: account system program cần được bao gồm vì chúng ta sẽ sử dụng CPI transfer instruction từ system program
+
+Đây là cách chúng ta định nghĩa account struct:
+
+<Codeblock lang="rust">
+```rust
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", signer.key().as_ref()],
+        bump,
+    )]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+</Codeblock>
+
+Hãy phân tích từng ràng buộc của account:
+
+1. `signer`: ràng buộc `mut` cần thiết vì chúng ta sẽ thay đổi lamport của account trong quá trình chuyển tiền.
+2. `vault`:
+  - `mut` vì chúng ta sẽ thay đổi lamport của nó
+  - `seeds` & `bumps` định nghĩa cách tạo PDA hợp lệ từ các seed
+3. `system_program`: kiểm tra xem account có được đặt thành executable và địa chỉ có phải là System Program không
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+Chúng ta không cần nhiều lỗi cho chương trình nhỏ này, vì vậy chúng ta chỉ tạo 2 enum:
+- `VaultAlreadyExists`: cho chúng ta biết nếu đã có lamport trong account vì điều đó có nghĩa là vault đã tồn tại.
+- `InvalidAmount`: chúng ta không thể deposit một số tiền ít hơn phí thuê tối thiểu cho một account cơ bản, vì vậy chúng ta kiểm tra rằng số tiền lớn hơn mức đó.
+
+Mã sẽ trông như thế này:
+
+<Codeblock lang="rust">
+```rust
+#[error_code]
+pub enum VaultError {
+    #[msg("Vault already exists")]
+    VaultAlreadyExists,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+```
+</Codeblock>
+
+<ArticleSection name="Deposit" id="deposit" level="h2" />
+
+Instruction deposit thực hiện các bước sau:
+1. Xác minh vault trống (có zero lamport) để ngăn chặn deposit kép
+2. Đảm bảo số tiền deposit vượt quá mức tối thiểu rent-exempt cho `SystemAccount`
+3. Chuyển lamport từ signer đến vault bằng lệnh CPI đến System Program
+
+Hãy triển khai các kiểm tra này trước:
+
+<Codeblock lang="rust">
+```rust
+// Check if vault is empty
+require_eq!(ctx.accounts.vault.lamports(), 0, VaultError::VaultAlreadyExists);
+
+// Ensure amount exceeds rent-exempt minimum
+require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
+```
+</Codeblock>
+
+Hai macro `require` hoạt động như các mệnh đề ràng buộc tùy chỉnh:
+- `require_eq!` xác nhận vault trống (ngăn chặn deposit kép).
+- `require_gt!` kiểm tra số tiền đảm bảo đủ rent-exempt.
+
+Khi các kiểm tra thành công, helper System Program của Anchor gọi CPI `Transfer` như thế này:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::system_program::{transfer, Transfer};
+
+transfer(
+    CpiContext::new(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.signer.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        },
+    ),
+    amount,
+)?;
+```
+</Codeblock>
+
+<ArticleSection name="Withdraw" id="withdraw" level="h2" />
+
+Instruction withdraw thực hiện các bước sau:
+1. Xác minh vault chứa lamport (không trống)
+2. Sử dụng PDA của vault để ký chuyển tiền thay mặt cho chính nó
+3. Chuyển tất cả lamport từ vault trở lại cho signer
+
+Đầu tiên, hãy kiểm tra xem vault có lamport nào để rút không:
+
+<Codeblock lang="rust">
+```rust
+// Check if vault has any lamports
+require_neq!(ctx.accounts.vault.lamports(), 0, VaultError::InvalidAmount);
+```
+</Codeblock>
+
+Sau đó, chúng ta cần tạo PDA signer seed và thực hiện chuyển tiền:
+
+<Codeblock lang="rust">
+```rust
+// Create PDA signer seeds
+let signer_key = ctx.accounts.signer.key();
+let signer_seeds = &[b"vault", signer_key.as_ref(), &[ctx.bumps.vault]];
+
+// Transfer all lamports from vault to signer
+transfer(
+    CpiContext::new_with_signer(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.signer.to_account_info(),
+        },
+        &[&signer_seeds[..]]
+    ),
+    ctx.accounts.vault.lamports()
+)?;
+```
+</Codeblock>
+
+Tính bảo mật của việc rút tiền này được đảm bảo bởi hai yếu tố:
+1. PDA của vault được tạo bằng public key của signer, đảm bảo chỉ người gửi tiền ban đầu mới có thể rút
+2. Khả năng ký chuyển tiền của PDA được xác minh thông qua các seed chúng ta cung cấp cho `CpiContext::new_with_signer`
+
+<ArticleSection name="Kết luận" id="conclusion" level="h2" />
+
+Bây giờ bạn có thể test chương trình của mình với unit test của chúng tôi và nhận NFT!
+
+Bắt đầu bằng cách build chương trình của bạn bằng lệnh sau trong terminal
+
+<Codeblock lang="terminal">
+```bash
+anchor build
+```
+</Codeblock>
+
+Điều này tạo ra một file `.so` trực tiếp trong thư mục `target/deploy` của bạn.
+
+Bây giờ hãy click vào nút `take challenge` và thả file vào đó!

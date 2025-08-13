@@ -1,0 +1,166 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Interest Bearing Extension
+
+Phần mở rộng `InterestBearing` là một `Mint` account extension cho phép người dùng áp dụng lãi suất cho token của họ và lấy tổng được cập nhật, bao gồm lãi, tại bất kỳ thời điểm nào.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Vì `Anchor` không có bất kỳ macro nào cho phần mở rộng `transfer_fee`, chúng ta sẽ tạo `Mint` account bằng cách sử dụng một CPI thô.
+
+Đây là cách tạo mint với phần mở rộng Transfer Fee:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint},
+        InitializeMint2,
+    },
+    token_interface::{
+        interest_bearing_mint_initialize, InterestBearingMintInitialize, Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_interest_bearing_config(
+    ctx: Context<Initialize>,
+    rate: i16
+) -> Result<()> {
+    // Calculate space required for mint and extension data
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TransferFeeConfig])?;
+
+    // Calculate minimum lamports required for size of mint account with extensions
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoke System Program to create new account with space for mint and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the InterestBearingConfig extension
+    // This instruction must come before the instruction to initialize the mint data
+    interest_bearing_mint_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InterestBearingMintInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(ctx.accounts.payer.key()),
+        rate,
+    )?;
+
+    // Initialize the standard mint account data
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimals
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Tính toán lãi suất" id="calculating-the-interest" level="h2" />
+
+Phần mở rộng `InterestBearing`, không tạo ra token mới; số lượng hiển thị đơn giản chỉ bao gồm lãi tích lũy thông qua hàm `amount_to_ui_amount`, làm cho thay đổi hoàn toàn việc hiển thị để xem.
+
+Vì vậy, sau khi chúng ta `unpack` account `Token` mà chúng ta muốn tính lãi từ đó, rất dễ dàng để lấy tất cả các thông tin chúng ta cần để thực hiện tính toán để lấy số lượng lãi.
+
+May mắn cho chúng ta, chúng ta thậm chí không cần làm như vậy vì chúng ta có thể sử dụng hàm `amountToUiAmount` như thế này:
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="Cập nhật phần mở rộng Interest Bearing" id="updating-the-interest-bearing-extension" level="h2" />
+
+Với phần mở rộng `InterestBearing`, có thể thay đổi lãi suất được tạo ra bởi token account nhờ vào cách dữ liệu của nó được cấu trúc:
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+Để làm như vậy, chúng ta có thể sử dụng instruction `interest_bearing_mint_update_rate()` như thế này:
+
+```ts
+interest_bearing_mint_update_rate(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InterestBearingMintUpdateRate {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            rate_authority: ctx.accounts.authority.to_account_info(),
+        },
+    ),
+    rate,
+)?;
+```
+
+Và nếu chúng ta muốn, chúng ta có thể thay đổi authority để đặt lãi suất bằng cách sử dụng hàm `set_authority()` và truyền vào `AuthorityType` đúng như thế này:
+
+```ts
+set_authority(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        SetAuthority {
+            current_authority: ctx.accounts.authority.to_account_info,
+            account_or_mint: ctx.accounts.mint.to_account_info,
+        }
+    ),
+    spl_token_2022::instruction::AuthorityType::InterestRate,
+    new_authority,
+)?;
+```

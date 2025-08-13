@@ -1,0 +1,138 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Anchor 101
+
+![Introduction to Anchor](/graphics/course-banners/introduction-to-anchor.png)
+
+<ArticleSection name="Anchor là gì" id="what-is-anchor" level="h2" />
+
+Anchor là framework hàng đầu cho việc phát triển smart contract Solana, cung cấp một quy trình hoàn chỉnh để viết, kiểm thử, triển khai và tương tác với các chương trình onchain.
+
+### Ưu điểm chính
+
+- **Giảm boilerplate**: Anchor trừu tượng hóa công việc lặp đi lặp lại của quản lý tài khoản, serialization instruction và xử lý lỗi để bạn có thể tập trung vào logic nghiệp vụ cốt lõi.
+- **Bảo mật tích hợp**: Các kiểm tra nghiêm ngặt như xác minh quyền sở hữu tài khoản và xác thực dữ liệu chạy ngay từ đầu, giảm thiểu nhiều lỗ hổng phổ biến trước khi chúng xuất hiện.
+
+### Anchor Macros
+
+- `declare_id!()`: Khai báo địa chỉ onchain nơi chương trình tồn tại.
+- `#[program]`: Đánh dấu module chứa mọi entrypoint instruction và hàm logic nghiệp vụ.
+- `#[derive(Accounts)]`: Liệt kê các tài khoản mà một instruction yêu cầu và tự động thực thi các ràng buộc của chúng.
+- `#[error_code]`: Định nghĩa các kiểu lỗi tùy chỉnh, dễ đọc giúp việc debug rõ ràng và nhanh hơn.
+
+Cùng nhau, những macro khai báo này trừu tượng hóa việc quản lý byte cấp thấp, cho phép bạn cung cấp các chương trình Solana bảo mật, chất lượng production với ít nỗ lực hơn nhiều.
+
+### Cấu trúc Chương trình
+
+Hãy bắt đầu với một phiên bản cơ bản của chương trình để giải thích chi tiết những gì mỗi macro thực sự làm:
+
+```rust
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_vault {
+    use super::*;
+
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        // ...
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        // ...
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    // ...
+}
+
+#[error_code]
+pub enum VaultError {
+    // ...
+}
+```
+
+Điều này sẽ chuyển đổi thành các module tập trung thay vì nhồi nhét mọi thứ vào `lib.rs` để có các chương trình có cấu trúc tốt hơn. Cây thư mục chương trình sẽ trông gần như thế này:
+
+```
+src
+├── instructions
+│       ├── instruction1.rs
+│       ├── mod.rs
+│       ├── instruction2.rs
+│       └── instruction3.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+#### `declare_id!()`
+
+Macro `declare_id!()` gán cho chương trình của bạn địa chỉ onchain của nó; một public key duy nhất được tạo ra từ keypair trong thư mục `target` của dự án. Keypair đó ký và triển khai file binary `.so` đã biên dịch chứa tất cả logic và dữ liệu của chương trình.
+
+**Lưu ý:** Chúng ta sử dụng placeholder `222222...` trong các ví dụ Blueshift vì test suite nội bộ của chúng ta. Trong production, Anchor sẽ tạo một program ID mới cho bạn khi bạn chạy các lệnh build và deploy tiêu chuẩn.
+
+#### `#[program]` & `#[derive(Accounts)]`
+
+Mỗi instruction có struct **Context** riêng liệt kê tất cả các tài khoản và, tùy chọn, bất kỳ dữ liệu nào mà instruction sẽ cần.
+
+Trong ví dụ này, cả `deposit` và `withdraw` đều chia sẻ cùng các tài khoản; vì lý do đó, chúng ta sẽ tạo một account struct duy nhất gọi là `VaultAction` để giữ mọi thứ hiệu quả và dễ dàng hơn.
+
+#### Nhìn kỹ hơn vào macro `#[derive(Accounts)]`
+
+```rust
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+  #[account(mut)]
+  pub signer: Signer<'info>,
+
+  #[account(
+    mut,
+    seeds = [b"vault", signer.key().as_ref()],
+    bump,
+  )]
+  pub vault: SystemAccount<'info>,
+
+  pub system_program: Program<'info, System>,
+}
+```
+
+Như chúng ta có thể thấy từ đoạn code, macro `#[derive(Accounts)]` phục vụ ba trách nhiệm quan trọng:
+- Khai báo tất cả các tài khoản mà một instruction cụ thể cần.
+- Tự động thực thi kiểm tra ràng buộc, chặn nhiều bug và khai thác tiềm ẩn tại runtime.
+- Tạo ra các phương thức hỗ trợ cho phép bạn truy cập và thay đổi tài khoản một cách an toàn.
+
+Nó thực hiện điều này thông qua sự kết hợp của các kiểu tài khoản và thuộc tính inline.
+
+**Các kiểu tài khoản trong ví dụ của chúng ta**
+- `Signer<'info>`: Xác minh tài khoản đã ký transaction; cần thiết cho bảo mật và cho các CPI yêu cầu chữ ký.
+- `SystemAccount<'info>`: Xác nhận quyền sở hữu tài khoản bởi System Program.
+- `Program<'info, System>`: Đảm bảo tài khoản có thể thực thi và khớp với System Program ID, cho phép các CPI như tạo tài khoản hoặc chuyển lamport.
+
+**Các thuộc tính inline bạn sẽ gặp**
+- `mut`: Đánh dấu tài khoản là có thể thay đổi; bắt buộc bất cứ khi nào số dư lamport hoặc dữ liệu của nó có thể thay đổi.
+- `seeds & bump`: Xác minh tài khoản là một Program-Derived Address (PDA) được tạo từ các seed được cung cấp cộng với một byte số bump.
+
+**Lưu ý** PDA quan trọng vì:
+- Khi được sử dụng bởi chương trình sở hữu chúng, PDA có thể ký CPI thay mặt cho chương trình.
+- Chúng cung cấp cho bạn các địa chỉ xác định và có thể xác minh để duy trì trạng thái chương trình.
+
+#### `#[error_code]`
+
+Macro `#[error_code]` cho phép bạn định nghĩa các lỗi tùy chỉnh rõ ràng bên trong chương trình.
+
+```rust
+#[error_code]
+pub enum VaultError {
+    #[msg("Vault already exists")]
+    VaultAlreadyExists,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+```
+
+Mỗi biến thể của enum có thể mang một thuộc tính `#[msg(...)]` ghi log một chuỗi mô tả bất cứ khi nào lỗi xảy ra; hữu ích hơn nhiều so với một con số trong quá trình debug.

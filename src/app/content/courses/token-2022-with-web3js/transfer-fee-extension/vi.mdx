@@ -1,0 +1,210 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Transfer Fee Extension
+
+Phần mở rộng `TransferFee` là một `Mint` extension cho phép creator đặt "thuế" trên token được thu thập mỗi khi ai đó thực hiện swap.
+
+Để đảm bảo rằng đối tượng nhận phí không bị write-lock mỗi khi ai đó thực hiện swap, và để đảm bảo rằng chúng ta có thể song song hóa các giao dịch chứa `Mint` với extension này, fee được đặt bên trong Token Account của người nhận mà chỉ `Withdraw Authority` mới có thể rút.
+
+<ArticleSection name="Khởi tạo Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Để khởi tạo phần mở rộng `TransferFee` trên `Mint` account, chúng ta sẽ cần hàm `createInitializeTransferFeeConfigInstruction()`.
+
+Đây là cách tạo mint với Transfer Fee extension:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeTransferFeeConfigInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.TransferFeeConfig]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Transfer Fee extension
+const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    500,
+    BigInt(1e6),
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTransferFeeConfig,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Transferring Tokens with the Fee" id="transferring-tokens-with-the-fee" level="h2" />
+
+Để chuyển token cho `Mint` có extension `TransferFee`, chúng ta có hai cách:
+- Chúng ta có thể sử dụng instruction `transferChecked()` bình thường và bằng cách này việc tính toán fee được xử lý tự động
+- Chúng ta có thể sử dụng instruction `tranferCheckedWithFee()` và cung cấp thủ công `fee` mà chúng ta sẽ trả trong transfer đó. Điều này rất hữu ích nếu chúng ta muốn đảm bảo không bị "rug" nếu authority thay đổi fee và tạo ra fee cao bất thường; nó giống như việc đặt slippage cho transfer.
+
+> Ngay cả khi authority thay đổi fee, fee mới sẽ trở nên hoạt động sau 2 epoch từ khi được đặt
+
+Đây là cách tạo transfer sử dụng instruction `tranferCheckedWithFee()`:
+
+```ts
+createTransferCheckedWithFeeInstruction(
+    sourceTokenAccount,
+    mint.publicKey, 
+    destinationTokenAccount, 
+    keypair.publicKey, 
+    BigInt(100e6), // transfer amount
+    6, // decimals
+    BigInt(1e6), // fee paid for the transfer
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(transferInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Thu hoạch Fee" id="harvesting-the-fee" level="h2" />
+
+Như đã chỉ ra trong phần giới thiệu, transfer fee ở lại trong `Token` account đang nhận token để tránh write-lock `Mint` account hoặc `sourceTokenAccount` vì lý do này, trước khi có thể rút fee, chúng ta sẽ cần có khả năng tìm kiếm tất cả `Token` account có fee để claim.
+
+Chúng ta có thể làm điều này bằng cách đặt filter và lấy tất cả account thuộc về mint đó như thế này:
+
+```ts
+// Retrieve all Token Accounts for the Mint Account
+const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+        {
+            memcmp: {
+                offset: 0,
+                bytes: mint.publicKey.toString(), // Mint Account address
+            },
+        },
+    ],
+});
+```
+
+Và lấy danh sách tất cả `Token` account có fee bên trong chúng bằng cách unpack `Token` account và sử dụng hàm `getTransferFeeAmount()` như thế này:
+
+```ts
+// List of Token Accounts to withdraw fees from
+const accountsToWithdrawFrom: PublicKey[] = [];
+
+for (const accountInfo of allAccounts) {
+    const account = unpackAccount(
+        accountInfo.pubkey,
+        accountInfo.account,
+        TOKEN_2022_PROGRAM_ID,
+    );
+
+    // Extract transfer fee data from each account
+    const transferFeeAmount = getTransferFeeAmount(account);
+
+    // Check if fees are available to be withdrawn
+    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+        accountsToWithdrawFrom.push(accountInfo.pubkey);
+    }
+}
+```
+
+Sau đó chúng ta có thể sử dụng instruction `withdrawWithheldTokensFromAccounts` với `Withdraw Authority` để truyền vào danh sách `accountsToWithdrawFrom` như thế này:
+
+```ts
+const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
+    mint.publicKey,
+    sourceTokenAccount,
+    keypair.publicKey,
+    [],
+    accountsToWithdrawFrom,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(harvestInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Cập nhật Fee" id="updating-the-fee" level="h2" />
+
+Sau khi đã khởi tạo `Mint` của chúng ta với extension `TranferFee`, chúng ta có thể cần cập nhật fee cụ thể đó trong tương lai. Và để đảm bảo rằng creator không "rug" token holder của họ với "bait and switch" bằng cách đặt fee rất cao mỗi khi transfer được thực thi, `TranferFee` mới sẽ được kích hoạt sau 2 epoch.
+
+Để phù hợp với điều này, đây là cách dữ liệu của phần mở rộng `TransferFee` được thể hiện:
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+ 
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+Vì vậy để thay đổi fee, chúng ta có thể sử dụng instruction `setTransferFee` như thế này:
+
+```ts
+const setTransferFeeInstruction = createSetTransferFeeInstruction(
+    mint.publicKey
+    keypaird.publicKey
+    [],
+    BigInt(1000), // new transfer fee
+    BigInt(100e6), // new maximum fee amount
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(setTransferFeeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

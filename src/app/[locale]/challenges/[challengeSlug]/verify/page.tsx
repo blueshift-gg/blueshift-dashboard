@@ -10,6 +10,7 @@ import CrosshairCorners from "@/app/components/Graphics/CrosshairCorners";
 import { notFound } from "next/navigation";
 import { getChallenge } from "@/app/utils/mdx";
 import BackToCourseButtonClient from "@/app/components/Challenges/BackToCourseButtonClient";
+import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
 
 interface ChallengePageProps {
   params: Promise<{
@@ -28,13 +29,22 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
   }
 
   let ChallengeContent;
+  let challengeLocale = locale;
   try {
     const challengeModule = await import(
       `@/app/content/challenges/${challengeMetadata.slug}/${locale}/verify.mdx`
     );
     ChallengeContent = challengeModule.default;
   } catch {
-    notFound();
+    try {
+      const challengeModule = await import(
+        `@/app/content/challenges/${challengeMetadata.slug}/en/verify.mdx`
+      );
+      ChallengeContent = challengeModule.default;
+      challengeLocale = "en";
+    } catch {
+      notFound();
+    }
   }
 
   return (
@@ -94,6 +104,10 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
           currentChallenge={challengeMetadata}
           content={
             <MdxLayout>
+              <ContentFallbackNotice
+                locale={locale}
+                originalLocale={challengeLocale}
+              />
               <ChallengeContent />
             </MdxLayout>
           }
@@ -103,6 +117,10 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
           currentChallenge={challengeMetadata}
           content={
             <MdxLayout>
+              <ContentFallbackNotice
+                locale={locale}
+                originalLocale={challengeLocale}
+              />
               <ChallengeContent />
             </MdxLayout>
           }

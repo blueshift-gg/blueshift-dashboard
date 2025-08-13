@@ -1,0 +1,288 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mollusk 101
+
+Kiểm thử các chương trình Solana một cách hiệu quả đòi hỏi một framework cân bằng giữa tốc độ, độ chính xác và khả năng hiểu biết sâu sắc. Khi phát triển logic chương trình phức tạp, bạn cần một môi trường cho phép lặp lại nhanh chóng mà không hy sinh khả năng kiểm thử các trường hợp biên hoặc đo lường hiệu suất một cách chính xác.
+
+Framework kiểm thử lý tưởng trên Solana nên cung cấp ba khả năng thiết yếu:
+- Thực thi nhanh cho chu kỳ phát triển nhanh chóng,
+- Thao tác trên trạng thái account một cách linh hoạt để kiểm thử toàn diện các trường hợp biên,
+- Cung cấp số liệu về hiệu suất chi tiết để có cái nhìn sâu sắc về tối ưu hóa.
+
+Mollusk giải quyết những yêu cầu này bằng cách cung cấp một môi trường kiểm thử được tối ưu hóa được thiết kế đặc biệt cho phát triển chương trình Solana.
+
+<ArticleSection name="Mollusk là gì" id="what-is-mollusk" level="h2" />
+
+[Mollusk](https://github.com/anza-xyz/mollusk), được tạo và duy trì bởi [Joe Caulfield](https://x.com/realbuffalojoe) từ team [Anza](https://x.com/anza_xyz), là một framework kiểm thử nhẹ cho các chương trình Solana cung cấp interface trực tiếp đến việc thực thi chương trình mà không cần overhead như một validator runtime đầy đủ.
+
+Thay vì mô phỏng một môi trường validator hoàn chỉnh, Mollusk xây dựng một pipeline thực thi chương trình sử dụng các component Solana Virtual Machine (SVM) cấp thấp. Cách tiếp cận này loại bỏ overhead không cần thiết trong khi duy trì chức năng thiết yếu cần thiết cho việc kiểm thử chương trình kỹ lưỡng.
+
+Framework đạt được hiệu suất đặc biệt bằng cách loại trừ các thành phần nặng như `AccountsDB` và `Bank` từ triển khai validator của Agave. Lựa chọn thiết kế này yêu cầu cung cấp account rõ ràng, điều này thực sự trở thành một lợi thế vì nó cấp quyền kiểm soát chính xác đối với trạng thái của account và cho phép kiểm thử các kịch bản khó tái tạo trong môi trường validator đầy đủ.
+
+Mollusk hỗ trợ các tùy chọn cấu hình toàn diện, bao gồm điều chỉnh compute budget, sửa đổi cá bộ tính năng, và tùy chỉnh sysvar. Những cấu hình này được quản lý trực tiếp thông qua struct `Mollusk` và có thể được sửa đổi bằng các hàm bổ trợ tích hợp.
+
+<ArticleSection name="Các bước đầu tiên" id="first-steps" level="h2" />
+
+Crate `mollusk-svm` cốt lõi cung cấp cơ sở hạ tầng kiểm thử cơ bản, trong khi các crate bổ sung cung cấp các bổ trợ chuyên biệt cho các chương trình Solana phổ biến như chương trình `Token` và `Memo`.
+
+### Thiết lập
+
+Thêm crate Mollusk chính vào dự án của bạn:
+
+```
+cargo add mollusk-svm
+```
+
+Bao gồm phàn bổ trợ cụ thể cho chương trình khi cần:
+
+```
+cargo add mollusk-svm-programs-memo mollusk-svm-programs-token
+```
+
+Những crate bổ sung này cung cấp các phần bổ trợ được cấu hình sẵn cho các chương trình Solana tiêu chuẩn, giảm boilerplate code và đơn giản hóa việc thiết lập các kịch bản kiểm thử phổ biến liên quan đến thao tác token hoặc memo instruction.
+
+### Các thành phần phụ thuộc bổ sung
+
+Một số crate Solana nâng cao trải nghiệm kiểm thử bằng cách cung cấp các type và utility thiết yếu:
+
+```
+cargo add solana-precompiles solana-account solana-pubkey solana-feature-set solana-program solana-sdk
+```
+
+Vì những phần phụ thuộc này chỉ cần thiết cho kiểm thử, hãy giữ cho binary chương trình của bạn nhẹ bằng cách thêm chúng dưới phần `[dev-dependencies]` trong `Cargo.toml` của bạn:
+
+```
+[dev-dependencies]
+mollusk-svm = "0.4.0"
+```
+> Cấu hình này đảm bảo rằng các utility kiểm thử không làm tăng kích thước triển khai chương trình của bạn trong khi cung cấp quyền truy cập vào tất cả các type Solana cần thiết và hàm bổ trợ trong quá trình phát triển.
+
+<ArticleSection name="Mollusk cơ bản" id="mollusk-basics" level="h2" />
+
+Bắt đầu bằng việc khai báo `program_id` và tạo một instance `Mollusk` với địa chỉ mà bạn đã sử dụng trong chương trình của mình để nó được gọi đúng cách và không gặp bất kỳ lỗi "ProgramMismatch" nào trong quá trình kiểm thử, và đường dẫn đến chương trình đã build như thế này:
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::pubkey::Pubkey;
+
+const ID: Pubkey = solana_sdk::pubkey!("22222222222222222222222222222222222222222222");
+
+// Alternative using an Array of bytes
+// pub const ID: [u8; 32] = [
+//    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+//    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+//    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+//    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+// ];
+
+#[test]
+fn test() {
+    let mollusk = Mollusk::new(&ID, "target/deploy/program.so");
+    
+    // Alternative using an Array of bytes
+    // let mollusk = Mollusk::new(&Pubkey::new_from_array(ID), "target/deploy/program.so")
+}
+```
+
+Để kiểm thử, chúng ta có thể sử dụng một trong bốn phương thức API chính được cung cấp:
+- `process_instruction`: Xử lý một instruction và trả về kết quả.
+- `process_and_validate_instruction`: Xử lý một instruction và thực hiện một loạt kiểm tra trên kết quả, panic nếu bất kỳ kiểm tra nào thất bại.
+- `process_instruction_chain`: Xử lý một chuỗi instruction và trả về kết quả.
+- `process_and_validate_instruction_chain`: Xử lý một chuỗi instruction và thực hiện một loạt kiểm tra trên mỗi kết quả, panic nếu bất kỳ kiểm tra nào thất bại.
+
+Nhưng trước khi có thể sử dụng những phương thức này, chúng ta cần tạo account và instruction struct để truyền vào:
+
+### Account
+
+Khi kiểm thử các chương trình Solana với Mollusk, bạn sẽ làm việc với một số loại account phản ánh các kịch bản thực thi chương trình thực tế. Hiểu cách xây dựng những account này đúng cách là thiết yếu cho việc kiểm thử hiệu quả.
+
+Loại account cơ bản nhất là `SystemAccount`, có hai biến thể chính:
+- Payer: Một account có lamport tài trợ cho việc tạo program account hoặc chuyển lamport
+- Uninitialized Account: Một program account đang chờ khởi tạo trong instruction của bạn
+
+System account không chứa dữ liệu và được sở hữu bởi System Program. Sự khác biệt chính giữa payer và uninitialized account là số dư lamport của chúng: payer có tiền, trong khi uninitialized account bắt đầu với số dư trống.
+
+Đây là cách tạo những account cơ bản này trong Mollusk:
+
+```rust
+use solana_sdk::{
+    account::Account,
+    system_program
+};
+
+// Payer account with lamports for transactions
+let payer = Pubkey::new_unique();
+let payer_account = Account::new(100_000_000, 0, &system_program::id());
+
+// Uninitialized account with no lamports
+let uninitialized_account = Pubkey::new_unique();
+let uninitialized_account_account = Account::new(0, 0, &system_program::id());
+```
+
+Đối với `ProgramAccount` chứa dữ liệu, bạn có hai cách tiếp cận xây dựng:
+
+```rust
+use solana_sdk::account::Account;
+
+let data = vec![
+    // Your serialized account data
+];
+let lamports = mollusk
+    .sysvars
+    .rent
+    .minimum_balance(data.len());
+
+let program_account = Pubkey::new_unique();
+let program_account_account = Account {
+    lamports,
+    data,
+    owner: ID, // The program's that owns the account
+    executable: false,
+    rent_epoch: 0,
+};
+```
+
+Hoặc sử dụng `AccountSharedData`:
+
+```rust
+use solana_sdk::account::AccountSharedData;
+
+let data = vec![
+    // Your serialized account data
+];
+let lamports = mollusk
+    .sysvars
+    .rent
+    .minimum_balance(data.len());
+
+let program_account = Pubkey::new_unique();
+let mut program_account_account = AccountSharedData::new(lamports, data.len(), &ID);
+program_account_account.set_data_from_slice(&data);
+```
+
+Khi bạn đã tạo account của mình, hãy biên dịch chúng thành định dạng mà Mollusk mong đợi:
+
+```rust
+let accounts = [
+    (user, user_account),
+    (program_account, program_account_account)
+];
+```
+
+> Khi sử dụng AccountSharedData, hãy nhớ gọi `.into()` để chuyển đổi nó thành type Account mà Mollusk yêu cầu để thực thi như thế này: `program_account_account.into()`.
+
+### Instruction
+
+Tạo instruction cho kiểm thử Mollusk rất đơn giản khi bạn hiểu ba thành phần thiết yếu: `program_id` xác định chương trình của bạn, `instruction_data` chứa discriminator và tham số, và metadata account chỉ định account nào được liên quan và quyền của chúng.
+
+Đây là cấu trúc instruction cơ bản:
+
+```rust
+use solana_sdk::instruction::{Instruction, AccountMeta};
+
+let instruction = Instruction::new_with_bytes(
+    ID, // Your program's ID
+    &[0], // Instruction data (discriminator + parameters)
+    vec![AccountMeta::new(payer, true)], // Account metadata
+);
+```
+
+Dữ liệu instruction phải bao gồm instruction discriminator và theo sau bởi bất kỳ tham số nào mà instruction của bạn yêu cầu. Đối với các chương trình Anchor, discriminator mặc định là giá trị 8-byte được derive từ tên instruction.
+
+Để đơn giản hóa việc tạo Anchor discriminator, hãy sử dụng hàm bổ trợ này và xây dựng dữ liệu instruction của bạn bằng cách nối discriminator với các tham số đã serialize:
+
+```rust
+use sha2::{Sha256, Digest};
+
+let instruction_data = &[
+    &get_anchor_discriminator_from_name("deposit"),
+    &1_000_000u64.to_le_bytes()[..],
+]
+.concat();
+
+pub fn get_anchor_discriminator_from_name(name: &str) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("global:{}", name));
+    let result = hasher.finalize();
+
+    [
+        result[0], result[1], result[2], result[3], 
+        result[4], result[5], result[6], result[7],
+    ]
+}
+```
+
+Đối với struct `AccountMeta`, chúng ta sẽ cần sử dụng constructor thích hợp dựa trên quyền account:
+- `AccountMeta::new(pubkey, is_signer)`: Cho account có thể thay đổi
+- `AccountMeta::new_readonly(pubkey, is_signer)`: Cho account chỉ đọc
+
+Tham số boolean cho biết liệu account có phải ký giao dịch hay không. Hầu hết account là non-signer (false), ngoại trừ payer và authority cần ủy quyền các thao tác.
+
+### Thực thi
+
+Với account và instruction đã chuẩn bị, giờ đây bạn có thể thực thi và xác thực logic chương trình của mình bằng cách sử dụng API thực thi của Mollusk. Mollusk cung cấp bốn phương thức thực thi khác nhau tùy thuộc vào việc bạn có cần kiểm tra xác thực hay không và liệu bạn có đang kiểm thử instruction đơn lẻ hay nhiều instruction.
+
+Phương thức thực thi đơn giản nhất xử lý một instruction duy nhất mà không có xác thực:
+
+```rust
+mollusk.process_instruction(&instruction, &accounts);
+```
+Phương thức này trả về kết quả thực thi mà bạn có thể kiểm tra thủ công, nhưng không thực hiện xác thực tự động.
+
+Để kiểm thử toàn diện, hãy sử dụng phương thức xác thực cho phép bạn chỉ định kết quả mong đợi:
+
+```rust
+mollusk.process_and_validate_instruction(
+    &instruction,
+    &accounts,
+    &[
+        Check::success(), // Verify the transaction succeeded
+        Check::compute_units(5_000), // Expect specific compute usage
+        Check::account(&payer).data(&expected_data).build(), // Validate account data
+        Check::account(&payer).owner(&ID).build(), // Validate account owner
+        Check::account(&payer).lamports(expected_lamports).build(), // Check lamport balance
+    ],
+);
+```
+
+> Chúng ta có thể thực hiện nhiều kiểm tra trên cùng một account bằng cách "gộp" chúng lại với nhau như thế này: `Check::account(&payer).data(&expected_data).owner(&ID).build()`
+
+Hệ thống xác thực hỗ trợ nhiều loại kiểm tra khác nhau để xác minh các khía cạnh khác nhau của kết quả thực thi. Để kiểm thử trường hợp biên, bạn có thể xác minh rằng instruction thất bại như mong đợi:
+
+```rust
+mollusk.process_and_validate_instruction(
+    &instruction,
+    &accounts,
+    &[
+        Check::err(ProgramError::MissingRequiredSignature), // Expect specific error
+    ],
+);
+```
+
+Để kiểm thử các luồng phức tạp yêu cầu nhiều instruction, hãy sử dụng phương thức instruction chain:
+
+```rust
+mollusk.process_instruction_chain(
+    &[
+        (&instruction, &accounts),
+        (&instruction_2, &accounts_2)
+    ]
+);
+```
+
+Kết hợp nhiều instruction với xác thực toàn diện:
+
+```rust
+mollusk.process_and_validate_instruction_chain(&[
+    (&instruction, &accounts, &[Check::success()]),
+    (&instruction_2, &accounts_2, &[
+        Check::success(),
+        Check::account(&target_account).lamports(final_balance).build(),
+    ]),
+]);
+```
+
+
+
+
+

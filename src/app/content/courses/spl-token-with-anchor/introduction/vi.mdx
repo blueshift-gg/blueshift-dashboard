@@ -1,0 +1,87 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Program
+
+Trên Solana, mọi thứ liên quan đến token đều được xử lý bởi [SPL Token Program](https://github.com/solana-program/token) và [Token2022 Program](/vi/courses/token-2022-program): framework token native của Solana định nghĩa cách tất cả token được tạo, quản lý và chuyển giao.
+
+Đây là một chương trình duy nhất, thống nhất xử lý tất cả các thao tác token trên mạng, đảm bảo tính nhất quán và khả năng tương tác.
+
+> Quyết định có một interface duy nhất, thống nhất cho tất cả token trên Solana tạo ra một triển khai dễ dàng có thể được sao chép trên tất cả dApp (ứng dụng phi tập trung) và tích hợp (như ví, ...)
+
+Đối với anchor, mọi thứ liên quan đến token có thể được tìm thấy trong crate `anchor-spl`. Vì lý do này, sau khi đã khởi tạo workspace `Anchor`, chúng ta chỉ cần làm:
+
+
+```
+cargo add anchor-spl
+```
+
+> Nếu bạn không quen thuộc với anchor, chúng tôi khuyên bạn nên xem qua [khóa học giới thiệu về anchor](/vi/courses/introduction-to-anchor) trước khi tiếp tục.
+
+<ArticleSection name="Mint và Token Account" id="mint-and-token-accounts" level="h2" />
+
+Nếu bạn quen thuộc với `Anchor`, bạn sẽ biết rằng họ có một tập hợp macro giúp người dùng trừu tượng hóa nhiều phức tạp liên quan đến việc khởi tạo account.
+
+Điều tương tự cũng hoạt động ở đây cho các account `Mint`, `Token` và `Associated Token`.
+
+### Mint Account
+
+Nhờ vào các macro mà `Anchor` cung cấp, đây là cách chúng ta có thể dễ dàng tạo một account `Mint`:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = signer.key(),
+    )]
+    pub mint: Account<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Token Account
+
+Điều tương tự cũng áp dụng với account `Token`. Tạo account `Token` thông qua macro sẽ trông như thế này:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Associated Token Account
+
+Điều tương tự cũng áp dụng cho account `Associated Token`, tạo account `Associated Token` thông qua macro sẽ trông tương tự như tạo account `Token`, sự khác biệt duy nhất là các ràng buộc và nó sẽ trông như thế này:
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```
