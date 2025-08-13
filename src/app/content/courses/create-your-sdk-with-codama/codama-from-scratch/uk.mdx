@@ -1,0 +1,227 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Створіть свій IDL Codama з нуля
+
+Створення IDL Codama з нуля означає створення повного дерева вузлів для вашої програми. Щоб зробити це ефективно, давайте розглянемо типи вузлів, доступних для використання:
+
+<ArticleSection name="Типи вузлів" id="node-types" level="h2" />
+
+### Вузол значення
+
+Для передачі певних значень у вузол ми використовуємо `ValueNode`. Цей тип представляє всі доступні вузли значення, які можуть містити різні типи даних.
+
+[Тут](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/valueNodes/README.md) ви можете знайти детальну документацію щодо всіх доступних значень.
+
+> `ValueNode` – це псевдонім типу, який не можна використовувати безпосередньо як вузол. Коли потрібен `ValueNode`, використовуйте один із конкретних типів вузлів значення.
+
+### Вузол типу
+
+Для визначення структури та форми даних ми використовуємо `TypeNode`. Ці вузли описують, які типи даних очікуються: такі як числа, рядки, структури, масиви або власні типи.
+
+Вони визначають схему, не маючи фактичних значень.
+
+[Тут](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/typeNodes/README.md) ви можете знайти детальну документацію щодо всіх доступних типів.
+
+> `TypeNode` – це псевдонім типу, який не можна використовувати безпосередньо як вузол. Коли потрібен `TypeNode`, використовуйте один із конкретних типів вузлів типу.
+
+### Вузол дискримінатора
+
+Щоб розрізняти облікові записи та інструкції в нашій програмі, ми використовуємо дискримінатори. Існують різні методи для досягнення цього, і `DiscriminatorNode` надає всі доступні опції:
+
+- `ConstantDiscriminatorNode`: Використовується для опису постійного значення при заданому зміщенні. Приймає `ConstantValueNode` як константу та `number` як зміщення:
+    
+    ```ts
+    const discriminatorNode = constantDiscriminatorNode(constantValueNodeFromString('utf8', 'Hello'), 64);
+    ```
+
+- `FieldDiscriminatorNode`: Використовується для опису значення за замовчуванням поля структури за заданим зміщенням. Він приймає `CamelCaseString` як назву поля та `number` як зміщення:
+    
+    ```ts
+    const discriminatorNode = fieldDiscriminatorNode('accountState', 64);
+    ```
+
+    > Поле має бути доступним у даних облікового запису або аргументах інструкції, і воно повинно мати значення за замовчуванням. Наприклад:
+
+    ```ts
+    accountNode({
+        data: structTypeNode([
+            structFieldTypeNode({
+                name: 'discriminator',
+                type: numberTypeNode('u32'),
+                defaultValue: numberValueNode(42),
+                defaultValueStrategy: 'omitted',
+            }),
+            // ...
+        ]),
+        discriminators: [fieldDiscriminatorNode('discriminator')],
+        // ...
+    });
+    ```
+
+- `SizeDiscriminatorNode`: Використовується для розрізнення облікових записів або інструкцій на основі розміру їхніх даних. Як параметр розміру приймає число:
+    
+    ```ts
+    const discriminatorNode = sizeDiscriminatorNode(165);
+    ```
+
+> `DiscriminatorNode` є псевдонімом типу та не може використовуватися безпосередньо як вузол. Коли потрібен `DiscriminatorNode`, використовуйте замість нього один із конкретних типів вузлів дискримінатора.
+
+### Pda Seed Node
+
+Щоб визначити початкові значення для адрес, отриманих з програми (PDA), ми використовуємо `PdaSeedNode`. Ці вузли визначають, як адреси PDA повинні бути отримані, або з постійних значень, або зі змінних вхідних даних. `PdaSeedNode` надає різні методи для визначення початкових значень PDA:
+
+- `ConstantPdaSeedNode`: Використовується для опису константного початкового значення для адреси, отриманої з програми. Приймає `TypeNode` та `ValueNode` у поєднанні:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNode(stringTypeNode('utf8'), stringValueNode('auth'));
+    ```
+
+    > A `constantPdaSeedNodeFromString` Допоміжний метод також можна використовувати для легшого визначення констант на основі рядків. Наприклад, наступний приклад еквівалентний наведеному вище:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNodeFromString('utf8', 'auth');
+    ```
+
+- `VariablePdaSeedNode`: Використовується для опису змінної-початкового значення для адреси, отриманої з програми. Вона приймає ім'я та `TypeNode`:
+
+    ```ts
+    const pdaSeedNode = variablePdaSeedNode('authority', publicKeyTypeNode())
+    ```
+
+Ось як вони використовуються в `pdaNode`:
+
+```ts
+const counterPda = pdaNode({
+    name: 'counter',
+    seeds: [
+        constantPdaSeedNodeFromString('utf8', 'counter'),
+        variablePdaSeedNode('authority', publicKeyTypeNode()),
+    ],
+});
+```
+
+> `PdaSeedNode` є псевдонімом типу та не може використовуватися безпосередньо як вузол. Коли потрібен `PdaSeedNode`, використовуйте один із конкретних типів початкових вузлів pda.
+
+<ArticleSection name="Пишимо Codama IDL" id="writing-a-codama-idl" level="h2" />
+
+Тепер, коли ми розглянули найважливіші вузли, доступні в програмі, давайте дізнаємося, як створити Codama IDL з нуля.
+
+### Root Node
+
+Для створення основи вашої Codama IDL ми використовуємо `RootNode`. Цей вузол служить контейнером верхнього рівня, який містить ваш основний `ProgramNode`, а також будь-які додаткові програми, на які може посилатися основна програма.
+
+```ts
+const node = rootNode(programNode({ ... }));
+```
+
+### Program Node
+
+Щоб визначити цілу програму в мережі, ми використовуємо `ProgramNode`. Цей вузол представляє повну програму, розгорнуту в мережі, та визначає всі мінімальні життєздатні елементи, такі як облікові записи, інструкції, PDA та помилки.
+
+На додаток до цих основних елементів, цей вузол приймає назву програми, версію, відкритий ключ розгортання та документацію щодо розмітки:
+
+```ts
+const node = programNode({
+    name: 'counter',
+    publicKey: '22222222222222222222222222222222222222222222',
+    version: '0.0.1',
+    docs: [],
+    accounts: [],
+    instructions: [],
+    definedTypes: [],
+    pdas: [],
+    errors: [],
+});
+```
+
+У наступних розділах ми детально розглянемо всі ці елементи.
+
+### Вузол облікового запису
+
+Для визначення облікових записів у мережі ми використовуємо `AccountNode`. Цей вузол характеризується своєю назвою, структурою даних та додатковими атрибутами, такими як визначення PDA та дискримінатори облікових записів.
+
+Він представляє облікові записи, які зазвичай відповідають файлу `state.rs` вашої програми.
+
+Поле docs можна використовувати для додавання документації, що пояснює, що цей обліковий запис виконує в програмі:
+
+```ts
+const node = accountNode({
+    name: 'token',
+    data: structTypeNode([
+        structFieldTypeNode({ name: 'mint', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'owner', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'amount', type: numberTypeNode('u64') }),
+    ]),
+    discriminators: [sizeDiscriminatorNode(72)],
+    size: 72,
+    pda: pdaLinkNode("associatedTokenAccount"),
+});
+```
+> `AccountNode` не зберігає масив `PdaNode`, а одне необов'язкове посилання на `PdaNode` через `PdaLinkNode`, тому, якщо `PdaNode` визначено всередині `ProgramNode`, їх можна пов'язати разом.
+
+### Вузол інструкцій
+
+Для визначення інструкцій програми ми використовуємо `InstructionNode`. Цей вузол представляє інструкцію в програмі та дозволяє вам без ускладнень вказати дискримінатор, необхідні облікові записи та дані інструкцій.
+
+Крім того, ви можете включити додаткові облікові записи. Залежно від дизайну вашої програми, ці додаткові облікові записи можна вирішити двома способами: пропустити або передати ідентифікатор програми як обліковий запис. Ви можете вибрати метод вирішення за допомогою поля `optionalAccountStrategy: "omitted" | "programId"`.
+
+> Коли `optionalAccountStrategy` не вказано, за замовчуванням передбачається стратегія `programId`.
+
+Поле docs можна використовувати для додавання документації, яка пояснює, що ця інструкція виконує в програмі.
+
+```ts
+const node = instructionNode({
+    name: 'increment',
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    arguments: [
+        instructionArgumentNode({
+            name: 'discriminator',
+            type: numberTypeNode('u8'),
+            defaultValue: numberValueNode(1),
+            defaultValueStrategy: 'omitted',
+        }),
+    ],
+    accounts: [
+        instructionAccountNode({ name: 'counter', isWritable: true, isSigner: true }),
+        instructionAccountNode({ name: 'authority', isWritable: false, isSigner: false }),
+    ],
+    remainingAccounts: [instructionRemainingAccountsNode(argumentValueNode('authorities'), { isSigner: true })],
+    optionalAccountStrategy: 'omitted',
+});
+```
+
+У `instructionAccountNode` ви можете вказати необов'язковість облікового запису за допомогою поля `isOptional: boolean` або надати `defaultValue`, яке перетворюється на `ValueNode`.
+
+> Функціональність defaultValue також працює для `instructionArgumentNode`.
+
+defaultValueStrategy у instructionArgumentNode визначає, як обробляються значення за замовчуванням: "optional" означає, що значення аргумента за замовчуванням може бути перевизначене наданим аргументом або "omitted", що означає, що аргумент не повинен бути наданий, і значення за замовчуванням завжди має використовуватися.
+
+Стратегія за замовчуванням має значення "optional", якщо не вказано.
+
+### Вузол помилки
+
+Щоб визначити помилки, які може повертати програма, ми використовуємо `ErrorNode`. Цей вузол характеризується назвою, числовим кодом, який буде повернуто, та пов'язаним з ним читабельним повідомленням для налагодження.
+
+```ts
+const node = errorNode({
+    name: 'invalidAmountArgument',
+    code: 1,
+    message: 'The amount argument is invalid.',
+});
+```
+
+### PDA Node
+
+Для визначення конкретних адрес, отриманих від програми, ми використовуємо `PdaNode`. Цей вузол характеризується назвою та списком початкових значень, які можуть бути як постійними, так і змінними, що дозволяє гнучко генерувати PDA.
+
+```ts
+const node = pdaNode({
+    name: 'counter',
+    seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+    docs: ['The counter PDA derived from its authority.'],
+});
+```
+
+> Якщо ідентифікатор програми відрізняється від найближчого предка ProgramNode, вам потрібно вказати його за допомогою поля programId.
+
+Це можна використовувати для зв'язування КПК як `defaultValue` у `instructionAccountNode` за допомогою `pdaValueNode`.
