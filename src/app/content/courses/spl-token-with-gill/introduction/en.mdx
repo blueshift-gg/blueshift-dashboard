@@ -64,14 +64,29 @@ const createAccountInstruction = getCreateAccountInstruction({
 });
 ```
 
-2. **Sending and confirming transaction instructions**: Gill provides a simple function for sending and confirming transaction instructions. Under the hood, it handles all the complexity of estimating compute units, managing blockhashes, and confirming transactions. We will walk through building SPL Token instructions and use this function to send them to the network: 
+2. **Creating and preparing transactions**: Gill provides powerful primitives for creating and preparing transactions. We'll use `createTransaction` to build a transaction with our instructions, then `prepareTransaction` to optimize compute units and set the blockhash. This gives us fine-grained control over transaction construction while still handling the complexity for us:
 
 ```ts
-const signature = await sendAndConfirmInstructions(
-    client,
-    payer,
-    [instruction1, instruction2],
-);
+import { createTransaction, prepareTransaction } from 'gill';
+import { MAX_COMPUTE_UNIT_LIMIT } from 'gill/programs';
+
+const unpreparedTransaction = createTransaction({
+    version: "legacy",
+    feePayer,
+    instructions,
+    computeUnitLimit: MAX_COMPUTE_UNIT_LIMIT,
+    computeUnitPrice: 1n,
+});
+
+const transaction = await prepareTransaction({
+    transaction: unpreparedTransaction,
+    rpc: client.rpc,
+    computeUnitLimitMultiplier: 1.1,
+    computeUnitLimitReset: true,
+    blockhashReset: true,
+});
+
+const signature = await client.sendAndConfirmTransaction(transaction);
 ```
 
 ### TypeScript Development Tips
@@ -194,12 +209,17 @@ import {
   KeyPairSigner,
   lamports,
   LAMPORTS_PER_SOL,
-  sendAndConfirmInstructions,
   SolanaClient,
   getExplorerLink,
   SolanaError,
+  Instruction,
+  prepareTransaction,
+  createTransaction,
 } from "gill";
-import { getAddMemoInstruction } from "gill/programs";
+import { 
+  getAddMemoInstruction, 
+  MAX_COMPUTE_UNIT_LIMIT 
+} from "gill/programs";
 
 async function setup() {
   const client = createSolanaClient({
@@ -220,11 +240,36 @@ async function setup() {
   return { client, feePayer };
 }
 
+async function prepareSendAndConfirmTransaction(
+  client: SolanaClient,
+  feePayer: KeyPairSigner,
+  instructions: Instruction[]
+) {
+  const unpreparedTransaction = createTransaction({
+    version: "legacy",
+    feePayer,
+    instructions,
+    computeUnitLimit: MAX_COMPUTE_UNIT_LIMIT,
+    computeUnitPrice: 1n,
+  });
+  const transaction = await prepareTransaction({
+    transaction: unpreparedTransaction,
+    rpc: client.rpc,
+    computeUnitLimitMultiplier: 1.1,
+    computeUnitLimitReset: true,
+    blockhashReset: true,
+  });
+  const signature = await client.sendAndConfirmTransaction(transaction);
+  return signature;
+}
+
 async function sendMemo(client: SolanaClient, feePayer: KeyPairSigner) {
   const memoIx = getAddMemoInstruction({ memo: "Hello, Gill!" });
-  const signature = await sendAndConfirmInstructions(client, feePayer, [
-    memoIx,
-  ]);
+  const signature = await prepareSendAndConfirmTransaction(
+    client,
+    feePayer,
+    [memoIx]
+  );
 
   console.log(
     `Send Memo: ${getExplorerLink({
@@ -271,17 +316,21 @@ Here's a breakdown of what's happening in the code:
   - Creates a Solana client using the `createSolanaClient` function.
   - Generates a key pair signer using the `generateKeyPairSigner` function.
   - Airdrops 1 SOL to the signer's address using the `airdropFactory` function.
-2. We create a helper function, `sendMemo`, that: 
+2. We create a helper function, `prepareSendAndConfirmTransaction`, that:
+  - Creates an unprepared transaction with `createTransaction`, specifying the version, fee payer, instructions, and compute unit settings.
+  - Prepares the transaction with `prepareTransaction`, which optimizes compute units and sets the blockhash.
+  - Sends and confirms the transaction using the client's `sendAndConfirmTransaction` method.
+3. We create a `sendMemo` function that:
   - Creates a memo instruction using the `getAddMemoInstruction` function.
-  - Sends the memo instruction to the network using the `sendAndConfirmInstructions` function.
-3. We call the `sendMemo` function to send a memo to the network.
+  - Uses our helper to send the instruction to the network.
+4. We call the `sendMemo` function to send a memo to the network.
 
 Easy, right?
 
 We have outlined the steps that we will walk through in the lessons in this course in `main`. They will all follow the same pattern:
 - Assemble instructions from the `gill/programs` module
-- sendAndConfirmInstructions
-- print transaction signature on the explorer
+- Use our `prepareSendAndConfirmTransaction` helper to send the transaction
+- Print transaction signature on the explorer
 
 We will run this example on localhost, so we will need to start a local Solana cluster. In a separate terminal, run the following command:
 

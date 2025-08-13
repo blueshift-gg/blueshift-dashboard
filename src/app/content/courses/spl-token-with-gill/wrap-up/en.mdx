@@ -35,6 +35,7 @@ Throughout this course, you've built a complete SPL token application that demon
 
 You've successfully learned how to work with SPL tokens using Gill. You can continue to build on your knowledge by exploring the following topics:
 
+- [**Build a Gill-Compatible Client**](https://learn.blueshift.gg/en/courses/create-your-sdk-with-codama): Learn how to auto-generate a Gill-compatible client using Codama.
 - **Token Extensions**: Explore Transfer Fees, Interest-Bearing tokens, and more
 - **Metadata**: Add rich metadata to your tokens using Metaplex
 - **Token-2022**: Learn about the new token program with enhanced features
@@ -57,37 +58,40 @@ Here's the complete `demo.ts` file with all the functions we've built:
 
 ```ts
 import {
+  Address,
   airdropFactory,
   createSolanaClient,
+  createTransaction,
   generateKeyPairSigner,
+  getExplorerLink,
+  Instruction,
   KeyPairSigner,
   lamports,
   LAMPORTS_PER_SOL,
-  sendAndConfirmInstructions,
+  prepareTransaction,
   SolanaClient,
-  getExplorerLink,
-  Address,
   stringifiedBigInt,
-  SolanaError,
 } from "gill";
 import {
   AuthorityType,
-  getSetAuthorityInstruction,
-  getBurnCheckedInstruction,
-  getTransferCheckedInstruction,
-  getCloseAccountInstruction,
   findAssociatedTokenPda,
+  getApproveInstruction,
+  getBurnCheckedInstruction,
+  getCloseAccountInstruction,
   getCreateAccountInstruction,
   getCreateAssociatedTokenIdempotentInstruction,
+  getFreezeAccountInstruction,
   getInitializeMintInstruction,
   getMintSize,
   getMintToInstruction,
-  TOKEN_PROGRAM_ADDRESS,
-  getApproveInstruction,
   getRevokeInstruction,
-  getFreezeAccountInstruction,
+  getSetAuthorityInstruction,
   getThawAccountInstruction,
+  getTransferCheckedInstruction,
+  MAX_COMPUTE_UNIT_LIMIT,
+  TOKEN_PROGRAM_ADDRESS,
 } from "gill/programs";
+
 const TOKEN_CONFIG = {
   decimals: 6,
   dropAmount: 1000,
@@ -115,55 +119,27 @@ async function setup() {
   return { client, feePayer };
 }
 
-async function transfer(
+async function prepareSendAndConfirmTransaction(
   client: SolanaClient,
   feePayer: KeyPairSigner,
-  mint: KeyPairSigner,
-  owner: KeyPairSigner,
-  ata: Address
+  instructions: Instruction[]
 ) {
-  const receiver = await generateKeyPairSigner();
-
-  // Get Receiver ATA
-  const [receiverAta] = await findAssociatedTokenPda({
-    mint: mint.address,
-    owner: receiver.address,
-    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  const unpreparedTransaction = createTransaction({
+    version: "legacy",
+    feePayer,
+    instructions,
+    computeUnitLimit: MAX_COMPUTE_UNIT_LIMIT,
+    computeUnitPrice: 1n,
   });
-
-  const instructions = [
-    // Create Associated Token Account for receiver
-    getCreateAssociatedTokenIdempotentInstruction({
-      mint: mint.address,
-      payer: feePayer,
-      owner: receiver.address,
-      ata: receiverAta,
-      tokenProgram: TOKEN_PROGRAM_ADDRESS,
-    }),
-
-    // Transfer from Owner to Receiver
-    getTransferCheckedInstruction(
-      {
-        source: ata,
-        mint: mint.address,
-        destination: receiverAta,
-        authority: owner,
-        amount: BigInt(TOKEN_CONFIG.transferAmount * 10 ** TOKEN_CONFIG.decimals),
-        decimals: TOKEN_CONFIG.decimals,
-      },
-      { programAddress: TOKEN_PROGRAM_ADDRESS }
-    ),
-  ];
-
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
-  console.log(
-    `2. Transfer: ${getExplorerLink({
-      cluster: "localhost",
-      transaction: signature,
-    })}`
-  );
-
-  return { receiver, receiverAta };
+  const transaction = await prepareTransaction({
+    transaction: unpreparedTransaction,
+    rpc: client.rpc,
+    computeUnitLimitMultiplier: 1.1,
+    computeUnitLimitReset: true,
+    blockhashReset: true,
+  });
+  const signature = await client.sendAndConfirmTransaction(transaction);
+  return signature;
 }
 
 async function mintTo(client: SolanaClient, feePayer: KeyPairSigner) {
@@ -221,7 +197,7 @@ async function mintTo(client: SolanaClient, feePayer: KeyPairSigner) {
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `1. Mint to: ${getExplorerLink({
       cluster: "localhost",
@@ -231,6 +207,59 @@ async function mintTo(client: SolanaClient, feePayer: KeyPairSigner) {
 
   return { mint, mintAuthority, owner, ata };
 }
+
+async function transfer(
+  client: SolanaClient,
+  feePayer: KeyPairSigner,
+  mint: KeyPairSigner,
+  owner: KeyPairSigner,
+  ata: Address
+) {
+  const receiver = await generateKeyPairSigner();
+
+  // Get Receiver ATA
+  const [receiverAta] = await findAssociatedTokenPda({
+    mint: mint.address,
+    owner: receiver.address,
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+
+  const instructions = [
+    // Create Associated Token Account for receiver
+    getCreateAssociatedTokenIdempotentInstruction({
+      mint: mint.address,
+      payer: feePayer,
+      owner: receiver.address,
+      ata: receiverAta,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    }),
+
+    // Transfer from Owner to Receiver
+    getTransferCheckedInstruction(
+      {
+        source: ata,
+        mint: mint.address,
+        destination: receiverAta,
+        authority: owner,
+        amount: BigInt(TOKEN_CONFIG.transferAmount * 10 ** TOKEN_CONFIG.decimals),
+        decimals: TOKEN_CONFIG.decimals,
+      },
+      { programAddress: TOKEN_PROGRAM_ADDRESS }
+    ),
+  ];
+
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
+
+  console.log(
+    `2. Transfer: ${getExplorerLink({
+      cluster: "localhost",
+      transaction: signature,
+    })}`
+  );
+
+  return { receiver, receiverAta };
+}
+
 async function burn(
   client: SolanaClient,
   feePayer: KeyPairSigner,
@@ -251,7 +280,7 @@ async function burn(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `3. Burn: ${getExplorerLink({
       cluster: "localhost",
@@ -278,11 +307,9 @@ async function closeAccount(
     ),
   ];
 
-  // Check if there's a remaining balance
   const balance = await client.rpc.getTokenAccountBalance(ata).send();
 
   if (balance.value.amount !== stringifiedBigInt("0")) {
-    // If there's a balance, burn it first
     instructions.unshift(
       getBurnCheckedInstruction(
         {
@@ -297,7 +324,7 @@ async function closeAccount(
     );
   }
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `4. Close Account: ${getExplorerLink({
       cluster: "localhost",
@@ -305,6 +332,7 @@ async function closeAccount(
     })}`
   );
 }
+
 async function approve(
   client: SolanaClient,
   feePayer: KeyPairSigner,
@@ -312,7 +340,6 @@ async function approve(
   ata: Address
 ) {
   const delegate = await generateKeyPairSigner();
-
   const instructions = [
     getApproveInstruction(
       {
@@ -325,22 +352,22 @@ async function approve(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `5A. Approve: ${getExplorerLink({
       cluster: "localhost",
       transaction: signature,
     })}`
   );
-
-  return delegate;
 }
+
 async function revoke(
   client: SolanaClient,
   feePayer: KeyPairSigner,
   owner: KeyPairSigner,
   ata: Address
 ) {
+  const delegate = await generateKeyPairSigner();
   const instructions = [
     getRevokeInstruction(
       {
@@ -351,7 +378,7 @@ async function revoke(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `5B. Revoke: ${getExplorerLink({
       cluster: "localhost",
@@ -378,7 +405,7 @@ async function freeze(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `6A. Freeze: ${getExplorerLink({
       cluster: "localhost",
@@ -386,6 +413,7 @@ async function freeze(
     })}`
   );
 }
+
 async function thaw(
   client: SolanaClient,
   feePayer: KeyPairSigner,
@@ -404,7 +432,7 @@ async function thaw(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `6B. Thaw: ${getExplorerLink({
       cluster: "localhost",
@@ -422,7 +450,6 @@ async function setAuthority(
   ataOwner: KeyPairSigner
 ) {
   const newAuthority = await generateKeyPairSigner();
-
   const instructions = [
     // Set new Mint Authority
     getSetAuthorityInstruction(
@@ -434,7 +461,6 @@ async function setAuthority(
       },
       { programAddress: TOKEN_PROGRAM_ADDRESS }
     ),
-
     // Set new Freeze Authority
     getSetAuthorityInstruction(
       {
@@ -445,8 +471,7 @@ async function setAuthority(
       },
       { programAddress: TOKEN_PROGRAM_ADDRESS }
     ),
-
-    // Set new Token Account Owner
+    // Set new Token Owner Authority
     getSetAuthorityInstruction(
       {
         owned: ata,
@@ -458,15 +483,13 @@ async function setAuthority(
     ),
   ];
 
-  const signature = await sendAndConfirmInstructions(client, feePayer, instructions);
+  const signature = await prepareSendAndConfirmTransaction(client, feePayer, instructions);
   console.log(
     `7. Set Authority: ${getExplorerLink({
       cluster: "localhost",
       transaction: signature,
     })}`
   );
-
-  return newAuthority;
 }
 
 async function main() {
@@ -482,11 +505,5 @@ async function main() {
   await setAuthority(client, feePayer, mint, mintAuthority, ata, owner);
 }
 
-main().catch(error => {
-  if (error instanceof SolanaError) {
-    console.error("Error code:", error.cause);
-  } else {
-    console.error("Error:", error);
-  }
-});
+main().catch(console.error);
 ```
