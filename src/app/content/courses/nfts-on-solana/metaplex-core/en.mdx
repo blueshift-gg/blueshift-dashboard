@@ -1,0 +1,192 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metaplex Core Program
+
+The Metaplex Core program addresses the complexity and cost issues inherent in the Token Metadata program's multi-account architecture. While Token Metadata relies on SPL-Token as its foundation, requiring multiple accounts for each NFT, this approach creates expensive and bulky implementations that burden both users and the network.
+
+Released in 2024, Metaplex Core represents an ultra-lightweight program designed specifically for NFT operations. Unlike its predecessor, Core operates independently without SPL-Token dependencies, handling minting, transfers, burns, and customizable behaviors through its own program logic. 
+
+This next-generation standard employs a single account design that significantly reduces minting costs while improving overall network performance through its flexible plugin system.
+
+<ArticleSection name="Assets" id="assets" level="h2" />
+
+The revolutionary aspect of Metaplex Core lies in its unified account structure that eliminates the traditional separation between mint and token accounts. 
+
+Since NFTs maintain unique ownership with a single holder, the program stores the relationship between wallet and asset directly within the asset account itself. 
+
+This design makes intuitive sense when considering that the original Token Account system was created to manage thousands of owners per mint, a scenario that never applies to non-fungible tokens.
+
+The Asset structure demonstrates this efficiency-focused approach through its minimal field requirements:
+
+```rust
+#[derive(Clone, BorshSerialize, BorshDeserialize, Debug, ShankAccount, Eq, PartialEq)]
+pub struct AssetV1 {
+    /// The account discriminator.
+    pub key: Key,
+    /// The owner of the asset.
+    pub owner: Pubkey,
+    /// The update authority of the asset.
+    pub update_authority: UpdateAuthority,
+    /// The name of the asset.
+    pub name: String,
+    /// The URI of the asset that points to the off-chain data.
+    pub uri: String,
+    /// The sequence number used for indexing with compression.
+    pub seq: Option<u64>,
+}
+```
+
+This structure represents the absolute minimum data required for functional NFT operations. 
+
+Traditional `Mint` account fields become redundant in this context since: supply always equals one, decimals always equal zero, mint authority should remain unset, and freeze authority can be consolidated with the update authority field. 
+
+Similarly, most `Token` account functionality integrates directly into the asset structure.
+
+The absence of an explicit freezing mechanism demonstrates Core's intelligent design philosophy. 
+
+Rather than reserving space for features that many assets never utilize, Core implements freezing functionality through its plugin system, adding capabilities on demand rather than maintaining unused fields.
+
+This approach optimizes storage costs while preserving full functionality for assets that require freezing capabilities.
+
+Collection membership receives equally thoughtful treatment through the update authority enumeration system: since grouped assets typically share the same update authority, Core leverages this relationship to eliminate redundant field storage:
+
+```rust
+pub enum UpdateAuthority {
+    None,
+    Address(Pubkey),
+    Collection(Pubkey),
+}
+```
+
+The update authority field serves triple duty by indicating immutable assets through `None`, independent assets through specific addresses, or collection members that inherit the update authority from their parent collection. 
+
+This elegant solution reduces storage requirements while maintaining clear authority relationships and collection membership verification.
+
+<ArticleSection name="Collections" id="collections" level="h2" />
+
+Collections in Metaplex Core represent grouped sets of assets that share thematic, creative, or functional relationships. 
+
+Unlike traditional NFT collections that rely on external verification systems, Core collections establish verifiable on-chain relationships between assets through their integrated authority structure.
+
+Creating a collection begins with establishing a Collection Asset that serves as the authoritative parent account for all member assets. 
+
+This Collection Asset functions as both the organizational hub and the metadata repository for collection-wide information including the collection name, description, and representative imagery. 
+
+The collection account also acts as a central control point for plugins that apply across all member assets, enabling creators to implement uniform behaviors throughout their entire collection.
+
+```rust
+pub struct CollectionV1 {
+    /// The account discriminator.
+    pub key: Key, //1
+    /// The update authority of the collection.
+    pub update_authority: Pubkey, //32
+    /// The name of the collection.
+    pub name: String, //4
+    /// The URI that links to what data to show for the collection.
+    pub uri: String, //4
+    /// The number of assets minted in the collection.
+    pub num_minted: u32, //4
+    /// The number of assets currently in the collection.
+    pub current_size: u32, //4
+}
+```
+
+The Collection structure maintains critical statistics through its `num_minted` and `current_size` fields, which track the total number of assets ever created within the collection and the current number of assets that remain active. 
+
+These metrics enable accurate collection analytics and support features like limited edition releases or burn tracking without requiring external indexing services.
+
+When an asset sets its `update_authority` to `Collection(collection_pubkey)`, it automatically inherits the collection's authority structure while establishing verifiable membership. This design eliminates the need for separate verification accounts or external attestation systems, creating immutable collection relationships that can be validated entirely on-chain.
+
+<ArticleSection name="Plugins" id="plugins" level="h2" />
+
+The plugin system represents Metaplex Core's most innovative feature, addressing the limitations of rigid, predefined behaviors that characterized earlier NFT standards. 
+
+While the legacy Token Metadata program required complex workarounds like programmable NFTs for custom functionality, Core's plugin architecture enables granular customization without sacrificing simplicity or performance.
+
+Core's revolutionary approach treats on-chain data fluidly rather than locking it into fixed structures. This design philosophy enables the flexible, plugin-based system that serves diverse use cases while maintaining efficient account management. 
+
+Each plugin defines its own permission model, specifying exactly who can perform particular actions, while Core's validation system prevents conflicts between different authorities and permissions.
+
+The account architecture divides into two distinct components: 
+- The core data section containing essential asset information with predictable field lengths
+- The optional plugin metadata section where additional functionalities and custom behaviors reside. 
+
+This separation ensures that basic assets remain lightweight while complex functionality scales on demand.
+
+Plugin metadata organizes itself through a three-part structure: the header, individual plugins, and the registry that coordinates everything. 
+
+```
+Header | Plugin1 | Plugin2 | Plugin3 | Registry
+```
+
+The Plugin Header serves as the entry point, containing a `plugin_registry_offset` pointer that indicates the registry's location within the account:
+
+```rust
+pub struct PluginHeaderV1 {
+    /// The Discriminator of the header which doubles as a Plugin metadata version.
+    pub key: Key, // 1
+    /// The offset to the plugin registry stored at the end of the account.
+    pub plugin_registry_offset: usize, // 8
+}
+```
+
+The Plugin Registry functions as the coordination center, maintaining vectors of both internal `RegistryRecord` entries and `ExternalRegistryRecord` entries for third-party plugins. 
+
+Each record contains the plugin type, governing authority, and offset location within the account:
+
+```rust
+pub struct PluginRegistryV1 {
+    /// The Discriminator of the header which doubles as a plugin metadata version.
+    pub key: Key, // 1
+    /// The registry of all plugins.
+    pub registry: Vec<RegistryRecord>, // 4
+    /// The registry of all adapter, third party, plugins.
+    pub external_registry: Vec<ExternalRegistryRecord>, // 4
+}
+
+pub struct RegistryRecord {
+    /// The type of plugin.
+    pub plugin_type: PluginType, // 2
+    /// The authority who has permission to utilize a plugin.
+    pub authority: Authority, // Variable
+    /// The offset to the plugin in the account.
+    pub offset: usize, // 8
+}
+
+pub struct ExternalRegistryRecord {
+    /// The adapter, third party plugin type.
+    pub plugin_type: ExternalPluginAdapterType,
+    /// The authority of the external plugin adapter.
+    pub authority: Authority,
+    /// The lifecyle events for which the the external plugin adapter is active.
+    pub lifecycle_checks: Option<Vec<(HookableLifecycleEvent, ExternalCheckResult)>>,
+    /// The offset to the plugin in the account.
+    pub offset: usize, // 8
+    /// For plugins with data, the offset to the data in the account.
+    pub data_offset: Option<usize>,
+    /// For plugins with data, the length of the data in the account.
+    pub data_len: Option<usize>,
+}
+```
+
+Plugin retrieval follows a systematic process that leverages this organized structure. 
+
+The system first loads the asset data to determine the plugin header location, then uses the header's offset to locate the registry, and finally iterates through registry records to compile the complete plugin list:
+
+```rust
+pub fn list_plugins(account: &AccountInfo) -> Result<Vec<PluginType>, ProgramError> {
+    let asset = AssetV1::load(account, 0)?;
+    if asset.get_size() == account.data_len() {
+        return Err(MplCoreError::PluginNotFound.into());
+    }
+    let header = PluginHeaderV1::load(account, asset.get_size())?;
+    let PluginRegistryV1 { registry, .. } =
+        PluginRegistryV1::load(account, header.plugin_registry_offset)?;
+    Ok(registry
+        .iter()
+        .map(|registry_record| registry_record.plugin_type)
+        .collect())
+}
+```
+
+> To learn more on how to use the `Core` program, refer to the [official documentation](https://developers.metaplex.com/core)

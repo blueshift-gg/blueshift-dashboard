@@ -102,7 +102,21 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       { slug: "introduction" },
       { slug: "mint-and-token-accounts" },
       { slug: "functionalities" },
+      { slug: "metaplex-token-metadata" },
       { slug: "conclusions" },
+    ],
+  },
+  {
+    slug: "nfts-on-solana",
+    language: "General",
+    color: "0,255,255",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "introduction" },
+      { slug: "metaplex-token-metadata" },
+      { slug: "metaplex-core" },
+      { slug: "conclusion" },
     ],
   },
   {

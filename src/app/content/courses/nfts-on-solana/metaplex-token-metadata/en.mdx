@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metaplex Token Metadata Program
+
+The Metaplex Token Metadata Program addresses a fundamental limitation in the SPL-Token program by enabling the attachment of rich descriptive data to both fungible and non-fungible tokens. 
+
+While the SPL-Token program efficiently handles core token mechanics like ownership and supply, tokens without metadata appear in wallets and explorers as anonymous public keys. 
+
+Metaplex transforms these basic blockchain entries into meaningful digital assets by providing the contextual information that applications and users need.
+
+<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+
+The `Metadata` account serves as the descriptive layer that provides context and utility to blockchain tokens. This account structure uses Solana's Program Derived Address system to create a reliable relationship between each token and its associated information. 
+
+The deterministic address generation ensures that every mint account has exactly one corresponding metadata account, establishing clear data ownership and preventing conflicts.
+
+The `Metadata` account derives its address using a deterministic process that combines specific seed values with the mint account's public key:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+
+let (metadata, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+    ], 
+    &ID  
+);
+```
+
+The `Metadata` account stores comprehensive information that extends well beyond basic token identifiers. 
+
+The creator verification system maintains a list of token creators, each with a verified attribute that provides cryptographic proof of authentic creator authorization. This verification prevents impersonation and establishes reliable provenance tracking for digital assets.
+
+The integrated royalty system enables automated revenue distribution through share attributes assigned to each creator. Marketplaces can programmatically reference these percentages to distribute secondary sale proceeds according to predetermined agreements, eliminating manual calculations and trust dependencies. 
+
+This creates sustainable economic models where creators continue earning from their work beyond initial sales.
+
+The Token Metadata program successfully bridges the gap between raw blockchain data and user-accessible digital assets. By augmenting mint accounts with rich contextual information, the program enables applications to display, categorize, and interact with tokens in meaningful ways. 
+
+This metadata layer provides the foundation for the diverse digital asset ecosystem that exists on Solana today.
+
+<ArticleSection name="Master Edition Account" id="master-edition-account" level="h2" />
+
+While Metadata accounts effectively serve both fungible and non-fungible tokens, ensuring authentic NFT characteristics requires additional control mechanisms. 
+
+The `Master Edition` account addresses this need as a specialized PDA that governs token authority management. This account is created only after the Token Metadata program verifies that proper non-fungible token properties have been established.
+
+The Master Edition system uses a sophisticated approach to authority management. Rather than permanently destroying mint authority, the program transfers both mint and freeze authorities to the Master Edition PDA. This design provides enhanced security and functionality compared to permanently voided authorities while maintaining strict control over token creation and management. 
+
+> Read [the FAQ](https://developers.metaplex.com/token-metadata/faq#why-are-the-mint-and-freeze-authorities-transferred-to-the-edition-pda) to understand the reason behind this choice.
+
+The seeds of the `Master Edition` account are as following:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const EDITION: &str = "edition";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+        EDITION.as_bytes(),
+    ], 
+    &ID  
+);
+```
+
+<ArticleSection name="Programmable NFTs" id="programmable-nfts" level="h2" />
+
+Programmable NFTs (pNFTs) represent an advanced token standard that enforces customizable behaviors and restrictions at the protocol level.
+
+This asset class addresses the limitations of traditional NFTs by enabling creators to define specific lifecycle rules that automatically execute during token interactions, ensuring compliance for creators without relying on external enforcement mechanisms.
+
+The enforcement architecture operates through a frozen token account system. When an NFT becomes programmable, its associated token account remains permanently frozen, requiring all operations to route through the Token Metadata program. 
+
+This design creates a mandatory validation checkpoint where rules are verified before any action can proceed, making it impossible to bypass creator-defined restrictions.
+
+Creator-defined rules are stored within `RuleSet` accounts that connect to the `Token Record` account, a new account type associated with the mint that signals programmable NFT status. 
+
+The `Token Record` account derives its address using specific seeds that link it to both the mint and token accounts:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const TOKEN_RECORD_SEED: &str = "token_record";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+        TOKEN_RECORD_SEED.as_bytes(),
+        token.as_ref(),
+    ], 
+    &ID  
+);
+```
+
+These `RuleSets` enable sophisticated conditional logic including marketplace allowlists that honor royalty payments, multi-signature requirements for transfers, time-based restrictions on operations, or complex approval workflows. 
+
+The [Token Auth Rules](https://developers.metaplex.com/token-auth-rules) program manages these `RuleSet` accounts and handles their validation logic, providing a flexible framework for implementing custom governance mechanisms.
+
+Developer interaction with pNFTs occurs through Token Metadata's program rather than direct SPL-Token program. The program provides streamlined instructions like `Create` and `Update` that replace traditional operations such as `CreateMetadataAccount` and `UpdateMetadata`. 
+
+Each instruction requires an `authorization_rules` account parameter that references the applicable `RuleSet`, which can be discovered through on-chain derivation or via the Metaplex Read API.
+
+This programmable framework enables creators to implement nuanced economic models and governance structures with guaranteed enforcement. 
+
+Whether implementing conditional transfers, dynamic royalty structures, or complex ownership requirements, pNFTs ensure that all behaviors execute automatically at the protocol level without depending on marketplace cooperation or voluntary user compliance.
+
+> To learn more on how to use the `Token Metadata` program, refer to the [official documentation](https://developers.metaplex.com/token-metadata)
