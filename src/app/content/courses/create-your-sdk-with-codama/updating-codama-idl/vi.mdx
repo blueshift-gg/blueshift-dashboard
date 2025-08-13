@@ -1,0 +1,172 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Cập nhất Codama IDL của bạn
+
+Hệ thống visitor của Codama cho phép bạn chuyển đổi và cải tiến Codama IDL của bạn sau khi tạo ra nó. 
+
+Dù bạn bắt đầu từ một Anchor IDL hay tạo ra từ đầu, visitor cho phép bạn cải tiến và tùy chỉnh Codama IDL của bạn nhiều hơn trước khi tạo ra các client, ví dụ, để tối ưu hóa trải nghiệm của nhà phát triển
+
+<ArticleSection name="Các visitor quan trọng" id="essential-visitors" level="h2" />
+
+Visitors tuân theo mô hình truy vấn, duyệt qua các node của IDL và áp dụng các biến đổi. 
+
+Hãy khám phá các visitor có ảnh hưởng nhất để tạo ra các SDK sẵn sàng cho môi trường production.
+
+### Thêm các Visitor PDA
+
+Để thêm các định nghĩa PDA vào các chương trình của bạn, chúng ta sử dụng `addPdasVisitor`. Visitor này là quan trọng khi Anchor IDL của bạn không bao gồm thông tin PDA nhưng logic chương trình của bạn phụ thuộc vào các địa chỉ được trích xuất từ chương trình cụ thể. 
+
+Nó nhận một đối tượng trong đó các khóa là các tên chương trình và các giá trị là các mảng các định nghĩa PDA để thêm vào.
+
+```ts
+codama.update(
+    addPdasVisitor({
+        // Add a PDA to the 'token' program.
+        token: [
+            {
+                name: 'associatedToken',
+                seeds: [
+                    variablePdaSeedNode('mint', publicKeyTypeNode()),
+                    constantPdaSeedNode(
+                        publicKeyTypeNode(),
+                        publicKeyValueNode('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+                    ),
+                    variablePdaSeedNode('owner', publicKeyTypeNode()),
+                ],
+            },
+        ],
+        // Add two PDAs to the 'counter' program.
+        counter: [
+            {
+                name: 'counter',
+                seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+            },
+            {
+                name: 'counterConfig',
+                seeds: [variablePdaSeedNode('counter', publicKeyTypeNode())],
+            },
+        ],
+    }),
+);
+```
+
+### Câp nhật Visitor xử lý account
+
+Để sửa đổi các định nghĩa tài khoản hiện có hoặc loại bỏ những thứ không mong muốn, chúng ta sử dụng `updateAccountsVisitor`. Visitor này là quan trọng để đổi tên các tài khoản cho phù hợp với các quy ước đặt tên của bạn hoặc thêm các liên kết PDA bị thiếu.
+
+Bạn nên sử dụng cái này khi các tên tài khoản được tạo bởi Anchor không khớp với các tiêu chuẩn đặt tên của bạn hoặc khi bạn cần liên kết các PDA với các tài khoản cụ thể để tạo ra mã tốt hơn.
+
+```ts
+codama.update(
+    updateAccountsVisitor({
+        vault: {
+            // Rename the 'vault' account to 'safe'.
+            name: 'safe',
+            // Rename the 'owner' field to 'authority'.
+            data: { owner: 'authority' },
+            // Create a new PDA node and link it to this account.
+            seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+        },
+        counter: {
+            // Delete the 'counter' account.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Cập nhật visitor xử lý instruction
+
+Để cải tiến các định nghĩa instruction với các giá trị tốt hơn mặc định, đặt tên hoặc cấu hình tài khoản, chúng ta sử dụng `updateInstructionsVisitor`. Đây là một trong những visitor mạnh mẽ nhất để cải thiện trải nghiệm của nhà phát triển cho các client được tạo ra.
+
+Bạn nên sử dụng cái này khi bạn muốn cung cấp các giá trị mặc định cho các tham số của instruction, đổi tên các instruction hoặc tài khoản cho rõ ràng, hoặc đánh dấu các tài khoản là tùy chọn để giản lược việc sử dụng trên client.
+
+```ts
+codama.update(
+    updateDefinedTypesVisitor({
+        options: {
+            // Rename the 'options' type to 'configs'.
+            name: 'configs',
+            // Rename the 'sol' field to 'lamports'.
+            data: { sol: 'lamports' },
+        },
+        player: {
+            // Delete the 'player' type.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Cập nhật visitor định nghĩa kiểu
+
+Để sửa đổi các định nghĩa kiểu tùy chỉnh hoặc làm sạch các kiểu không sử dụng, chúng ta sử dụng `updateDefinedTypesVisitor`. Visitor này giúp duy trì các kiểu clean, đặt tên rõ ràng cho các client được tạo ra.
+
+Bạn nên sử dụng cái này khi Anchor tạo ra các tên kiểu không khớp với các tiêu chuẩn đặt tên của bạn hoặc khi bạn cần loại bỏ các kiểu đã lỗi thời từ IDL của bạn.
+
+```ts
+codama.update(
+    updateDefinedTypesVisitor({
+        options: {
+            // Rename the 'options' type to 'configs'.
+            name: 'configs',
+            // Rename the 'sol' field to 'lamports'.
+            data: { sol: 'lamports' },
+        },
+        player: {
+            // Delete the 'player' type.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Cập nhật visitor xử lý lỗi
+
+Để cải tiến các định nghĩa lỗi với các tên, thông điệp hoặc mã lỗi rõ ràng hơn, chúng ta sử dụng `updateErrorsVisitor`. Visitor này đảm bảo việc xử lý lỗi của bạn mang tính mô tả cụ thể và tuân theo các mẫu nhất quán.
+
+Bạn nên sử dụng cái này khi bạn muốn các tên lỗi hoặc thông điệp lỗi mang tính mô tả cụ thể hơn những gì Anchor tạo ra, hoặc khi bạn cần đặt các mã lỗi nhất quán trên các chương trình của bạn.
+
+```ts
+codama.update(
+    updateErrorsVisitor({
+        invalidPda: {
+            // Rename the 'invalidPda' error to 'invalidProgramDerivedAddress'.
+            name: 'invalidProgramDerivedAddress',
+            // Change the error message.
+            message: 'The program-derived address is invalid.',
+            // Change the error code.
+            code: 123,
+        },
+        accountMismatch: {
+            // Delete the 'accountMismatch' error.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Cập nhật visitor xứ lý chương trình
+
+Để sửa đổi các thông tin ở cấp độ chương trình như tên, phiên bản hoặc khóa công khai, chúng ta sử dụng `updateProgramsVisitor`. Visitor này là quan trọng để duy trì các thông tin chương trình chính xác.
+
+Bạn nên sử dụng cái này khi bạn cần cập nhật phiên bản chương trình, đặt các tên chương trình nhất quán trên các môi trường hoặc loại bỏ các chương trình đã lỗi thời từ IDL của bạn.
+
+```ts
+codama.update(
+    updateProgramsVisitor({
+        splToken: {
+            // Rename the 'splToken' program to 'token'.
+            name: 'token',
+            // Change the program version.
+            version: '3.0.0',
+            // Change the program's public key.
+            publicKey: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        },
+        splAssociatedToken: {
+            // Delete the 'splAssociatedToken' program.
+            delete: true,
+        },
+    }),
+);
+```

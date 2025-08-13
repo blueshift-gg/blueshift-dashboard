@@ -1,0 +1,232 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Xây dựng Codama IDL của bạn từ đầu
+
+Xây dựng một Codama IDL từ đầu có nghĩa là bạn sẽ hoàn toàn tạo tất cả các node trong cây chương trình của bạn. Để làm điều này hiệu quả, hãy xem xét các loại nút có sẵn để sử dụng:
+
+<ArticleSection name="Các kiểu của node" id="node-types" level="h2" />
+
+### Node giá trị
+
+Để đưa các giá trị cụ thể vào một node, chúng ta sử dụng `ValueNode`. Kiểu này đại diện cho tất cả các node giá trị có sẵn có thể chứa các loại dữ liệu khác nhau.
+
+Bạn có thể tìm thấy tài liệu chi tiết về tất cả các giá trị có sẵn [ở đây](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/valueNodes/README.md).
+
+
+> `ValueNode` chỉ là một kiểu bí danh và nó không thể được sử dụng trực tiếp như một node trong cây. Khi cần một `ValueNode`, hãy sử dụng một trong các loại node thể hiện giá trị cụ thể thay thế.
+
+### Node kiểu
+
+Để định nghĩa cấu trúc và hình dạng của dữ liệu, chúng ta sử dụng `TypeNode`. Các node này mô tả loại dữ liệu được yêu cầu như: số, chuỗi, cấu trúc, mảng hoặc các kiểu tùy chỉnh.
+
+Chúng chỉ định nghĩa lược đồ của kiểu mà không chứa các giá trị thực tế.
+
+Bạn có thể tìm thấy tài liệu chi tiết về tất cả các kiểu có sẵn [ở đây](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/typeNodes/README.md)
+
+> `TypeNode` chỉ là một kiểu bí danh và nó không thể được sử dụng trực tiếp như một node trong cây. Khi cần một `TypeNode`, hãy sử dụng một trong các loại node thể hiện kiểu cụ thể thay thế.
+
+### Discriminator Node
+
+Để phân biệt giữa các account và instructions trong chương trình của chúng ta, chúng ta sử dụng discriminators. Có các phương pháp khác nhau để thực hiện điều này, và `DiscriminatorNode` cung cấp tất cả các tùy chọn có sẵn:
+
+- `ConstantDiscriminatorNode`: Sử dụng để mô tả một giá trị hằng số tại một vị trí nhất định. Nó nhận vào một `ConstantValueNode` thể hiện một giá trị hằng số và một `number` thể hiện là vị trí:
+    
+    ```ts
+    const discriminatorNode = constantDiscriminatorNode(constantValueNodeFromString('utf8', 'Hello'), 64);
+    ```
+
+- `FieldDiscriminatorNode`: sử dụng để mô tả một giá trị mặc định của một trường cấu trúc tại một vị trí nhất định. Nó nhận vào một `CamelCaseString` thể hiện tên trường và một `number` thể hiện là vị trí:
+    
+    ```ts
+    const discriminatorNode = fieldDiscriminatorNode('accountState', 64);
+    ```
+
+    > Trường này phải có trong dữ liệu account hoặc đối số instruction và nó phải có một giá trị mặc định. Ví dụ:
+
+    ```ts
+    accountNode({
+        data: structTypeNode([
+            structFieldTypeNode({
+                name: 'discriminator',
+                type: numberTypeNode('u32'),
+                defaultValue: numberValueNode(42),
+                defaultValueStrategy: 'omitted',
+            }),
+            // ...
+        ]),
+        discriminators: [fieldDiscriminatorNode('discriminator')],
+        // ...
+    });
+    ```
+
+- `SizeDiscriminatorNode`: sử dụng để phân biệt giữa các account hoặc instructions dựa trên kích thước của dữ liệu chúng chứa. Nó nhận vào một `number` thể hiện kích thước:
+    
+    ```ts
+    const discriminatorNode = sizeDiscriminatorNode(165);
+    ```
+
+> `DiscriminatorNode` là một kiểu bí danh và nó không thể được sử dụng trực tiếp như một node trong cây. Khi cần một `DiscriminatorNode`, hãy sử dụng một trong các loại node thể hiện discriminator cụ thể thay thế.
+
+### Node hạt giống cho Pda
+
+Để xác định các seed cho các địa chỉ được dẫn xuất từ một chương trình, chúng ta sử dụng `PdaSeedNode`. Các node này xác định cách địa chỉ PDA được dẫn xuất, hoặc từ các giá trị hằng số hoặc các biến đầu vào. `PdaSeedNode` cung cấp các phương pháp khác nhau để xác định các seed PDA:
+
+- `ConstantPdaSeedNode`: sử dụng để mô tả một seed hằng số cho một địa chỉ được dẫn xuất từ một chương trình. Nó nhận vào một cặp `TypeNode` và `ValueNode`:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNode(stringTypeNode('utf8'), stringValueNode('auth'));
+    ```
+
+    > Một `constantPdaSeedNodeFromString` cũng có thể được sử dụng để xác định các hằng số dạng chuỗi một cách dễ dàng hơn. Ví dụ sau đây tương đương với ví dụ trên:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNodeFromString('utf8', 'auth');
+    ```
+
+- `VariablePdaSeedNode`: sử dụng để mô tả seed ở dạng một biến cho một địa chỉ được dẫn xuất từ một chương trình. Nó nhận vào một tên và một `TypeNode`:
+
+    ```ts
+    const pdaSeedNode = variablePdaSeedNode('authority', publicKeyTypeNode())
+    ```
+
+Đây là cách chúng được sử dụng trong `pdaNode`:
+
+```ts
+const counterPda = pdaNode({
+    name: 'counter',
+    seeds: [
+        constantPdaSeedNodeFromString('utf8', 'counter'),
+        variablePdaSeedNode('authority', publicKeyTypeNode()),
+    ],
+});
+```
+
+> `PdaSeedNode` là một kiểu bí danh và nó không thể được sử dụng trực tiếp như một node trong cây. Khi cần một `PdaSeedNode`, hãy sử dụng một trong các loại node thể hiện seed Pda cụ thể thay thế.
+
+<ArticleSection name="Viết một Codama IDL" id="writing-a-codama-idl" level="h2" />
+
+Giờ đây chúng ta đã xem xét các node quan trọng nhất có sẵn trong một chương trình, hãy khám phá cách để tạo một Codama IDL từ đầu.
+
+### Node gốc
+
+Để tạo nền tảng của Codama IDL của bạn, chúng ta sử dụng `RootNode`. Node này dùng để chứa `ProgramNode` chính của bạn cũng như các chương trình bổ sung có thể được tham chiếu bởi chương trình chính.
+
+```ts
+const node = rootNode(programNode({ ... }));
+```
+
+### Node chương trình
+
+Để định nghĩa toàn bộ chương trình được triển khai trên chuỗi, chúng ta sử dụng `ProgramNode`. Node này đại diện cho toàn bộ chương trình được triển khai trên chuỗi và định nghĩa tất cả các yếu tố tối thiểu có thể hoạt động như các account, các instruction, các PDA và các lỗi.
+
+Ngoài các yếu tố cơ bản này, node này cũng nhận vào tên chương trình, phiên bản, khóa công khai của chương trình đã triển khai và tài liệu markdown:
+
+
+```ts
+const node = programNode({
+    name: 'counter',
+    publicKey: '22222222222222222222222222222222222222222222',
+    version: '0.0.1',
+    docs: [],
+    accounts: [],
+    instructions: [],
+    definedTypes: [],
+    pdas: [],
+    errors: [],
+});
+```
+
+Trong phần tiếp theo, chúng ta sẽ xem xét tất cả các yếu tố này một cách chi tiết.
+
+### Account Node
+
+Để định nghĩa các account trên chuỗi, chúng ta sử dụng `AccountNode`. Node này được đặc trưng bởi tên của nó, cấu trúc dữ liệu và các thuộc tính tùy chọn như các định nghĩa PDA và các discriminator account.
+
+Nó đại diện cho các account thường tương ứng với tệp `state.rs` của chương trình của bạn.
+
+Trường docs có thể được sử dụng để thêm tài liệu giải thích những gì account này thực hiện trong chương trình:
+
+```ts
+const node = accountNode({
+    name: 'token',
+    data: structTypeNode([
+        structFieldTypeNode({ name: 'mint', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'owner', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'amount', type: numberTypeNode('u64') }),
+    ]),
+    discriminators: [sizeDiscriminatorNode(72)],
+    size: 72,
+    pda: pdaLinkNode("associatedTokenAccount"),
+});
+```
+
+> `AccountNode` không lưu trữ một mảng của `PdaNode` nhưng thay vào đó là một liên kết tùy chọn đến một `PdaNode` thông qua một `PdaLinkNode` vì vậy nếu một `PdaNode` được định nghĩa bên trong một `ProgramNode` thì hai node có thể được liên kết với nhau ở đây.
+
+### Instruction Node
+
+Để định nghĩa các instruction của chương trình, chúng ta sử dụng `InstructionNode`. Node này đại diện cho một instruction trong một chương trình và cho phép bạn chỉ định discriminator, các account cần thiết và dữ liệu cho instruction một cách dễ dàng.
+
+Thêm vào đó, bạn có thể bao gồm các account tùy chọn. Dựa trên thiết kế của chương trình, các account tùy chọn có thể được giải quyết theo hai cách: bằng cách bỏ qua chúng hoặc bằng cách chuyển ID của chương trình làm account. Bạn có thể chọn phương pháp giải quyết bằng cách sử dụng trường `optionalAccountStrategy: "omitted" | "programId"`.
+
+
+> Khi `optionalAccountStrategy` không được cung cấp, chiến lược mặc định là sử dụng `programId`.
+
+Trường docs có thể được sử dụng để thêm tài liệu giải thích những gì instruction này thực hiện trong chương trình:
+
+```ts
+const node = instructionNode({
+    name: 'increment',
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    arguments: [
+        instructionArgumentNode({
+            name: 'discriminator',
+            type: numberTypeNode('u8'),
+            defaultValue: numberValueNode(1),
+            defaultValueStrategy: 'omitted',
+        }),
+    ],
+    accounts: [
+        instructionAccountNode({ name: 'counter', isWritable: true, isSigner: true }),
+        instructionAccountNode({ name: 'authority', isWritable: false, isSigner: false }),
+    ],
+    remainingAccounts: [instructionRemainingAccountsNode(argumentValueNode('authorities'), { isSigner: true })],
+    optionalAccountStrategy: 'omitted',
+});
+```
+
+Trong `instructionAccountNode`, bạn có thể chỉ định tính tùy chọn của account bằng cách sử dụng trường `isOptional: boolean` hoặc cung cấp một `defaultValue` mà được thể hiện thành một `ValueNode`.
+
+> Các tính năng defaultValue cũng hoạt động cho `instructionArgumentNode`.
+
+The defaultValueStrategy trong instructionArgumentNode xác định cách các giá trị mặc định được xử lý: "optional" có nghĩa là giá trị mặc định của đối số có thể được ghi đè bởi một đối số được cung cấp hoặc "omitted" có nghĩa là không cần cung cấp đối số và giá trị mặc định luôn được sử dụng
+
+Chiến lược mặc định là "optional" nếu không được chỉ định.
+
+### Node lỗi
+
+Để định nghĩa các lỗi có thể được trả về bởi một chương trình, chúng ta sử dụng `ErrorNode`. Node này được đặc trưng bởi tên, một mã lỗi sẽ được trả về và một thông báo có thể đọc được liên kết với nó để gỡ lỗi.
+
+```ts
+const node = errorNode({
+    name: 'invalidAmountArgument',
+    code: 1,
+    message: 'The amount argument is invalid.',
+});
+```
+
+### PDA Node
+
+Để cung cấp định nghĩa cho các địa chỉ được dẫn xuất từ một chương trình cụ thể, chúng ta sử dụng `PdaNode`. Node này được đặc trưng bởi tên và một danh sách các seed có thể là hằng số hoặc biến, cho phép tạo PDA linh hoạt.
+
+
+```ts
+const node = pdaNode({
+    name: 'counter',
+    seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+    docs: ['The counter PDA derived from its authority.'],
+});
+```
+
+> Nếu program ID để dẫn xuất khác với ProgramNode gần nhất, bạn cần chỉ định nó bằng cách sử dụng trường programId.
+
+Điều này có thể được sử dụng để liên kết các PDA như `defaultValue` trong `instructionAccountNode` bằng cách sử dụng `pdaValueNode`.
