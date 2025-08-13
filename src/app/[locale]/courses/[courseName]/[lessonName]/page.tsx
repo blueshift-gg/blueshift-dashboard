@@ -263,11 +263,11 @@ export default async function LessonPage({ params }: LessonPageProps) {
               )}
 
               {!nextLesson && !challenge && (
-                <div className="w-[calc(100%+32px)] md:w-[calc(100%+64px)] lg:w-[calc(100%+48px)] gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12 group -mt-12 pt-24 pb-16 px-8 [background:linear-gradient(180deg,rgba(0,255,255,0)_0%,rgba(0,255,255,0.08)_50%,rgba(0,255,255,0)_100%)]">
-                  <span className="text-primary w-auto flex-shrink-0 font-mono">
+                <div className="w-full gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-start md:items-center gap-x-12 group -mt-12 pt-24 pb-16 px-8 [background:linear-gradient(180deg,rgba(0,255,255,0)_0%,rgba(0,255,255,0.08)_50%,rgba(0,255,255,0)_100%)]">
+                  <span className="text-primary w-auto font-mono">
                     {t("lessons.lesson_completed")}
                   </span>
-                  <Link href={`/courses`} className="w-max">
+                  <Link href={`/courses`} className="w-max self-end">
                     <Button
                       variant="primary"
                       size="lg"

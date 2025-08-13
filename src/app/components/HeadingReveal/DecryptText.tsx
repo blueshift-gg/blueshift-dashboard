@@ -114,7 +114,7 @@ export default function DecryptedText({
 
   return (
     <motion.span
-      className={`inline-block whitespace-pre-wrap pt-0.5 ${parentClassName}`}
+      className={`inline-block whitespace-break-spaces pt-0.5 ${parentClassName}`}
       {...props}
     >
       <span className="sr-only">{displayText}</span>
