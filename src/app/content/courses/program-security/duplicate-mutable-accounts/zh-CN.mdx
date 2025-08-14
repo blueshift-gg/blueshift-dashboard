@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 重复的可变账户
+
+重复的可变账户攻击利用了程序接受多个相同类型的可变账户的漏洞，通过传递同一个账户两次，导致程序在不知情的情况下覆盖了自己的更改。这在单个指令中创建了一个竞争条件，其中后续的更改可能会悄悄地取消之前的更改。
+
+此漏洞主要影响修改程序拥有账户中数据的指令，而不是像 lamport 转账这样的系统操作。攻击之所以成功，是因为 Solana 的运行时不会阻止同一个账户被多次传递给不同的参数；检测和处理重复账户是程序的责任。
+
+危险在于指令执行的顺序性。当同一个账户被传递两次时，程序会先执行第一次更改，然后立即用第二次更改覆盖它，导致账户处于一个意外的状态，这可能无法反映用户的意图或程序的逻辑。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下这个更新两个程序账户所有权字段的易受攻击的指令：
+
+```rust
+#[program]
+pub mod unsafe_update_account{
+    use super::*;
+    
+    //..
+
+    pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+        ctx.accounts.program_account_1.owner = pubkey_a;
+        ctx.accounts.program_account_2.owner = pubkey_b;
+        
+        Ok(())
+    }
+
+    //..
+
+}
+
+#[derive(Accounts)]
+pub struct UpdateAccount<'info> {
+   #[account(mut)]
+    pub program_account_1: Account<'info, ProgramAccount>,
+    #[account(mut)]
+    pub program_account_2: Account<'info, ProgramAccount>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+此代码存在一个关键缺陷：它从未验证 `program_account_1` 和 `program_account_2` 是否是不同的账户。
+
+攻击者可以通过为两个参数传递同一个账户来利用这一点。以下是会发生的情况：
+- 程序设置 `program_account_1.owner = pubkey_a`
+- 由于两个参数引用的是同一个账户，程序会立即用 `program_account_2.owner = pubkey_b` 覆盖它
+
+最终结果：账户的所有者被设置为 `pubkey_b`，完全忽略了 `pubkey_a`
+
+这看起来可能无害，但请考虑其影响。一个期望为两个不同账户分配特定所有权的用户会发现只有一个账户被修改了，而且修改的方式并非他们所期望。在复杂的协议中，这可能导致状态不一致、多步操作失败，甚至是财务损失。
+
+解决方案很简单。您只需在继续之前验证账户是否唯一：
+
+```rust
+pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+    if ctx.accounts.program_account_1.key() == ctx.accounts.program_account_2.key() {
+        return Err(ProgramError::InvalidArgument)
+    }
+
+    ctx.accounts.program_account_1.owner = pubkey_a;
+    ctx.accounts.program_account_2.owner = pubkey_b;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，同样的验证模式适用：
+
+```rust
+if self.accounts.program_account_1.key() == ctx.accounts.program_account_2.key() {
+    return Err(ProgramError::InvalidArgument)
+}
+```

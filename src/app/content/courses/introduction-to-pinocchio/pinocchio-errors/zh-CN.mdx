@@ -1,0 +1,87 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# 错误
+
+清晰且描述性强的错误类型对于使用 Pinocchio 构建的 Solana 程序至关重要。它们可以让调试更容易，并为与您的程序交互的用户和客户端提供有意义的反馈。
+
+### PinocchioError 枚举
+
+在 Rust 中定义自定义错误类型时，您有多种选择，例如 `thiserror`、`anyhow` 和 `failure`。对于 Pinocchio 程序，`thiserror` 是首选，因为：
+- 它允许您使用 `#[error("...")]` 属性为每个错误变体添加可读的消息注释。
+- 它会自动实现 `core::error::Error` 和 `Display` 特性，使您的错误易于打印和调试。
+- 所有错误消息和格式在编译时检查，降低了运行时问题的风险。
+- 最重要的是，`thiserror` 支持在禁用其默认功能时的 `no_std` 环境，这是 Pinocchio 程序的必要条件。
+
+要在 Pinocchio 程序中使用 thiserror，请将其添加到您的 `Cargo.toml` 中，如下所示：
+
+```
+[dependencies]
+thiserror = { version = "1.0", default-features = false }
+```
+
+以下是为您的 Pinocchio 程序定义自定义错误类型的方法：
+
+```rust
+use {
+    num_derive::FromPrimitive,
+    pinocchio::program_error::{ProgramError, ToStr},
+    thiserror::Error,
+};
+
+#[derive(Clone, Debug, Eq, Error, FromPrimitive, PartialEq)]
+pub enum PinocchioError {
+    // 0
+    /// Lamport balance below rent-exempt threshold.
+    #[error("Lamport balance below rent-exempt threshold")]
+    NotRentExempt,
+}
+```
+
+每个变体都带有一条消息，当错误发生时会显示该消息。
+
+要从 Solana 指令中返回您的自定义错误，请为 `ProgramError` 实现 `From<PinocchioError>`：
+
+```rust
+impl From<PinocchioError> for ProgramError {
+    fn from(e: PinocchioError) -> Self {
+        ProgramError::Custom(e as u32)
+    }
+}
+```
+
+这使您可以使用 `?` 操作符并无缝返回您的自定义错误。
+
+### 从原始值反序列化错误
+
+如果您需要将原始错误代码（例如来自日志或跨程序调用的代码）转换回您的错误枚举，请实现 `TryFrom<u32>`：
+
+```rust
+impl TryFrom<u32> for PinocchioError {
+    type Error = ProgramError;
+    fn try_from(error: u32) -> Result<Self, Self::Error> {
+        match error {
+            0 => Ok(PinocchioError::NotRentExempt),
+            _ => Err(ProgramError::InvalidArgument),
+        }
+    }
+}
+```
+
+> 这是可选的，但对于高级错误处理和测试非常有用。
+
+### 可读性强的错误信息
+
+为了记录和调试，您可能希望提供错误的字符串表示。实现 `ToStr` trait 可以实现这一点：
+
+```rust
+impl ToStr for PinocchioError {
+    fn to_str<E>(&self) -> &'static str {
+        match self {
+            PinocchioError::NotRentExempt => "Error: Lamport balance below rent-exempt threshold",
+        }
+    }
+}
+```
+
+> 此步骤也是可选的，但它可以使错误报告对用户更加友好。

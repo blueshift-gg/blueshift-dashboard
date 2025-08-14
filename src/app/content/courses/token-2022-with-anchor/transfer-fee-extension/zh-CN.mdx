@@ -1,0 +1,358 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 转账手续费扩展
+
+`TransferFee` 扩展是一种 `Mint` 扩展，允许创建者为代币设置一种“税”，每当有人进行交换时都会收取。
+
+为了确保手续费接收者在每次有人进行交换时不会被写锁定，并确保我们可以并行处理包含此扩展的 `Mint` 的交易，手续费会被存放在接收者的 Token Account 中，只有 `Withdraw Authority` 可以提取。
+
+<ArticleSection name="初始化铸币账户" id="initializing-the-mint-account" level="h2" />
+
+由于 `Anchor` 没有为 `transfer_fee` 扩展提供任何宏，我们将使用原始 CPI 创建一个 `Mint` 账户。
+
+以下是如何使用转账手续费扩展创建铸币的方法：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{
+            extension::{
+                transfer_fee::TransferFeeConfig, BaseStateWithExtensions, ExtensionType,
+                StateWithExtensions,
+            },
+            pod::PodMint,
+            state::Mint as MintState,
+        },
+        InitializeMint2,
+    },
+    token_interface::{
+        spl_pod::optional_keys::OptionalNonZeroPubkey, transfer_fee_initialize, Token2022,
+        TransferFeeInitialize,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_transfer_fee_config(
+    ctx: Context<Initialize>,
+    transfer_fee_basis_points: u16,
+    maximum_fee: u64,
+) -> Result<()> {
+    // Calculate space required for mint and extension data
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TransferFeeConfig])?;
+
+    // Calculate minimum lamports required for size of mint account with extensions
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoke System Program to create new account with space for mint and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the transfer fee extension data
+    // This instruction must come before the instruction to initialize the mint data
+    transfer_fee_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferFeeInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(&ctx.accounts.payer.key()), // transfer fee config authority (update fee)
+        Some(&ctx.accounts.payer.key()), // withdraw authority (withdraw fees)
+        transfer_fee_basis_points,       // transfer fee basis points (% fee per transfer)
+        maximum_fee,                     // maximum fee (maximum units of token per transfer)
+    )?;
+
+    // Initialize the standard mint account data
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimals
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="带手续费的代币转账" id="transferring-tokens-with-the-fee" level="h2" />
+
+要为具有 TransferFee 扩展的 `Mint` 转账代币，我们有两种方式：
+- 我们可以使用普通的 `transfer_checked()` 指令，这样手续费的计算会自动处理
+- 我们可以使用 `transfer_checked_with_fee()` 指令并手动提供我们将在该转账中支付的 `fee`。如果我们想确保在权限更改手续费并设置异常高的手续费时不会被“割韭菜”，这非常有用；这就像为转账设置滑点。
+
+> 即使权限更改了手续费，新手续费会在设置后 2 个 epoch 生效
+
+以下是如何使用 `transfer_checked_with_fee()` 指令进行转账的方法：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token_2022::spl_token_2022::{
+        extension::{
+            transfer_fee::TransferFeeConfig, BaseStateWithExtensions, StateWithExtensions,
+        },
+        state::Mint as MintState,
+    },
+    token_interface::{
+        transfer_checked_with_fee, Mint, Token2022, TokenAccount, TransferCheckedWithFee,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub sender: Signer<'info>,
+    pub recipient: SystemAccount<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint_account,
+        associated_token::authority = sender,
+        associated_token::token_program = token_program
+    )]
+    pub sender_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = sender,
+        associated_token::mint = mint_account,
+        associated_token::authority = recipient,
+        associated_token::token_program = token_program
+    )]
+    pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+// transfer fees are automatically deducted from the transfer amount
+// recipients receives (transfer amount - fees)
+// transfer fees are stored directly on the recipient token account and must be "harvested"
+pub fn transfer_checked_with_fee(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // read mint account extension data
+    let mint = &ctx.accounts.mint_account.to_account_info();
+    let mint_data = mint.data.borrow();
+    let mint_with_extension = StateWithExtensions::<MintState>::unpack(&mint_data)?;
+    let extension_data = mint_with_extension.get_extension::<TransferFeeConfig>()?;
+
+    // calculate expected fee
+    let epoch = Clock::get()?.epoch;
+    let fee = extension_data.calculate_epoch_fee(epoch, amount).unwrap();
+
+    // mint account decimals
+    let decimals = ctx.accounts.mint_account.decimals;
+
+    transfer_checked_with_fee(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferCheckedWithFee {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                source: ctx.accounts.sender_token_account.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                destination: ctx.accounts.recipient_token_account.to_account_info(),
+                authority: ctx.accounts.sender.to_account_info(),
+            },
+        ),
+        amount,   // transfer amount
+        decimals, // decimals
+        fee,      // fee
+    )?;
+
+    Ok(())
+}
+```
+
+然后要提取手续费，我们可以收集所有“困住”手续费的 `Token Account`，并将它们作为剩余账户传递。在 Typescript 端看起来会是这样的：
+
+```ts
+// Retrieve all Token Accounts for the Mint Account
+const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+        {
+            memcmp: {
+                offset: 0,
+                bytes: mint.publicKey.toString(), // Mint Account address
+            },
+        },
+    ],
+});
+
+// List of Token Accounts to withdraw fees from
+const accountsToWithdrawFrom: PublicKey[] = [];
+ 
+for (const accountInfo of allAccounts) {
+    const account = unpackAccount(
+        accountInfo.pubkey,
+        accountInfo.account,
+        TOKEN_2022_PROGRAM_ID,
+    );
+ 
+    // Extract transfer fee data from each account
+    const transferFeeAmount = getTransferFeeAmount(account);
+ 
+    // Check if fees are available to be withdrawn
+    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+        accountsToWithdrawFrom.push(accountInfo.pubkey);
+    }
+}
+
+// ...instruction data and accounts
+remainingAccounts: accountsToWithdrawFrom.map(pubkey => ({
+    pubkey,
+    isWritable: true,
+    isSigner: false
+})),
+```
+
+在设置好我们需要的所有账户后，要将代币提取到 `authority_token_account`，我们需要使用 `harvest_withheld_tokens_to_mint()` 指令从代币账户中“收取”所有费用，然后将其通过 `withdraw_withheld_tokens_from_mint()` 指令领取到 `token_account`，由 `authority` 选择。
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{
+    harvest_withheld_tokens_to_mint, HarvestWithheldTokensToMint, withdraw_withheld_tokens_from_mint, WithdrawWithheldTokensFromMint, Mint, Token2022, TokenAccount,
+};
+
+#[derive(Accounts)]
+pub struct HarvestAndWithdrawFees<'info> {
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+pub fn harvest_and_withdraw_fees<'info>(ctx: Context<'_, '_, 'info, 'info, HarvestAndWithdrawFees<'info>>) -> Result<()> {
+    // Using remaining accounts to allow for passing in an unknown number of token accounts to harvest from
+    // Check that remaining accounts are token accounts for the mint to harvest to
+    let sources = ctx
+        .remaining_accounts
+        .iter()
+        .filter_map(|account| {
+            InterfaceAccount::<TokenAccount>::try_from(account)
+                .ok()
+                .filter(|token_account| token_account.mint == ctx.accounts.mint_account.key())
+                .map(|_| account.to_account_info())
+        })
+        .collect::<Vec<_>>();
+
+    // transfer fees are stored directly on the recipient token account and must be "harvested"
+    // "harvesting" transfers fees accumulated on token accounts to the mint account
+    harvest_withheld_tokens_to_mint(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            HarvestWithheldTokensToMint {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        sources, // token accounts to harvest from
+    )?;
+
+    // transfer fees "harvested" to the mint account can then be withdraw by the withdraw authority
+    // this transfers fees on the mint account to the specified token account
+    withdraw_withheld_tokens_from_mint(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        WithdrawWithheldTokensFromMint {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            destination: ctx.accounts.token_account.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        },
+    ))?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="更新费用" id="updating-the-fee" level="h2" />
+
+在使用 `TranferFee` 扩展初始化我们的 `Mint` 后，未来可能需要更新该特定费用。为了确保创建者不会通过设置非常高的费用来“诱骗”代币持有者，每次执行转账时，新设置的 `TranferFee` 将在 2 个 epoch 后生效。
+
+为此，以下是 `TransferFee` 扩展的数据结构：
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+ 
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+因此，要更改费用，我们可以像这样使用 `transfer_fee_set()` 指令：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{transfer_fee_set, Mint, Token2022, TransferFeeSetTransferFee};
+
+#[derive(Accounts)]
+pub struct UpdateFee<'info> {
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+// Note that there is a 2 epoch delay from when new fee updates take effect
+// This is a safely feature built into the extension
+// https://github.com/solana-labs/solana-program-library/blob/master/token/program-2022/src/extension/transfer_fee/processor.rs#L92-L109
+pub fn update_fee(
+    ctx: Context<UpdateFee>,
+    transfer_fee_basis_points: u16,
+    maximum_fee: u64,
+) -> Result<()> {
+    transfer_fee_set(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferFeeSetTransferFee {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            },
+        ),
+        transfer_fee_basis_points, // transfer fee basis points (% fee per transfer)
+        maximum_fee,               // maximum fee (maximum units of token per transfer)
+    )?;
+
+    Ok(())
+}
+```

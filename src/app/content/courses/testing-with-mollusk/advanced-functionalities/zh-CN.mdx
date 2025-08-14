@@ -1,0 +1,496 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 高级功能
+
+Mollusk 提供灵活的初始化选项，以适应不同的测试场景。您可以创建预加载了您的程序的实例，或者从最小环境开始，根据需要添加组件。
+
+在测试特定程序时，可以使用预加载程序的方式初始化 Mollusk：
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::pubkey::Pubkey;
+
+const ID: Pubkey = solana_sdk::pubkey!("22222222222222222222222222222222222222222222");
+
+#[test]
+fn test() {
+    let mollusk = Mollusk::new(&ID, "target/deploy/program.so");
+}
+```
+
+这种方法会自动加载您已编译的程序，并使其可用于测试，从而简化了针对特定程序测试套件的设置过程。
+
+对于更广泛的测试场景，或者当您需要动态添加程序时，可以从默认实例开始：
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    // System Program, ...
+    let mollusk = Mollusk::default();
+}
+```
+
+默认实例包括像 System Program 这样的基本内置程序，为大多数 Solana 操作提供了基础，而不会增加不必要的程序负担。
+
+当您的测试需要 System Program 时，Mollusk 提供了一个便捷的助手来生成必要的账户引用：
+
+```rust
+let (system_program, system_program_account) = keyed_account_for_system_program();
+```
+
+要复制程序加载功能或加载默认情况下不存在的自定义程序，您可以使用这些助手：
+
+```rust
+use mollusk_svm::Mollusk;
+use mollusk_svm::program::create_program_account_loader_v3;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Get the account that you need
+    let program = &ID; // ID of the program we're trying to load into mollusk
+    let program_account = create_program_account_loader_v3(&ID);
+
+    // Load the program into your mollusk instance
+    mollusk.add_program(
+        &ID, 
+        "src/programs/program", 
+        &mollusk_svm::program::loader_keys::LOADER_V3
+    );
+}
+```
+
+<ArticleSection name="Token Program" id="token-program" level="h2" />
+
+Mollusk 的 token program 助手显著简化了涉及 SPL 代币的测试场景。`mollusk-svm-programs-token` crate 提供了对 `Token`、`Token2022` 和 `Associated Token` 程序的预配置支持。
+
+在包含 token helper crate 后，添加您的测试所需的特定 token 程序：
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Add the SPL Token Program
+    mollusk_svm_programs_token::token::add_program(&mut mollusk);
+
+    // Add the Token2022 Program
+    mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
+
+    // Add the Associated Token Program
+    mollusk_svm_programs_token::associated_token::add_program(&mut mollusk);
+}
+```
+
+并创建测试场景所需的账户引用：
+
+```rust
+// SPL Token Program
+let (token_program, token_program_account) = 
+    mollusk_svm_programs_token::token::keyed_account();
+
+// Token2022 Program
+let (token2022_program, token2022_program_account) = 
+    mollusk_svm_programs_token::token2022::keyed_account();
+
+// Associated Token Program
+let (associated_token_program, associated_token_program_account) =
+    mollusk_svm_programs_token::associated_token::keyed_account();
+```
+
+这些助手确保与代币相关的测试能够访问正确的程序账户并具有适当的配置，从而无需手动设置程序即可全面测试代币操作。
+
+如果我们想从 token program 中创建已初始化的 State 账户，我们需要使用 Account 方法创建它们，并将其加载到 Mollusk 实例的账户结构中。
+
+手动创建已初始化的 token account 涉及大量的样板代码，用于序列化账户数据和计算 rent 免除。以下是简化此过程的辅助函数：
+
+```rust
+use spl_token::{state::{Mint, Account as TokenAccount, AccountState}, ID as token};
+use spl_associated_token_account::get_associated_token_address_with_program_id;
+
+// Create a Keyed Account for a Mint with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_mint_default(
+    mollusk: &Mollusk,
+    authority: &Pubkey,
+    decimals: u8,
+    pubkey: Option<Pubkey>,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let mint_data = Mint {
+        mint_authority: Some(*authority).into(),
+        supply: 0,
+        decimals,
+        is_initialized: true,
+        freeze_authority: None.into(),
+    };
+
+    let mut data = vec![0u8; Mint::LEN];
+    Mint::pack(mint_data, &mut data).unwrap();
+
+    let account = Account {
+        lamports: mollusk.sysvars.rent.minimum_balance(Mint::LEN),
+        data,
+        owner: token_program.unwrap_or(token::ID),
+        executable: false,
+        rent_epoch: 0,
+    };
+
+    (pubkey.unwrap_or(Pubkey::new_unique()), account)
+}
+
+// Create a Keyed Account for a Token Account with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_token_account_default(
+    mollusk: &Mollusk,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    pubkey: Option<Pubkey>,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let account_data = TokenAccount {
+        mint: *mint,
+        owner: *owner,
+        amount,
+        delegate: None.into(),
+        state: AccountState::Initialized,
+        is_native: None.into(),
+        delegated_amount: 0,
+        close_authority: None.into(),
+    };
+
+    let mut data = vec![0u8; TokenAccount::LEN];
+    TokenAccount::pack(account_data, &mut data).unwrap();
+
+    let account = Account {
+        lamports: mollusk.sysvars.rent.minimum_balance(TokenAccount::LEN),
+        data,
+        owner: token_program.unwrap_or(token::ID),
+        executable: false,
+        rent_epoch: 0,
+    };
+
+    (pubkey.unwrap_or(Pubkey::new_unique()), account)
+}
+
+// Create a Keyed Account for an Associated Token Account with default data
+#[allow(dead_code)]
+pub fn keyed_account_for_associated_token_account_default(
+    mollusk: &Mollusk,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    token_program: Option<Pubkey>,
+) -> (Pubkey, Account) {
+    let associated_token_address = get_associated_token_address_with_program_id(
+        owner,
+        mint,
+        &token_program.unwrap_or(token::ID),
+    );
+
+    keyed_account_for_token_account_default(
+        mollusk,
+        mint,
+        owner,
+        amount,
+        Some(associated_token_address),
+        Some(token_program.unwrap_or(token::ID)),
+    )
+}
+```
+
+<ArticleSection name="基准测试计算单元" id="benchmarking-compute-units" level="h2" />
+
+Mollusk 包含一个专用的计算单元基准测试系统，可以精确测量和跟踪程序的计算效率。`MolluskComputeUnitBencher` 提供了一个简化的 API，用于创建全面的基准测试，监控不同指令场景下的计算单元消耗。
+
+此基准测试系统对于性能优化尤为重要，因为它生成详细的报告，显示当前计算单元使用情况以及与之前运行的差异。
+
+这使您能够立即看到代码更改对程序效率的影响，从而帮助您优化关键性能瓶颈。
+
+基准测试工具可以无缝集成到您现有的 Mollusk 测试设置中：
+
+```rust
+use {
+    mollusk_svm_bencher::MolluskComputeUnitBencher,
+    mollusk_svm::Mollusk,
+    /* ... */
+};
+
+// Optionally disable logging.
+solana_logger::setup_with("");
+
+/* Instruction & accounts setup ... */
+
+let mollusk = Mollusk::new(&program_id, "my_program");
+
+MolluskComputeUnitBencher::new(mollusk)
+    .bench(("bench0", &instruction0, &accounts0))
+    .bench(("bench1", &instruction1, &accounts1))
+    .bench(("bench2", &instruction2, &accounts2))
+    .bench(("bench3", &instruction3, &accounts3))
+    .must_pass(true)
+    .out_dir("../target/benches")
+    .execute();
+```
+
+### 配置选项
+
+基准测试工具提供了多个配置选项：
+- `must_pass(true)`：如果任何基准测试未能成功执行，将触发 panic，确保代码更改后基准测试仍然有效
+- `out_dir("../target/benches")`：指定生成 markdown 报告的位置，便于与 CI/CD 系统和文档工作流集成
+
+### 与 Cargo 的集成
+
+要使用 `cargo bench` 运行基准测试，请在您的 `Cargo.toml` 中添加基准测试配置：
+
+```
+[[bench]]
+name = "compute_units"
+harness = false
+```
+
+### 基准测试报告
+
+基准测试工具生成的 markdown 报告提供了当前性能指标和历史比较：
+
+```
+| Name   | CUs   | Delta  |
+|--------|-------|--------|
+| bench0 | 450   | --     |
+| bench1 | 579   | -129   |
+| bench2 | 1,204 | +754   |
+| bench3 | 2,811 | +2,361 |
+```
+
+报告格式包括：
+- 名称：您指定的基准测试标识符
+- CUs：此场景下的当前计算单元消耗
+- 差异：与之前基准测试运行的变化（正值表示使用增加，负值表示优化）
+
+<ArticleSection name="自定义系统调用" id="custom-syscalls" level="h2" />
+
+Mollusk 支持创建和测试自定义系统调用，使您能够通过专用功能扩展 Solana 虚拟机以适应测试场景。
+
+此功能对于测试通过 SIMD 添加的新系统调用（Syscall）的创建特别有价值，因为它可以模拟特定的运行时行为或创建受控的测试环境。
+
+> 自定义系统调用在虚拟机（VM）级别操作，直接访问调用上下文和执行环境。
+
+### 定义自定义系统调用
+
+自定义系统调用是使用 `declare_builtin_function!` 宏定义的，该宏创建一个可以在 Mollusk 的运行时环境中注册的系统调用：
+
+```rust
+use {
+    mollusk_svm::{result::Check, Mollusk},
+    solana_instruction::Instruction,
+    solana_program_runtime::{
+        invoke_context::InvokeContext,
+        solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
+    },
+    solana_pubkey::Pubkey,
+};
+
+declare_builtin_function!(
+    /// A custom syscall to burn compute units for testing
+    SyscallBurnCus,
+    fn rust(
+        invoke_context: &mut InvokeContext,
+        to_burn: u64,
+        _arg2: u64,
+        _arg3: u64,
+        _arg4: u64,
+        _arg5: u64,
+        _memory_mapping: &mut MemoryMapping,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        // Consume the specified number of compute units
+        invoke_context.consume_checked(to_burn)?;
+        Ok(0)
+    }
+);
+```
+
+> 这是一个简单“消耗”计算单元（CUs）的自定义系统调用示例。
+
+系统调用函数签名遵循特定模式：
+- `invoke_context`：提供对执行上下文和运行时状态的访问
+- 参数 1-5：程序可以传递最多五个 64 位参数
+- memory_mapping：提供对程序内存空间的访问
+- 返回值：一个 `Result<u64, Box<dyn std::error::Error>>`，指示成功或失败
+
+> 这就是所有系统调用在底层的创建方式
+
+### 注册自定义系统调用
+
+定义后，自定义系统调用必须在 Mollusk 的程序运行时环境中注册后才能使用：
+
+```rust
+#[test]
+fn test_custom_syscall() {
+    std::env::set_var("SBF_OUT_DIR", "../target/deploy");
+    let program_id = Pubkey::new_unique();
+    
+    let mollusk = {
+        let mut mollusk = Mollusk::default();
+        
+        // Register the custom syscall with a specific name
+        mollusk
+            .program_cache
+            .program_runtime_environment
+            .register_function("sol_burn_cus", SyscallBurnCus::vm)
+            .unwrap();
+            
+        // Add your program that uses the custom syscall
+        mollusk.add_program(
+            &program_id,
+            "test_program_custom_syscall",
+            &mollusk_svm::program::loader_keys::LOADER_V3,
+        );
+        
+        mollusk
+    };
+}
+```
+
+系统调用以一个名称（在此示例中为 "sol_burn_cus"）注册，您的程序可以在进行系统调用时引用该名称。
+
+### 测试自定义系统调用行为
+
+自定义系统调用可以像其他程序功能一样进行测试，并具有对其行为进行精确控制的额外优势：
+
+```rust
+fn instruction_burn_cus(program_id: &Pubkey, to_burn: u64) -> Instruction {
+    Instruction::new_with_bytes(*program_id, &to_burn.to_le_bytes(), vec![])
+}
+
+#[test]
+fn test_custom_syscall() {
+    // ... mollusk setup ...
+    
+    // Establish baseline compute unit usage
+    let base_cus = mollusk
+        .process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, 0),
+            &[],
+            &[Check::success()],
+        )
+        .compute_units_consumed;
+    
+    // Test different compute unit consumption levels
+    for to_burn in [100, 1_000, 10_000] {
+        mollusk.process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, to_burn),
+            &[],
+            &[
+                Check::success(),
+                Check::compute_units(base_cus + to_burn), // Verify exact CU consumption
+            ],
+        );
+    }
+}
+```
+
+> 此示例演示了测试一个消耗计算单元的系统调用，验证请求的单元数是否被精确消耗。验证精确数据的能力使 Mollusk 成为在实现之前测试自定义系统调用的最佳方式。
+
+<ArticleSection name="配置方法" id="configuration-methods" level="h2" />
+
+Mollusk 提供了全面的配置选项，使您能够自定义执行环境以满足特定的测试需求，正如我们从 Mollusk `Context` 中可以看到的：
+
+```rust
+/// Instruction context fixture.
+pub struct Context {
+    /// The compute budget to use for the simulation.
+    pub compute_budget: ComputeBudget,
+    /// The feature set to use for the simulation.
+    pub feature_set: FeatureSet,
+    /// The runtime sysvars to use for the simulation.
+    pub sysvars: Sysvars,
+    /// The program ID of the program being invoked.
+    pub program_id: Pubkey,
+    /// Accounts to pass to the instruction.
+    pub instruction_accounts: Vec<AccountMeta>,
+    /// The instruction data.
+    pub instruction_data: Vec<u8>,
+    /// Input accounts with state.
+    pub accounts: Vec<(Pubkey, Account)>,
+}
+```
+
+这些配置方法使您能够精确控制计算预算、功能可用性和系统变量，从而可以在各种运行时条件下测试程序。
+
+### 基本配置设置
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::feature_set::FeatureSet;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+    
+    // Configure compute budget for performance testing
+    mollusk.set_compute_budget(200_000);
+    
+    // Configure feature set to enable/disable specific Solana features
+    mollusk.set_feature_set(FeatureSet::all_enabled());
+    
+    // Sysvars are handled automatically but can be customized if needed
+}
+```
+
+计算预算决定了程序执行时可用的计算单元数量。这对于测试接近或超出计算限制的程序至关重要：
+
+```rust
+// Test with standard compute budget
+mollusk.set_compute_budget(200_000);
+```
+
+Solana 的功能集控制了程序执行期间哪些区块链功能是激活的。Mollusk 允许您配置这些功能，以测试在不同网络状态下的兼容性：
+
+```rust
+use solana_sdk::feature_set::FeatureSet;
+
+// Enable all features (latest functionality)
+mollusk.set_feature_set(FeatureSet::all_enabled());
+
+// Use default feature set (production-like environment)
+mollusk.set_feature_set(FeatureSet::default());
+```
+
+有关可用功能的完整列表，请查阅 `agave-feature-set` crate [文档](https://docs.rs/agave-feature-set/2.3.6/agave_feature_set/)，其中详细说明了所有可配置的区块链功能及其影响。
+
+Mollusk 提供了对所有系统变量（sysvars）的访问权限，程序在执行期间可以查询这些变量。虽然这些变量会自动配置为合理的默认值，但您可以根据特定的测试场景进行自定义：
+
+```rust
+/// Mollusk sysvars wrapper for easy manipulation
+pub struct Sysvars {
+    pub clock: Clock,                     // Current slot, epoch, and timestamp
+    pub epoch_rewards: EpochRewards,      // Epoch reward distribution info  
+    pub epoch_schedule: EpochSchedule,    // Epoch timing and slot configuration
+    pub last_restart_slot: LastRestartSlot, // Last validator restart information
+    pub rent: Rent,                       // Rent calculation parameters
+    pub slot_hashes: SlotHashes,          // Recent slot hash history
+    pub stake_history: StakeHistory,      // Historical stake activation data
+}
+```
+
+您可以自定义特定的系统变量以测试与时间相关的逻辑、租金计算或其他依赖系统的行为，或者使用一些辅助工具：
+
+```rust
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+    
+    // Customize clock for time-based testing
+    mollusk.sysvars.clock.epoch = 10;
+    mollusk.sysvars.clock.unix_timestamp = 1234567890;
+
+    // Jump to Slot 1000
+    warp_to_slot(&mut Mollusk, 1000)
+}
+```

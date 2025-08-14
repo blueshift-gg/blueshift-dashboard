@@ -1,0 +1,380 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Extensions
+
+虽然原始的 Token Program 提供了铸造、转移和冻结代币等基本功能，但 Token Extensions 开启了可编程代币的新范式。
+
+这个增强的程序在保持与现有 SPL Token 操作完全兼容的同时，增加了复杂的功能，例如用于执行自定义逻辑的 transfer hook、内置费用机制、增强的元数据支持、计息计算和高级安全控制。
+
+### 扩展兼容性
+
+Token Extensions 旨在具有可组合性，允许您结合多个扩展来创建完全符合您项目需求的代币。
+
+然而，由于功能冲突或逻辑矛盾，某些组合是不兼容的，例如：
+- 不可转移(Non-transferable ) + 转移钩子(transfer hooks) / 转移费用(transfer fees) / 保密转移(confidential transfer)
+- 保密转移(Confidential transfer) + 转移费用（直到 1.18）
+- 保密转移 + 转移钩子（这些转移只能看到源账户 / 目标账户，因此无法对转移金额进行操作）
+- 保密转移 + 永久代理(permanent delegate)
+
+<ArticleSection name="Transfer Fee Extension" id="transfer-fee-config" level="h2" />
+
+`TransferFee` 扩展是一个 `Mint` 扩展，允许创建者为代币设置一个“税”，每次有人进行交换时都会收取。
+
+为了确保费用接收者在每次有人进行交换时不会被写锁定，并确保我们可以并行处理包含此扩展的 Mint 的交易，费用会被存放在接收者的 Token Account 中，只有 `Withdraw Authority` 可以提取。
+
+正因如此，要使用 `TransferFee` 扩展，我们需要两种不同类型的扩展：一种直接应用于 `Mint` 账户，称为 `TransferFeeConfig`，它包含执行交换所需的所有数据；另一种应用于 `Token` 账户，称为 `TransferFeeAmount`，它“注册”了代币账户扣留的代币数量。
+
+以下是 `TransferFee` 扩展数据的样子：
+
+```rust
+/// TransferFeeConfig Extension
+pub const transfer_fee_config_header: [u8; 4] = [1, 0, 108, 0];
+
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+需要注意的一些事项：
+- `config_authority` 可能与实际能够从 `Token` 账户中提取代币的人不同。
+- 我们同时有 `older` 和 `newer` 转账费用结构。
+
+最后一点是因为在设置新的 `TransferFee` 时存在一个“冷却”期，为期 2 个 epoch，以避免在 epoch 结束时发生 rug pull。这意味着在新的 `TransferFee` 的前 2 个 epoch 中，旧的 `TransferFee` 实际上是活跃的。
+
+此外，您可以看到 `TransferFeeConfig` 具有一个 `withheld_amount` 字段。这可能听起来很奇怪，因为我们刚刚提到代币费用会累积到 `Token Account` 中，但实际上，领取这些费用是一个两步的过程：
+- 从 `Token Account` 领取费用到 `Mint`。这可以无权限完成。
+- 从 `Mint` 领取费用到目标账户。这是一个仅 `Withdraw Authority` 可以执行的权限操作。
+
+对于此扩展，我们需要一个两步的流程，以应对某人想要关闭一个 `Token Account` 而其中仍有费用的边缘情况。由于这些费用的目标可能与 `Withdraw Authority` 不同，我们需要确保在关闭 `Token Account` 之前，这些费用需要被发送到某个地方。
+
+以下是 `TransferFeeAmount` 扩展数据的样子
+
+```rust
+/// TransferFeeAmount Extension
+pub const transfer_amount_config_header: [u8; 4] = [2, 0, 8, 0];
+
+pub struct TransferFeeAmount {
+    pub withheld_amount: u64,
+}
+```
+
+<ArticleSection name="铸币关闭权限扩展" id="mint-close-authority-config" level="h2" />
+
+`MintCloseAuthority` 扩展是一个 `Mint` 扩展，允许权限方关闭并从当前供应量为 0 的 `Mint` 账户中取回 rent。
+
+此扩展对于清理未使用的代币铸造（mints）并回收用于支付账户租金豁免的 SOL 非常有用。只有在没有代币流通时，代币铸造才可以被关闭。
+
+以下是 `MintCloseAuthority` 扩展数据的样子：
+
+```rust
+/// MintCloseAuthority Extension
+pub const mint_close_authority_extension_header: [u8; 4] = [3, 0, 32, 0];
+
+pub struct MintCloseAuthority {
+    pub close_authority: Pubkey,
+}
+```
+
+<ArticleSection name="默认账户状态扩展" id="default-account-state-extension" level="h2" />
+
+`DefaultAccountState` 扩展是一种 `Mint` 扩展，允许为特定代币铸造新创建的所有代币账户默认处于冻结状态。然后，代币铸造的 `Freeze Authority` 可以解冻（解除冻结）这些 `Token` 账户，使其可以使用。
+
+此功能使代币创建者能够通过限制谁可以持有代币来更好地控制代币分发。它在合规场景、KYC/AML 要求或基于允许名单的代币分发中特别有用，在这些情况下，账户必须在接收或转移代币之前明确获得批准。
+
+以下是 `DefaultAccountState` 扩展数据的样子：
+
+```rust
+/// DefaultAccountState Extension
+pub const default_account_state_extension_header: [u8; 4] = [6, 0, 1, 0];
+
+pub struct DefaultAccountState {
+    pub account_state: AccountState,
+}
+
+pub enum AccountState {
+    Uninitialized,
+    Initialized,
+    Frozen,
+}
+```
+
+<ArticleSection name="不可变所有者扩展" id="immutable-owner-extension" level="h2" />
+
+`ImmutableOwner` 扩展是一种 `Token` 账户扩展，防止代币账户的所有权发生任何更改。这可以保护账户免受未经授权的访问和转移尝试。
+
+此扩展对于关联代币账户（ATAs）和其他所有权不应更改的账户特别有价值。它可以防止恶意程序试图窃取代币账户的所有权，并为用户和应用程序提供额外的安全保障。
+
+> 所有 Token Extensions Program 的 ATAs 默认启用了不可变所有者功能
+
+以下是 `ImmutableOwner` 扩展数据的样子：
+
+```rust
+/// ImmutableOwner Extension
+pub const immutable_owner_extension_header: [u8; 4] = [7, 0, 0, 0];
+```
+
+<ArticleSection name="备注转账扩展" id="memo-transfer-extension" level="h2" />
+
+`MemoTranfer Extension` 是一种 `Token` 账户扩展，它要求所有转入 token account 的交易必须包含备注（memo），从而增强交易追踪和用户识别功能。
+
+此扩展对交易所、受监管机构以及需要追踪转入交易目的或来源以满足合规性、会计或客户服务需求的应用程序特别有用。启用后，任何转入账户的交易如果未在同一交易中包含备注指令，将会失败。
+
+以下是 `MemoTranfer` 扩展数据的样式：
+
+```rust
+/// MemoTranfer Extension
+pub const memo_transfer_extension_header: [u8; 4] = [8, 0, 1, 0];
+
+pub struct MemoTranfer {
+    pub require_incoming_transfer_memos: bool,
+}
+```
+
+<ArticleSection name="不可转移扩展" id="non-transferable-extension" level="h2" />
+
+`NonTransferable` 扩展是一种 `Mint` 账户扩展，它阻止 token 在账户之间转移，使其永久绑定到当前持有者。
+
+此扩展适用于创建灵魂绑定代币、成就徽章、证书或任何代表不可转移权利或状态的代币。一旦铸造到某个账户，这些代币将无法移动、出售或转移到其他钱包，确保它们永久与原始接收者相关联。
+
+此外，与具有 `NonTransferable` 扩展的 `Mint` 相关联的 `Token` 账户将附带 `NonTransferableAccount` 扩展。
+
+以下是 `NonTransferable` 和 `NonTransferableAccount` 扩展数据的样式：
+
+```rust
+/// NonTransferable Extension
+pub const non_transferable_extension_header: [u8; 4] = [9, 0, 0, 0];
+
+/// NonTransferableAccount Extension
+pub const non_transferable_account_extension_header: [u8; 4] = [13, 0, 0, 0];
+```
+
+这两个扩展只是标志；仅凭它们的存在即可强制执行限制。
+
+<ArticleSection name="计息扩展" id="interest-bearing-extension" level="h2" />
+
+`InterestBearing` 扩展是一种 `Mint` 账户扩展，它允许用户为其代币应用利率，并随时检索包括利息在内的更新总额。
+
+> 此机制不会生成新代币；显示的金额仅通过 `amount_to_ui_amount` 函数包含累计利息，使更改仅为视觉效果。尽管如此，这是存储在 mint account 中的一个值，程序可以利用这一点来创建超越纯粹视觉效果的功能。
+
+以下是 `InterestBearing` 扩展数据的样子：
+
+```rust
+/// InterestBearing Extension
+pub const interest_bearing_extension_header: [u8; 4] = [10, 0, 52, 0];
+
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+由于费率可能会更新，为了确保计算的准确性，在计算过程中会使用一个 `pre_update_average_rate` 字段，以确定在费率更新时的处理方式。
+
+<ArticleSection name="Cpi Guard Extension" id="cpi-guard-extension" level="h2" />
+
+`CpiGuard` 扩展是一种 `Token` 账户扩展，它禁止在跨程序调用中执行某些操作，从而保护用户免受可能试图在未经明确同意的情况下操纵其 token account 的恶意程序的侵害。
+
+在与 DeFi 协议、DEX 或任何请求 token account 访问权限的程序交互时，此扩展对于安全性至关重要。它可以防止程序在跨程序调用期间执行未经授权的操作，例如更改所有权、设置不需要的代理或将资金重定向到非预期的接收方。
+
+当启用 `CpiGuard` 扩展时，以下 CPI 的行为如下所述：
+- 转账：签名权限必须是账户所有者或先前设定的账户代理
+- 销毁：签名权限必须是账户所有者或先前设定的账户代理
+- 授权：禁止——在 CPI 中不能授权任何代理
+- 关闭账户： lamport 的接收方必须是账户所有者
+- 设置关闭权限：除非取消设置，否则禁止
+- 设置所有者：始终禁止，包括在 CPI 外
+
+以下是 `CpiGuard` 扩展数据的样子：
+
+```rust
+/// CpiGuard Extension
+pub const cpi_guard_extension_header: [u8; 4] = [11, 0, 1, 0];
+
+pub struct CpiGuard {
+    pub lock_cpi: bool,
+}
+```
+
+<ArticleSection name="Permanent Delegate Extension" id="permanent-delegate-extension" level="h2" />
+
+`PermanentDelegate` 扩展是一种 `Mint` 账户扩展，它允许为该 mint 的所有代币设置一个永久代理，该代理可以从任何 token account 转移或销毁该 mint 的任何代币。
+
+此扩展对于创建具有内置管理控制功能的代币非常有用，例如需要紧急冻结功能的稳定币、需要集中管理的游戏代币或需要监管机构永久监督的合规代币。
+
+> 与可以被撤销的普通委托不同，此委托权限是永久且不可变的。
+
+以下是 `PermanentDelegate` 扩展数据的样子：
+
+```rust
+/// PermanentDelegate Extension
+pub const permanent_delegate_extension_header: [u8; 4] = [12, 0, 32, 0];
+
+pub struct PermanentDelegate {
+    delegate: Pubkey,
+}
+```
+
+<ArticleSection name="转账钩子扩展" id="transfer-hook-extension" level="h2" />
+
+`TransferHook` 扩展是一个 `Mint` 账户扩展，它引入了创建 `Mint` 账户的能力，这些账户在每次代币转账时执行自定义指令逻辑。
+
+此扩展支持强大的用例，例如自动税收征收、版税支付、基于自定义逻辑的转账限制、合规检查或任何其他在转账期间需要发生的可编程行为。每当发生转账时，扩展程序会自动调用钩子程序。
+
+为实现这一点，开发者必须构建一个实现 [Transfer Hook Interface](https://github.com/solana-program/transfer-hook/tree/main/program) 的程序，并初始化一个启用了 `Transfer Hook` 扩展的 `Mint` 账户。
+
+此外，与启用了 `TransferHook` 扩展的 `Mint` 相关联的 Token 账户将附带 `TransferHookAccount` 扩展。
+
+以下是 `TransferHook` 和 `TransferHookAccount` 扩展数据的样子：
+
+```rust
+/// TransferHook Extension
+pub const transfer_hook_extension_header: [u8; 4] = [14, 0, 64, 0];
+
+pub struct TransferHook {
+    // The transfer hook update authority
+    authority: Pubkey,
+    // The transfer hook program account
+    programId: Pubkey,
+}
+
+/// TransferHookAccount Extension
+pub const transfer_hook_account_extension_header: [u8; 4] = [15, 0, 1, 0];
+
+pub struct TransferHookAccount {
+    // Whether or not this account is currently transferring tokens
+    transferring: bool,
+}
+```
+
+<ArticleSection name="元数据扩展" id="metadata-extension" level="h2" />
+
+`Metadata` 扩展是一个 `Mint` 账户扩展，它引入了将元数据直接嵌入到铸币账户中的能力，无需使用其他程序。
+
+此扩展对需要链上元数据（如名称、符号、图像和自定义属性）的 NFT、代币和其他资产特别有用。通过将元数据直接嵌入到铸币账户中，它消除了对外部元数据程序的需求，并确保元数据永久与代币相关联。
+
+`Metadata` 扩展由两个不同的扩展组成，这两个扩展都应用于 Mint account：
+- 包含所有元数据信息（如名称、符号、URI 和附加账户）的 `Metadata` 扩展。
+- 引用 `Mint` 账户的 `MetadataPointer` 扩展，其中存储了 `Metadata` 扩展。
+
+通常情况下，这两个扩展会存储在同一个 `Mint` 账户中。但在某些情况下，相同的元数据可能会被不同的资产使用，因此将这两个扩展分开并通过 `Metadata` 扩展引用 `Mint` 会更经济。
+
+> 与其他扩展不同，要创建 `Metadata` 扩展，我们需要使用 [Token Metadata Interface](https://github.com/solana-program/token-metadata/tree/main)。元数据指针扩展使用经典的 Token2022 程序。
+
+这次我们无法为 `Metadata` 扩展创建一个固定的扩展头，因为其中包含可变数据，这意味着长度会根据字段的不同而变化。
+
+以下是 `Metadata` 和 `MetadataPointer` 扩展数据的样式：
+
+```rust
+/// Metadata Pointer Extension
+pub const metadata_pointer_extension_header: [u8; 4] = [18, 0, 64, 0]
+
+pub struct MetadataPointer {
+    // Authority that can set the metadata address
+    authority: Pubkey;
+    // Account Address that holds the metadata
+    metadata_address: Pubkey;
+}
+
+/// Metadata Extension (Discriminator: 19)
+pub struct TokenMetadata {
+    /// The authority that can sign to update the metadata
+    pub update_authority: Pubkey,
+    /// The associated mint, used to counter spoofing to be sure that metadata
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The longer name of the token
+    pub name: String,
+    /// The shortened symbol for the token
+    pub symbol: String,
+    /// The URI pointing to richer metadata
+    pub uri: String,
+    /// Any additional metadata about the token as key-value pairs. The program
+    /// must avoid storing the same key twice.
+    pub additional_metadata: Vec<(String, String)>,
+}
+```
+
+<ArticleSection name="组和成员扩展" id="group-and-member-extension" level="h2" />
+
+`Group` 和 `Member` 扩展是 `Mint` 账户扩展，它们引入了创建组（如与多个资产关联的 NFT 集合）的能力。
+
+此扩展系统非常适合创建 NFT 集合、代币家族或任何需要跟踪成员资格并强制执行集合限制的相关资产分组。组可以表示集合，而成员则表示这些集合中的单个项目。
+
+组和成员扩展都由两个不同的扩展组成，这两个扩展都应用于 `Mint` 账户，就像 `Metadata` 扩展一样：
+- 包含有关组或成员的所有信息的 `Extension`。
+- 引用存储 `Group` 或 `Member` 扩展的 Mint account 的 `Pointer Extension`。
+
+群组与成员之间的关系是，一个群组可以有多个成员，但成员不能同时属于多个群组。
+
+与 Metadata 扩展类似，我们通常将 `Extension` 和 `Pointer` 放在同一个 `Mint` 账户中，而要创建 `Group` 和 `Member` 扩展，我们需要使用 [Token Group Interface](https://github.com/solana-program/token-group/tree/main)。
+
+> 我们不能在同一个包含 `Member` 扩展的 `Mint` 账户中添加 `Group` 扩展。
+
+以下是 `Group` 和 `GroupPointer` 扩展数据的样式：
+
+```rust
+/// GroupPointer Extension
+pub const group_pointer_extension_header: [u8; 4] = [20, 0, 64, 0]
+
+pub struct GroupPointer {
+    // Authority that can set the group address
+    authority: Pubkey;
+    // Account Address that holds the group
+    group_address: Pubkey;
+}
+
+/// Group Extension
+pub const group_extension_header: [u8; 4] = [21, 0, 80, 0]
+
+pub struct TokenGroup {
+    /// The authority that can sign to update the group
+    pub update_authority: Pubkey,
+    /// The associated mint, used to counter spoofing to be sure that group
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The current number of group members
+    pub size: u64,
+    /// The maximum number of group members
+    pub max_size: u64,
+}
+```
+
+以下是 `Member` 和 `MemberPointer` 扩展数据的样式：
+
+```rust
+/// MemberPointer Extension
+pub const group_pointer_extension_header: [u8; 4] = [22, 0, 64, 0]
+
+pub struct MemberPointer {
+    // Authority that can set the member address
+    authority: Pubkey;
+    // Account Address that holds the member
+    member_address: Pubkey;
+}
+
+/// Member Extension
+pub const group_extension_header: [u8; 4] = [23, 0, 72, 0]
+
+pub struct TokenGroupMember {
+    /// The associated mint, used to counter spoofing to be sure that member
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The pubkey of the `TokenGroup`
+    pub group: Pubkey,
+    /// The member number
+    pub member_number: u64,
+}
+```

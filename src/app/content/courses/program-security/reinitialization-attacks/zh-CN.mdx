@@ -1,0 +1,110 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 重新初始化攻击
+
+重新初始化攻击利用了未检查账户是否已初始化的程序漏洞，使攻击者能够覆盖现有数据并劫持对有价值账户的控制权。
+
+虽然初始化是为了首次使用而合法设置新账户，但重新初始化则是恶意地将现有账户重置为攻击者控制的状态。
+
+如果没有正确的初始化验证，攻击者可以对已在使用中的账户调用初始化函数，从而有效地对已建立的程序状态进行恶意接管。这在托管、金库或任何账户所有权决定对有价值资产控制权的系统中尤为严重。
+
+初始化是首次为新账户设置数据。必须检查账户是否已被初始化，以防止覆盖现有数据。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下存在漏洞的指令，它用于初始化一个程序账户：
+
+```rust
+#[program]
+pub mod unsafe_initialize_account{
+    use super::*;
+    
+    //..
+
+    pub fn unsafe_initialize_account(ctx: Context<InitializeAccount>) -> Result<()> {
+        let mut writer: Vec<u8> = vec![];
+        
+        let program_account = ProgramAccount {
+            owner: ctx.accounts.owner.key()
+        }.try_serialize(&mut writer)?;
+
+        sol_memcpy(&mut data, &writer, writer.len());
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+此代码存在一个致命缺陷：它从未检查账户是否已被初始化。每次调用此指令时，它都会无条件地覆盖账户数据，并将调用者设置为新所有者，而不考虑账户的先前状态。
+
+攻击者可以通过以下方式利用此漏洞：
+- 找到一个有价值的已初始化账户（例如控制 token account 的托管 PDA）
+- 使用该现有账户调用 `unsafe_initialize_account`
+- 通过覆盖先前的所有者数据成为新的“所有者”
+- 利用他们的新所有权清空该账户控制的所有资产
+
+这种攻击在托管场景中尤为严重。想象一个托管 PDA 拥有包含数千美元资产的 token account。最初的托管初始化正确地设置了账户并包含了合法参与者。但如果攻击者能够调用重新初始化函数，他们可以覆盖托管数据，将自己设置为所有者，并获得对所有托管 token 的控制权。
+
+幸运的是，`Anchor` 使得直接在账户结构中执行此检查变得非常简单，只需在初始化账户时使用 `init` 约束，如下所示：
+
+```rust
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + ProgramAccount::INIT_SPACE
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+或者，您也可以在指令中使用 `ctx.accounts.program_account.is_initialized` 检查，验证账户是否已被初始化，如下所示：
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.is_initialized {
+        return Err(ProgramError::AccountAlreadyInitialized.into());
+    }
+
+    Ok(())
+}
+```
+
+> Anchor 的 `init_if_needed` 约束（受功能标志保护）应谨慎使用。虽然它方便地仅在账户尚未初始化时初始化账户，但它也带来了一个危险的陷阱：如果账户已经初始化，指令处理程序会继续正常执行。这意味着您的程序可能会在不知情的情况下操作现有账户，可能覆盖关键数据或允许未经授权的访问。
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，由于我们无法直接在账户结构中添加安全检查，因此我们被迫在指令逻辑中进行检查。
+
+我们可以通过检查账户是否具有正确的标识符来实现：
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] == DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```

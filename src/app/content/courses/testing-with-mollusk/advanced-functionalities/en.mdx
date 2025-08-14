@@ -67,6 +67,8 @@ fn test() {
 
 Mollusk's token program helpers significantly simplify testing scenarios involving SPL tokens. The `mollusk-svm-programs-token` crate provides pre-configured support for `Token`, `Token2022`, and `Associated Token` programs.
 
+### Program Accounts
+
 After including the token helper crate, add the specific token programs your tests require:
 
 ```rust
@@ -105,105 +107,70 @@ let (associated_token_program, associated_token_program_account) =
 
 These helpers ensure that token-related tests have access to the correct program accounts with proper configuration, enabling comprehensive testing of token operations without manual program setup.
 
-If we then wanted to create State accounts from the token program that are already initialized, we would need to create them using the Account method and load them in the account struct of the Mollusk instance.
+### State Accounts
 
-Creating initialized token accounts manually involves significant boilerplate for serializing account data and calculating rent exemption. Here are helper functions that streamline this process:
+During our tests, we might need to have a `Mint`, `Token` or `Associated Token` account that has already been initialized. Luckily for us, Mollusk has some handy helpers for us.
+
+To create a `Mint` account we can use the `create_account_for_mint()` function like this:
 
 ```rust
-use spl_token::{state::{Mint, Account as TokenAccount, AccountState}, ID as token};
-use spl_associated_token_account::get_associated_token_address_with_program_id;
+use spl_token::state::Mint;
+use mollusk_svm_programs_token::token::create_account_for_mint;
 
-// Create a Keyed Account for a Mint with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_mint_default(
-    mollusk: &Mollusk,
-    authority: &Pubkey,
-    decimals: u8,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let mint_data = Mint {
-        mint_authority: Some(*authority).into(),
-        supply: 0,
-        decimals,
-        is_initialized: true,
-        freeze_authority: None.into(),
-    };
+let mint_data = Mint {
+    mint_authority: Pubkey::new_unique(),
+    supply: 10_000_000_000,
+    decimals: 6,
+    is_initialized: true,
+    freeze_authority: None,
+};
 
-    let mut data = vec![0u8; Mint::LEN];
-    Mint::pack(mint_data, &mut data).unwrap();
-
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(Mint::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for a Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    pubkey: Option<Pubkey>,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let account_data = TokenAccount {
-        mint: *mint,
-        owner: *owner,
-        amount,
-        delegate: None.into(),
-        state: AccountState::Initialized,
-        is_native: None.into(),
-        delegated_amount: 0,
-        close_authority: None.into(),
-    };
-
-    let mut data = vec![0u8; TokenAccount::LEN];
-    TokenAccount::pack(account_data, &mut data).unwrap();
-
-    let account = Account {
-        lamports: mollusk.sysvars.rent.minimum_balance(TokenAccount::LEN),
-        data,
-        owner: token_program.unwrap_or(token::ID),
-        executable: false,
-        rent_epoch: 0,
-    };
-
-    (pubkey.unwrap_or(Pubkey::new_unique()), account)
-}
-
-// Create a Keyed Account for an Associated Token Account with default data
-#[allow(dead_code)]
-pub fn keyed_account_for_associated_token_account_default(
-    mollusk: &Mollusk,
-    mint: &Pubkey,
-    owner: &Pubkey,
-    amount: u64,
-    token_program: Option<Pubkey>,
-) -> (Pubkey, Account) {
-    let associated_token_address = get_associated_token_address_with_program_id(
-        owner,
-        mint,
-        &token_program.unwrap_or(token::ID),
-    );
-
-    keyed_account_for_token_account_default(
-        mollusk,
-        mint,
-        owner,
-        amount,
-        Some(associated_token_address),
-        Some(token_program.unwrap_or(token::ID)),
-    )
-}
+let mint_account = create_account_for_mint(mint_data)
 ```
+
+To create a `Token` account we can use the `create_account_for_token_account()` function like this:
+
+```rust
+use spl_token::state::{TokenAccount, AccountState};
+use mollusk_svm_programs_token::token::create_account_for_token_account;
+
+let token_data = TokenAccount {
+    mint: Pubkey::new_unique(),
+    owner: Pubkey::new_unique(),
+    amount: 1_000_000,
+    delegate: None,
+    state: AccountState::Initialized,
+    is_native: None,
+    delegated_amount: 0,
+    close_authority: None,
+};
+
+let token_account = create_account_for_token_account(token_data)
+```
+
+> Note: These examples are for the SPL-Token program. If you want to create `Mint` and `Token` account owned by the Token2022 program, just use `mollusk_svm_programs_token::token2022::...`.
+
+To create an `Associated Token` account we can use the `create_account_for_associated_token_account()` function like this:
+
+```rust
+use spl_token::state::{TokenAccount, AccountState};
+use mollusk_svm_programs_token::associated_token::pub fn create_account_for_associated_token_account;
+
+let token_data = TokenAccount {
+    mint: Pubkey::new_unique(),
+    owner: Pubkey::new_unique(),
+    amount: 1_000_000,
+    delegate: None,
+    state: AccountState::Initialized,
+    is_native: None,
+    delegated_amount: 0,
+    close_authority: None,
+};
+
+let associated_token_account = create_account_for_associated_token_account(token_data)
+```
+
+> Note: This example are for the SPL-Token program. If you want to create an `Associated Token` account owned by the Token2022 program, just use the `create_account_for_associated_token_2022_account` function.
 
 <ArticleSection name="Benchmarking Compute Units" id="benchmarking-compute-units" level="h2" />
 

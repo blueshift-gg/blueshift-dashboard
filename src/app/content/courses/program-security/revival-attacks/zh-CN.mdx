@@ -1,0 +1,135 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 复活攻击
+
+复活攻击利用了 Solana 的账户关闭机制，通过在同一笔交易中将“死亡”账户重新激活。
+
+当您通过转移账户中的 lamports 来关闭账户时，Solana 并不会立即对其进行垃圾回收；账户只有在交易完成后才会被清理。这种延迟会产生一个危险的窗口，攻击者可以通过将 lamports 发送回这些账户来“复活”已关闭的账户，从而留下可能仍被您的程序信任的僵尸账户和过时数据。
+
+这种攻击之所以成功，是因为对账户生命周期的基本误解。开发者通常认为关闭账户会使其立即不可用，但实际上，账户在交易结束之前仍然可以访问。攻击者可以在您的关闭指令前后插入一条转账指令，将账户的租金豁免金额退回，从而阻止垃圾回收并使账户保持在可被利用的状态。
+
+在某些协议中，这种攻击尤其具有破坏性，例如账户关闭代表最终操作的场景：完成托管、解决争议或销毁资产。被复活的账户可能会欺骗您的程序，使其认为这些操作从未完成，从而可能导致双重支付、未经授权的访问或协议操控。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下易受攻击的指令，该指令用于关闭一个程序账户：
+
+```rust
+#[program]
+pub mod insecure_close{
+    use super::*;
+
+    //..
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+        **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+            .checked_add(ctx.accounts.account_to_close.to_account_info().lamports())
+            .unwrap();
+        **ctx.accounts.account_to_close.to_account_info().lamports.borrow_mut() = 0;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+这段代码看起来是正确的：它将账户中的所有 lamports 转移到目标地址，这应该会触发垃圾回收。然而，账户的数据仍然保持不变，并且在同一笔交易中仍然可以访问该账户。
+
+攻击者可以通过创建包含多个指令的交易来利用这一点：
+- 指令 1：调用您的关闭函数以清空账户中的 lamports
+- 指令 2：将 lamports 转回“已关闭”的账户（复活）
+- 指令 3：在后续操作中使用复活的账户
+
+结果是一个僵尸账户，从程序逻辑上看似已关闭，但实际上仍然可以正常运行，并保留其所有原始数据。这可能导致：
+- 双重支付：多次使用“已关闭”的托管账户
+- 授权绕过：重新激活本应停用的管理员账户
+- 状态损坏：操作本应不再存在的账户
+
+最安全的解决方案是使用 Anchor 的 `close` 约束，它可以自动处理安全关闭：
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+   #[account(
+        mut,
+        close = owner,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+或者，您可以像这样添加 `signer` 账户约束：
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+对于自定义关闭逻辑，请实现完整的安全关闭模式：
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    let account = ctx.accounts.account.to_account_info();
+
+    let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+    **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+        .checked_add(account.lamports())
+        .unwrap();
+    **account.lamports.borrow_mut() = 0;
+
+    let mut data = account.try_borrow_mut_data()?;
+    for byte in data.deref_mut().iter_mut() {
+        *byte = 0;
+    }
+
+    let dst: &mut [u8] = &mut data;
+    let mut cursor = std::io::Cursor::new(dst);
+    cursor
+        .write_all(&anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，手动实现关闭模式：
+
+```rust
+self.program_account.realloc(0, true)?;
+self.program_account.close()?;
+
+let mut data_ref = self.program_account.try_borrow_mut_data()?;
+data_ref[0] = 0xff;
+```

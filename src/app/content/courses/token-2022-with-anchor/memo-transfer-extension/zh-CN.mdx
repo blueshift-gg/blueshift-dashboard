@@ -1,0 +1,169 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 备忘录转账扩展
+
+`MemoTranfer` 扩展是一种 `Token` 账户扩展，它强制要求所有转入 token account 的交易都包含备忘录，从而增强交易跟踪和用户识别。
+
+<ArticleSection name="初始化 Token Account" id="initializing-the-token-account" level="h2" />
+
+由于 `Anchor` 没有为 `memo_transfer` 扩展提供任何宏，我们将使用原始 CPI 创建一个 `Token` 账户。
+
+以下是创建带有备忘录转账扩展的 token 的方法：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_account3,
+        spl_token_2022::{extension::ExtensionType, pod::PodAccount},
+        InitializeAccount3,
+    },
+    token_interface::{memo_transfer_initialize, MemoTransfer, Mint, Token2022},
+};
+
+// There is currently not an anchor constraint to automatically initialize the MemoTransfer extension
+// We can manually create and initialize the token account via CPIs in the instruction handler
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    // Calculate space required for token and extension data
+    let token_account_size =
+        ExtensionType::try_calculate_account_len::<PodAccount>(&[ExtensionType::MemoTransfer])?;
+
+    // Calculate minimum lamports required for size of token account with extensions
+    let lamports = (Rent::get()?).minimum_balance(token_account_size);
+
+    // Invoke System Program to create new account with space for token account and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.token_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        token_account_size as u64,         // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the standard token account data
+    initialize_account3(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InitializeAccount3 {
+            account: ctx.accounts.token_account.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            authority: ctx.accounts.payer.to_account_info(),
+        },
+    ))?;
+
+    // Initialize the memo transfer extension
+    // This instruction must come after the token account initialization
+    memo_transfer_initialize(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        MemoTransfer {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            account: ctx.accounts.token_account.to_account_info(),
+            owner: ctx.accounts.payer.to_account_info(),
+        },
+    ))?;
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(mut)]
+    pub token_account: Signer<'info>,
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+<ArticleSection name="带备忘录的 Token 转账" id="transferring-token-with-a-memo" level="h2" />
+
+要在 Solana 上使用 Memo 程序，我们有可行的路径。
+
+构建我们自己的“原始”备忘录指令，如下所示：
+
+```ts
+const message = "Hello, Solana";
+
+new TransactionInstruction({
+    keys: [{ pubkey: keypair.publicKey, isSigner: true, isWritable: true }],
+    data: Buffer.from(message, "utf-8"), // Memo message. In this case it is "Hello, Solana"
+    programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Memo program that validates keys and memo message
+}),
+```
+
+或者我们可以在下载该软件包后，使用 Memo 程序的软件开发工具包，如下所示：
+
+
+
+```bash
+npm i @solana/spl-memo
+
+```
+
+> After creating the memo, the next instruction will be a simple transfer instruction.
+
+在我们的示例中，我们将使用后者，代码如下：
+
+```ts
+const memoInstruction = createMemoInstruction(
+    "Hello, world!",
+    [keypair.publicKey],
+);
+
+//...anchor 指令与转账指令
+
+const transferTransaction = new Transaction().add(
+    memoInstruction,
+    transferInstruction,
+);
+
+const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [keypair]);
+
+console.log(`Tokens transferred with memo! Check out your TX here: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`);
+
+```
+
+<ArticleSection name="Disabling and Enabling the Memo" id="disabling-and-enabling-the-memo" level="h2" />
+
+如果我们不想强制要求转账必须附带备注，可以使用 memo_transfer_disable 函数来实现，具体如下：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{memo_transfer_disable, MemoTransfer, Token, Mint, Token2022};
+
+#[derive(Accounts)]
+pub struct DisableMemo<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(
+        mut,
+        token::authority = owner,
+    )]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+pub fn disable_memo(
+    ctx: Context<DisableMemo>,
+) -> Result<()> {
+    memo_transfer_disable(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        MemoTransfer {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            account: ctx.accounts.token_account.to_account_info(),
+            owner: ctx.accounts.owner.to_account_info(),
+        },
+    ))?;
+    
+    Ok(())
+}
+```

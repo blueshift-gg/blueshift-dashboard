@@ -1,0 +1,128 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token2022 程序
+
+Token2022 程序，也被称为 Token Extensions，是 Token Program 提供功能的超集。
+
+如果您想了解更多关于可用的附加功能以及与传统 Token Program 的区别，请访问[此课程](/zh-cn/courses/token-2022-program)。
+
+> 如果您不熟悉 Anchor，我们建议您在继续之前先完成我们的 [Anchor 入门课程](/zh-cn/courses/introduction-to-anchor)。
+
+对于 Anchor，所有与 token 相关的内容都可以在 `anchor-spl` crate 中找到。因此，在初始化了一个 `Anchor` 工作区后，我们可以直接执行：
+
+```
+cargo add anchor-spl
+```
+
+> `anchor-spl` 的版本需要与我们的 `anchor-lang` crate 的版本一致。而 Token2022 扩展仅从 0.30.0 版本开始可用。
+
+别忘了更新程序中 `cargo.toml` 文件的 `[features]` 部分中的 `idl-build` 功能，使用 `idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]`。
+
+<ArticleSection name="铸币账户和 Token 账户" id="mint-and-token-accounts" level="h2" />
+
+如果您熟悉 `Anchor`，您会知道它们有一组宏，可以帮助用户抽象掉与初始化账户相关的许多复杂性。
+
+对于 `Mint`、`Token` 和 `Associated Token` 账户，这里也是一样的。
+
+### 带扩展的铸币账户
+
+由于带扩展的 `Mint` 账户具有不同的大小并由不同的程序拥有，`Anchor` 创建了一种新类型的账户，无论 `Mint` 账户是来自传统 Token 还是 Token2022 程序，都可以独立工作。
+
+要使用它们，我们只需从 `anchor_spl::token_interface` 中同时导入 `TokenInterface` 和 `Mint`，如下所示：
+
+```rust
+use anchor_spl::token_interface::{TokenInterface, Mint};
+```
+
+之后，我们只需执行 `pub mint: InterfaceAccount<'info, Mint>,`，并指定我们希望 mint 使用我们在账户结构中定义的 token_program 账户，如下所示：`mint::token_program = token_program`，这样就完成了！
+
+> token 接口提供了一种通用方式，可以在不需要处理反序列化逻辑差异的情况下，与两种类型的账户交互，同时保持类型安全和适当的验证。
+
+在深入了解如何为 mint account 添加扩展之前，以下是使用 Token2022 程序创建 mint 的方法：
+
+```rust
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = signer.key(),
+        mint::token_program = token_program
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+```
+
+幸运的是，`Anchor` 为我们提供了支持，并创建了一些宏，可以在初始化步骤中直接添加最流行的扩展，如下所示：
+
+```rust
+#[account(
+    // ...init
+    extensions::metadata_pointer::authority = <target_account>,
+    extensions::metadata_pointer::metadata_address = <target_account>,
+    extensions::group_pointer::authority = <target_account>,
+    extensions::group_pointer::group_address = <target_account>,
+    extensions::group_member_pointer::authority = <target_account>,
+    extensions::group_member_pointer::member_address = <target_account>,
+    extensions::transfer_hook::authority = <target_account>,
+    extensions::transfer_hook::program_id = <target_pubkey>
+    extensions::close_authority::authority = <target_account>,
+    extensions::permanent_delegate::delegate = <target_account>,
+)]
+pub mint: InterfaceAccount<'info, Mint>,
+```
+
+### 关联 Token 账户及扩展功能
+
+`Associated Token` 账户默认自带 `ImmutableOwner` 扩展功能。因此，创建旧版代币账户和 Token2022 `Token Account` 的唯一区别仅在于是否使用 `Interface Account`。
+
+
+创建关联代币账户的方法如下:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateAssociatedToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = signer,
+        associated_token::token_program = token_program,
+    )]
+    pub associated_token: InterfaceAccount<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+```
+
+### 带扩展程序的 Token 账户 
+
+`Token` 账户默认不带任何扩展程序，也没有任何宏可以帮助我们。因此，使用宏我们只能创建一个普通的 Token2022 `Token` 账户。
+
+创建 Token 账户的方法如下：
+
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = signer,
+        token::token_program = token_program,
+    )]
+    pub token: InterfaceAccount<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+```

@@ -1,0 +1,136 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 任意 CPI
+
+任意 Cross Program Invocation (CPI) 攻击发生在程序盲目调用作为参数传入的任何程序，而不是验证它们是否调用了预期的程序。
+
+这会将您的安全程序转变为恶意代码的启动器，使攻击者能够劫持您的程序权限，并以您的程序身份执行未经授权的操作。
+
+危险在于 Solana 灵活的账户模型。由于调用者可以将任何程序 ID 传入指令的账户列表中，如果未能验证程序地址，您的程序就会成为任意代码执行的代理。
+
+攻击者可以替换一个恶意程序，该程序模仿预期的接口，但执行完全不同的操作——例如逆转转账、清空账户或以意想不到的方式操纵状态。
+
+这种攻击特别隐蔽的地方在于，即使所有其他安全检查都通过，攻击仍然可能成功。您的程序可能正确验证了账户所有权、检查了签名并验证了数据结构，但仍然可能调用恶意代码，因为它从未确认与之交互的是正确的程序。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下执行代币转移的易受攻击的指令：
+
+```rust
+#[program]
+pub mod insecure_cpi{
+    use super::*;
+    //..
+
+    pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+        solana_program::program::invoke(
+            &spl_token::instruction::transfer(
+                ctx.accounts.token_program.key,
+                ctx.accounts.source.key,
+                ctx.accounts.destination.key,
+                ctx.accounts.authority.key,
+                &[],
+                amount,
+            )?,
+            &[
+                ctx.accounts.source.clone(),
+                ctx.accounts.destination.clone(),
+                ctx.accounts.authority.clone(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    /// CHECK: This account will not be checked by Anchor
+    pub token_program: UncheckedAccount<'info>,
+}
+```
+
+这段代码乍一看似乎是安全的。源和目标已正确验证为 token account，并且授权必须签署交易。然而，`token_program` 字段是一个 `UncheckedAccount`，这意味着 Anchor 对其完全不进行验证。
+
+攻击者可以通过以下方式利用这一点：
+- 创建一个具有与 SPL Token 的转移指令相同接口的恶意程序
+- 他们的恶意程序不是将代币从源转移到目标，而是执行相反的操作，甚至更糟
+- 将他们的恶意程序作为 `token_program` 参数传入
+- 您的程序在完全拥有交易权限的情况下，毫不知情地调用了攻击者的代码
+
+攻击之所以成功，是因为虽然 token account 是合法的，但执行操作的程序却不是合法的。恶意程序可能会将代币转移到错误的方向，将账户资金转移到攻击者的钱包，或者执行任何传递的账户允许的操作。
+
+幸运的是，`Anchor` 使得可以直接在账户结构中轻松执行此检查，只需将 `UncheckedAccount` 更改为 `Program` 并传递 `Token` 类型，该类型会自动验证程序 ID：
+
+```rust
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+更好的是，使用 Anchor 的 CPI 辅助工具，它会自动处理程序验证：
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.from_token_account.to_account_info(),
+                to: ctx.accounts.to_token_account.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            },
+        ),
+        &amount,
+    )?;
+
+    Ok(())
+}
+```
+
+对于自定义验证，在进行 CPI 之前显式检查程序 ID：
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    if &spl_token::ID != ctx.accounts.token_program.key {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    solana_program::program::invoke(
+        &spl_token::instruction::transfer(
+            ctx.accounts.token_program.key,
+            ctx.accounts.source.key,
+            ctx.accounts.destination.key,
+            ctx.accounts.authority.key,
+            &[],
+            amount,
+        )?,
+        &[
+            ctx.accounts.source.clone(),
+            ctx.accounts.destination.clone(),
+            ctx.accounts.authority.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，由于没有自动程序检查，因此需要手动验证：
+
+```rust
+if self.accounts.token_program.pubkey() != &spl_token::ID {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```

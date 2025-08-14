@@ -1,0 +1,166 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 利息承载扩展
+
+`InterestBearing` 扩展是一种 `Mint` 账户扩展，允许用户为其代币应用利率，并在任何时候检索包括利息在内的更新总额。
+
+<ArticleSection name="初始化铸币账户" id="initializing-the-mint-account" level="h2" />
+
+由于 `Anchor` 没有任何用于 `transfer_fee` 扩展的宏，我们将使用原始 CPI 创建一个 `Mint` 账户。
+
+以下是如何创建带有转账费用扩展的铸币账户：
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint},
+        InitializeMint2,
+    },
+    token_interface::{
+        interest_bearing_mint_initialize, InterestBearingMintInitialize, Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_interest_bearing_config(
+    ctx: Context<Initialize>,
+    rate: i16
+) -> Result<()> {
+    // Calculate space required for mint and extension data
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TransferFeeConfig])?;
+
+    // Calculate minimum lamports required for size of mint account with extensions
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoke System Program to create new account with space for mint and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the InterestBearingConfig extension
+    // This instruction must come before the instruction to initialize the mint data
+    interest_bearing_mint_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InterestBearingMintInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(ctx.accounts.payer.key()),
+        rate,
+    )?;
+
+    // Initialize the standard mint account data
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimals
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="计算利息" id="calculating-the-interest" level="h2" />
+
+`InterestBearing` 扩展不会生成新代币；显示的金额仅通过 `amount_to_ui_amount` 函数包含了累计利息，因此更改仅是视觉上的。
+
+因此，在 `unpacking` `Token` 账户后，我们可以轻松获取所需的所有信息来计算利息金额。
+
+幸运的是，我们甚至不需要这样做，因为我们可以像这样使用 `amountToUiAmount` 函数：
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="更新利息承载扩展" id="updating-the-interest-bearing-extension" level="h2" />
+
+通过 `InterestBearing` 扩展，可以更改代币账户产生的利息，这得益于其数据结构的设计：
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+为此，我们可以像这样使用 `interest_bearing_mint_update_rate()` 指令：
+
+```ts
+interest_bearing_mint_update_rate(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InterestBearingMintUpdateRate {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            rate_authority: ctx.accounts.authority.to_account_info(),
+        },
+    ),
+    rate,
+)?;
+```
+
+如果需要，我们还可以通过使用 `set_authority()` 函数并传入正确的 `AuthorityType` 来更改设置利息的权限，如下所示：
+
+```ts
+set_authority(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        SetAuthority {
+            current_authority: ctx.accounts.authority.to_account_info,
+            account_or_mint: ctx.accounts.mint.to_account_info,
+        }
+    ),
+    spl_token_2022::instruction::AuthorityType::InterestRate,
+    new_authority,
+)?;
+```

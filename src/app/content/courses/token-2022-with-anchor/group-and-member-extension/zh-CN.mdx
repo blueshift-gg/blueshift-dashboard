@@ -1,0 +1,177 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 群组和成员扩展
+
+`Group` 和 `Member` 扩展是 `Mint` 账户扩展，它们引入了创建群组的功能，例如与多个资产关联的 NFT 集合。
+
+<ArticleSection name="初始化铸币账户" id="initializing-the-mint-account" level="h2" />
+
+`Member` 和 `Group` 扩展与我们通常的操作略有不同，因为它由两个不同的扩展组成，这两个扩展都位于一个 `Mint` 账户上：
+- 包含所有关于群组或成员信息的 `Extension`。
+- 引用 `Mint` 账户的 `Pointer Extension`，该账户上存有 `Group` 或 `Member` 扩展。
+
+通常情况下，当使用时，`Extension` 和 `Pointer Extension` 会位于同一个 `Mint` 账户上；在这个示例中，我们也会这样做。
+
+> `Group` 和 `Member` 扩展不能位于同一个账户上
+
+在深入代码之前，让我们先了解一些基础知识：
+
+虽然 `GroupPointer` 和 `MemberPointer` 扩展位于 `@solana/spl-token package` 中，但要初始化 `Group` 和 `Member`，我们需要使用 `@solana/spl-token-group` 包。
+
+因此，让我们安装所需的包：
+
+```
+npm i @solana/spl-token-group
+```
+
+此外，`Group` 和 `Member` 扩展是少数需要在初始化 `Mint` 账户后再初始化扩展的扩展之一。
+
+这是因为元数据初始化指令会根据群组和成员内容的长度动态分配所需的空间。
+
+同时，这意味着我们需要为 `Mint` 账户初始化足够的 lamports，以使其在包含 `Group` 或 `Member` 扩展时免租金，但仅为 `GroupPointer` 或 `MemberPointer` 扩展分配足够的空间，因为 `initializeGroup()` 和 `intializeMember()` 指令实际上会正确增加空间。
+
+初始化 `Group` 的代码如下：
+
+```ts
+const mint = Keypair.generate();
+
+// Size of Mint Account with extensions
+const mintLen = getMintLen([ExtensionType.GroupPointer]);
+
+// Minimum lamports required for Mint Account
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + TYPE_SIZE + LENGTH_SIZE + TOKEN_GROUP_SIZE);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeGroupPointer = createInitializeGroupPointerInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeGroupInstruction = createInitializeGroupInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        mint: mint.publicKey,
+        mintAuthority: keypair.publicKey,
+        updateAuthority: keypair.publicKey,
+        maxSize: BigInt(100),
+    }
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeGroupPointer,
+    initializeMintInstruction,
+    initializeGroupInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint], {commitment: "finalized"});
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+之后，我们可以使用刚刚创建的组来添加成员，代码如下：
+
+```ts
+const member = Keypair.generate();
+
+// Size of Member Account with extensions
+const memberLen = getMintLen([ExtensionType.GroupMemberPointer]);
+
+// Minimum lamports required for Member Account
+const lamports = await connection.getMinimumBalanceForRentExemption(memberLen + TYPE_SIZE + LENGTH_SIZE + TOKEN_GROUP_MEMBER_SIZE);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: member.publicKey,
+    space: memberLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeGroupMemberPointer = createInitializeGroupMemberPointerInstruction(
+    member.publicKey,
+    keypair.publicKey,
+    member.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    member.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeGroupMemberInstruction = createInitializeMemberInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        member: member.publicKey,
+        memberMint: member.publicKey,
+        memberMintAuthority: keypair.publicKey,
+        groupUpdateAuthority: keypair.publicKey,
+    }
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeGroupMemberPointer,
+    initializeMintInstruction,
+    initializeGroupMemberInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, member], {commitment: "finalized"});
+
+console.log(`Member created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="更新组的 maxSize" id="updating-the-max-size-for-groups" level="h2" />
+
+如您所见，当我们创建组时，我们分配了一个 `maxSize` 字段，用于限制该特定组中最多可以有多少个 `Member`。
+
+如果我们改变主意，并且仍然拥有该组的 `updateAuthority`，我们可以使用 `updateGroupMaxSize()` 指令来缩小或增加该数字，如下所示：
+
+```ts
+const updateGroupMaxSizeInstructions = createUpdateGroupMaxSizeInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        updateAuthority: keypair.publicKey,
+        maxSize: BigInt(100),
+    }
+);
+```
+
+<ArticleSection name="更新组的 updateAuthority" id="updating-the-update-authority-for-groups" level="h2" />
+
+如果我们想更改 `UpdateAuthority` 或将其设为不可变，以防止任何人向其中添加更多的 `Member`，我们可以使用 `updateGroupAuthority()` 指令，如下所示：
+
+```ts
+const updateGroupAuthorityInstructions = createUpdateGroupAuthorityInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        currentAuthority: keypair.publicKey,
+        newAuthority: null,
+    }
+);
+```

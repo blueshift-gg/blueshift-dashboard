@@ -1,0 +1,102 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mint 和 Token 账户
+
+正如我们在上一节中提到的，`SPL Token` 程序的构建模块是账户：代表所有关于代币信息的 mint 账户，以及代表这些特定代币所有权信息的 token 账户。
+
+对于每个唯一的 mint，有成千上万个不同的 token 账户，代表了账本中持有该代币的持有者数量。
+
+在本节中，我们将更深入地讨论这些不同的账户：
+
+<ArticleSection name="Mint 账户" id="the-mint-account" level="h2" />
+
+在 Solana 上，代币通过由 Token Program 拥有的 Mint 账户地址唯一标识。此账户充当特定代币的全局计数器，并存储以下数据：
+- 供应量：代币的总供应量
+- 小数位数：代币的小数精度
+- Mint 权限：被授权创建代币新单位、增加供应量的账户
+- 冻结权限：被授权冻结 Token 账户中代币的账户，防止其被转移或销毁
+
+以下是链上数据的展示方式：
+
+```rust
+pub struct Mint {
+    /// Optional authority used to mint new tokens. The mint authority may only
+    /// be provided during mint creation. If no mint authority is present
+    /// then the mint has a fixed supply and no further tokens may be
+    /// minted.
+    pub mint_authority: COption<Pubkey>,
+    /// Total supply of tokens.
+    pub supply: u64,
+    /// Number of base 10 digits to the right of the decimal place.
+    pub decimals: u8,
+    /// Is `true` if this structure has been initialized
+    pub is_initialized: bool,
+    /// Optional authority to freeze token accounts.
+    pub freeze_authority: COption<Pubkey>,
+}
+```
+
+### 元数据
+
+在区块浏览器和钱包中，代币通常通过特定的名称和图像变得可识别且易于阅读。
+
+我们将代币的名称、符号和图像称为 `Metadata`。因为在其原生形式中，`Mint` 账户只是一个 32 字节长的公钥，没有附加任何人类可读的信息。
+
+在原生的 SPL Token 程序中，无法直接在代币上设置元数据。因此，像 [Metaplex](https://www.metaplex.com/) 这样的协议开发了 [MPL-token-metadata](https://github.com/metaplex-foundation/mpl-token-metadata) 程序，为每个代币提供了关联元数据的方法。
+
+> 使用 Token Extensions 和 [Token2022 程序](/zh-cn/courses/token-2022-program)，这一切将完全改变。Metadata 扩展允许您将元数据直接嵌入到 mint account 中，从而无需依赖外部程序。
+
+### 非同质化代币
+
+虽然代币的用途由创建者具体决定，他们可以将特定代币设定为治理代币、实用代币或社区代币，但我们可以通过一些特性来区分同质化代币和非同质化代币：
+
+非同质化代币需要具备以下特性：
+- 供应量为 1，因为它们是独一无二的
+- 小数位为 0，因为它们是不可分割的
+- 没有 mint authority，因为我们不希望添加更多具有相同特性的代币，这会“破坏”代币的独特性
+
+在 Token Program 中，本地无法强制执行这些特性。因此，像 `MPL-token-metadata` 这样的程序不仅提供了元数据的实现，还提供了强制执行这些约束的实现，从而可以轻松创建 NFT。
+
+<ArticleSection name="Token Account" id="the-token-account" level="h2" />
+
+Token Program 创建了 Token Account，用于跟踪每个代币单位的个人所有权。Token Account 存储以下数据：
+- Mint：Token Account 持有的代币
+- Owner：被授权从 Token Account 转移代币的账户
+- Amount：Token Account 当前持有的代币数量
+
+以下是这些数据在链上的表现形式：
+
+```rust
+pub struct Account {
+    /// The mint associated with this account
+    pub mint: Pubkey,
+    /// The owner of this account.
+    pub owner: Pubkey,
+    /// The amount of tokens this account holds.
+    pub amount: u64,
+    /// If `delegate` is `Some` then `delegated_amount` represents
+    /// the amount authorized by the delegate
+    pub delegate: COption<Pubkey>,
+    /// The account's state
+    pub state: AccountState,
+    /// If is_native.is_some, this is a native token, and the value logs the
+    /// rent-exempt reserve. An Account is required to be rent-exempt, so
+    /// the value is used by the Processor to ensure that wrapped SOL
+    /// accounts do not drop below this threshold.
+    pub is_native: COption<u64>,
+    /// The amount delegated
+    pub delegated_amount: u64,
+    /// Optional authority to close the account.
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+每个钱包需要为其想要持有的每种代币（mint）创建一个 token account，并将钱包地址设置为 token account 的所有者。每个钱包可以为同一种代币（mint）拥有多个 token account，但一个 token account 只能有一个所有者，并且只能持有一种代币（mint）。
+
+<ArticleSection name="关联 Token Account" id="the-associated-token-account" level="h2" />
+
+关联 Token Account 简化了为特定 mint 和所有者查找 token account 地址的过程。可以将关联 Token Account 视为特定 mint 和所有者的“默认” token account。
+
+关联 Token Account 的地址是根据所有者地址和 mint account 地址派生出来的。需要理解的是，关联 Token Account 只是一个具有特定地址的 token account。
+
+这引入了 Solana 开发中的一个关键概念：[程序派生地址](https://solana.com/docs/core/pda) (PDA)。PDA 使用预定义的输入以确定性方式派生地址，从而使查找账户地址变得简单。

@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token2022 程序
+
+Token2022 程序，也被称为 Token Extensions，是 Token Program 提供功能的超集。
+
+传统的 Token Program 通过一组简单的无偏接口和结构满足了大多数对同质化和非同质化代币的需求。然而，它缺乏更具针对性的功能和实现，这些功能和实现可以帮助开发者通过通用接口创建自定义行为，从而使开发更快、更安全。
+
+正是出于这个原因，一个名为 `Token2022` 的新 Token Program 被创建，并配备了一组名为 `Token Extensions` 的新功能。这些扩展提供了特定的、可定制的行为，可以附加到 `Token Account` 或 `Mint Account` 上。
+
+> `SPL-Token Program`（开发者通常称其为 `Tokenkeg`，因为其程序地址为：`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`）和 `Token2022 Program` 是两个完全不同的程序，它们共享相同的“起点”。这意味着 `Tokenkeg` 代币可以被 `Token2022` 反序列化，但它们不能在该程序中使用，例如为其添加扩展。
+
+<ArticleSection name="铸币账户和代币账户" id="mint-and-token-accounts" level="h2" />
+
+在上一节中，我们讨论了 `Tokenkeg` 和 `Token2022` 程序之间的主要区别是 **Token Extensions**。
+
+为了能够强制执行，这些扩展需要直接存在于 `Mint` 和 `Token` 账户中，因为这是在直接操作 token program 时确保规则集被强制执行的唯一方法。
+
+因此，让我们来看看这些账户中传统和新 token program 的主要区别。
+
+**传统代币账户**
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Optional authority used to mint new tokens. The mint authority may only
+    /// be provided during mint creation. If no mint authority is present
+    /// then the mint has a fixed supply and no further tokens may be
+    /// minted.
+    pub mint_authority: COption<Pubkey>,
+    /// Total supply of tokens.
+    pub supply: u64,
+    /// Number of base 10 digits to the right of the decimal place.
+    pub decimals: u8,
+    /// Is `true` if this structure has been initialized
+    pub is_initialized: bool,
+    /// Optional authority to freeze token accounts.
+    pub freeze_authority: COption<Pubkey>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// The mint associated with this account
+    pub mint: Pubkey,
+    /// The owner of this account.
+    pub owner: Pubkey,
+    /// The amount of tokens this account holds.
+    pub amount: u64,
+    /// If `delegate` is `Some` then `delegated_amount` represents
+    /// the amount authorized by the delegate
+    pub delegate: COption<Pubkey>,
+    /// The account's state
+    pub state: AccountState,
+    /// If `is_native.is_some`, this is a native token, and the value logs the
+    /// rent-exempt reserve. An Account is required to be rent-exempt, so
+    /// the value is used by the Processor to ensure that wrapped SOL
+    /// accounts do not drop below this threshold.
+    pub is_native: COption<u64>,
+    /// The amount delegated
+    pub delegated_amount: u64,
+    /// Optional authority to close the account.
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+如您所见，这些账户没有书面区分符。这是因为这些字段的长度都是固定的，并且空间差异足够大，仅通过比较它们的不同长度就可以区分这些不同类型的账户。
+
+Token Extensions Program 的问题在于，扩展所需的任何额外数据都附加在我们熟悉的 `Mint` 和 `Token` 账户的末尾。
+
+这意味着通过长度来区分将会失效，因为我们可能会有一个附加了 3-4 个扩展的 `Mint`，其长度超过了 `Token` 账户的长度。因此，当 `Mint` 和 `Token` 账户有扩展时，会像这样为它们添加一个区分符：
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Legacy Token Program data
+    /// ...
+    /// Padding (83 empty bytes)
+    pub padding: [u8; 83]
+    /// Discriminator (1)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// Legacy Token Program data
+    /// ...
+    /// Discriminator (2)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+```
+
+为了维护传统结构，区分符不会像通常那样位于第一个字节，而是位于字节 `166`。
+
+这是因为 `Token` 账户的长度为 165 字节，这意味着区分符会添加在基础长度之后。对于 `Mint` 账户，这意味着我们必须添加 83 字节的填充，以确保两个账户具有相同的基础长度。
+
+因此，要区分这两个账户，我们只需检查第 166 个字节（如果从 0 开始计数，则为 data[165]），然后相应地操作。
+
+<ArticleSection name="Token Extensions" id="token-extensions" level="h2" />
+
+在下一节中，我们将讨论目前在 Solana 上存在的 Token Extensions 的优点和不同类型，但在这一介绍性段落中，我们只会讨论它们如何被序列化并添加到我们之前提到的两个状态账户中。
+
+每个扩展都有一个判别器，该判别器会与该扩展的大小一起直接保存在账户上。我们将其称为扩展的“头部”，其形式如下：
+
+```rust
+pub struct ExtensionHeader {
+    /// Extension Discriminator
+    pub discriminator: u16
+    /// Length of the Disriminator
+    pub length: u16
+}
+```
+
+这使得非常容易知道代币上有哪些扩展，并且只反序列化我们需要的数据，因为我们可以获取判别器，然后跳到下一个扩展以检查是否存在其他内容。

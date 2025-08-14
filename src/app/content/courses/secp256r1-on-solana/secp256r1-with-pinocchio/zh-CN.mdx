@@ -1,0 +1,127 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Secp256r1 与 Pinocchio
+
+Blueshift 团队的 [Dean](https://x.com/deanmlittle) 发布了首个支持 Pinocchio 兼容性的 crate，用于验证执行 `Secp256r1` 预编译的指令。
+
+这对于在 Pinocchio 程序中实现现代认证方法（如通行密钥）特别有用。
+
+<ArticleSection name="Introduction" id="introduction" level="h2" />
+
+SDK 通过核心数据结构提供了简洁的抽象：
+
+```rust
+// 33-byte compressed public key (1 byte parity + 32 byte x-coordinate)
+pub type Secp256r1Pubkey = [u8; 33];
+// 64-byte signature (r,s values)
+pub type Secp256r1Signature = [u8; 64];
+
+// Main instruction parser
+pub struct Secp256r1Instruction<'a> {
+    header: Secp256r1InstructionHeader,    // Number of signatures
+    offsets: &'a [Secp256r1SignatureOffsets], // Data location pointers
+    data: &'a [u8],                        // Raw instruction data
+}
+```
+
+`Secp256r1SignatureOffsets` 结构体充当内存映射，包含字节偏移量，指向指令有效负载中每个组件所在的位置：
+
+```rust
+pub struct Secp256r1SignatureOffsets {
+    pub signature_offset: u16,
+    pub signature_instruction_index: u16,
+    pub public_key_offset: u16,
+    pub public_key_instruction_index: u16,
+    pub message_data_offset: u16,
+    pub message_data_size: u16,
+    pub message_instruction_index: u16,
+}
+```
+
+在数据中，我们可以找到偏移结构引用的三个关键组件：
+- 公钥：33 字节的压缩 `Secp256r1` 公钥。在使用现代认证方法（如通行密钥）时，这代表了认证设备/用户的加密身份。
+- 签名：64 字节的 `ECDSA` 签名（r,s 值），由私钥生成。这证明了对应私钥的持有者授权了特定消息。
+- 消息数据：经过加密签名的任意字节。在实际应用中，这包含特定于应用程序的数据，如交易详情、时间戳或用户标识符，以防止重放攻击并确保签名具有上下文绑定。
+
+如您所见，公钥长度为 33 字节，因为它使用了压缩点表示法，这是一种空间高效的椭圆曲线点编码方式。
+
+在 Secp256r1 上，公钥在数学上是一个点 (x,y)，其中两个坐标均为 32 字节（总计 64 字节）。
+
+然而，给定任意 x 坐标，只有两个可能的 y 坐标满足曲线方程。
+
+压缩格式存储了 32 字节的 x 坐标加上一个单一的奇偶校验字节（偶数 y 为 0x02，奇数 y 为 0x03），从而实现了完整点的重建，同时节省了 48% 的存储空间。
+
+<ArticleSection name="Implementation" id="implementation" level="h2" />
+
+要验证 `Secp256r1` 签名，我们需要两个主要组件：
+1. 指令 sysvar：这使我们能够检查 `Secp256r1` 签名
+2. `pinocchio-secp256r1-instruction` crate：提供反序列化指令的工具
+
+指令 sysvar 已经包含在 Pinocchio crate 中，因此无需额外安装。
+
+但是，我们需要将 `pinocchio-secp256r1-instruction` crate 添加到我们的 Pinocchio 程序中：
+
+```
+cargo add pinocchio-secp256r1-instruction
+```
+
+为了实现验证，我们需要：
+1. 包含指令 Sysvar 程序（`Sysvar1nstructions1111111111111111111111111`，我们将其称为 `instructions`）
+2. 将 `Secp256r1` 指令放在当前指令之后
+
+以下是访问和反序列化指令的方法：
+
+```rust
+// Deserialize the instructions sysvar
+let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+// Get the instruction that follows our current one
+let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+```
+
+接下来，我们反序列化 `Secp256r1` 指令：
+
+```rust
+// Deserialize the Secp256r1 instruction
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+```
+
+然后我们进行一些安全检查。
+
+实施多个安全检查至关重要：
+1. **权限检查**：确保只有授权的接收者可以从包装 Secp256r1 公钥的 PDA 接收资金。这可以防止 MEV 攻击，即有人拦截交易，捕获有效签名并替换预期的接收者。
+2. **过期检查**：对签名的有效性设置时间限制。由于已验证的签名会无限期有效，实施过期时间戳可以防止重放攻击。
+
+我们通过将这些数据放入签名的消息中来执行这些检查。
+
+以下是实施这些安全检查的方法：
+
+```rust
+// Verify the fee payer is authorized
+let (receiver, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32).ok_or(ProgramError::InvalidInstructionData)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+
+// Check signature expiration
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+最后，我们可以直接从 Secp256r1 公钥派生程序派生地址（PDA），创建用户可以通过现代身份验证方法控制的确定性账户地址：
+
+```rust
+// Verify the first signature matches our PDA owner
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+// Create signer seeds for CPI
+let seeds = [
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+];
+let signers = [Signer::from(&seeds)];
+```
+
+> 我们需要将 pubkey 分成两部分，因为 seed 的最大长度为 32 字节。

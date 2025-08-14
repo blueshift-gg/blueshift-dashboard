@@ -1,0 +1,81 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# 使用 Anchor 进行指令内省
+
+Anchor 没有针对 `Instruction` sysvar 的内置辅助工具，但 Anchor 本身支持 `solana_program` crate 中的所有类型和函数。
+
+要在 Anchor 中使用指令内省，您需要将 `solana_program` crate 添加到您的项目中：
+
+```sh
+cargo add solana-program
+```
+
+添加 crate 后，您可以通过导入来访问所需的函数：
+
+```rust
+use solana_program::sysvar::instructions::{
+    self,
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="如何使用内省" id="how-to-use-introspection" level="h2" />
+
+如介绍中所述，指令内省通过从 `Instruction` sysvar 账户反序列化数据来提供交易中指令的详细信息。
+
+即使 `load_instruction_at_checked` 函数验证了被反序列化的账户是正确的账户，最好还是在您的账户结构中添加一个额外的检查：
+
+```rust
+#[account(address = instructions::ID)]
+/// CHECK: InstructionsSysvar account
+instructions: UncheckedAccount<'info>,
+```
+
+现在您可以开始使用指令内省了。
+
+首先，使用 `load_current_index_checked` 函数检查当前指令的索引：
+
+```rust
+// Check the index of the currently executing instruction. This could be in a different position than [0]).
+let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
+```
+
+接下来，您可以使用 `load_instruction_at_checked` 检查相对索引的指令。在这里，我们将检查当前指令之后的指令：
+
+```rust
+// Load the next instruction to check its input.
+let ix = load_instruction_at_checked(index as usize + 1, &ctx.accounts.instructions.to_account_info())?;
+```
+
+在进入下一步之前，重要的是要考虑哪些信息对于防止恶意攻击至关重要。
+
+我们通常从检查被调用的程序是否是预期的程序开始。在此示例中，我们正在内省同一程序的另一个指令：
+
+```rust
+require_keys_eq!(ix.program_id, ID, EscrowError::InvalidProgram);
+```
+
+接下来，检查指令是否是您期望的指令。为此，将指令的标识符与预期的标识符进行比较。在这种情况下，由于它是另一个 Anchor 指令，您可以这样做：
+
+```rust
+require!(ix.data[0..8].eq(instruction::TakeEnd::DISCRIMINATOR.as_slice()), EscrowError::InvalidIx);
+```
+
+> Anchor 通过在指令上直接提供 `Discriminator` trait `anchor_lang::Discriminator`，使这一过程变得更加简单。
+
+然后，您可以根据被检查指令的逻辑执行更多特定于程序的检查。
+
+在此示例中，我们检查指令数据（一个金额）是否正确。指令数据总是在判别器之后反序列化，因此您可以这样做：
+
+```rust
+require!(ix.data[8..16].eq(&escrow.take_amount.to_le_bytes()), EscrowError::InvalidAmount);
+```
+
+最后，检查内省指令中存在的账户。此步骤要求您了解 `Account` 结构的确切结构，因为您需要在特定索引处请求账户的数据或公钥：
+
+```rust
+let maker_ata = get_associated_token_address(&ctx.accounts.maker.key(), &escrow.mint_b);
+require_keys_eq!(ix.accounts.get(3).unwrap().pubkey, maker_ata, EscrowError::InvalidMakerATA);
+```

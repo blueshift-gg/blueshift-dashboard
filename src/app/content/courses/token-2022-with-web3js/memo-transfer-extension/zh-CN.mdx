@@ -1,0 +1,194 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 备忘录转账扩展
+
+`MemoTranfer` 扩展是一种 `Token` 账户扩展，它强制要求所有转入 token account 的转账都包含备忘录，从而增强交易跟踪和用户识别。
+
+<ArticleSection name="初始化 Token 账户" id="initializing-the-token-account" level="h2" />
+
+要在 `MemoTransfer` 扩展上初始化一个 `Token` 账户，我们需要使用 `enableRequiredMemoTransfers()` 函数。
+
+以下是如何创建带有不可变所有者扩展的 token：
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createInitializeImmutableOwnerInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calculate the size needed for a Token account with Transfer Fee extension
+const accountLen = getAccountLen([ExtensionType.ImmutableOwner]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Memo Transfer extension
+const enableMemoTransferInstruction = createEnableRequiredMemoTransfersInstruction(
+    destinationTokenAccount.publicKey,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the Token account itself
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableMemoTransferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="带备忘录的 Token 转账" id="transferring-token-with-a-memo" level="h2" />
+
+要在 Solana 上使用 Memo 程序，我们有两种可行路径。
+
+构建我们自己的“原始”备忘录指令，如下所示：
+
+```ts
+const message = "Hello, Solana";
+
+new TransactionInstruction({
+    keys: [{ pubkey: keypair.publicKey, isSigner: true, isWritable: true }],
+    data: Buffer.from(message, "utf-8"), // Memo message. In this case it is "Hello, Solana"
+    programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Memo program that validates keys and memo message
+}),
+
+或者，我们可以在下载该软件包后，使用 Memo 程序的软件开发工具包，如下所示：
+
+```
+
+npm i @solana/spl-memo
+
+```
+
+在我们的示例中，我们将使用后者，代码如下：
+
+```
+
+ts
+const memoInstruction = createMemoInstruction(
+    "Hello, world!",
+    [keypair.publicKey],
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount.publicKey,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferTransaction = new Transaction().add(
+    memoInstruction,
+    transferInstruction,
+);
+
+const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [keypair]);
+
+console.log(`Tokens transferred with memo! Check out your TX here: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`);
+
+```
+
+<ArticleSection name="Disabling and Enabling the Memo" id="disabling-and-enabling-the-memo" level="h2" />
+
+如果我们不想强制要求转账必须附带备注，可以使用 memo_transfer_disable 函数来实现，具体如下：
+
+```
+
+ts
+const disableRequiredMemoTransfersInstruction = createDisableRequiredMemoTransfersInstruction(
+    destinationTokenAccount,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    disableRequiredMemoTransfersInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+
+console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+
+```
+
+如需恢复强制备注要求，只需调用 enableRequiredMemoTransfers() 函数，示例如下：
+
+```
+
+ts
+const enableRequiredMemoTransfersInstruction = createEnableRequiredMemoTransfersInstruction(
+    destinationTokenAccount,
+    destinationKeypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transferInstruction = createTransferCheckedInstruction(
+    tokenAccount,
+    mint.publicKey,
+    destinationTokenAccount,
+    keypair.publicKey,
+    BigInt(100e6),
+    6,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    enableRequiredMemoTransfersInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+
+console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

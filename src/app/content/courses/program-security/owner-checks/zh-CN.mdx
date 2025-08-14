@@ -1,0 +1,115 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 所有者检查
+
+所有者检查是 Solana 程序安全的第一道防线。它们验证传递到指令处理器的账户是否确实由预期的程序拥有，从而防止攻击者替换恶意的相似账户。
+
+在 Solana 的 `AccountInfo` 结构中，每个账户都包含一个 owner 字段，该字段标识哪个程序控制该账户。所有者检查确保在程序信任账户数据之前，此 `owner` 字段与预期的 `program_id` 匹配。
+
+`AccountInfo` 结构包含多个字段，其中包括代表拥有该账户的程序的 owner。所有者检查确保 `AccountInfo` 中的 `owner` 字段与预期的 `program_id` 匹配。
+
+如果没有所有者检查，攻击者可以创建一个完美的账户数据结构“副本”，包括正确的鉴别器和所有正确的字段，并利用它操纵依赖数据验证的指令。这就像有人制作了一个看起来与真实身份证完全相同的假身份证，但由错误的权限控制。
+
+> 一个重要的例外是当您修改账户的内部数据时。在这些情况下，Solana 的运行时会自动阻止其他程序写入它们不拥有的账户。但是对于读取操作和验证逻辑，您需要自行处理。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下易受攻击的指令，它基于 `owner` 执行 `program_account` 的逻辑：
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let account_data = ctx.accounts.program_account.try_borrow_data()?;
+        let mut account_data_slice: &[u8] = &account_data;
+        let account_state = ProgramAccount::try_deserialize(&mut account_data_slice)?;
+
+        if account_state.owner != ctx.accounts.owner.key() {
+            return Err(ProgramError::InvalidArgument.into());
+        }
+
+        //..do something
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+`UncheckedAccount` 类型是 Anchor 表示“我不检查任何内容，请极其小心”的方式。虽然账户数据可能会完美反序列化并看起来合法，但缺少所有者检查会造成严重的漏洞。
+
+攻击者可以创建一个具有相同数据结构的账户，并将其传递给您的指令。您的程序会愉快地检查所有权字段，但由于攻击者控制了该账户，他们可以在指令中随意操作。
+
+解决方法既简单又关键：在信任账户内容之前，始终验证该账户是否由您的程序拥有。
+
+使用 `Anchor` 这非常简单，因为可以直接在账户结构中通过将 `UncheckedAccount` 更改为 `ProgramAccount` 来执行此检查，如下所示：
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+或者，您可以像这样添加 `owner` 账户约束：
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut, owner = ID)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+```
+
+或者，您也可以在指令中使用 `ctx.accounts.program_account.owner` 检查添加一个所有者检查，如下所示：
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.owner != ID {
+        return Err(ProgramError::IncorrectProgramId.into());
+    }
+    
+    //..do something
+
+    Ok(())
+}
+```
+
+通过添加此检查，指令处理程序仅在账户具有正确的 `program_id` 时才会继续。如果账户不属于我们的程序，交易将失败。
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，由于我们无法直接在账户结构中添加安全检查，因此我们被迫在指令逻辑中进行。
+
+我们可以通过使用 `is_owned_by()` 函数以类似于 Anchor 的方式实现，如下所示：
+
+```rust
+if !self.accounts.owner.is_owned_by(ID) {
+    return Err(ProgramError::IncorrectProgramId.into());
+}
+```

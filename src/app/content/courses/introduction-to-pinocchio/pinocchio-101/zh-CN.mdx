@@ -1,0 +1,198 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Pinocchio 101
+
+![Pinocchio简介](/graphics/course-banners/introduction-to-pinocchio.png)
+
+<ArticleSection name="什么是Pinocchio" id="what-is-pinocchio" level="h2" />
+
+虽然大多数 Solana 开发者依赖 Anchor，但有很多充分的理由选择不使用它编写程序。也许您需要对每个账户字段进行更精细的控制，或者您追求极致的性能，亦或是您只是想避免使用宏。
+
+在没有像 Anchor 这样的框架支持下编写 Solana 程序被称为 **原生开发**。这更具挑战性，但在本课程中，您将学习如何使用 Pinocchio 从零开始构建一个 Solana 程序；这是一个轻量级的库，可以让您跳过外部框架，完全掌控代码的每一个字节。
+
+Pinocchio 是一个极简的 Rust 库，它允许您在不引入重量级 `solana-program` crate 的情况下编写 Solana 程序。它通过将传入的交易负载（账户、指令数据等所有内容）视为单个字节切片，并通过零拷贝技术就地读取。
+
+### 主要优势
+
+极简设计带来了三大优势：
+- 更少的计算单元。没有额外的反序列化或内存拷贝。
+- 更小的二进制文件。更精简的代码路径意味着更轻量的 `.so` 链上程序。
+- 零依赖拖累。没有需要更新（或可能破坏）的外部 crate。
+
+该项目由 [Febo](https://x.com/0x_febo) 在 [Anza](https://www.anza.xyz) 发起，并得到了 Solana 生态系统和 Blueshift 团队的核心贡献，项目地址在 [这里](https://github.com/anza-xyz/pinocchio)。
+
+除了核心 crate，您还会发现 `pinocchio-system` 和 `pinocchio-token`，它们为 Solana 的原生 System 和 SPL-Token 程序提供了零拷贝辅助工具和 CPI 实用程序。
+
+### 原生开发
+
+原生开发可能听起来令人望而生畏，但这正是本章节存在的原因。在本章节结束时，您将了解跨越程序边界的每一个字节，以及如何保持您的逻辑紧凑、安全和高效。
+
+Anchor 使用 **过程宏和派生宏** 来简化处理账户、instruction data 和错误处理的样板代码，这些是构建 Solana 程序的核心。
+
+原生开发意味着我们不再享有这种便利，我们需要：
+- 为不同的指令创建我们自己的 Discriminator 和 Entrypoint
+- 创建我们自己的账户、指令和反序列化逻辑
+- 实现所有 Anchor 之前为我们处理的安全检查
+
+**注意**：目前还没有用于构建 Pinocchio 程序的“框架”。因此，我们将基于我们的经验，介绍我们认为是编写 Pinocchio 程序的最佳方法。
+
+<ArticleSection name="Entrypoint" id="entrypoint" level="h2" />
+
+在 Anchor 中，`#[program]` 宏隐藏了许多底层逻辑。它在底层为每个指令和账户构建了一个 8 字节的 Discriminator（从 0.31 版本开始支持自定义大小）。
+
+<AnchorDiscriminatorCalculator value={"Test"} />
+
+原生程序通常更加精简。单字节的 Discriminator（值范围为 0x01…0xFF）足以支持最多 255 个指令，这对于大多数用例来说已经足够。如果需要更多，可以切换到双字节变体，扩展到 65,535 种可能的变体。
+
+`entrypoint!` 宏是程序执行的起点。它提供了三个原始切片：
+- **program_id**：已部署程序的公钥
+- **accounts**：指令中传递的所有账户
+- **instruction_data**：包含 Discriminator 和用户提供数据的不透明字节数组
+
+这意味着在 entrypoint 之后，我们可以创建一个模式，通过适当的处理器执行所有不同的指令，我们将其称为 `process_instruction`。以下是它的典型样式：
+
+```rust
+entrypoint!(process_instruction);
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {    
+    match instruction_data.split_first() {
+        Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
+        Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+在幕后，这个处理器：
+1. 使用 `split_first()` 提取判别字节
+2. 使用 `match` 确定要实例化的指令结构
+3. 每个指令的 `try_from` 实现会验证并反序列化其输入
+4. 调用 `process()` 执行业务逻辑
+
+### `solana-program` 和 `pinocchio` 的区别
+
+主要的区别和优化在于 `entrypoint()` 的行为方式。
+- 标准的 Solana 入口点使用传统的序列化模式，运行时会预先反序列化输入数据，在内存中创建拥有的数据结构。这种方法广泛使用 Borsh 序列化，在反序列化过程中复制数据，并为结构化数据类型分配内存。
+- Pinocchio 入口点通过直接从输入字节数组中读取数据而不进行复制，实现零拷贝操作。该框架定义了引用原始数据的零拷贝类型，消除了序列化/反序列化的开销，并通过直接内存访问避免了抽象层。
+
+<ArticleSection name="账户和指令" id="accounts-and-instructions" level="h2" />
+
+由于我们没有宏，并且为了保持程序的精简和高效，我们希望避免使用宏，因此每个指令数据字节和账户都必须手动验证。
+
+为了使这个过程更有条理，我们使用了一种模式，该模式提供了类似 Anchor 的易用性，但没有使用宏，从而通过实现 Rust 的 `TryFrom` trait，使实际的 `process()` 方法几乎没有样板代码。
+
+### `TryFrom` Trait
+
+`TryFrom` 是 Rust 标准转换家族的一部分。与 `From` 假设转换不会失败不同，`TryFrom` 返回一个 `Result`，允许您及早暴露错误——非常适合链上验证。
+
+该 trait 定义如下：
+
+```rust
+pub trait TryFrom<T>: Sized {
+    type Error;
+    fn try_from(value: T) -> Result<Self, Self::Error>;
+}
+```
+
+在 Solana 程序中，我们实现 `TryFrom` 来将原始账户切片（以及在需要时的指令字节）转换为强类型结构，同时强制执行每个约束。
+
+<ArticleSection name="账户验证" id="accounts-validation" level="h2" />
+
+我们通常在每个 `TryFrom` 实现中处理所有不需要双重借用（即在账户验证和可能的处理过程中同时借用）的特定检查。这使得所有指令逻辑发生的 `process()` 函数尽可能简洁。
+
+我们从实现指令所需的账户结构开始，类似于 Anchor 的 `Context`。
+
+**注意**：与 Anchor 不同，在这个账户结构中，我们只包括在处理过程中需要使用的账户，并将指令中需要但不会使用的其余账户（例如 `SystemProgram`）标记为 `_`。
+
+对于类似 `Vault` 的内容，它看起来会像这样：
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+```
+
+现在我们知道了在指令中需要使用哪些账户，我们可以使用 `TryFrom` 特性来反序列化并执行所有必要的检查：
+
+```rust
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        // 1. Destructure the slice
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // 2. Custom checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // 3. Return the validated struct
+        Ok(Self { owner, vault })
+    }
+}
+```
+
+如您所见，在这个指令中，我们将使用 `SystemProgram` CPI 将 lamport 从所有者转移到金库，但我们不需要在指令本身中使用 SystemProgram。程序只需要包含在指令中，因此我们可以将其作为 `_` 传递。
+
+然后我们对账户执行自定义检查，类似于 Anchor 的 `Signer` 和 `SystemAccount` 检查，并返回验证后的结构。
+
+<ArticleSection name="指令验证" id="instruction-validation" level="h2" />
+
+指令验证遵循与账户验证类似的模式。我们使用 `TryFrom` 特性来验证和反序列化指令数据为强类型结构，从而使 `process()` 中的业务逻辑保持简洁和专注。
+
+我们首先定义一个结构体来表示我们的 instruction data：
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+```
+
+然后我们实现 `TryFrom` 来验证 instruction data 并将其转换为我们的结构化类型。这包括：
+1. 验证数据长度是否与预期大小匹配
+2. 将字节切片转换为具体类型
+3. 执行任何必要的验证检查
+
+以下是实现的样子：
+
+```rust
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        // 1. Verify the data length matches a u64 (8 bytes)
+        if data.len() != core::mem::size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        // 2. Convert the byte slice to a u64
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // 3. Validate the amount (e.g., ensure it's not zero)
+        if amount == 0 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+
+这种模式使我们能够：
+- 在 instruction data 进入业务逻辑之前进行验证
+- 将验证逻辑与核心功能分离
+- 在验证失败时提供清晰的错误信息
+- 在整个程序中保持类型安全性

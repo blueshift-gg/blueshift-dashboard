@@ -1,0 +1,102 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# 指令内省
+
+指令内省是 Solana 上的一项强大功能，它允许程序分析同一事务中的其他指令，包括尚未执行的指令。这使您能够动态响应或增强这些指令，例如通过注入保护措施、验证行为或将外部程序的指令集成到您自己的逻辑中。
+
+这得益于一个特殊的系统账户，称为 `Instructions` sysvar。Sysvar 是由 Solana 运行时维护的只读账户，向程序公开内部状态（例如，时钟、租金、纪元计划等）。Instructions sysvar 专门公开当前事务中的完整指令列表，以及它们的元数据和序列化数据。
+
+以下是 Solana 在运行时序列化此信息的方式：
+
+```rust
+// First encode the number of instructions:
+//  0..2 - num_instructions
+//
+// Then a table of offsets of where to find them in the data
+//  3..2 * num_instructions table of instruction offsets
+//
+// Each instruction is then encoded as:
+//   0..2 - num_accounts
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
+//   3..35 - pubkey - 32 bytes
+//   35..67 - program_id
+//   67..69 - data len - u16
+//   69..data_len - data
+#[cfg(not(target_os = "solana"))]
+fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
+    // 64 bytes is a reasonable guess, calculating exactly is slower in benchmarks
+    let mut data = Vec::with_capacity(instructions.len() * (32 * 2));
+    append_u16(&mut data, instructions.len() as u16);
+    for _ in 0..instructions.len() {
+        append_u16(&mut data, 0);
+    }
+
+    for (i, instruction) in instructions.iter().enumerate() {
+        let start_instruction_offset = data.len() as u16;
+        let start = 2 + (2 * i);
+        data[start..start + 2].copy_from_slice(&start_instruction_offset.to_le_bytes());
+        append_u16(&mut data, instruction.accounts.len() as u16);
+        for account_meta in &instruction.accounts {
+            let mut account_meta_flags = InstructionsSysvarAccountMeta::empty();
+            if account_meta.is_signer {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_SIGNER;
+            }
+            if account_meta.is_writable {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_WRITABLE;
+            }
+            append_u8(&mut data, account_meta_flags.bits());
+            append_slice(&mut data, account_meta.pubkey.as_ref());
+        }
+
+        append_slice(&mut data, instruction.program_id.as_ref());
+        append_u16(&mut data, instruction.data.len() as u16);
+        append_slice(&mut data, instruction.data);
+    }
+    data
+}
+```
+
+这意味着，通过在您的程序中读取 `Instructions` sysvar 账户，您可以访问当前事务中包含的所有指令。
+
+您无需手动解析原始字节。Solana 提供了辅助函数：
+- `load_current_index_checked`：返回当前正在执行的指令的索引。
+- `load_instruction_at_checked`：允许您通过索引以解析、反序列化的格式加载特定指令。
+
+<ArticleSection name="它是如何工作的？" id="how-does-it-work" level="h2" />
+
+每个 Solana 指令包含：
+- 它目标的程序 ID，
+- 它交互的账户（包括签名者/可写等元数据），
+- 和数据负载（通常是一个区分符 + 参数）。
+
+这正是 Instructions sysvar 中的 `load_instruction_at_checked` 函数提供的内容：
+- program_id：此指令调用的程序。
+- accounts：包含元数据的相关账户列表。
+- data：原始输入负载（如果我们正在内省一个 Anchor 指令，它通常以 8 字节的区分符开头，后跟参数）。
+
+为了安全高效地检查其他指令，请按照以下步骤操作：
+- 确定当前指令索引：使用 `load_current_index_checked` 找到当前执行指令的索引。
+> 请注意：您的指令可能不是事务中的第一个（索引为 0）。
+
+- 加载目标指令进行分析：在获取索引后，使用 `load_instruction_at_checked(index)` 加载同一事务中的其他指令——可以是前一个、后一个或特定位置的指令。
+> 这对于验证行为、确保预期输入或在程序之间安全组合非常有用。
+
+- 构建约束以防止恶意行为：指令检查功能非常强大，但它也引入了新的攻击面。请确保：验证被检查的指令是否针对预期的程序，确认账户地址和数据是否符合预期模式，并避免对指令顺序做出假设，除非明确强制执行。
+
+通过采取这些预防措施，您可以安全地利用指令检查功能来构建强大、可组合且安全的 Solana 程序。
+
+<ArticleSection name="指令检查的常见约束" id="common-constraints-for-introspection" level="h2" />
+
+在使用指令检查时，必须强制执行严格的约束以防止恶意或意外行为。最常见的安全措施包括：
+- 指令验证：验证指令的程序 ID 和标识符（discriminator），以确保其正确无误。标识符（通常是指令数据的前 1、4 或 8 字节）唯一标识正在调用的函数。
+> 此步骤可确保您正在检查预期的指令，而不是伪造或格式错误的指令。
+
+- 变量验证：在标识符之后，解析并检查指令使用的关键变量。这些变量可能包括金额、方向（例如多头/空头）或 ID，您应始终确认这些字段与您的集成逻辑或安全措施的预期一致。
+- 账户验证：验证指令账户的结构和身份。检查预期账户是否出现在特定位置（例如签名者、金库、抵押品），并确保签名者/可写状态等角色符合您的假设。
+
+通过应用这些约束，您可以确保程序仅响应有效且可信的指令，从而使您的逻辑更加健壮、可组合且安全。
+
+结合事务的原子性，这些检查使您能够构建健壮、可组合的逻辑，能够在同一事务中安全地与其他程序和指令交互。
+
+> 请记住，Solana 中的事务是原子的。如果任何指令失败，整个事务将被回滚。

@@ -1,0 +1,99 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 永久委托扩展
+
+`PermanentDelegate` 扩展是一个 Mint account 扩展，允许为该 mint 的所有代币设置一个永久委托，该委托可以从任何 token account 转移或销毁该 mint 的任何代币。
+
+<ArticleSection name="初始化 Mint Account" id="initializing-the-mint-account" level="h2" />
+
+要在 `Mint` 账户上初始化 `PermanentDelegate` 扩展，我们需要使用 `initializePermanentDelegate()` 函数。
+
+以下是如何创建带有 Mint Close 扩展的 mint：
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializePermanentDelegateInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.MintCloseAuthority]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Permanent Delegate extension
+const initializePermanentDelegate = createInitializePermanentDelegateInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializePermanentDelegate,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="关闭 Mint Account" id="closing-the-mint-account" level="h2" />
+
+如果 `Mint` 账户的供应量为零，`CloseMint Authority` 可以通过使用 `closeAccount` 指令来回收该账户的 rent，如下所示：
+
+```ts
+const closeMintInstruction = createCloseAccountInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    [],
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(closeMintInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: false});
+
+console.log(`Mint closed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="权限操作" id="permissioned-actions" level="h2" />
+
+与可以被撤销的普通委托不同，这种委托权限是永久且不可更改的。
+
+这意味着每个常规操作，例如 `transfer()`、`burn()`、`approve()` 和 `freeze()`，都可以在需要时直接由权限方执行，而无需实际所有者的签名。
+
+这意味着我们可以直接使用常规的 `transferChecked()`、`burnChecked()` 等指令，并在 `authority` 字段中传入 `PermanetDelegate` 权限。

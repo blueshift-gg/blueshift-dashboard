@@ -1,0 +1,97 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# PDA 共享
+
+PDA 共享攻击利用了在多个用户或域之间使用相同 Program Derived Address (PDA) 的程序，从而使攻击者能够访问不属于他们的资金、数据或权限。虽然使用全局 PDA 进行程序范围的操作看起来很优雅，但它会导致危险的交叉污染，使一个用户的操作可能影响到另一个用户的资产。
+
+漏洞的根源在于派生 PDA 时种子（seed）特异性不足。当多个账户共享相同的 PDA 权限时，程序就无法区分合法和非法的访问尝试。攻击者可以创建引用相同共享 PDA 的账户，然后利用该 PDA 的签名权限操控其他用户的资产。
+
+在 DeFi 协议中，这种情况尤其具有破坏性，因为 PDA 控制着代币金库、用户余额或提款权限。共享 PDA 本质上创建了一把主密钥，可以解锁多个用户的资产，将单个用户的操作变成对整个协议的潜在攻击。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+以下是一个使用基于 mint 的 PDA 进行签名的易受攻击的提款系统：
+
+```rust
+#[program]
+pub mod insecure_withdraw{
+    use super::*;
+    //..
+
+    pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+        let amount = ctx.accounts.vault.amount;
+        
+        let seeds = &[
+            ctx.accounts.pool.withdraw_destination.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+
+        transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.withdraw_destination.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+            ),
+            &amount,
+            seeds,
+        )?;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(has_one = vault, has_one = withdraw_destination)]
+    pool: Account<'info, TokenPool>,
+    vault: Account<'info, TokenAccount>,
+    withdraw_destination: Account<'info, TokenAccount>,
+    /// CHECK: This is the PDA that signs for the transfer
+    authority: UncheckedAccount<'info>,
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool {
+    pub vault: Pubkey,
+    pub mint: Pubkey,
+    pub withdraw_destination: Pubkey,
+    pub bump: u8,
+}
+```
+
+此代码存在一个关键缺陷：PDA 仅使用 mint 地址派生。这意味着同一代币类型的所有池共享相同的签名权限，从而形成了一个危险的攻击向量。
+
+攻击者可以通过以下方式利用这一点：
+- 为相同的 mint 创建他们自己的 TokenPool
+- 将他们自己的地址设置为 `withdraw_destination`
+- 使用共享的 PDA 权限从任何使用相同 mint 的金库中提取代币
+- 将其他用户的资金转移到他们自己的目的地
+
+攻击之所以成功，是因为 PDA 权限没有区分不同的资金池实例，它只关注代币类型，而不是应该访问这些资金的特定用户或资金池。
+
+第一个改进是使 PDA 特定于个人用户或目标，并使用 Anchor 的种子和 bump 约束来验证 PDA 的推导：
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        seeds = [withdraw_destination.key().as_ref()],
+        bump = pool.bump,                             
+        has_one = vault,                              
+        has_one = withdraw_destination,              
+    )]
+    pool: Account<'info, TokenPool>,
+    #[account(mut)]
+    vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    withdraw_destination: Account<'info, TokenAccount>,
+    token_program: Program<'info, Token>,
+}
+```

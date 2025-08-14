@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 转账指令
+
+将代币从一个账户转移到另一个账户。这是用户之间发送代币的基本操作。
+
+在我们可以转移任何代币之前，我们需要已经具备以下条件：
+- 已初始化一个 `Mint` 账户。
+- 一个源 `Token` 账户或 `Associated Token` 账户，并且该账户中至少有我们想要转移的数量。
+- 一个目标 `Token` 账户或 `Associated Token` 账户，该账户将接收来自源 `Token` 账户的代币。
+
+> 我们转移的代币数量是根据小数位数进行“标准化”的。这意味着，如果我们想要转移一个有 6 位小数的代币，我们实际上需要将 `1e6` 作为数量。
+
+<ArticleSection name="原始指令" id="raw-instruction" level="h2" />
+
+仅使用“原始”指令而没有任何抽象时，转移代币的操作如下：
+
+```ts
+const destination = Keypair.generate();
+
+const destinationTokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    destination.publicKey,
+);
+
+// Create ATA creation instruction
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    destinationTokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// Transfer tokens to ATA 
+const transferInstruction = createTransferInstruction(
+    sourceTokenAccount, // source token account pubkey
+    destinationTokenAccount, // destination token account pubkey
+    keypair.publicKey, // owner of the source token account
+    1e6, // amount
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    transferInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token accounts created and tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="抽象指令" id="abstracted-instruction" level="h2" />
+
+通过 `transfer()` 指令抽象化后，相同的指令看起来如下：
+
+```ts
+const destination = Keypair.generate();
+
+const destinationAta = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    destination.publicKey
+);
+
+console.log(`This is your ATA: ${ata.address}!`)
+  
+let tx = await transfer(
+    connection, // connection
+    keypair, // payer
+    sourceAta, // source token account
+    destinationAta, // destination token account
+    keypair.publicKey, // owner of the source token account
+    1e6, // amount to transfer
+);
+
+console.log(`Succesfully Transferred!. Transaction Here: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+<ArticleSection name="检查指令" id="checked-instruction" level="h2" />

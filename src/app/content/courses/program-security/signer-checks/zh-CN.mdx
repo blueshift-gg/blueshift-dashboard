@@ -1,0 +1,124 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 签名者检查
+
+签名者检查是手写签名的数字等价物，它们证明账户持有人确实授权了交易，而不是由其他人代为操作。在 Solana 的无信任环境中，这种加密证明是验证真实授权的唯一方式。
+
+当处理程序派生账户 (PDA) 和权限控制操作时，这一点尤为重要。大多数程序账户存储一个 `authority` 字段，用于确定谁可以修改它们，而许多 PDA 是从特定用户账户派生的。如果没有签名者验证，您的程序将无法区分合法所有者和恶意冒充者。
+
+缺少签名者检查的后果是灾难性的：任何账户都可以执行本应限制在特定权限内的操作，导致未经授权的访问、账户资金被盗以及对程序状态的完全失控。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下这个易受攻击的指令，它会转移程序账户的所有权：
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+乍一看，这似乎是安全的。`has_one = owner` 约束确保传递给指令的所有者账户与存储在 `program_account` 中的 `owner` 字段匹配。数据验证是完美的，但存在一个致命的缺陷。
+
+请注意，`owner` 是一个 `UncheckedAccount`，而不是一个 `Signer`。这意味着虽然 Anchor 验证了提供的账户与存储的所有者匹配，但它从未检查该账户是否实际签署了交易。
+
+攻击者可以通过以下方式利用这一点：
+- 找到他们想要劫持的任何程序账户
+- 从账户数据中读取当前所有者的公钥
+- 构造一个交易，将真实所有者的公钥作为所有者参数传递
+- 将自己设置为 `new_owner`
+- 在没有真实所有者签名的情况下提交交易
+
+`has_one` 约束条件通过是因为公钥匹配，但由于没有签名者验证，攻击者成功地在未经合法所有者同意的情况下将所有权转移给自己。一旦他们控制了账户，就可以作为新的权限执行任何操作。
+
+幸运的是，`Anchor` 使得直接在账户结构中执行此检查变得非常简单，只需将 `UncheckedAccount` 更改为 `Signer`，如下所示：
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+或者，您可以像这样添加 `signer` 账户约束：
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+或者，您也可以在指令中使用 `ctx.accounts.owner.is_signer` 检查添加签名者验证，如下所示：
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if !ctx.accounts.owner.is_signer {
+        return Err(ProgramError::MissingRequiredSignature.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+
+    Ok(())
+}
+```
+
+通过添加此检查，指令处理程序仅在权限账户签署交易时才会继续。如果账户未签署，交易将失败。
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，由于我们无法直接在账户结构中添加安全检查，因此我们被迫在指令逻辑中进行。
+
+我们可以通过使用 `is_signer()` 函数以类似于 Anchor 的方式实现，如下所示：
+
+```rust
+if !self.accounts.owner.is_signer() {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```

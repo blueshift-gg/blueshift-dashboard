@@ -1,0 +1,77 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 铸造到指令
+
+创建新代币并将其存入指定账户。只有铸币权限持有者可以执行此操作。
+
+在我们铸造任何代币之前，我们需要已经完成以下操作：
+- 初始化一个 `Mint` 账户，并持有 `mintAuthority`
+- 初始化一个 `Token` 账户或 `Associated Token` 账户，用于接收铸造的代币
+
+> 我们铸造的代币数量是根据小数位数进行“标准化”的。这意味着如果我们想铸造一个具有 6 位小数的代币，我们实际上需要将 `1e6` 作为数量输入
+
+<ArticleSection name="原始指令" id="raw-instruction" level="h2" />
+
+通过仅使用“原始”指令而不进行任何抽象，铸造代币的操作如下所示：
+
+```ts
+const destination = Keypair.generate();
+
+const tokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    destination.publicKey,
+);
+
+// Create ATA creation instruction
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    tokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// Mint tokens to ATA 
+const mintToInstruction = createMintToInstruction(
+    mint.publicKey, // mint
+    tokenAccount, // destination
+    keypair.publicKey, // mint authority
+    1_000e6, // amount of tokens
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    mintToInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token accounts created and tokens minted! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="抽象指令" id="abstracted-instruction" level="h2" />
+
+以下是使用 `mintTo()` 指令抽象后的操作：
+
+```ts
+const destination = Keypair.generate();
+
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    destination.publicKey
+);
+
+console.log(`This is your ATA: ${ata.address}!`)
+  
+let tx = await mintTo(
+    connection,
+    keypair,
+    mint,
+    ata.address,
+    keypair.publicKey,
+    1e6,
+);
+
+console.log(`Succesfully Minted!. Transaction Here: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```

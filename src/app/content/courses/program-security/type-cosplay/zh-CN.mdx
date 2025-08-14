@@ -1,0 +1,135 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 类型伪装攻击
+
+类型伪装攻击利用程序未能验证账户类型的漏洞，允许攻击者替换具有相同数据结构但用途不同的账户。由于 Solana 将所有账户数据存储为原始字节，一个未检查账户类型的程序可能会被欺骗，将 `VaultConfig` 视为 `AdminSettings`，从而导致潜在的灾难性后果。
+
+该漏洞源于结构上的模糊性。当多个账户类型共享相同的数据布局（例如都具有 `owner: Pubkey` 字段）时，仅依靠所有者检查和数据验证不足以区分它们。控制一种账户类型的攻击者可以伪装成完全不同账户类型的所有者，从而绕过围绕特定账户用途设计的授权逻辑。
+
+如果没有区分符（用于区分账户类型的唯一标识符），您的程序将容易受到复杂的伪装攻击，恶意行为者可以利用结构相似性与逻辑意图之间的差距。
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+请考虑以下基于账户所有权执行管理员操作的易受攻击的指令：
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let program_account_one = ctx.accounts.program_account_one.to_account_info();
+        if program_account_one.owner != ctx.program_id {
+            return Err(ProgramError::IllegalOwner.into());
+        }
+        if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        //..do something
+    
+        Ok(())
+
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: UncheckedAccount<'info>,
+
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+这段代码看起来很安全：它检查了程序所有权并验证了管理员权限。但存在一个致命的缺陷：它从未验证 `program_account_one` 是否确实是一个 `ProgramAccountOne`，而不是其他具有相同数据结构的账户类型。
+
+攻击者可以通过以下方式利用这一点：
+- 创建或控制一个 `ProgramAccountTwo` 账户
+- 在该账户的数据中将自己设置为所有者
+- 将他们的 `ProgramAccountTwo` 作为 `program_account_one` 参数传递
+- 由于两种账户类型具有相同的 `owner: Pubkey` 结构，反序列化成功
+- 攻击者成为仅为 `ProgramAccountOne` 所有者设计的操作的“管理员”
+
+Solana 使用判别器来解决此问题：
+- Anchor 的 8 字节判别器（默认）：从账户名称派生，自动添加到标记为 #[account] 的账户中。（来自 Anchor `0.31.0`，可以实现“自定义”判别器）
+- 基于长度的判别：由 Token Program 用于区分 Token 和 Mint 账户（尽管 Token2022 现在使用显式判别器）
+
+最简单的解决方法是使用 Anchor 的内置类型验证：
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: Account<'info, ProgramAccountOne>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: Account<'info, ProgramAccountTwo>,
+
+}
+
+#[account]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[account]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+对于自定义验证，可以添加显式判别器检查：
+
+```rust
+pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+    let program_account_one = ctx.accounts.program_account_one.to_account_info();
+    if program_account_one.owner != ctx.program_id {
+        return Err(ProgramError::IllegalOwner.into());
+    }
+    if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+    let data = program_account_one.data.borrow();
+    // Assume ProgramAccountOne has a discriminator of 8 bytes
+    let discriminator = &data[..8];
+    if discriminator != ProgramAccountOne::DISCRIMINATOR {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    //..do something
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+在 Pinocchio 中，手动实现判别器检查：
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] != DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```

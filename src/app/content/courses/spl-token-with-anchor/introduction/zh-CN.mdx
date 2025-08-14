@@ -1,0 +1,87 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The Token Program
+
+在 Solana 上，所有与代币相关的操作都由 [SPL Token Program](https://github.com/solana-program/token) 和 [Token2022 Program](/zh-cn/courses/token-2022-program) 处理：这是 Solana 的原生代币框架，定义了所有代币的创建、管理和转移方式。
+
+这是一个单一的统一程序，处理整个网络中的所有代币操作，确保一致性和互操作性。
+
+> 在 Solana 上为所有代币提供单一统一接口的决定，创造了一种可以在所有 dApp（去中心化应用程序）和集成（如钱包等）中复制的简单实现。
+
+对于 Anchor，所有与代币相关的内容都可以在 `anchor-spl` crate 中找到。因此，在初始化了一个 `Anchor` 工作区后，我们可以这样做：
+
+```
+cargo add anchor-spl
+```
+
+> 如果您不熟悉 Anchor，我们建议您先完成我们的 [Anchor 入门课程](/zh-cn/courses/introduction-to-anchor) 再继续。
+
+<ArticleSection name="铸币账户和代币账户" id="mint-and-token-accounts" level="h2" />
+
+如果您熟悉 `Anchor`，您会知道它们有一组宏，可以帮助用户抽象掉与初始化账户相关的许多复杂性。
+
+同样适用于 `Mint`、`Token` 和 `Associated Token` 账户。
+
+### 铸币账户
+
+得益于 `Anchor` 提供的宏，我们可以轻松创建一个 `Mint` 账户，如下所示：
+
+```rust
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = signer.key(),
+    )]
+    pub mint: Account<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### 代币账户
+
+同样适用于 `Token` 账户。通过宏创建 `Token` 账户的方式如下：
+
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### 关联代币账户
+
+同样适用于 `Associated Token` 账户，通过宏创建 `Associated Token` 账户的方式与创建 `Token` 账户类似，唯一的区别在于约束条件，具体如下：
+
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```

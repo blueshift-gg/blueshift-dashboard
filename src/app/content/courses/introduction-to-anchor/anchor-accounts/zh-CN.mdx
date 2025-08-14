@@ -1,0 +1,437 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# 账户
+
+我们已经了解了 `#[account]` 宏，但在 Solana 上自然存在不同类型的账户。因此，有必要花点时间来了解 Solana 上账户的工作原理，尤其是它们如何与 Anchor 协作。
+
+<ArticleSection name="概述" id="general-overview" level="h2" />
+
+在 Solana 上，每一块状态都存储在一个账户中；可以将 [账本](https://solana.com/docs/references/terminology#ledger) 想象成一个巨大的表格，其中每一行都共享相同的基础模式：
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
+    pub data: Vec<u8>,
+    /// the program that owns this account and can mutate its lamports or data.
+    pub owner: Pubkey,
+    /// `true` if the account is a program; `false` if it merely belongs to one
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent (currently deprecated and is set to `0`)
+    pub rent_epoch: Epoch,
+}
+```
+
+Solana 上的所有账户都共享相同的基础布局。它们的区别在于：
+
+1. 所有者：拥有修改账户数据和 lamports 的独占权的程序。
+2. 数据：由所有者程序用于区分不同的账户类型。
+
+当我们谈论 Token Program 账户时，我们指的是一个 `owner` 是 Token Program 的账户。与数据字段为空的系统账户不同，Token Program 账户可以是 **Mint** 或 **Token** 账户。我们使用区分符来区分它们。
+
+正如 Token Program 可以拥有账户一样，任何其他程序甚至我们自己的程序也可以拥有账户。
+
+<ArticleSection name="程序账户" id="program-accounts" level="h2" />
+
+程序账户是 Anchor 程序中状态管理的基础。它们允许您创建由您的程序拥有的自定义数据结构。让我们来探索如何有效地使用它们。
+
+### 账户结构和区分符
+
+Anchor 中的每个程序账户都需要一种方式来标识其类型。这是通过区分符来处理的，区分符可以是：
+
+1. **默认区分符**：一个 8 字节的前缀，账户使用 `sha256("account:<StructName>")[0..8]` 生成，指令使用 `sha256("global:<instruction_name>")[0..8]` 生成。种子对于账户使用 PascalCase，对于指令使用 snake_case。
+
+<AnchorDiscriminatorCalculator value={"TestAccount"} displayMode="account" />
+
+2. **自定义区分符**：从 Anchor `v0.31.0` 开始，您可以指定自己的区分符：
+
+```rust
+#[account(discriminator = 1)]              // single-byte
+pub struct Escrow { … }
+```
+
+**关于区分符的重要注意事项**：
+- 它们必须在您的程序中唯一
+- 使用 `[1]` 会阻止使用 `[1, 2, …]`，因为它们也以 `1` 开头
+- `[0]` 不能使用，因为它与未初始化的账户冲突
+
+### 创建程序账户
+
+要创建一个程序账户，您需要首先定义您的数据结构：
+
+```rust
+use anchor_lang::prelude::*;
+
+#[derive(InitSpace)]
+#[account(discriminator = 1)]
+pub struct CustomAccountType {
+    data: u64,
+}
+```
+
+关于程序账户的关键点：
+- 最大大小为 10,240 字节（10 KiB）
+- 对于更大的账户，您需要 `zero_copy` 和分块写入
+- `InitSpace` 派生宏会自动计算所需空间
+- 总空间 = `INIT_SPACE` + `DISCRIMINATOR.len()`
+
+账户所需的总字节空间是 `INIT_SPACE`（所有字段的总大小）与区分符大小（`DISCRIMINATOR.len()`）的总和。
+
+Solana 账户需要以 lamports 存入租金，这取决于账户的大小。了解大小有助于我们计算需要存入多少 lamports 才能使账户打开。
+
+以下是我们如何在 `Account` 结构中初始化账户：
+
+```rust
+#[account(
+    init,
+    payer = <target_account>,
+    space = <num_bytes>                 // CustomAccountType::INIT_SPACE + CustomAccountType::DISCRIMINATOR.len(),
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+以下是 `#[account]` 宏中使用的一些字段，除了我们已经覆盖的 `seeds` 和 `bump` 字段之外，以及它们的作用：
+- `init`：告诉 Anchor 创建账户
+- `payer`：哪个签名者为租金提供资金（这里是创建者）
+- `space`：分配多少字节。这也是租金计算发生的地方
+
+创建后，您可以修改账户的数据。如果需要更改其大小，请使用重新分配：
+
+```rust
+#[account(
+    mut,                       // Mark as mutable
+    realloc = <space>,         // New size
+    realloc::payer = <target>, // Who pays for the change
+    realloc::zero = <bool>     // Whether to zero new space
+)]
+```
+
+**注意**：在减少账户大小时，请设置 `realloc::zero = true` 以确保旧数据被正确清除。
+
+最后，当账户不再需要时，我们可以关闭它以回收租金：
+
+```rust
+#[account(
+    mut,                       // Mark as mutable
+    close = <target_account>,  // Where to send remaining lamports
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+然后，我们可以将 PDA（由种子和程序 ID 派生出的确定性地址）添加到这些约束中，如下所示：
+
+```rust
+#[account(
+    seeds = <seeds>,            // Seeds for derivation
+    bump                        // Standard bump seed
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+**注意**：PDA 是确定性的：相同的种子 + 程序 + bump 总是生成相同的地址，而 bump 确保地址不在 ed25519 曲线上。
+
+由于计算 bump 可能会“消耗”大量的 CU，因此最好将其保存到账户中，或者将其传递到指令中并进行验证，而无需像这样计算：
+
+```rust
+#[account(
+    seeds = <seeds>,
+    bump = <expr>
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+通过传递派生自另一个程序的地址，可以派生出一个由另一个程序派生的 PDA，如下所示：
+
+```rust
+#[account(
+    seeds = <seeds>,
+    bump = <expr>,
+    seeds::program = <expr>
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+<ArticleSection name="Token Accounts" id="token-program" level="h2" />
+
+Token Program 是 Solana Program Library (SPL) 的一部分，是用于铸造和转移任何非原生 SOL 资产的内置工具包。它提供了创建代币、铸造新供应、转移余额、销毁、冻结等指令。
+
+该程序拥有两种关键账户类型：
+- **铸造账户**：存储特定代币的元数据：供应量、小数位、铸造权限、冻结权限等。
+- **代币账户**：为特定所有者持有该铸造代币的余额。只有所有者可以减少余额（转移、销毁等），但任何人都可以向账户发送代币，从而增加其余额。
+
+### Anchor 中的 Token 账户
+
+Anchor 核心 crate 本身只为系统程序提供 CPI 和账户辅助功能。如果您希望对 SPL Token 也有类似的支持，可以引入 `anchor_spl` crate。
+
+`anchor_spl` 提供：
+- 针对 SPL Token 和 Token-2022 程序中每个指令的辅助构建器
+- 类型包装器，使验证和反序列化 Mint 和 Token 账户变得简单
+
+让我们看看 `Mint` 和 `Token` 账户的结构：
+
+```rust
+#[account(
+    mint::decimals     = <expr>,
+    mint::authority    = <target_account>,
+    mint::freeze_authority = <target_account>
+    mint::token_program = <target_account>
+)]
+pub mint: Account<'info, Mint>,
+
+#[account(
+    mut,
+    associated_token::mint       = <target_account>,
+    associated_token::authority  = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: Account<'info, TokenAccount>,
+```
+
+`Account<'info, Mint>` 和 `Account<'info, TokenAccount>` 告诉 Anchor：
+- 确认账户确实是 Mint 或 Token 账户
+- 反序列化其数据，以便您可以直接读取字段
+- 强制执行您指定的任何额外约束（`authority`、`decimals`、`mint`、`token_program` 等）
+
+这些与 Token 相关的账户遵循之前使用的 `init` 模式。由于 Anchor 知道它们的固定字节大小，我们不需要指定 `space` 值，只需指定为账户提供资金的付款人即可。
+
+Anchor 还提供了 `init_if_needed` 宏：它会检查 Token 账户是否已存在，如果不存在，则创建它。这个快捷方式并不适用于所有账户类型，但非常适合 Token 账户，因此我们将在这里依赖它。
+
+如前所述，`anchor_spl` 为 **Token** 和 **Token2022** 程序创建了辅助工具，后者引入了 Token 扩展。主要挑战在于，尽管这些账户实现了类似的目标并具有相似的结构，但由于它们由两个不同的程序拥有，因此无法以相同的方式反序列化和检查。
+
+我们可以创建更“高级”的逻辑来处理这些不同的账户类型，但幸运的是，Anchor 通过 **InterfaceAccounts** 支持这种场景：
+
+```rust
+use anchor_spl::token_interface::{Mint, TokenAccount};
+
+#[account(
+    mint::decimals     = <expr>,
+    mint::authority    = <target_account>,
+    mint::freeze_authority = <target_account>
+)]
+pub mint: InterfaceAccounts<'info, Mint>,
+
+#[account(
+    mut,
+    associated_token::mint = <target_account>,
+    associated_token::authority = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: InterfaceAccounts<'info, TokenAccount>,
+```
+
+这里的主要区别在于我们使用了 `InterfaceAccounts` 而不是 `Account`。这使得我们的程序可以同时处理 Token 和 Token2022 账户，而无需处理它们反序列化逻辑的差异。接口提供了一种与两种账户类型交互的通用方式，同时保持类型安全性和适当的验证。
+
+当您希望程序兼容两种代币标准时，这种方法特别有用，因为它消除了为每个程序编写单独逻辑的需要。接口在后台处理了不同账户结构的所有复杂性。
+
+如果您想了解更多关于如何使用 `anchor-spl` 的信息，可以参考 [SPL-Token Program with Anchor](/zh-cn/courses/spl-token-with-anchor) 或 [Token2022 Program with Anchor](/zh-cn/courses/token-2022-with-anchor) 课程。
+
+<ArticleSection name="其他账户类型" id="additional-accounts-type" level="h2" />
+
+当然，系统账户、程序账户和代币账户并不是我们在 Anchor 中可以拥有的唯一账户类型。因此，我们将在这里看到其他可以拥有的账户类型：
+
+### 签名者
+
+当您需要验证某个账户是否签署了交易时，可以使用 `Signer` 类型。这对于安全性至关重要，因为它确保只有授权账户才能执行某些操作。每当您需要保证特定账户已批准交易时，例如在转移资金或修改需要明确权限的账户数据时，都会使用此类型。以下是使用方法：
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+```
+
+`Signer` 类型会自动检查账户是否签署了交易。如果没有签署，交易将失败。这在您需要确保只有特定账户可以执行某些操作时特别有用。
+
+### AccountInfo 和 UncheckedAccount
+
+`AccountInfo` 和 `UncheckedAccount` 是低级账户类型，提供对账户数据的直接访问，而无需自动验证。它们在功能上是相同的，但 `UncheckedAccount` 是更推荐的选择，因为其名称更能反映其用途。
+
+这些类型在以下三种主要场景中非常有用：
+1. 处理没有定义结构的账户
+2. 实现自定义验证逻辑
+3. 与其他程序中没有 Anchor 类型定义的账户交互
+
+由于这些类型绕过了 Anchor 的安全检查，它们本质上是不安全的，需要通过使用 `/// CHECK` 注释明确承认。这种注释作为文档，表明您了解风险并已实施适当的验证。
+
+以下是如何使用它们的示例：
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    /// CHECK: This is an unchecked account
+    pub account: UncheckedAccount<'info>,
+
+    /// CHECK: This is an unchecked account
+    pub account_info: AccountInfo<'info>,
+}
+```
+
+### Option
+
+Anchor 中的 `Option` 类型允许您在指令中将账户设置为可选。当一个账户被包裹在 `Option` 中时，它可以在交易中提供或省略。这在以下情况下特别有用：
+- 构建可以在有或没有某些账户的情况下工作的灵活指令
+- 实现可能并非总是需要的可选参数
+- 创建能够兼容新旧账户结构的向后兼容指令
+
+当一个 `Option` 账户被设置为 `None` 时，Anchor 将使用程序 ID 作为账户地址。在处理可选账户时，理解这种行为非常重要。
+
+以下是如何实现它的示例：
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub optional_account: Option<Account<'info, CustomAccountType>>,
+}
+```
+
+### Box
+
+`Box` 类型用于将账户存储在堆上而不是栈上。这在以下几种场景中是必要的：
+- 处理存储在栈上效率较低的大型账户结构
+- 处理递归数据结构
+- 需要处理在编译时无法确定大小的账户
+
+使用 `Box` 可以通过在堆上分配账户数据，在这些情况下更高效地管理内存。以下是一个示例：
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub boxed_account: Box<Account<'info, LargeAccountType>>,
+}
+```
+
+### 程序
+
+`Program` 类型用于验证和与其他 Solana 程序交互。Anchor 可以轻松识别程序账户，因为它们的 `executable` 标志被设置为 `true`。此类型特别有用的场景包括：
+
+- 需要进行跨程序调用（CPI）
+- 希望确保与正确的程序交互
+- 需要验证账户的程序所有权
+
+使用 `Program` 类型的两种主要方式：
+
+1. 使用内置程序类型（推荐在可用时使用）：
+
+```rust
+use anchor_spl::token::Token;
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+2. 当程序类型不可用时，使用自定义程序地址：
+
+```rust
+// Address of the Program
+const PROGRAM_ADDRESS: Pubkey = pubkey!("22222222222222222222222222222222222222222222")
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    #[account(address = PROGRAM_ADDRESS)]
+    /// CHECK: this is fine since we're checking the address
+    pub program: UncheckedAccount<'info>,
+}
+```
+
+**注意**：在处理代币程序时，可能需要同时支持传统代币程序和 Token-2022 程序。在这种情况下，请使用 `Interface` 类型，而不是 `Program`：
+
+```rust
+use anchor_spl::token_interface::TokenInterface;
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub program: Interface<'info, TokenInterface>,
+}
+```
+
+<ArticleSection name="Custom Account Validation" id="custom-account-validation" level="h2" />
+
+Anchor 提供了一套强大的约束，可以直接应用在 `#[account]` 属性中。这些约束有助于确保账户的有效性，并在指令逻辑运行之前，在账户级别强制执行程序规则。以下是可用的约束：
+
+### 地址约束
+
+`address` 约束验证账户的公钥是否与特定值匹配。这在需要确保与已知账户（例如特定 PDA 或程序账户）交互时至关重要：
+
+```rust
+#[account(
+    address = <expr>,                    // Basic usage
+    address = <expr> @ CustomError       // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 所有者约束
+
+`owner` 约束确保账户由特定程序拥有。这是处理程序拥有账户时的关键安全检查，因为它可以防止未经授权访问应由特定程序管理的账户：
+
+```rust
+#[account(
+    owner = <expr>,                      // Basic usage
+    owner = <expr> @ CustomError         // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 可执行约束
+
+`executable` 约束验证一个账户是程序账户（其 `executable` 标志被设置为 `true`）。这在进行跨程序调用（CPI）时特别有用，以确保您与程序交互而不是数据账户：
+
+```rust
+#[account(executable)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 可变约束
+
+`mut` 约束将账户标记为可变，允许在指令期间修改其数据。这对于任何将被更新的账户都是必需的，因为 Anchor 默认出于安全性强制不可变性：
+
+```rust
+#[account(
+    mut,                                 // Basic usage
+    mut @ CustomError                    // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 签名者约束
+
+`signer` 约束验证账户已签署交易。当账户需要授权某个操作（例如转移资金或修改数据）时，这对于安全性至关重要。这是一种比使用 `Signer` 类型更明确的要求签名的方式：
+
+```rust
+#[account(
+    signer,                              // Basic usage
+    signer @ CustomError                 // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 关联约束
+
+`has_one` 约束验证账户结构中的特定字段与另一个账户的公钥匹配。这对于维护账户之间的关系非常有用，例如确保一个代币账户属于正确的所有者：
+
+```rust
+#[account(
+    has_one = data @ Error::InvalidField
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### 自定义约束
+
+当内置约束无法满足您的需求时，您可以编写自定义验证表达式。这允许进行复杂的验证逻辑，无法通过其他约束表达，例如检查账户数据长度或验证多个字段之间的关系：
+
+```rust
+#[account(
+    constraint = data == account.data @ Error::InvalidField
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+这些约束可以组合起来，为您的账户创建强大的验证规则。通过在账户级别进行验证，您可以将安全检查与账户定义紧密结合，避免在指令逻辑中散布 `require!()` 调用。

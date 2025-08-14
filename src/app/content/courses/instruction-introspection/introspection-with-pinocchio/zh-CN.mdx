@@ -1,0 +1,66 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# 使用 Pinocchio 进行指令内省
+
+Pinocchio 使用的类型与 `solana_program` crate 不同。这意味着我们需要为 Pinocchio 创建一个新的优化 SDK。
+
+在 [Orion](https://x.com/BasedOrion_) 的帮助下，我们创建了一组助手工具，这些工具在尊重“原始”实现的同时，使得 `Instruction` sysvar —— 一个使用成本最高的 sysvar 之一 —— 成为最有效率的之一。
+
+因此，我们可以在 Pinocchio 中使用*指令内省*，无需安装任何外部 crate，并且可以通过导入这些函数访问我们所需的所有信息：
+
+```rust
+use pinocchio::sysvars::instructions::{
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="如何使用内省" id="how-to-use-introspection" level="h2" />
+
+如前所述，指令内省只是从 `Instruction` sysvar 账户中反序列化数据，以提供我们所需的所有指令相关数据。
+
+我们从检查当前索引开始。可以通过使用 `load_current_index_checked` 函数来实现，如下所示：
+
+```rust
+let index = load_current_index_checked(&self.accounts.sysvar_instructions)?;
+```
+
+之后，我们可以使用 `load_instruction_at_checked` 检查相对索引处的指令。这次，我们将检查紧随执行内省的指令之后的指令，如下所示：
+
+```rust
+// We load the next instruction, which is the one we want to check for the correct input.
+let instruction = load_instruction_at_checked(index as usize + 1, &self.accounts.sysvar_instructions)?;
+```
+
+在进入下一步之前，我们应该问自己哪些信息对于防止恶意攻击是必不可少的。
+
+我们通常从检查所使用的程序是否是我们期望的程序开始。在此示例中，我们正在从系统程序中内省另一个指令，因此可以这样做：
+
+```rust
+if instruction.get_program_id() != &pinocchio_system::ID {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+接下来，我们检查指令是否是我们期望的指令。为此，我们将判别器和指令数据与预期值进行比较。我们首先创建一个 `instruction_data` 变量并进行检查，如下所示：
+
+```rust
+let mut instruction_data = [0u8; 12];
+instruction_data[0..4].copy_from_slice(&2u32.to_le_bytes());
+instruction_data[4..12].copy_from_slice(&100_000_000u64.to_le_bytes());
+
+if instruction.get_instruction_data() != instruction_data {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+然后，我们可以根据正在检查的指令逻辑执行更多特定于程序的检查。
+
+我们还可以检查被内省的指令中存在的账户。此步骤要求我们了解账户结构的确切结构，因为我们需要在特定索引处请求账户的数据或公钥，如下所示：
+
+```rust
+if instruction.get_account_meta_at(0)?.key() != self.accounts.from.key() {
+    return Err(ProgramError::InvalidAccountData);
+}
+```
