@@ -14,6 +14,16 @@ const redirects = [
     destination: "/:locale/courses/pinocchio-vault",
     permanent: false,
   },
+  {
+    source: "/:locale/courses/introduction-to-anchor",
+    destination: "/:locale/courses/anchor-for-dummies",
+    permanent: true,
+  },
+  {
+    source: "/:locale/courses/introduction-to-anchor/:lesson*",
+    destination: "/:locale/courses/anchor-for-dummies/:lesson*",
+    permanent: true,
+  },
 ];
 
 export default redirects; 

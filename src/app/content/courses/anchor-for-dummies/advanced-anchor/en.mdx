@@ -1,0 +1,371 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Advanced Anchor
+
+Sometimes, the abstraction done with Anchor makes it impossible to build out the logic that our program needs. For this reason, in this section we're going to talk about how to use some advanced concept to work with out program.
+
+<ArticleSection name="Feature Flags" id="feature-flags" level="h2" />
+
+Software engineers routinely need distinct environments for local development, testing, and production. Feature flags provide an elegant solution by enabling conditional compilation and environment-specific configurations without maintaining separate codebases.
+
+### Cargo Features
+
+Cargo features offer a powerful mechanism for conditional compilation and optional dependencies. You define named features in your `Cargo.toml`'s `[features]` table, then enable or disable them as needed:
+- Enable features via command line: --features feature_name
+- Enable features for dependencies directly in Cargo.toml
+
+This gives you fine-grained control over what gets included in your final binary.
+
+### Feature Flags in Anchor
+
+Anchor programs commonly use feature flags to create different behaviors, constraints, or configurations based on the target environment. Use the `cfg` attribute to conditionally compile code:
+
+```rust
+#[cfg(feature = "testing")]
+fn function_for_testing() {
+   // Compiled only when "testing" feature is enabled
+}
+
+#[cfg(not(feature = "testing"))]
+fn function_for_production() {
+   // Compiled only when "testing" feature is disabled
+}
+```
+
+Feature flags excel at handling environment differences. Since not all tokens deploy across Mainnet and Devnet, you often need different addresses for different networks:
+
+```rust
+#[cfg(feature = "localnet")]
+pub const TOKEN_ADDRESS: &str = "Local_Token_Address_Here";
+
+#[cfg(not(feature = "localnet"))]
+pub const TOKEN_ADDRESS: &str = "Mainnet_Token_Address_Here";
+```
+
+This approach eliminates deployment configuration errors and streamlines your development workflow by switching environments at compile time rather than runtime.
+
+This is how you would set it up in your `Cargo.toml` file:
+
+```toml
+[features]
+default = ["localnet"]
+localnet = []
+```
+
+After that, you can specify the flag you want to build your program with like this:
+
+```
+# Uses default (localnet)
+anchor build
+
+# Build for mainnet
+anchor build --no-default-features
+```
+
+> Once you build the program, the binary will just have the conditional flag you enabled meaning that once you test and deploy it will respect that condition.
+
+<ArticleSection name="Working with Raw Accounts" id="working-with-raw-accounts" level="h2" />
+
+Anchor streamlines account handling by automatically deserializing accounts through the account context:
+
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub account: Account<'info, MyAccount>,
+}
+
+#[account]
+pub struct MyAccount {
+    pub data: u8,
+}
+```
+
+However, this automatic deserialization becomes problematic when you need conditional account processing, such as deserializing and modifying an account only when specific criteria are met.
+
+For conditional scenarios, use `UncheckedAccount` to defer validation and deserialization until runtime. This prevents hard errors when accounts might not exist or when you need to validate them programmatically:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    /// CHECK: Validated conditionally in instruction logic
+    pub account: UncheckedAccount<'info>,
+}
+
+#[account]
+pub struct MyAccount {
+    pub data: u8,
+}
+
+pub fn instruction(ctx: Context<Instruction>, should_process: bool) -> Result<()> {
+    if should_process {
+        // Deserialize the account data
+        let mut account = MyAccount::try_deserialize(&mut &ctx.accounts.account.to_account_info().data.borrow_mut()[..])
+            .map_err(|_| error!(InstructionError::AccountNotFound))?;
+
+        // Modify the account data
+        account.data += 1;
+
+        // Serialize back the data to the account
+        account.try_serialize(&mut &mut ctx.accounts.account.to_account_info().data.borrow_mut()[..])?;
+    }
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Zero Copy Accounts" id="zero-copy-accounts" level="h2" />
+
+Solana's runtime enforces strict memory limits: 4KB for stack memory and 32KB for heap memory. Additionally, the stack grows by 10KB for each loaded account. These constraints make traditional deserialization impossible for large accounts, requiring zero-copy techniques for efficient memory management.
+
+When accounts exceed these limits, you'll encounter stack overflow errors like: `Stack offset of -30728 exceeded max offset of -4096 by 26632 bytes`
+
+For medium-sized accounts, you can use `Box` to move data from stack to heap (as mentioned in the introduction), but larger accounts require implementing `zero_copy`.
+
+Zero-copy bypasses automatic deserialization entirely by using raw memory access. To define an account type that uses zero-copy, annotate the struct with `#[account(zero_copy)]`:
+
+```rust
+#[account(zero_copy)]
+pub struct Data {
+    // 10240 bytes - 8 bytes account discriminator
+    pub data: [u8; 10_232],
+}
+```
+
+The `#[account(zero_copy)]` attribute automatically implements several traits required for zero-copy deserialization:
+- `#[derive(Copy, Clone)]`, 
+- `#[derive(bytemuck::Zeroable)]`, 
+- `#[derive(bytemuck::Pod)]`, and 
+- `#[repr(C)]`
+
+> Note: To use zero-copy, add the `bytemuck` crate to your dependencies with the `min_const_generics` feature to work with arrays of any size in your zero-copy types.
+
+To deserialize a zero-copy account in your instruction context, use `AccountLoader<'info, T>`, where `T` is your zero-copy account type:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub data_account: AccountLoader<'info, Data>,
+}
+```
+
+### Initializing a Zero Copy Account
+
+There are two different approaches for initialization, depending on your account size:
+
+For accounts under 10,240 bytes, use the `init` constraint directly:
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        // 10240 bytes is max space to allocate with init constraint
+        space = 8 + 10_232,
+        payer = payer,
+    )]
+    pub data_account: AccountLoader<'info, Data>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+> The init constraint is limited to 10,240 bytes due to CPI limitations. Under the hood, init makes a CPI call to the System Program to create the account.
+
+For accounts requiring more than 10,240 bytes, you must first create the account separately by calling the System Program multiple times, adding 10,240 bytes per transaction. This allows you to create accounts up to Solana's maximum size of 10MB (10,485,760 bytes), bypassing the CPI limitation.
+
+After creating the account externally, use the `zero` constraint instead of `init`. The `zero` constraint verifies the account hasn't been initialized by checking that its discriminator is unset:
+
+```rust
+#[account(zero_copy)]
+pub struct Data {
+    // 10,485,780 bytes - 8 bytes account discriminator
+    pub data: [u8; 10_485_752],
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(zero)]
+    pub data_account: AccountLoader<'info, Data>,
+}
+```
+
+For both initialization methods, call `load_init()` to get a mutable reference to the account data and set the account discriminator:
+
+```rust
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    let account = &mut ctx.accounts.data_account.load_init()?;
+
+    // Set your account data here
+    // account.data = something;
+
+    Ok(())
+}
+```
+
+### Loading a Zero Copy Account
+
+Once initialized, use `load()` to read the account data:
+
+```rust
+#[derive(Accounts)]
+pub struct ReadOnly<'info> {
+    pub data_account: AccountLoader<'info, Data>,
+}
+
+pub fn read_only(ctx: Context<ReadOnly>) -> Result<()> {
+    let account = &ctx.accounts.data_account.load()?;
+
+    // Read your data here
+    // let value = account.data;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Working with Raw CPIs" id="working-with-raw-cpis" level="h2" />
+
+Anchor abstracts cross-program invocation (CPI) complexity, but understanding the underlying mechanics is crucial for advanced Solana development. 
+
+Every instruction consists of three core components: a `program_id`, an `accounts` array, and `instruction_data` bytes that the Solana Runtime processes via the `sol_invoke` syscall.
+
+At the system level, Solana executes CPIs through this syscall:
+
+```rust
+/// Solana BPF syscall for invoking a signed instruction.
+fn sol_invoke_signed_c(
+    instruction_addr: *const u8,
+    account_infos_addr: *const u8,
+    account_infos_len: u64,
+    signers_seeds_addr: *const u8,
+    signers_seeds_len: u64,
+) -> u64;
+```
+
+The Runtime receives pointers to your instruction data and account information, then executes the target program with these inputs.
+
+Here's how you'd invoke an Anchor program using raw Solana primitives:
+
+```rust
+pub fn manual_cpi(ctx: Context<MyCpiContext>) -> Result<()> {
+    // Construct instruction discriminator (8-byte SHA256 hash prefix)
+    let discriminator = sha256("global:instruction_name")[0..8]
+    
+    // Build complete instruction data
+    let mut instruction_data = discriminator.to_vec();
+    instruction_data.extend_from_slice(&[additional_instruction_data]); // Your instruction parameters
+    
+    // Define account metadata for the target program
+    let accounts = vec![
+        AccountMeta::new(ctx.accounts.account_1.key(), true),           // Signer + writable
+        AccountMeta::new_readonly(ctx.accounts.account_2.key(), false), // Read-only
+        AccountMeta::new(ctx.accounts.account_3.key(), false),          // Writable
+    ];
+    
+    // Collect account infos for the syscall
+    let account_infos = vec![
+        ctx.accounts.account_1.to_account_info(),
+        ctx.accounts.account_2.to_account_info(),
+        ctx.accounts.account_3.to_account_info(),
+    ];
+    
+    // Create the instruction
+    let instruction = solana_program::instruction::Instruction {
+        program_id: target_program::ID,
+        accounts,
+        data: instruction_data,
+    };
+    
+    // Execute the CPI
+    solana_program::program::invoke(&instruction, &account_infos)?;
+    
+    Ok(())
+}
+
+// For PDA-signed CPIs, use invoke_signed instead:
+pub fn pda_signed_cpi(ctx: Context<PdaCpiContext>) -> Result<()> {
+    // ... instruction construction same as above ...
+    
+    let signer_seeds = &[
+        b"seed",
+        &[bump],
+    ];
+    
+    solana_program::program::invoke_signed(
+        &instruction,
+        &account_infos,
+        &[signer_seeds],
+    )?;
+    
+    Ok(())
+}
+```
+
+### CPI to another Anchor Program
+
+Anchor's `declare_program!()` macro enables type-safe cross-program invocations without adding the target program as a dependency. The macro generates Rust modules from a program's IDL, providing CPI helpers and account types for seamless program interactions.
+
+Place the target program's IDL file in an `/idls` directory anywhere in your project structure:
+
+```
+project/
+├── idls/
+│   └── target_program.json
+├── programs/
+│   └── your_program/
+└── Cargo.toml
+```
+
+Then use the macro to generate the necessary modules:
+
+```
+use anchor_lang::prelude::*;
+
+declare_id!("YourProgramID");
+
+// Generate modules from IDL
+declare_program!(target_program);
+
+// Import the generated types
+use target_program::{
+    accounts::Counter,             // Account types
+    cpi::{self, accounts::*},      // CPI functions and account structs  
+    program::TargetProgram,        // Program type for validation
+};
+
+#[program]
+pub mod your_program {
+    use super::*;
+
+    pub fn call_other_program(ctx: Context<CallOtherProgram>) -> Result<()> {
+        // Create CPI context
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.target_program.to_account_info(),
+            Initialize {
+                payer: ctx.accounts.payer.to_account_info(),
+                counter: ctx.accounts.counter.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            },
+        );
+
+        // Execute the CPI using generated helper
+        target_program::cpi::initialize(cpi_ctx)?;
+        
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct CallOtherProgram<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub counter: Account<'info, Counter>,  // Uses generated account type    
+    pub target_program: Program<'info, TargetProgram>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+> You can CPI another Anchor program by adding in the your `Cargo.toml` under `[dependencies]`: `callee = { path = "../callee", features = ["cpi"] }` after building your program doing `anchor build -- --features cpi` and using `callee::cpi::<instruction>()`. This is not recommended since it could give you a circular dependency error.
+`

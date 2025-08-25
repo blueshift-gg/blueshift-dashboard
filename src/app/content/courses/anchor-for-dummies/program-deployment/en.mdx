@@ -1,0 +1,173 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Program Deployment
+
+Once your program is complete, deploy it to devnet or mainnet to enable user interaction.
+
+<ArticleSection name="Program Deployment" id="program-deployment" level="h2" />
+
+Build your program to generate the necessary deployment files:
+
+```
+anchor build
+```
+
+This creates a `target/deploy` folder containing:
+- `<project-name>.so`: your program's bytecode
+- `<project-name>-keypair.json`: a generated keypair for deployment
+
+> You can replace this keypair with a vanity address by substituting the keypair in the `<project-name>-keypair.json` file.
+
+Retrieve the program address:
+
+```
+solana address -k target/deploy/<project-name>-keypair.json
+```
+
+Update the `declare_id!()` function in `lib.rs` with this address, then configure your `Anchor.toml` with the right target cluster and program ID:
+
+```
+[provider]
+cluster = "devnet"
+
+[programs.devnet]
+<project-name> = "<PROGRAM_ID>"
+```
+
+Deploy your program:
+
+```
+anchor deploy
+```
+
+This deploys using the specified address, cluster, and wallet from `Anchor.toml` as the fee payer.
+
+### Deployment Failures
+
+Failed deployments create intermediate buffer accounts that hold lamports. You'll see recovery instructions like:
+
+```
+==================================================================================
+Recover the intermediate account's ephemeral keypair file with
+`solana-keygen recover` and the following 12-word seed phrase:
+==================================================================================
+valley flat great hockey share token excess clever benefit traffic avocado athlete
+==================================================================================
+To resume a deploy, pass the recovered keypair as
+the [BUFFER_SIGNER] to `solana program deploy` or `solana program write-buffer'.
+Or to recover the account's lamports, pass it as the
+[BUFFER_ACCOUNT_ADDRESS] argument to `solana program drain`.
+==================================================================================
+```
+
+To recover your balance:
+
+- **Resume deployment** by recovering the keypair:
+    ```
+    solana-keygen recover -o <KEYPAIR_PATH>
+    ```
+    Enter the 12-word seed phrase when prompted, then deploy with the buffer:
+    ```
+    solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json --buffer ./target/deploy/<buffer>-keypair.json
+    ```
+
+- **Close** the buffer to reclaim lamports:
+    ```
+    solana program close <ADDRESS>
+    ```
+
+### Deployment through Solana CLI
+
+You can deploy your programs directly using Solana CLI instead of Anchor:
+
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+During network congestion, use these flags to improve deployment success:
+- `--with-compute-unit-price`: Set compute unit price in micro-lamports
+- `--use-rpc`: Send transactions to RPC instead of validator TPUs
+- `--max-sign-attempts`: Maximum retry attempts after blockhash expiration
+
+<ArticleSection name="Program Upgrade" id="program-upgrade" level="h2" />
+
+By default, `anchor deploy` creates a new program ID. To upgrade an existing program while preserving its address and associated accounts:
+
+```
+anchor upgrade target/deploy/<project-name>.so --program-id <PROGRAM_ID>
+```
+
+If the new executable is larger than the deployed version, extend the program account first:
+
+```
+solana program extend ./target/deploy/<project-name>.so <ADDITIONAL_BYTES>
+```
+
+### Upgrade through Solana CLI
+
+The process remains the same: extend if needed, then deploy:
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+### Making Programs Immutable
+
+You can remove the upgrade authority to make your program immutable:
+
+```
+solana program set-upgrade-authority <PROGRAM_ID> --final
+```
+
+> This action is irreversible. Once set, the program cannot be updated.
+
+### Migrating Programs
+
+Migration transfers a program from one address to another. The CLI closes the old program and redeploys to the new location:
+
+```
+solana program migrate ./target/deploy/<project-name>.json
+```
+
+> Migration breaks all existing PDAs since they derive from the old Program ID. Users must update their applications to use the new address and change authority over any token account which authority is a PDA.
+
+<ArticleSection name="Uploading an IDL" id="uploading-an-idl" level="h2" />
+
+An Interface Description Language (IDL) file provides a standardized JSON description of your program's instructions and accounts, enabling easier client integration.
+
+Upload the IDL onchain to help developers integrate your program:
+
+```
+anchor idl init --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+### Upgrading the IDL
+
+After redeploying your program, update the onchain IDL:
+
+```
+anchor idl upgrade --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+<ArticleSection name="Verified Builds" id="verified-builds" level="h2" />
+
+Verified builds ensure that the executable program deployed on Solana matches the source code in your repository. This verification enables developers and users to confirm the onchain program corresponds exactly to the public codebase.
+
+The verification process compares the hash of the onchain program against the locally built program from source code, detecting any discrepancies between versions.
+
+Building programs with the Solana CLI can embed machine-specific code into binaries. Compiling the same program on different machines may produce different executables. To address this, build inside a Docker container with pinned dependencies for reproducible results.
+
+Anchor provides CLI commands that handle building and Docker configuration:
+
+```
+anchor build --verifiable
+```
+
+Verify a build against a program deployed on mainnet:
+
+```
+anchor verify -p <lib-name> <program-id>
+```
+
+> The `<lib-name>` corresponds to the name defined in your program's `Cargo.toml` file.

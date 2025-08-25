@@ -19,10 +19,15 @@ pub mod insecure_withdraw{
     //..
 
     pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+
+        //..
+        // other conditions/actions...
+        //..
+
         let amount = ctx.accounts.vault.amount;
         
         let seeds = &[
-            ctx.accounts.pool.withdraw_destination.as_ref(),
+            ctx.accounts.pool.mint.as_ref(),
             &[ctx.accounts.pool.bump],
         ];
 
@@ -47,51 +52,68 @@ pub mod insecure_withdraw{
 
 #[derive(Accounts)]
 pub struct WithdrawTokens<'info> {
-    #[account(has_one = vault, has_one = withdraw_destination)]
+    #[account(
+        seeds = [b"pool", pool.mint.as_ref()],
+        bump = pool.bump,                                        
+    )]
     pool: Account<'info, TokenPool>,
     vault: Account<'info, TokenAccount>,
     withdraw_destination: Account<'info, TokenAccount>,
-    /// CHECK: This is the PDA that signs for the transfer
-    authority: UncheckedAccount<'info>,
+    //..
+    // other accounts..
+    //..
     token_program: Program<'info, Token>,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct TokenPool {
-    pub vault: Pubkey,
     pub mint: Pubkey,
-    pub withdraw_destination: Pubkey,
     pub bump: u8,
 }
 ```
 
-This code has a critical flaw: the PDA is derived using only the mint address. This means that all pools for the same token type share the same signing authority, creating a dangerous attack vector.
+This code has a critical flaw: the PDA is derived using only the mint address. This means that all vaults for the same token type share the same signing authority, creating a dangerous attack vector.
 
 An attacker can exploit this by:
-- Creating their own TokenPool for the same mint
-- Setting their own address as the `withdraw_destination`
+- Creating their own vault for the same mint
+- Calling the instruction with their own address as the `withdraw_destination`
 - Using the shared PDA authority to withdraw tokens from any vault that uses the same mint
 - Draining other users' funds to their own destination
 
-The attack succeeds because the PDA authority doesn't distinguish between different pool instances, it only cares about the mint type, not the specific user or pool that should have access to those funds.
+The attack succeeds because the PDA authority doesn't distinguish between different pool instances, it only cares about the mint type, not the specific user that should have access to those funds.
 
-The first improvement is making PDAs specific to individual users or destinations and use Anchor's seeds and bump constraints to validate PDA derivation:
+A possible solution is making PDAs specific to individual users and destinations and use Anchor's seeds and bump constraints to validate PDA derivation:
 
 ```rust
 #[derive(Accounts)]
 pub struct WithdrawTokens<'info> {
     #[account(
-        seeds = [withdraw_destination.key().as_ref()],
-        bump = pool.bump,                             
-        has_one = vault,                              
-        has_one = withdraw_destination,              
+        has_one = vault,
+        has_one = withdraw_destination,
+        seeds = [b"pool", vault.key().as_ref(), withdraw_destination.key().as_ref()],
+        bump = pool.bump,                                        
     )]
-    pool: Account<'info, TokenPool>,
+    pool: Account<'info, TokenPool>, // Authority for the vault
     #[account(mut)]
     vault: Account<'info, TokenAccount>,
     #[account(mut)]
     withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // other accounts..
+    //..
     token_program: Program<'info, Token>,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool{
+    pub vault:Pubkey,
+    pub withdraw_destination:Pubkey,
+    pub bump:u8
+}
 ```
+
+The same change is made for the instruction handler, one possible situation where this can hold is a leverage trading program that allows a users's trade to be liquidated when they have lost a certain amount e.g they set a stop loss themselves, the code would then check the condition of reaching that amount and then allow anyone to stop the trade and withdraw the remaining funds to the destination, the withdrawal account.
+
+One single PDA controlling all the funds for a particular mint would create a situation where if conditions were met for users simultaneously e.g many user's being close to stop loss/liquidation, then any single user could withdraw those funds for all those users, possibly in a one or more transactions containing multiple instructions doing this for different users.

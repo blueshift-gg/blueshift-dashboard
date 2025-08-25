@@ -14,7 +14,7 @@ export async function generateMetadata({
   params,
 }: ChallengePageProps): Promise<Metadata> {
   const { challengeSlug, locale } = await params;
-  const t = await getTranslations({ locale, namespace: "metadata" });
+  const t = await getTranslations({ locale });
   const pathname = getPathname({
     locale,
     href: `/challenges/${challengeSlug}`,
@@ -26,14 +26,16 @@ export async function generateMetadata({
     height: 630,
   };
 
+  const title = `${t("metadata.title")} | ${t(`challenges.${challengeSlug}.title`)}`;
+
   return {
-    title: t("title"),
-    description: t("description"),
+    title: title,
+    description: t("metadata.description"),
     openGraph: {
-      title: t("title"),
+      title: title,
       type: "website",
-      description: t("description"),
-      siteName: t("title"),
+      description: t("metadata.description"),
+      siteName: title,
       url: pathname,
       images: [
         {

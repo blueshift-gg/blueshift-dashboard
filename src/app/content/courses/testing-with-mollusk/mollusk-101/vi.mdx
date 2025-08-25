@@ -2,6 +2,8 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Mollusk 101
 
+![Testing with Mollusk](/graphics/course-banners/testing-with-mollusk.png)
+
 Kiểm thử các chương trình Solana một cách hiệu quả đòi hỏi một framework cân bằng giữa tốc độ, độ chính xác và khả năng hiểu biết sâu sắc. Khi phát triển logic chương trình phức tạp, bạn cần một môi trường cho phép lặp lại nhanh chóng mà không hy sinh khả năng kiểm thử các trường hợp biên hoặc đo lường hiệu suất một cách chính xác.
 
 Framework kiểm thử lý tưởng trên Solana nên cung cấp ba khả năng thiết yếu:
@@ -30,32 +32,27 @@ Crate `mollusk-svm` cốt lõi cung cấp cơ sở hạ tầng kiểm thử cơ 
 Thêm crate Mollusk chính vào dự án của bạn:
 
 ```
-cargo add mollusk-svm
+cargo add mollusk-svm --dev
 ```
 
-Bao gồm phàn bổ trợ cụ thể cho chương trình khi cần:
+Bao gồm các phần bổ trợ cụ thể cho chương trình khi cần:
 
 ```
-cargo add mollusk-svm-programs-memo mollusk-svm-programs-token
+cargo add mollusk-svm-programs-memo mollusk-svm-programs-token --dev
 ```
 
 Những crate bổ sung này cung cấp các phần bổ trợ được cấu hình sẵn cho các chương trình Solana tiêu chuẩn, giảm boilerplate code và đơn giản hóa việc thiết lập các kịch bản kiểm thử phổ biến liên quan đến thao tác token hoặc memo instruction.
 
+> Cờ `--dev` trong `cargo add <crate-name> --dev` được dùng để dữ cho binary chương trình của bạn nhẹ bằng cách thêm chúng dưới phần `[dev-dependencies]` trong `Cargo.toml`
+> Cấu hình này đảm bảo rằng các tiện ích phục vụ cho kiểm thử không làm tăng kích thước triển khai chương trình của bạn trong khi vẫn cung cấp quyền truy cập vào tất cả các kiểu Solana  và hàm bổ trợ cần thiết trong quá trình phát triển.
+
 ### Các thành phần phụ thuộc bổ sung
 
-Một số crate Solana nâng cao trải nghiệm kiểm thử bằng cách cung cấp các type và utility thiết yếu:
+Một số crate Solana nâng cao trải nghiệm kiểm thử bằng cách cung cấp các kiểu và tiện ích thiết yếu:
 
 ```
-cargo add solana-precompiles solana-account solana-pubkey solana-feature-set solana-program solana-sdk
+cargo add solana-precompiles solana-account solana-pubkey solana-feature-set solana-program solana-sdk --dev
 ```
-
-Vì những phần phụ thuộc này chỉ cần thiết cho kiểm thử, hãy giữ cho binary chương trình của bạn nhẹ bằng cách thêm chúng dưới phần `[dev-dependencies]` trong `Cargo.toml` của bạn:
-
-```
-[dev-dependencies]
-mollusk-svm = "0.4.0"
-```
-> Cấu hình này đảm bảo rằng các utility kiểm thử không làm tăng kích thước triển khai chương trình của bạn trong khi cung cấp quyền truy cập vào tất cả các type Solana cần thiết và hàm bổ trợ trong quá trình phát triển.
 
 <ArticleSection name="Mollusk cơ bản" id="mollusk-basics" level="h2" />
 
@@ -77,10 +74,12 @@ const ID: Pubkey = solana_sdk::pubkey!("2222222222222222222222222222222222222222
 
 #[test]
 fn test() {
-    let mollusk = Mollusk::new(&ID, "target/deploy/program.so");
-    
+    // Omit the `.so` file extension for the program name since
+    // it is automatically added when Mollusk is loading the file.
+    let mollusk = Mollusk::new(&ID, "target/deploy/program");
+
     // Alternative using an Array of bytes
-    // let mollusk = Mollusk::new(&Pubkey::new_from_array(ID), "target/deploy/program.so")
+    // let mollusk = Mollusk::new(&Pubkey::new_from_array(ID), "target/deploy/program")
 }
 ```
 
@@ -98,7 +97,7 @@ Khi kiểm thử các chương trình Solana với Mollusk, bạn sẽ làm vi�
 
 Loại account cơ bản nhất là `SystemAccount`, có hai biến thể chính:
 - Payer: Một account có lamport tài trợ cho việc tạo program account hoặc chuyển lamport
-- Uninitialized Account: Một program account đang chờ khởi tạo trong instruction của bạn
+- Default Account: Một account rỗng và không có lamport, thường dùng để biểu diễn tài khoản chương trình đang chờ khởi tạo trong instruction của bạn
 
 System account không chứa dữ liệu và được sở hữu bởi System Program. Sự khác biệt chính giữa payer và uninitialized account là số dư lamport của chúng: payer có tiền, trong khi uninitialized account bắt đầu với số dư trống.
 
@@ -115,8 +114,7 @@ let payer = Pubkey::new_unique();
 let payer_account = Account::new(100_000_000, 0, &system_program::id());
 
 // Uninitialized account with no lamports
-let uninitialized_account = Pubkey::new_unique();
-let uninitialized_account_account = Account::new(0, 0, &system_program::id());
+let default_account = Account::default();
 ```
 
 Đối với `ProgramAccount` chứa dữ liệu, bạn có hai cách tiếp cận xây dựng:
@@ -142,24 +140,6 @@ let program_account_account = Account {
 };
 ```
 
-Hoặc sử dụng `AccountSharedData`:
-
-```rust
-use solana_sdk::account::AccountSharedData;
-
-let data = vec![
-    // Your serialized account data
-];
-let lamports = mollusk
-    .sysvars
-    .rent
-    .minimum_balance(data.len());
-
-let program_account = Pubkey::new_unique();
-let mut program_account_account = AccountSharedData::new(lamports, data.len(), &ID);
-program_account_account.set_data_from_slice(&data);
-```
-
 Khi bạn đã tạo account của mình, hãy biên dịch chúng thành định dạng mà Mollusk mong đợi:
 
 ```rust
@@ -168,8 +148,6 @@ let accounts = [
     (program_account, program_account_account)
 ];
 ```
-
-> Khi sử dụng AccountSharedData, hãy nhớ gọi `.into()` để chuyển đổi nó thành type Account mà Mollusk yêu cầu để thực thi như thế này: `program_account_account.into()`.
 
 ### Instruction
 

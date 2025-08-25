@@ -2,6 +2,47 @@ import { useTranslations } from "next-intl";
 import HeadingReveal from "@/app/components/HeadingReveal/HeadingReveal";
 import Challenges from "@/app/components/ChallengeCenterContent/Challenges";
 import CrosshairCorners from "@/app/components/Graphics/CrosshairCorners";
+import { Metadata } from "next";
+import { getPathname } from "@/i18n/navigation";
+import { getTranslations } from "next-intl/server";
+
+interface ChallengesPageProps {
+  params: Promise<{
+    locale: string;
+  }>;
+}
+
+export async function generateMetadata({
+  params,
+}: ChallengesPageProps): Promise<Metadata> {
+  const { locale } = await params;
+  const t = await getTranslations({ locale });
+  const pathname = getPathname({
+    locale,
+    href: `/challenges`,
+  });
+
+  const title = `${t("metadata.title")} | ${t(`header.challenges`)}`;
+
+  return {
+    title: title,
+    description: t("metadata.description"),
+    openGraph: {
+      title: title,
+      type: "website",
+      description: t("metadata.description"),
+      siteName: title,
+      url: pathname,
+      images: [
+        {
+          url: "https://learn.blueshift.gg/graphics/meta-image.png",
+          width: 1200,
+          height: 628,
+        },
+      ],
+    },
+  };
+}
 
 export default function RewardsPage() {
   const t = useTranslations();

@@ -19,10 +19,15 @@ pub mod insecure_withdraw{
     //..
 
     pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+
+        //..
+        // other conditions/actions...
+        //..
+
         let amount = ctx.accounts.vault.amount;
         
         let seeds = &[
-            ctx.accounts.pool.withdraw_destination.as_ref(),
+            ctx.accounts.pool.mint.as_ref(),
             &[ctx.accounts.pool.bump],
         ];
 
@@ -47,51 +52,68 @@ pub mod insecure_withdraw{
 
 #[derive(Accounts)]
 pub struct WithdrawTokens<'info> {
-    #[account(has_one = vault, has_one = withdraw_destination)]
+    #[account(
+        seeds = [b"pool", pool.mint.as_ref()],
+        bump = pool.bump,                                        
+    )]
     pool: Account<'info, TokenPool>,
     vault: Account<'info, TokenAccount>,
     withdraw_destination: Account<'info, TokenAccount>,
-    /// CHECK: This is the PDA that signs for the transfer
-    authority: UncheckedAccount<'info>,
+    //..
+    // other accounts..
+    //..
     token_program: Program<'info, Token>,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct TokenPool {
-    pub vault: Pubkey,
     pub mint: Pubkey,
-    pub withdraw_destination: Pubkey,
     pub bump: u8,
 }
 ```
 
-Mã này có một lỗ hổng nghiêm trọng: PDA được derive chỉ sử dụng địa chỉ mint. Điều này có nghĩa là tất cả pool cho cùng kiểu token chia sẻ cùng signing authority, tạo ra một vector tấn công nguy hiểm.
+Mã này có một lỗ hổng nghiêm trọng: PDA được derive chỉ sử dụng địa chỉ mint. Điều này có nghĩa là tất cả vault cho cùng kiểu token chia sẻ cùng signing authority, tạo ra một khả năng tấn công vector nguy hiểm.
 
 Kẻ tấn công có thể khai thác điều này bằng cách:
-- Tạo TokenPool riêng của họ cho cùng mint
-- Đặt địa chỉ riêng của họ làm `withdraw_destination`
+- Tạo vault riêng của chúng cho cùng một mint
+- Gọi instruction với địa chỉ riêng của chúng là `withdraw_destination`
 - Sử dụng PDA authority được chia sẻ để rút token từ bất kỳ vault nào sử dụng cùng mint
 - Rút cạn tiền của người dùng khác đến đích của họ
 
-Cuộc tấn công thành công vì PDA authority không phân biệt giữa các pool instance khác nhau, nó chỉ quan tâm đến kiểu mint, không phải user hoặc pool cụ thể nên có quyền truy cập vào những khoản tiền đó.
+Cuộc tấn công thành công vì PDA authority không phân biệt giữa các pool instance khác nhau, nó chỉ quan tâm đến kiểu của mint, không phải user cụ thể có quyền truy cập vào những khoản tiền đó.
 
-Cải tiến đầu tiên là làm cho PDA cụ thể cho từng user hoặc destination riêng lẻ và sử dụng ràng buộc seed và bump của Anchor để xác thực PDA derivation:
+Giải pháp có thể là khiến cho PDA xác định cụ thể cho từng user hoặc destination riêng lẻ và sử dụng ràng buộc seed và bump của Anchor để xác thực PDA derivation:
 
 ```rust
 #[derive(Accounts)]
 pub struct WithdrawTokens<'info> {
     #[account(
-        seeds = [withdraw_destination.key().as_ref()],
-        bump = pool.bump,                             
-        has_one = vault,                              
-        has_one = withdraw_destination,              
+        has_one = vault,
+        has_one = withdraw_destination,
+        seeds = [b"pool", vault.key().as_ref(), withdraw_destination.key().as_ref()],
+        bump = pool.bump,                                        
     )]
-    pool: Account<'info, TokenPool>,
+    pool: Account<'info, TokenPool>, // Authority for the vault
     #[account(mut)]
     vault: Account<'info, TokenAccount>,
     #[account(mut)]
     withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // other accounts..
+    //..
     token_program: Program<'info, Token>,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool{
+    pub vault:Pubkey,
+    pub withdraw_destination:Pubkey,
+    pub bump:u8
+}
 ```
+
+Thay đổi tương tự cũng được thực hiện đối với trình xử lý instruction, một tình huống khả thi mà có thể xảy ra điều này là một chương trình giao dịch đòn bẩy cho phép thanh lý giao dịch của người dùng khi họ thua lỗ một số tiền nhất định, ví dụ: họ tự đặt lệnh dừng lỗ, mã sau đó sẽ kiểm tra điều kiện để đạt đến số tiền đó và sau đó cho phép bất kỳ ai cũng có thể dừng giao dịch và rút số tiền còn lại về một địa chỉ đích, tức là tài khoản rút tiền.
+
+Một PDA duy nhất kiểm soát tất cả tiền của một mint cụ thể sẽ tạo ra tình huống mà nếu các điều kiện được đáp ứng đồng thời cho người dùng, ví dụ: nhiều người dùng sắp đạt đến điều kiện dừng lỗ/thanh lý, thì bất kỳ người dùng nào cũng có thể rút số tiền đó cho tất cả những người dùng, có thể trong một hoặc nhiều giao dịch chứa nhiều instruction thực hiện việc này cho những người dùng khác nhau.

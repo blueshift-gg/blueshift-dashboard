@@ -1,0 +1,186 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Transaction Request
+
+Transaction requests unlock the full power of Solana Pay by enabling dynamic, server-composed transactions that can handle any type of Solana operation. 
+
+Unlike transfer requests that contain all payment information in the URL, transaction requests use interactive endpoints to build custom transactions based on real-time data and business logic.
+
+This approach transforms Solana Pay from a simple payment system into a complete commerce platform capable of handling complex business scenarios, dynamic pricing, and sophisticated transaction flows.
+
+<ArticleSection name="How Transaction Requests Work" id="how-it-works" level="h2" />
+
+Transaction requests follow a simple URL format that points to your server endpoint:
+
+```
+solana:<recipient>?<optional-query-params>
+```
+
+The `link` value should be a URL to your API endpoint that handles both `GET` and `POST` requests. When a user scans a transaction request QR code, their wallet initiates a four-step process:
+1. **Initial GET Request**: Retrieves display information like your business name and logo
+2. **User Confirmation**: Wallet shows the business information to the user
+3. **POST Request**: Sends the user's public key to your endpoint
+4. **Transaction Response**: Your server builds a custom transaction and returns it as a base64-encoded string
+
+The wallet then presents this transaction to the user for approval and signing.
+
+> You can include parameters in the URL to access them from your endpoint like this:
+
+```
+solana:https://myapi.com/pay?amount=100&product=premium&reference=abc123
+```
+
+<ArticleSection name="Building the API Endpoint" id="api-endpoint" level="h2" />
+
+Creating a transaction request endpoint requires handling both GET and POST requests at the same URL. Here's the structure using Next.js App Router:
+
+```ts
+import { NextRequest, NextResponse } from 'next/server';
+
+// CORS headers for wallet compatibility
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: corsHeaders });
+}
+
+export async function GET() {
+  // Implementation details below...
+}
+
+export async function POST(request: NextRequest) {
+  // Implementation details below...
+}
+```
+
+> Since wallets make cross-origin requests to your endpoint, CORS headers are mandatory. Without them, wallet requests will fail.
+
+### GET Request Handler
+
+The GET request provides display information that helps users understand what they're interacting with:
+
+```ts
+export async function GET() {
+  return NextResponse.json({
+    label: "Coffee Shop Demo",
+    icon: "https://solana.com/src/img/branding/solanaLogoMark.svg",
+  }, { headers: corsHeaders });
+}
+```
+
+**Response Format:**
+
+```json
+{
+  "label": "Coffee Shop Demo",
+  "icon": "https://solana.com/src/img/branding/solanaLogoMark.svg"
+}
+```
+
+This information helps the user understand what they're about to interact with before proceeding to the actual transaction composition.
+
+### POST Request Handler
+
+The POST request is where transaction requests truly shine. Your endpoint receives the user's public key and builds a completely custom transaction:
+
+```ts
+export async function POST(request: NextRequest) {
+  // Parse user's public key from request body
+  const body = await request.json();
+  const { account } = body;
+
+  // Connect to Solana network
+  const connection = new Connection(clusterApiUrl("devnet"));
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+
+  // Create transaction with user as fee payer
+  const transaction = new Transaction({
+    feePayer: new PublicKey(account),
+    blockhash: blockhash,
+    lastValidBlockHeight: lastValidBlockHeight,
+  });
+
+  // ========================================
+  // ADD YOUR CUSTOM INSTRUCTIONS HERE
+  // ========================================
+  
+  // This is where you build your transaction logic.
+  // You can add any combination of instructions:
+  
+  // Example 1: Simple SOL transfer
+  // const transferInstruction = SystemProgram.transfer({
+  //   fromPubkey: new PublicKey(account),
+  //   toPubkey: new PublicKey("YOUR_MERCHANT_WALLET"),
+  //   lamports: LAMPORTS_PER_SOL * 0.01, // 0.01 SOL
+  // });
+  // transaction.add(transferInstruction);
+
+  // Serialize the transaction for the wallet
+  const serializedTransaction = transaction.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+
+  return NextResponse.json({
+    transaction: serializedTransaction.toString('base64'),
+    message: "Transaction created successfully", // Customize this message
+  }, { headers: corsHeaders });
+}
+```
+
+> Your application doesn't submit the transaction to the network, so you won't have access to the transaction signature for tracking purposes. Use reference parameters as explained in the [Introduction Lesson](/en/courses/solana-pay/introduction#reference)
+
+<ArticleSection name="Advanced Capabilities" id="advanced-capabilities" level="h2" />
+
+### Gated Transactions
+
+Transaction requests enable sophisticated access control by verifying conditions before building transactions. Since you control the endpoint, you can check NFT ownership, whitelist membership, or any other criteria:
+
+```ts
+// Check NFT ownership before building transaction
+const nfts = await metaplex.nfts().findAllByOwner({ owner: account }).run(); 
+
+const hasRequiredNFT = nfts.some(nft => 
+  nft.collection?.address.toString() === requiredCollection
+);
+
+if (!hasRequiredNFT) {
+  return response.status(403).json({ 
+    error: "Access denied: Required NFT not found" 
+  });
+}
+
+// Build transaction only for verified users
+```
+
+### Partial Signing for Enhanced Security
+
+For transactions requiring approval from an admin keypair or multi-party authentication, Solana Pay supports partial signing. Your server can add its signature before sending to the user:
+
+```ts
+const transaction = new Transaction({
+  feePayer: account,
+  blockhash,
+  lastValidBlockHeight,
+});
+
+// Add your instructions requiring admin signature
+transaction.add(customInstruction);
+
+// Partially sign with your admin keypair
+transaction.partialSign(adminKeypair);
+
+// Send to user for final signature
+const serializedTransaction = transaction.serialize({
+  requireAllSignatures: false,
+});
+```
+
+<ArticleSection name="Example" id="example" level="h2" />
+
+As fully fledged example, you can use the [Solana NFT Minter Example](https://github.com/solana-developers/solana-pay-nft-minter/tree/main) from Solana Foundation

@@ -133,7 +133,7 @@ pub account: Account<'info, CustomAccountType>,
 
 **Note**: that PDAs are deterministic: same seeds + program + bump always produce the same address and that the bump ensures the address is off the ed25519 curve
 
-Since the calculating the bump can "burn" a lot of CUs, it's always good to save it into the account or pass it into the instruction and validate it without having to calculate like this:
+Since calculating the bump can "burn" a lot of CUs, it's always good to save it into the account or pass it into the instruction and validate it without having to calculate like this:
 
 ```rust
 #[account(
@@ -143,7 +143,7 @@ Since the calculating the bump can "burn" a lot of CUs, it's always good to save
 pub account: Account<'info, CustomAccountType>,
 ```
 
-And it's possible to derive a PDA that is derived from another program by passing the address of the program is derived from like this:
+And it's possible to derive a PDA from another program by passing the address of the program it's derived from like this:
 
 ```rust
 #[account(
@@ -152,6 +152,56 @@ And it's possible to derive a PDA that is derived from another program by passin
     seeds::program = <expr>
 )]
 pub account: Account<'info, CustomAccountType>,
+```
+
+### Lazy Account
+
+Starting from Anchor 0.31.0, `LazyAccount` provides a more performant way to read account data. Unlike the standard `Account` type that deserializes the entire account onto the stack, `LazyAccount` is a read-only, heap allocated account that uses only 24 bytes of stack memory and lets you selectively load specific fields.
+
+Start by enabling the feature in your `Cargo.toml`:
+
+```
+anchor-lang = { version = "0.31.1", features = ["lazy-account"] }
+```
+
+Now we can use it like this:
+
+```rust
+#[derive(Accounts)]
+pub struct MyInstruction<'info> {
+    pub account: LazyAccount<'info, CustomAccountType>,
+}
+
+#[account(discriminator = 1)]
+pub struct CustomAccountType {
+    pub balance: u64,
+    pub metadata: String,
+}
+
+pub fn handler(ctx: Context<MyInstruction>) -> Result<()> {
+    // Load specific field
+    let balance = ctx.accounts.account.get_balance()?;
+    let metadata = ctx.accounts.account.get_metadata()?;
+    
+    Ok(())
+}
+```
+
+> `LazyAccount` is read-only. Attempting to mutate fields will panic since you're working with references, not stack-allocated data.
+
+When CPIs modify the account, cached values become stale. For this reason you need to use the `unload()` function to refresh:
+
+```rust
+// Load the initial value
+let initial_value = ctx.accounts.my_account.load_field()?;
+
+// Do CPI...
+
+// We still have a reference to the account from `initial_value`, drop it before `unload`
+drop(initial_value);
+
+// Load the updated value
+let updated_value = ctx.accounts.my_account.unload()?.load_field()?;
 ```
 
 <ArticleSection name="Token Accounts" id="token-program" level="h2" />
@@ -433,3 +483,87 @@ pub account: Account<'info, CustomAccountType>,
 ```
 
 These constraints can be combined to create powerful validation rules for your accounts. By placing validation at the account level, you keep your security checks close to the account definitions and avoid scattering `require!()` calls throughout your instruction logic.
+
+<ArticleSection name="Remaining Accounts" id="remaining-accounts" level="h2" />
+
+Sometimes when writing programs, the fixed structure of instruction accounts doesn't provide the flexibility your program needs. 
+
+Remaining accounts solve this by allowing you to pass additional accounts beyond the defined instruction structure, enabling dynamic behavior based on runtime conditions.
+
+### Implementation Guideline
+
+Traditional instruction definitions require you to specify exactly which accounts will be used:
+
+```rust
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    pub from: Account<'info, TokenAccount>,
+    pub to: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+```
+
+This works great for single operations, but what if you want to perform multiple token transfers in one instruction? You'd need to call the instruction multiple times, increasing transaction costs and complexity.
+
+Remaining accounts let you pass additional accounts that aren't part of the fixed instruction structure meaning that your program could iterate through these accounts and apply repeating logic dynamically.
+
+Instead of requiring separate instructions for each transfer, you can design one instruction that handles "N" transfers:
+
+```rust
+#[derive(Accounts)]
+pub struct BatchTransfer<'info> {
+    pub from: Account<'info, TokenAccount>,
+    pub to: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+
+pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<()> {
+    // Handle the first transfer using fixed accounts
+    transfer_tokens(&ctx.accounts.from, &ctx.accounts.to, amounts[0])?;
+    
+    let remaining_accounts = &ctx.remaining_accounts;
+
+    // CRITICAL: Validate remaining accounts schema
+    // For batch transfers, we expect pairs of accounts
+    require!(
+        remaining_accounts.len() % 2 == 0,
+        TransferError::InvalidRemainingAccountsSchema
+    );
+
+    // Process remaining accounts in groups of 2 (from_account, to_account)
+    for (i, chunk) in remaining_accounts.chunks(2).enumerate() {
+        let from_account = &chunk[0];
+        let to_account = &chunk[1];
+        let amount = amounts[i + 1];
+        
+        // Apply the same transfer logic to remaining accounts
+        transfer_tokens(from_account, to_account, amount)?;
+    }
+    
+    Ok(())
+}
+```
+
+Batching instructions means: 
+- Smaller instruction size: the repeating accounts and data doesn't need to be included
+- Efficiency: each CPI costs 1000 CU, meaning that somebody that uses your program could invoke it only one time instead of 3 if they need to do batch instructions
+
+> Remaining accounts are passed as `UncheckedAccount`, meaning Anchor doesn't perform any validation on them. Always validate the `RemainingAccountSchema` and the underlying account.
+
+### Client Side Implementation
+
+We can easily pass remaining accounts using the Anchor SDK generated once we do `anchor build`. Since those are "raw" accounts we'll need to specify if they need to be passed as signer and/or mutable like this:
+
+```ts
+await program.methods.someMethod().accounts({
+  // some accounts
+})
+.remainingAccounts([
+  {
+    isSigner: false,
+    isWritable: true,
+    pubkey: new Pubkey().default
+  }
+])
+.rpc();
+```

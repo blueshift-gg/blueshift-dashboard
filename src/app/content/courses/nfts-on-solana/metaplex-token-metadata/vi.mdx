@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Chương trình Metaplex Token Metadata
+
+Chương trình Metaplex Token Metadata giải quyết một hạn chế cơ bản trong chương trình SPL-Token bằng cách cho phép đính kèm dữ liệu mô tả phong phú cho cả token có thể thay thế và token không thể thay thế.
+
+Trong khi chương trình SPL-Token hiệu quả xử lý các cơ chế cơ bản của token như sở hữu và nguồn cung, các token không có metadata xuất hiện trong ví và các trình khám phá như các public key vô danh.
+
+Metaplex chuyển đổi các mục blockchain cơ bản này thành tài sản kỹ thuật số có ý nghĩa bằng cách cung cấp thông tin ngữ cảnh mà các ứng dụng và người dùng cần.
+
+<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+
+Account `Metadata` được dùng là, lớp mô tả cung cấp ngữ cảnh và tiện ích cho các token. Cấu trúc account này sử dụng hệ thống PDA của Solana để tạo ra một mối quan hệ tin cậy giữa mỗi token và thông tin liên quan của nó.
+
+Việc sinh địa chỉ một cách xác định đảm bảo rằng mỗi account mint có chính xác một account metadata tương ứng, thiết lập quyền sở hữu dữ liệu rõ ràng và ngăn chặn xung đột.
+
+Account `Metadata` được trích xuất địa chỉ bằng một quy trình xác định bằng việc kết hợp các giá trị seed cụ thể với public key của account mint:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+
+let (metadata, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+    ], 
+    &ID  
+);
+```
+
+Account `Metadata` lưu trữ thông tin phong phú giúp mở rộng vượt xa các định danh token cơ bản.
+
+Hệ thống xác thực người tạo duy trì danh sách các người tạo token, mỗi người tạo được xác thực bằng một thuộc tính mang tính mật mã để chứng minh quyền tác giả hợp pháp. Việc xác minh này giúp ngăn chặn hành vi mạo danh và thiết lập khả năng theo dõi nguồn gốc đáng tin cậy cho các tài sản kỹ thuật số.
+
+Hệ thống tính phí bản quyền tich hợp cho phép tự động phân phối thu nhập cho các người tạo thông qua các thuộc tính phần trăm chia sẻ được gán cho mỗi người tạo. Các chợ có thể tham chiếu vào các phần trăm chia sẻ này để phân phối các khoản thu nhập từ các giao dịch thứ câp theo các thỏa thuận được xác định trước, loại bỏ tính toán thủ công và sự phụ thuộc vào niềm tin.
+
+Việc này tạo ra các mô hình kinh tế bền vững trong đó người tạo tiếp tục kiếm tiền từ công việc của họ sau lần bán đầu tiên.
+
+Chương trình Token Metadata thành công kết nối lỗ hổng giữa dữ liệu blockchain thô và các tài sản kỹ thuật số có thể truy cập bởi người dùng. Bằng cách tăng thêm các thông tin ngữ cảnh phong phú vào các account mint, chương trình cho phép các ứng dụng hiển thị, phân loại và tương tác với các token một cách có ý nghĩa.
+
+Lớp metadata này cung cấp cơ sở cho hệ sinh thái tài sản kỹ thuật số phong phú hiện tại trên Solana.
+
+<ArticleSection name="Master Edition Account" id="master-edition-account" level="h2" />
+
+Mặc dù Account `Master Edition` đáp ứng hiệu quả cho cả token có thể thay thế và token không thể thay thế, việc đảm bảo các đặc điểm NFT hợp pháp yêu cầu các biện pháp kiểm soát bổ sung.
+
+Account `Master Edition` đáp ứng nhu cầu này bằng một PDA đặc biệt để quản lý quyền của token. Account này chỉ được tạo sau khi chương trình Token Metadata xác thực rằng các thuộc tính token không thể thay thế đã được thiết lập.
+
+Hệ thống Master Edition sử dụng cách tiếp cận quản lý quyền hạn tinh vi hơn. Thay vì hoàn toàn hủy quyền đúc token, chương trình chuyển cả hai quyền đúc và đóng băng cho PDA Master Edition. Thiết kế này cung cấp tính bảo mật và chức năng cao hơn so với các quyền hạn bị hủy vĩnh viễn, đồng thời duy trì kiểm soát chặt chẽ trên việc tạo và quản lý token.
+
+> Đọc [phần FAQ](https://developers.metaplex.com/token-metadata/faq#why-are-the-mint-and-freeze-authorities-transferred-to-the-edition-pda) để hiểu lý do của lựa chọn này.
+
+Seed của account `Master Edition` như sau:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const EDITION: &str = "edition";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+        EDITION.as_bytes(),
+    ], 
+    &ID  
+);
+```
+
+<ArticleSection name="NFTs có thể lập trình" id="programmable-nfts" level="h2" />
+
+NFTs có thể lập trình (pNFTs) đại diện cho một tiêu chuẩn token nâng cao mà áp đặt các hành vi và ràng buộc có thể tùy chỉnh ở mức giao thức.
+
+Lớp tài sản này giải quyết các hạn chế của NFT truyền thống bằng cách cho phép người tạo định nghĩa các quy tắc vòng đời riêng biệt được thực hiện tự động trong các tương tác token, đảm bảo tuân thủ quy tắc mà không phụ thuộc vào các biện pháp kiểm soát bên ngoài.
+
+Kiến trúc kiểm soát được thực hiện thông qua hệ thống tài khoản token đóng băng. Khi một NFT trở thành có thể lập trình, tài khoản token liên kết với nó vẫn bị đóng băng vĩnh viễn, yêu cầu tất cả các hoạt động phải truyền qua chương trình Token Metadata.
+
+Thiết kế này tạo ra một điểm kiểm tra bắt buộc để xác minh các quy tắc trước khi bất kỳ hành động nào có thể tiếp tục thực hiện, làm cho việc bỏ qua các ràng buộc được định nghĩa bởi người tạo là không thể thực hiện.
+
+Các quy tắc được định nghĩa bởi người tạo được lưu trữ trong các account `RuleSet` kết nối với account `Token Record`, một loại account mới được liên kết với mint để chỉ ra trạng thái của NFT có thể lập trình.
+
+Account `Token Record` trích xuất địa chỉ của nó bằng các seed cụ thể liên kết nó với cả hai account mint và token:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const TOKEN_RECORD_SEED: &str = "token_record";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(), 
+        &ID, 
+        mint.as_ref()
+        TOKEN_RECORD_SEED.as_bytes(),
+        token.as_ref(),
+    ], 
+    &ID  
+);
+```
+
+Các `RuleSet` này cho phép logic điều kiện phức tạp bao gồm danh sách cho phép của các chợ tuân thử các khoản thanh toán phí bản quyền, yêu cầu đa ký cho các giao dịch, các ràng buộc dựa trên thời gian cho các hoạt động hoặc các luồng phê duyệt phức tạp.
+
+Chương trình [Token Auth Rules](https://developers.metaplex.com/token-auth-rules) quản lý các account `RuleSet` này và xử lý logic xác minh của chúng, cung cấp một kiến trúc linh hoạt để thực hiện các biện pháp quản lý tùy chỉnh.
+
+Tương tác của nhà phát triển với pNFTs diễn ra thông qua chương trình Token Metadata thay vì chương trình SPL-Token trực tiếp. Chương trình này cung cấp các instruction được tối ưu hóa như `Create` và `Update` để thay thế các hoạt động truyền thống như `CreateMetadataAccount` và `UpdateMetadata`.
+
+Mỗi instruction yêu cầu một tham số account `authorization_rules` tham chiếu đến `RuleSet` có thể được khám phá thông qua việc trích xuất on-chain hoặc thông qua API đọc của Metaplex.
+
+Kiến trúc có thể lập trình này cho phép người tạo thực hiện các mô hình kinh tế phức tạp và các cấu trúc quản lý với sự kiểm soát được đảm bảo.
+
+Bằng việc ứng dụng vào các giao dịch có điều kiện, cấu trúc phí bản quyền động hoặc các yêu cầu sở hữu phức tạp, pNFT đảm bảo rằng tất cả các hành vi được thực hiện tự động ở mức giao thức mà không phụ thuộc vào sự hợp tác của các chợ hoặc sự tuân thủ tự nguyện của người dùng.
+
+> Để học thêm về cách sử dụng chương trình `Token Metadata`, tham khảo [tài liệu chính thức](https://developers.metaplex.com/token-metadata)

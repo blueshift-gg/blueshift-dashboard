@@ -1,0 +1,186 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Yêu cầu Transaction
+
+Các yêu cầu Transaction mở khóa toàn bộ sức mạnh của Solana Pay bằng cách cho phép các giao dịch động, được tạo thành từ máy chủ có thể xử lý bất kỳ loại hoạt động nào của Solana.
+
+Khác với các yêu cầu Transfer chứa tất cả thông tin thanh toán trong URL, các yêu cầu Transaction sử dụng các điểm cuối tương tác để xây dựng các giao dịch tùy chỉnh dựa trên dữ liệu thời gian thực và logic kinh doanh.
+
+Cách tiếp cận này biến Solana Pay từ một hệ thống thanh toán đơn giản thành một nền tảng thương mại hoàn chỉnh có khả năng xử lý các kịch bản kinh doanh phức tạp, định giá động và các luồng giao dịch tinh vi.
+
+<ArticleSection name="Yêu cầu Transaction hoạt động thế nào" id="how-it-works" level="h2" />
+
+Các yêu cầu Transaction tuân theo định dạng URL đơn giản trỏ đến điểm cuối máy chủ của bạn:
+
+```
+solana:<recipient>?<optional-query-params>
+```
+
+Giá trị của `link` phải là một URL đến API của bạn mà có thể xử lý cả yêu cầu `GET` và `POST`. Khi người dùng quét mã QR yêu cầu giao dịch, ví của họ sẽ khởi động một quy trình bốn bước:
+1. **Yêu cầu GET ban đầu**: Lấy thông tin hiển thị như tên doanh nghiệp và logo của bạn
+2. **Xác nhận của người dùng**: Ví sau đó hiển thị thông tin doanh nghiệp cho người dùng
+3. **Yêu cầu POST**: Gửi khóa công khai của người dùng đến API của bạn
+4. **Phản hồi giao dịch**: Máy chủ của bạn xây dựng một giao dịch tùy chỉnh và trả về dưới dạng chuỗi mã hóa base64
+
+Ví sau đó hiển thị giao dịch này cho người dùng để phê duyệt và ký.
+
+> Bạn có thể bao gồm các tham số khác trong URL để truy cập chúng từ điểm cuối của bạn như sau:
+
+```
+solana:https://myapi.com/pay?amount=100&product=premium&reference=abc123
+```
+
+<ArticleSection name="Xây dựng API Endpoint" id="api-endpoint" level="h2" />
+
+Việc tạo một yêu cầu Transaction đòi hỏi phải xử lý cả yêu cầu GET và POST tại cùng một URL. Đây là cấu trúc sử dụng Next.js App Router:
+
+```ts
+import { NextRequest, NextResponse } from 'next/server';
+
+// CORS headers for wallet compatibility
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: corsHeaders });
+}
+
+export async function GET() {
+  // Implementation details below...
+}
+
+export async function POST(request: NextRequest) {
+  // Implementation details below...
+}
+```
+
+> Vì các ví thực hiện các yêu cầu cross-origin đến điểm cuối của bạn, các tiêu đề CORS là bắt buộc. Nếu không có chúng, các yêu cầu từ ví sẽ thất bại.
+
+### Xử lý yêu cầu GET
+
+Yêu cầu GET cung cấp thông tin hiển thị giúp người dùng hiểu những gì họ đang tương tác:
+
+```ts
+export async function GET() {
+  return NextResponse.json({
+    label: "Coffee Shop Demo",
+    icon: "https://solana.com/src/img/branding/solanaLogoMark.svg",
+  }, { headers: corsHeaders });
+}
+```
+
+**Response Format:**
+
+```json
+{
+  "label": "Coffee Shop Demo",
+  "icon": "https://solana.com/src/img/branding/solanaLogoMark.svg"
+}
+```
+
+Thông tin này giúp người dùng hiểu những gì họ sắp tương tác trước khi tiến hành tạo giao dịch thực tế.
+
+### Xử lý yêu cầu POST
+
+Yêu cầu POST là nơi các yêu cầu giao dịch thực sự tỏa sáng. Điểm cuối của bạn nhận khóa công khai của người dùng và xây dựng một giao dịch hoàn toàn tùy chỉnh:
+
+```ts
+export async function POST(request: NextRequest) {
+  // Parse user's public key from request body
+  const body = await request.json();
+  const { account } = body;
+
+  // Connect to Solana network
+  const connection = new Connection(clusterApiUrl("devnet"));
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+
+  // Create transaction with user as fee payer
+  const transaction = new Transaction({
+    feePayer: new PublicKey(account),
+    blockhash: blockhash,
+    lastValidBlockHeight: lastValidBlockHeight,
+  });
+
+  // ========================================
+  // ADD YOUR CUSTOM INSTRUCTIONS HERE
+  // ========================================
+  
+  // This is where you build your transaction logic.
+  // You can add any combination of instructions:
+  
+  // Example 1: Simple SOL transfer
+  // const transferInstruction = SystemProgram.transfer({
+  //   fromPubkey: new PublicKey(account),
+  //   toPubkey: new PublicKey("YOUR_MERCHANT_WALLET"),
+  //   lamports: LAMPORTS_PER_SOL * 0.01, // 0.01 SOL
+  // });
+  // transaction.add(transferInstruction);
+
+  // Serialize the transaction for the wallet
+  const serializedTransaction = transaction.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+
+  return NextResponse.json({
+    transaction: serializedTransaction.toString('base64'),
+    message: "Transaction created successfully", // Customize this message
+  }, { headers: corsHeaders });
+}
+```
+
+> Ưng dụng của bạn không gửi giao dịch đến mạng, vì vậy bạn sẽ không có quyền truy cập vào chữ ký giao dịch để theo dõi. Sử dụng các tham số tham chiếu như đã giải thích trong [Bài học Giới thiệu](/vi/courses/solana-pay/introduction#reference)
+
+<ArticleSection name="Các khả năng nâng cao" id="advanced-capabilities" level="h2" />
+
+### Gated Transactions
+
+Các yêu cầu Transaction cho phép kiểm soát truy cập tinh vi bằng cách xác minh các điều kiện trước khi xây dựng giao dịch. Vì bạn kiểm soát điểm cuối, bạn có thể kiểm tra quyền sở hữu NFT, tư cách thành viên trong danh sách trắng hoặc bất kỳ tiêu chí nào khác:
+
+```ts
+// Check NFT ownership before building transaction
+const nfts = await metaplex.nfts().findAllByOwner({ owner: account }).run(); 
+
+const hasRequiredNFT = nfts.some(nft => 
+  nft.collection?.address.toString() === requiredCollection
+);
+
+if (!hasRequiredNFT) {
+  return response.status(403).json({ 
+    error: "Access denied: Required NFT not found" 
+  });
+}
+
+// Build transaction only for verified users
+```
+
+### Ký tên một phần để tăng cường bảo mật
+
+Đối với các giao dịch yêu cầu phê duyệt từ một cặp khóa quản trị hoặc xác thực nhiều bên, Solana Pay hỗ trợ ký tên một phần. Máy chủ của bạn có thể thêm chữ ký của nó trước khi gửi cho người dùng:
+
+```ts
+const transaction = new Transaction({
+  feePayer: account,
+  blockhash,
+  lastValidBlockHeight,
+});
+
+// Add your instructions requiring admin signature
+transaction.add(customInstruction);
+
+// Partially sign with your admin keypair
+transaction.partialSign(adminKeypair);
+
+// Send to user for final signature
+const serializedTransaction = transaction.serialize({
+  requireAllSignatures: false,
+});
+```
+
+<ArticleSection name="Ví dụ" id="example" level="h2" />
+
+Như một ví dụ đầy đủ, bạn có thể sử dụng [Ví dụ Solana NFT Minter](https://github.com/solana-developers/solana-pay-nft-minter/tree/main) từ Solana Foundation

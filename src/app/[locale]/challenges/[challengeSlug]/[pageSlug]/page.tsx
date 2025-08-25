@@ -14,11 +14,11 @@ interface ChallengePageProps {
 export async function generateMetadata({
   params,
 }: ChallengePageProps): Promise<Metadata> {
-  const { challengeSlug, locale } = await params;
-  const t = await getTranslations({ locale, namespace: "metadata" });
+  const { challengeSlug, pageSlug, locale } = await params;
+  const t = await getTranslations({ locale });
   const pathname = getPathname({
     locale,
-    href: `/challenges/${challengeSlug}`,
+    href: `/challenges/${challengeSlug}/${pageSlug}`,
   });
 
   const ogImage = {
@@ -27,14 +27,16 @@ export async function generateMetadata({
     height: 630,
   };
 
+  const title = `${t("metadata.title")} | ${t(`challenges.${challengeSlug}.title`)} | ${t(`challenges.${challengeSlug}.pages.${pageSlug}.title`)}`;
+
   return {
-    title: t("title"),
-    description: t("description"),
+    title: title,
+    description: t("metadata.description"),
     openGraph: {
-      title: t("title"),
+      title: title,
       type: "website",
-      description: t("description"),
-      siteName: t("title"),
+      description: t("metadata.description"),
+      siteName: title,
       url: pathname,
       images: [
         {

@@ -29,7 +29,7 @@ export async function generateMetadata({
   params,
 }: LessonPageProps): Promise<Metadata> {
   const { courseName, lessonName, locale } = await params;
-  const t = await getTranslations({ locale, namespace: "metadata" });
+  const t = await getTranslations({ locale });
   const pathname = getPathname({
     locale,
     href: `/courses/${courseName}/${lessonName}`,
@@ -41,14 +41,16 @@ export async function generateMetadata({
     height: 630,
   };
 
+  const title = `${t("metadata.title")} | ${t(`courses.${courseName}.title`)} | ${t(`courses.${courseName}.lessons.${lessonName}`)}`;
+
   return {
-    title: t("title"),
-    description: t("description"),
+    title: title,
+    description: t("metadata.description"),
     openGraph: {
-      title: t("title"),
+      title: title,
       type: "website",
-      description: t("description"),
-      siteName: t("title"),
+      description: t("metadata.description"),
+      siteName: title,
       url: pathname,
       images: [
         {
@@ -72,7 +74,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
       `@/app/content/courses/${courseName}/${lessonName}/${locale}.mdx`
     );
     Lesson = lessonModule.default;
-  } catch (e) {
+  } catch {
     try {
       const lessonModule = await import(
         `@/app/content/courses/${courseName}/${lessonName}/en.mdx`

@@ -1,0 +1,195 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Chương trình Metaplex Core
+
+Chương trình Metaplex Core giải quyết các vấn đề phức tạp và chi phí trong cấu trúc đa account của chương trình Token Metadata. Mặc dù Token Metadata phụ thuộc vào SPL-Token làm nền tảng, nó yêu cầu nhiều account cho mỗi NFT, phương pháp này đắt và tạo ra sự phức tạp mà tác động đến cả người dùng và mạng lưới.
+
+Được phát hành năm 2024, Metaplex Core đại diện cho một chương trình siêu nhẹ được thiết kế riêng cho các hoạt động NFT. Khác biệt với chương trình trước đó, Core hoạt động độc lập mà không phụ thuộc vào SPL-Token, xử lý việc phát hành, chuyển nhượng, hủy và hành vi tuỳ chỉnh thông qua chương trình logic của riêng mình.
+
+Tiêu chuẩn thế hệ tiếp theo của Metaplex Core sử dụng thiết kế một account duy nhất để giảm chi phí phát hành mà vẫn cải thiện hiệu suất mạng lưới thông qua hệ thống plugin linh hoạt của riêng mình.
+
+<ArticleSection name="Tài sản" id="assets" level="h2" />
+
+Điểm mạnh của Metaplex Core nằm trong cấu trúc account được hợp nhất để loại bỏ sự phân biệt truyền thống giữa các mint và token account.
+
+Vì NFT duy trì sự sở hữu duy nhất với một người giữ nó, chương trình lưu trữ mối quan hệ giữa ví và tài sản trực tiếp trong chính account của tài sản.
+
+Thiết kế này có ý nghĩa thực tế khi xem xét rằng hệ thống token account ban đầu được tạo ra để quản lý hàng ngàn người sở hữu mỗi lần phát hành, một tình huống không áp dụng cho các token không thay thế.
+
+Cấu trúc tài sản minh họa phương pháp tập trung vào hiệu quả này bằng cách yêu cầu trường tối thiểu của riêng mình:
+
+```rust
+#[derive(Clone, BorshSerialize, BorshDeserialize, Debug, ShankAccount, Eq, PartialEq)]
+pub struct AssetV1 {
+    /// The account discriminator.
+    pub key: Key,
+    /// The owner of the asset.
+    pub owner: Pubkey,
+    /// The update authority of the asset.
+    pub update_authority: UpdateAuthority,
+    /// The name of the asset.
+    pub name: String,
+    /// The URI of the asset that points to the off-chain data.
+    pub uri: String,
+    /// The sequence number used for indexing with compression.
+    pub seq: Option<u64>,
+}
+```
+
+Cấu trúc này đại diện cho lượng dữ liệu tối thiểu nhất cần thiết cho các hoạt động NFT.
+
+Account `Mint` truyền thống trở nên thừa thãi trong bối cảnh này vì: nguồn cung luôn bằng 1, phần thập phân (decimal) luôn bằng 0, quyền phát hành không nên được xác định, và quyền đóng băng có thể được hợp nhất với trường quyền cập nhật.
+
+Giống như nhiều chức năng của `Token` account, hầu hết các chức năng của `Token` account được tích hợp trực tiếp vào cấu trúc của tài sản.
+
+Việc không có cơ chế đóng băng rõ ràng chứng tỏ triết lý thiết kế thông minh của Core.
+
+Thay vì dành không gian cho các tính năng mà nhiều tài sản không dùng đến, Core thực hiện chức năng đóng băng thông qua hệ thống plugin của riêng mình, thêm tính năng theo yêu cầu thay vì duy trì các trường không sử dụng.
+
+Phương pháp này tối ưu hóa chi phí lưu trữ trong khi duy trì tính năng đầy đủ cho các tài sản yêu cầu chức năng đóng băng.
+
+Quyền thành viên của bộ sưu tập được xử lý một cách minh bạch như nhau thông qua hệ thống liệt kê quyền cập nhật: vì tài sản được nhóm lại với nhau thường chia sẻ cùng một đối tượng có quyền cập nhật, Core tận dụng mối quan hệ này để loại bỏ việc lưu trữ trường dư thừa:
+
+Collection membership receives equally thoughtful treatment through the update authority enumeration system: since grouped assets typically share the same update authority, Core leverages this relationship to eliminate redundant field storage:
+
+```rust
+pub enum UpdateAuthority {
+    None,
+    Address(Pubkey),
+    Collection(Pubkey),
+}
+```
+
+Trường quyền cập nhật đap ứng cho ba mục đích bằng cách xác định các tài sản không thay đổi thông qua `None`, các tài sản độc lập thông qua các địa chỉ cụ thể, hoặc các thành viên của bộ sưu tập kế thừa quyền cập nhật từ bộ sưu tập cha của chúng.
+
+Giải pháp tinh tế này giảm chi phí lưu trữ trong khi duy trì các quan hệ quyền rõ ràng và xác minh thành viên của bộ sưu tập.
+
+<ArticleSection name="Bộ sưu tập" id="collections" level="h2" />
+
+Bộ sưu tập trong Metaplex Core đại diện cho tập hợp các tài sản được nhóm lại với nhau, chia sẻ chung các mối quan hệ chủ đề, phương pháp tạo, hoặc chức năng.
+
+Không giống với các bộ sưu tập NFT truyền thống phụ thuộc vào các hệ thống xác thực bên ngoài, các bộ sưu tập của Core thiết lập các mối quan hệ xác thực trên chain giữa các tài sản thông qua cấu trúc quyền của riêng mình.
+
+Việc tạo ra một bộ sưu tập bắt đầu bằng việc thiết lập một Collection Asset dưới dạng account chủ quyền cho tất cả các tài sản thành viên.
+
+Collection Asset này hoạt động như trung tâm tổ chức và kho lưu trữ metadata cho các thông tin mở rộng bao gồm tên bộ sưu tập, mô tả và hình ảnh biểu tượng.
+
+Account bộ sưu tập cũng hoạt động như một điểm kiểm soát trung tâm cho các plugin áp dụng cho tất cả các tài sản thành viên, cho phép người tạo áp dụng các hành vi nhất quán trên toàn bộ bộ sưu tập của họ.
+
+```rust
+pub struct CollectionV1 {
+    /// The account discriminator.
+    pub key: Key, //1
+    /// The update authority of the collection.
+    pub update_authority: Pubkey, //32
+    /// The name of the collection.
+    pub name: String, //4
+    /// The URI that links to what data to show for the collection.
+    pub uri: String, //4
+    /// The number of assets minted in the collection.
+    pub num_minted: u32, //4
+    /// The number of assets currently in the collection.
+    pub current_size: u32, //4
+}
+```
+
+Cấu trúc bộ sưu tập duy trì các thống kê quan trọng thông qua các trường `num_minted` và `current_size`, theo dõi tổng số lượng tài sản được tạo ra trong bộ sưu tập và số lượng tài sản hiện tại đang hoạt động.
+
+Các thống kê này cho phép phân tích bộ sưu tập chính xác và hỗ trợ các tính năng như phát hành phiên bản hạn chế hoặc theo dõi đốt mà không cần các dịch vụ đánh chỉ mục bên ngoài.
+
+Khi một tài sản đặt trường `update_authority` của nó thành `Collection(collection_pubkey)`, nó tự động kế thừa cấu trúc quyền của bộ sưu tập trong khi thiết lập thành viên có thể được xác thực. Thiết kế này loại bỏ nhu cầu cho các account xác thực riêng biệt hoặc các hệ thống chứng nhận bên ngoài, tạo ra các mối quan hệ bất biến trong bộ sưu tập có thể được xác minh hoàn toàn trên chain.
+
+<ArticleSection name="Plugins" id="plugins" level="h2" />
+
+Hệ thống các plugint đại diện cho tính năng tuyệt vời nhất của Metaplex Core, khắc phục hạn chế của các hành vi cố định, được định trước mà đã đặc trưng cho các tiêu chuẩn NFT trước đó.
+
+Trong khi chương trình Token Metadata cũ yêu cầu các giải pháp phức tạp như NFT có thể được lập trình cho các tính năng tùy chỉnh, kiến trúc plugin của Core cho phép tùy chỉnh chi tiết mà không đánh mất sự đơn giản và hiệu suất.
+
+Cách tiếp cận mang tính cách mạng của Core sử lý dữ liệu trên chuỗi một cách linh hoạt hơn, thay vì khóa nó vào các cấu trúc cố định. Triết lý thiết kế này cho phép hệ thống plugin linh hoạt của Core phục vụ các trường hợp sử dụng đa dạng trong khi duy trì việc quản lý account hiệu quả.
+
+Mỗi plugint định nghĩa mô hình quyền của riêng mình, chỉ định chính xác ai có thể thực hiện các hành động cụ thể, trong khi hệ thống xác minh của Core ngăn chặn xung đột giữa các thẩm quyền và quyền hạn khác nhau.
+
+
+Kiến trúc account của Core chia thành hai thành phần riêng biệt:
+- Phần dữ liệu chính chứa thông tin tài sản quan trọng với độ dài của trường có thể biết trước.
+- Phần metadata plugin tùy chọn nơi các chức năng bổ sung và hành vi tuỳ chỉnh được lưu trữ.
+
+Cách phân tách này đảm bảo rằng tài sản cơ bản vẫn nhẹ nhàng trong khi các chức năng phức tạp được mở rộng theo nhu cầu.
+
+Metadata plugin tổ chức chính nó qua một cấu trúc gồm ba phần: header, các plugint riêng lẻ, và bộ đăng ký điều hành mọi thứ.
+
+```
+Header | Plugin1 | Plugin2 | Plugin3 | Registry
+```
+
+Plugin Header được dùng làm điểm vào, chứa một con trỏ `plugin_registry_offset` cho biết vị trí của bộ đăng ký trong account:
+
+```rust
+pub struct PluginHeaderV1 {
+    /// The Discriminator of the header which doubles as a Plugin metadata version.
+    pub key: Key, // 1
+    /// The offset to the plugin registry stored at the end of the account.
+    pub plugin_registry_offset: usize, // 8
+}
+```
+
+Bộ đăng ký plugin hoạt động như trung tâm điều hành, duy trì các vector của các mục đăng ký nội bộ `RegistryRecord` và `ExternalRegistryRecord` cho các plugint bên thứ ba.
+
+Mỗi mục đăng ký chứa loại plugint, thẩm quyền điều hành, và vị trí offset trong account:
+
+```rust
+pub struct PluginRegistryV1 {
+    /// The Discriminator of the header which doubles as a plugin metadata version.
+    pub key: Key, // 1
+    /// The registry of all plugins.
+    pub registry: Vec<RegistryRecord>, // 4
+    /// The registry of all adapter, third party, plugins.
+    pub external_registry: Vec<ExternalRegistryRecord>, // 4
+}
+
+pub struct RegistryRecord {
+    /// The type of plugin.
+    pub plugin_type: PluginType, // 2
+    /// The authority who has permission to utilize a plugin.
+    pub authority: Authority, // Variable
+    /// The offset to the plugin in the account.
+    pub offset: usize, // 8
+}
+
+pub struct ExternalRegistryRecord {
+    /// The adapter, third party plugin type.
+    pub plugin_type: ExternalPluginAdapterType,
+    /// The authority of the external plugin adapter.
+    pub authority: Authority,
+    /// The lifecyle events for which the the external plugin adapter is active.
+    pub lifecycle_checks: Option<Vec<(HookableLifecycleEvent, ExternalCheckResult)>>,
+    /// The offset to the plugin in the account.
+    pub offset: usize, // 8
+    /// For plugins with data, the offset to the data in the account.
+    pub data_offset: Option<usize>,
+    /// For plugins with data, the length of the data in the account.
+    pub data_len: Option<usize>,
+}
+```
+
+Việc truy xuất plugint tuân theo một quy trình hệ thống tuân theo cấu trúc được sắp xếp này.
+
+Hệ thống đầu tiên tải dữ liệu tài sản để xác định vị trí của header plugint, sau đó sử dụng offset của header để tìm bộ đăng ký, cuối cùng lặp qua các mục đăng ký để biên dịch danh sách plugint hoàn chỉnh:
+
+```rust
+pub fn list_plugins(account: &AccountInfo) -> Result<Vec<PluginType>, ProgramError> {
+    let asset = AssetV1::load(account, 0)?;
+    if asset.get_size() == account.data_len() {
+        return Err(MplCoreError::PluginNotFound.into());
+    }
+    let header = PluginHeaderV1::load(account, asset.get_size())?;
+    let PluginRegistryV1 { registry, .. } =
+        PluginRegistryV1::load(account, header.plugin_registry_offset)?;
+    Ok(registry
+        .iter()
+        .map(|registry_record| registry_record.plugin_type)
+        .collect())
+}
+```
+
+> Để tìm hiểu thêm về cách sử dụng chương trình `Core`, hãy tham khảo [tài liệu chính thức](https://developers.metaplex.com/core)
