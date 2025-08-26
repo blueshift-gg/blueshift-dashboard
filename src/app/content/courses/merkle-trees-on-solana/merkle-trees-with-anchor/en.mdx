@@ -1,0 +1,189 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Merkle Trees with Anchor
+
+[Dean](https://x.com/deanmlittle) from the Blueshift team has released a crate that enables efficient Merkle Tree creation and verification for Anchor programs.
+
+Merkle trees provide a cryptographically secure way to efficiently verify that specific data belongs to a larger dataset without storing the entire dataset on-chain. 
+
+This makes them perfect for applications like airdrops, whitelists, and other scenarios where you need to prove membership in a large set while minimizing on-chain storage costs.
+
+<ArticleSection name="Client Side Integration" id="client-side-integration" level="h2" />
+
+The heavy computational work of creating trees, updating trees and generating proofs happens client-side.
+
+Let's start by adding the `svm-merkle-tree` package to our project:
+
+```
+npm i git+https://github.com/deanmlittle/svm-merkle-tree
+
+```
+
+### Creating a Tree
+
+All data must be converted to buffers that match Solana's byte reading and writing conventions. For this example, we'll use an airdrop state structure:
+
+```ts
+interface AirdropTokenData {
+    address: PublicKey;
+    amount: number;
+    isClaimed: boolean;
+}
+
+let merkleTreeData: AirdropTokenData = {
+    address: Keypair.generate().publicKey,
+    amount: Math.floor(Math.random() * 1000),
+    isClaimed: false,
+};
+```
+
+Create a new Merkle tree and add leaves (individual data entries):
+
+```ts
+let merkleTree: MerkleTree;
+
+// Initialize with Keccak hashing and 32-byte hash size
+merkleTree = new MerkleTree(HashingAlgorithm.Keccak, 32);
+
+// Serialize the data into a buffer format Solana can process
+merkleTree.add_leaf(Buffer.concat([
+    entry.address.toBuffer(),
+    Buffer.from(new Uint8Array(new anchor.BN(entry.amount).toArray('le', 8))),
+    Buffer.from([entry.isClaimed ? 1 : 0]),
+]));
+```
+
+After adding all your data, transform the raw entries into a proper Merkle tree structure and extract the root hash:
+
+```ts
+merkleTree.merklize();
+const merkleRoot = merkleTree.get_merkle_root();
+```
+
+### Updating a Tree
+
+Tree updates follow the same pattern as creation. Add new data as leaves, rebuild the tree structure, and extract the new root:
+
+```ts
+// Add the new entry
+merkleTree.add_leaf(Buffer.concat([
+    entry.address.toBuffer(),
+    Buffer.from(new Uint8Array(new anchor.BN(entry.amount).toArray('le', 8))),
+    Buffer.from([entry.isClaimed ? 1 : 0]),
+]));
+
+// Rebuild the tree structure with the new data
+merkleTree.merklize();
+const newMerkleRoot = merkleTree.get_merkle_root();
+```
+
+### Generate a Proof
+
+Proofs require the index position of your data within the tree. Since your Merkle tree data is typically stored in a database, you'll search for the specific entry (often by wallet address) to find its index:
+
+```ts
+let merkleTreeData: AirdropTokenData[];
+
+const index = merkleTreeData.findIndex(data => data.address.equals(targetAddress.publicKey));
+if (index === -1) {
+    throw new Error("Address not found in Merkle tree data");
+}
+```
+
+Generate the cryptographic proof that demonstrates the data belongs to the tree:
+
+```ts
+const proof = merkleTree.merkle_proof_index(index);
+const proofArray = proof.get_pairing_hashes();
+```
+
+The proof consists of sibling hashes along the path from your leaf to the root. The verifier can use these hashes to reconstruct the path and confirm the data's membership in the tree.
+
+<ArticleSection name="Program Side Integration" id="program-side-integration" level="h2" />
+
+On the program side, we focus exclusively on updating and verifying Merkle roots.
+
+Let's start by adding the `svm-merkle-tree` crate to our project:
+
+```
+cargo add svm-merkle-tree --git https://github.com/deanmlittle/svm-merkle-tree
+```
+
+### Store the Root On-Chain
+
+Create an account structure to store the Merkle root and designate an authority for future updates:
+
+```rust
+#[account]
+pub struct AirdropState {
+    pub merkle_root: [u8; 32],
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+```
+
+This account serves as the single source of truth for your Merkle tree's current state, allowing efficient verification without storing the entire dataset on-chain.
+
+### Verify the Root onchain
+
+For verification operations (like checking airdrop eligibility), we reconstruct the original leaf from on-chain data and verify it matches the stored root:
+
+```rust
+// Step 1: Create a Merkle proof from client-provided data
+let merkle_proof = MerkleProof::new(
+    HashingAlgorithm::Keccak,
+    32,
+    index as u32,
+    hashes.clone(),
+);
+
+// Step 2: Reconstruct the original leaf from on-chain data for security
+// This prevents clients from manipulating the verification data
+let mut original_leaf = Vec::new();
+original_leaf.extend_from_slice(&ctx.accounts.signer.key().to_bytes());
+original_leaf.extend_from_slice(&amount.to_le_bytes());
+original_leaf.push(0u8); // isClaimed = false (original state)
+
+// Step 3: Compute the root using the reconstructed leaf and proof
+let computed_root = merkle_proof
+    .merklize(&original_leaf)
+    .map_err(|_| WhitelistError::InvalidProof)?;
+
+// Step 4: Verify against the stored on-chain root
+require!(
+    computed_root.eq(&airdrop_state.merkle_root),
+    WhitelistError::InvalidProof
+);
+```
+
+### Update the Root On-Chain
+
+For state-changing operations (like claiming an airdrop), we update the leaf data and recalculate the root:
+
+```rust
+// Step 1: Create a Merkle proof from client-provided data
+let merkle_proof = MerkleProof::new(
+    HashingAlgorithm::Keccak,
+    32,
+    index as u32,
+    hashes.clone(),
+);
+
+// Step 2: Create the updated leaf with the new claimed status
+let mut updated_leaf = Vec::new();
+updated_leaf.extend_from_slice(&ctx.accounts.signer.key().to_bytes());
+updated_leaf.extend_from_slice(&amount.to_le_bytes());
+updated_leaf.push(1u8); // isClaimed = true (updated state)
+
+// Step 3: Recompute the root with the updated leaf data
+let updated_root: [u8; 32] = merkle_proof
+    .merklize(&updated_leaf)
+    .map_err(|_| WhitelistError::InvalidProof)?
+    .try_into()
+    .map_err(|_| WhitelistError::InvalidProof)?;
+
+// Step 4: Store the new root in the airdrop state
+airdrop_state.merkle_root = updated_root;
+```
+
+> Always reconstruct leaf data from trusted on-chain sources rather than accepting client-provided leaf data. This prevents malicious clients from manipulating the verification process by providing false data about their eligibility or claim status.

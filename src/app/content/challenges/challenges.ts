@@ -191,6 +191,21 @@ const allChallenges: ChallengeMetadata[] = [
     ],
     collectionMintAddress: "FW9LJEjJwGL1fkAjfM9HxuJuftTU9KrRvPBgP5ZzJx3D",
   },
+  {
+    slug: "anchor-merkle-airdrop-claimer",
+    language: "Anchor",
+    color: "221,234,224",
+    difficulty: 3,
+    isFeatured: true,
+    unitName: "Anchor Merkle Airdrop Claimer",
+    apiPath: "/v1/verify/anchor/merkle-airdrop-claimer",
+    pages: [{ slug: "create" }, { slug: "update" }, { slug: "claim" }],
+    requirements: [
+      { instructionKey: "create" },
+      { instructionKey: "claim" },
+    ],
+    collectionMintAddress: "2NVDhSXZck9AX2aUdPSxMemLN2wtqEd5sNEcwuZVCbHW",
+  },
 ];
 
 const releasedChallengesSetting =

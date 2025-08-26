@@ -1,0 +1,201 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../../components/Codeblock/Codeblock";
+
+<ArticleSection name="Claim" id="claim" level="h2" />
+
+We can now implement the `claim` instruction, which resides in `claim.rs` and performs these essential actions:
+- Verifies that the signer and amount are valid by reconstructing the original leaf
+- Validates the merkle proof against the on-chain root
+- Transfers tokens from the vault to the user's account
+- Creates a PDA "receipt" to prevent double-claiming
+
+### Accounts 
+
+The accounts needed in this context are:
+- `airdrop_state`: PDA that stores the airdrop configuration and merkle tree root.
+- `vault`: Associated token account that holds the tokens to be distributed.
+- `signer_ata`: The user's token account that will receive the claimed tokens
+- `signer`: The user claiming their allocation
+- `airdrop_receipt`: A receipt PDA created upon successful claim to prevent re-claiming
+- `system_program`: The system program used to create the `Escrow`.
+- `token_program`: The token program used to CPI the transfer.
+- `associated_token_program`: The associated token program used to create the associated token accounts.
+
+And with all the constraint it will look something like this:
+
+<Codeblock lang="rust">
+  ```rust
+pub struct Claim<'info> {
+    #[account(
+        mut,
+        has_one = mint,
+        seeds = [b"merkle_tree".as_ref(), mint.key().to_bytes().as_ref()],
+        bump = airdrop_state.bump
+    )]
+    pub airdrop_state: Account<'info, AirdropState>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = airdrop_state,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = signer,
+        associated_token::mint = mint,
+        associated_token::authority = signer,
+    )]
+    pub signer_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"receipt".as_ref(), airdrop_state.key().to_bytes().as_ref(), signer.key().to_bytes().as_ref()],
+        bump
+    )]
+    /// CHECK: we check this in the smart contract
+    pub airdrop_receipt: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```
+</Codeblock>
+
+### Logic 
+
+After defining the accounts, we implement the core logic using helper functions as methods on the account struct.
+
+The process involves verifying the merkle proof, transferring tokens, and creating a receipt:
+
+<Codeblock lang="rust">
+```rust
+impl<'info> Claim<'info> {
+    /// # Verify the Proof against the Root
+    fn verify_merkle_proof(&mut self, amount: u64, hashes: Vec<u8>, index: u64) -> Result<()> {
+        let mut original_leaf = Vec::new();
+        original_leaf.extend_from_slice(&self.signer.key().to_bytes());
+        original_leaf.extend_from_slice(&amount.to_le_bytes());
+
+        let merkle_proof = MerkleProof::new(
+            HashingAlgorithm::Keccak,
+            32,
+            index as u32,
+            hashes.clone(),
+        );
+
+        let computed_root = merkle_proof
+            .merklize(&original_leaf)
+            .map_err(|_| AirdropError::InvalidProof)?;
+
+        require!(
+            computed_root.eq(&airdrop_state.merkle_root),
+            AirdropError::InvalidProof
+        );
+
+        Ok(())
+    }
+
+    /// # Transfer the tokens
+    fn transfer_tokens(&self, amount: u64) -> Result<()> {
+        let mint_key = self.mint.key().to_bytes();
+
+        let signer_seeds = &[
+            b"merkle_tree".as_ref(),
+            mint_key.as_ref(),
+            &[self.airdrop_state.bump],
+        ];
+
+        transfer(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(),
+                Transfer {
+                    from: self.vault.to_account_info(),
+                    to: self.signer_ata.to_account_info(),
+                    authority: self.airdrop_state.to_account_info(),
+                },
+                &[signer_seeds],
+            ),
+            amount,
+        )?;
+
+        self.airdrop_state.amount_claimed = self.airdrop_state.amount_claimed
+            .checked_add(amount)
+            .ok_or(AirdropError::ArithmeticOverflow)?;
+
+        Ok(())
+    }
+
+    /// # Create airdrop_receipt account
+    fn create_airdrop_receipt(&self, bump: u8) -> Result<()> {
+        let airdrop_state_key = self.airdrop_state.key().to_bytes();
+
+        let signer_seeds = &[
+            b"receipt".as_ref(),
+            airdrop_state_key.as_ref(),
+            &[bump],
+        ];
+
+        let lamports = Rent::get()?.minimum_balance(0);
+
+        create_account(
+            CpiContext::new_with_signer(
+                self.system_program.to_account_info(), 
+                CreateAccount {
+                    from: self.signer.to_account_info(),
+                    to: self.airdrop_receipt.to_account_info()
+                },
+                &[signer_seeds],
+            ),
+            lamports,
+            0u64,
+            &ID,
+        )?;
+
+        Ok(())
+    }
+}
+```
+</Codeblock>
+
+Finally, we create the handler function that orchestrates these helper methods:
+
+<Codeblock lang="rust">
+```rust
+pub fn handler(ctx: Context<Claim>, amount: u64, hashes: Vec<u8>, index: u64) -> Result<()> {
+    // Check if the user already claimed
+    require!(
+        ctx.accounts.airdrop_receipt.owner().ne(&ID),
+        AirdropError::AlreadyClaimed
+    );
+
+    // Check if the users is trying to claim more tokens than available
+    require!(
+        ctx.accounts.airdrop_state.airdrop_amount.gte(
+            &ctx.accounts.airdrop_state.amount_claimed
+                .checked_add(amount)
+                .ok_or(AirdropError::ArithmeticOverflow)?
+            ),
+        AirdropError::AlreadyClaimed
+    );
+
+    // Verify the Merkle Proof
+    ctx.accounts.verify_merkle_proof(amount, hashes, index)
+
+    // Transfer Tokens
+    ctx.accounts.transfer_tokens(amount)?;
+
+    // Create the airdrop_receipt account
+    create_airdrop_receipt(ctx.bumps.airdrop_receipt)
+
+    Ok(())
+}
+  ```
+</Codeblock>
+
+We prevent double-claiming by checking if the `airdrop_receipt` account has already been created. Before processing the claim, we verify that the account's owner is not our program (indicating it hasn't been claimed yet).
+
+Once a user successfully claims their allocation, we create this receipt account, which serves as permanent proof of their claim. 
+ 
+This approach avoids contentious mutability on the main airdrop state, allowing for better parallelization of claims.

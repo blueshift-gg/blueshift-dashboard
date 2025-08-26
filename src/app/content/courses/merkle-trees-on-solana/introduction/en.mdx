@@ -1,0 +1,159 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+# Merkle Trees on Solana
+
+![Merkle Trees on Solana](/graphics/course-banners/merkle-trees-on-solana.png)
+
+Unlike traditional data verification methods that require checking every piece of data individually, Merkle trees provide a mathematical guarantee of data integrity through a single hash value. 
+
+This elegant structure enables efficient verification of massive datasets using only logarithmic space and time complexity.
+
+This fundamental property makes them indispensable for any system requiring tamper-evident data storage at scale.
+
+<ArticleSection name="What is a Merkle Tree" id="what-is-a-merkle-tree" level="h2" />
+
+Merkle trees, named after computer scientist Ralph Merkle, are binary tree data structures where each leaf node represents a hash of a data block, and each internal node represents a hash of its children. 
+
+First introduced in Merkle's 1979 paper "Secrecy, Authentication, and Public Key Systems," they solved a critical problem: how to efficiently verify the integrity of large datasets without transmitting or storing the entire dataset.
+
+The genius of Merkle's insight was recognizing that cryptographic hash functions could be arranged in a tree structure to create a "fingerprint" of any dataset. If even a single bit changes anywhere in the data, the root hash changes completely, providing immediate tamper detection.
+
+Consider a simple example with four data blocks A, B, C, and D:
+
+```
+        Root Hash (R)
+       /             \
+    H(A,B)          H(C,D)
+   /     \         /     \
+  H(A)   H(B)   H(C)   H(D)
+   |      |      |      |
+   A      B      C      D
+```
+
+The root hash R represents the entire dataset. To verify that block A exists and hasn't been tampered with, you only need A itself, plus the hashes H(B), H(C,D), and the trusted root R. This requires logarithmic space instead of linear space.
+
+Before Merkle trees, verifying data integrity meant either trusting a central authority or checking every piece of data individually. Merkle trees provided the first practical solution for decentralized, efficient data verification.
+
+<ArticleSection name="Mathematical Foundations" id="mathematical-foundations" level="h2" />
+
+Merkle trees depend entirely on the security properties of cryptographic hash functions. These functions must satisfy several critical properties:
+- Deterministic: For any input `x`, `H(x)` always produces the same output
+- Fixed Output Size: Regardless of input size, output is always `n` bits
+- Avalanche Effect: Small input changes cause dramatic output changes
+- Preimage Resistance: Given `H(x)`, finding `x` is computationally infeasible
+- Collision Resistance: Finding two inputs that produce the same hash is computationally infeasible
+
+> The collision resistance property is particularly crucial. If an attacker can find inputs `x ≠ y` such that `H(x) = H(y)`, they can potentially substitute malicious data while maintaining the same tree structure.
+
+### Merkle Trees
+
+For a Merkle tree with `n` leaf nodes, the mathematical properties are:
+- Tree Height: `h = ⌊log₂(n)⌋`
+- Total Nodes: `2n - 1` (for a complete binary tree)
+- Proof Size: At most `⌊log₂(n)⌋` hashes needed to verify any leaf
+
+To create a tree you would need to:
+
+1. Hash the Data: Each data block `D₁, D₂, ..., Dₙ` is hashed: `H(D₁), H(D₂), ..., H(Dₙ)`.
+
+2. Adjacent hashes are concatenated and hashed together until only one hash remains (the root): `H(H(D₁) || H(D₂)), H(H(D₃) || H(D₄)), ...` and then `H(Level1Hash₁ || Level1Hash₂), ...`
+
+> The pairing is done sequentially from left to right so the tree structure is reproducible by anyone with the same input data and to make addition more efficient (you need to reconstruct only one path).
+
+3. Deal with odd numbers of nodes: it might happens that the number of nodes at any level is odd, making it "impossible" to pair it with another leaf. We can solve this by duplicating the last element to make pairs or by adding empty/null nodes with predefined hash values.
+
+### Merkle Proofs
+
+A Merkle proof consists of the minimal set of hashes needed to reconstruct the path from any leaf to the root.
+
+For leaf position `i` in a tree with `n` leaves, a proof requires exactly `⌊log₂(n)⌋` sibling hashes. This logarithmic proof size makes verification scalable even for massive datasets.
+
+To create a proof for data block at position `i`:
+
+1. Start at leaf position `i`
+
+2. For each level moving toward the root: identify the sibling node (adjacent hash at the same level), add the sibling hash to the proof and move to parent position `⌊current_position/2⌋`
+
+3. Repeat until reaching the root
+
+For a tree like this: 
+
+```
+        Root Hash (R)
+       /             \
+    H(A,B)          H(C,D)
+   /     \         /     \
+  H(A)   H(B)   H(C)   H(D)
+   |      |      |      |
+   A      B      C      D
+```
+
+The proof for the leaf C would look like this: `[H(D), H(AB)]`
+
+Based on the proof we can then verify that the leaf C exists in a tree with trusted root hash R like this:
+
+1. Start with the data: Compute `H(C)` as the starting point
+
+2. Apply the proof: For each sibling hash in the proof: determine if the current hash is a left (even index) or right (odd index) child, concatenate appropriately: `H(current || sibling)` for left hashes or `H(sibling || current)` for right hashes
+
+3. Compare roots: Hash the result till you get to the root and check if the final computed hash must equal the trusted root R
+
+For a tree like this: 
+
+```
+        Root Hash (R)
+       /             \
+    H(A,B)          H(C,D)
+   /     \         /     \
+  H(A)   H(B)   H(C)   H(D)
+   |      |      |      |
+   A      B      C      D
+```
+
+The verification for the leaf C would look like this: 
+1. Reconstruct the immediate parent: `H(C,D) = H(H(C), H(D))`
+2. Reconstruct the root: `computed_root = H(H(A,B), H(C,D))` -> is `computed_root == R`?
+3. Verify: `if (computed_root != R) { err }`
+
+<ArticleSection name="Merkle Trees on Solana" id="merkle-tress-on-solana" level="h2" />
+
+Solana's account-based architecture presents unique challenges for storing large datasets on-chain. Every piece of data requires rent payments, and storing millions of user records directly on-chain becomes prohibitively expensive. 
+
+Merkle trees solve this fundamental scalability problem through compressed accounts: nstead of creating individual accounts for each piece of data, compressed accounts store thousands or millions of data elements as leaves in a Merkle tree, with only the root hash and tree structure living on-chain.
+
+Everytime a compressed account is created, it's transaction data is picked up by an RPC and stored in a database so it can be looked up by anyone to create a proof permissionlessly.
+
+### Concurrent Merkle Trees
+
+Solana's compressed accounts implementation uses concurrent Merkle trees: a specialized variant that solves a fundamental parallelization problem in Solana's architecture. 
+
+In Solana, when an account is flagged as mutable (writable) in a transaction, it becomes locked and cannot be modified by any other transaction until the first transaction is processed and the account lock is released.
+
+The fundamental problem is that every leaf modification requires updating the root hash. Since the root is stored in a single on-chain account, this creates massive lock contention:
+
+
+```
+Tree Account stores: Root Hash = H(...)
+
+User A mints NFT → Updates leaf 100 → Recomputes root → Locks Tree Account  
+User B mints NFT → Updates leaf 500 → Needs to update same root → BLOCKED
+User C mints NFT → Updates leaf 750 → Needs to update same root → BLOCKED
+...
+```
+
+> All users are competing to write to the SAME account (the root) since any leaf change propagates to root
+
+Concurrent trees solve this by deferring root updates through a buffer system:
+
+```
+Concurrent Tree Structure:
+├─ Tree Account
+│  ├─ Current Root Hash ← Not updated immediately
+│  ├─ Sequence Number
+│  └─ Change Buffer ← Key innovation
+│     ├─ Pending Change 1: leaf_index, old_hash, new_hash
+│     ├─ Pending Change 2: leaf_index, old_hash, new_hash  
+│     └─ Pending Change N: leaf_index, old_hash, new_hash
+``` 
+

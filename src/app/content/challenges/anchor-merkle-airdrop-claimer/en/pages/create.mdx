@@ -1,0 +1,116 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../../components/Codeblock/Codeblock";
+
+<ArticleSection name="Create" id="create" level="h2" />
+
+We can now move to the `create` instruction, that lives in the `create.rs` and will perform these actions:
+- Initializes the `AirdropState` account and stores all airdrop configuration data
+- Creates the `vault` (an Associated Token Account for the mint, owned by the `airdrop_state`)
+- Mints all tokens that need to be airdropped to users into the `vault`
+
+### Accounts
+
+The accounts needed in this context are:
+- `airdrop_state`: PDA that stores the airdrop configuration and merkle tree root
+- `vault`: Associated token account that holds the tokens to be distributed
+- `authority`: The signer who has permission to create the airdrop and mint tokens
+- `system_program`: The system program used to create the `Escrow`
+- `token_program`: The token program used to CPI the transfer
+- `associated_token_program`: The associated token program used to create the associated token accounts
+
+And with all the constraint it will look something like this:
+
+<Codeblock lang="rust">
+```rust
+#[derive(Accounts)]
+pub struct Create<'info> {
+  #[account(
+    init, 
+    seeds = [b"merkle_tree".as_ref(), mint.key().to_bytes().as_ref()],
+    bump,
+    payer = authority, 
+    space = AirdropState::INIT_SPACE + AirdropState::DISCRIMINATOR.len()
+  )]
+  pub airdrop_state: Account<'info, AirdropState>,
+  #[account(mut)]
+  pub mint: Account<'info, Mint>,
+  #[account(
+    init_if_needed,
+    payer = authority,
+    associated_token::mint = mint,
+    associated_token::authority = airdrop_state,
+  )]
+  pub vault: Account<'info, TokenAccount>,
+  #[account(mut)]
+  pub authority: Signer<'info>,
+  pub system_program: Program<'info, System>,
+  pub token_program: Program<'info, Token>,
+  pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```
+</Codeblock>
+
+> This instruction assumes the mint has already been initialized in a previous instruction. The mint creation can be included in this instruction if needed.
+
+### Logic 
+
+After defining the accounts, we implement the core logic using helper functions as methods on the account struct.
+
+First, we populate the `AirdropState` using the `set_inner()` method, then mint the tokens through a `mint_to` CPI call:
+
+<Codeblock lang="rust">
+```rust
+impl<'info> Create<'info> {
+    /// # Create the Airdrop State
+    fn populate_airdrop_state(&mut self, merkle_root: [u8; 32], amount: u64, bump: u8) -> Result<()> {
+        self.airdrop_state.set_inner(
+            AirdropState {
+                merkle_root,
+                authority: self.authority.key(),
+                mint: self.mint.key(),
+                airdrop_amount: amount,
+                amount_claimed: 0,
+                bump,
+            }
+        );
+
+        Ok(())
+    }
+
+    /// # Mint the tokens
+    fn mint_tokens(&self, amount: u64) -> Result<()> {
+        mint_to(
+            CpiContext::new(
+                self.token_program.to_account_info(),
+                MintTo {
+                    mint: self.mint.to_account_info(),
+                    to: self.vault.to_account_info(),
+                    authority: self.authority.to_account_info(),
+                }
+            ),
+            amount,
+        )?;
+
+        Ok(())
+    }
+}
+```
+</Codeblock>
+
+Finally, we create the handler function that orchestrates these helper methods:
+
+<Codeblock lang="rust">
+```rust
+pub fn handler(ctx: Context<Create>, merkle_root: [u8; 32], amount: u64) -> Result<()> {
+    // Save the AirdropState Data
+    ctx.accounts.populate_airdrop_state(merkle_root:, amount, ctx.bumps.airdrop_state)?;
+
+    // Mint Tokens
+    ctx.accounts.mint_tokens(amount)?;
+
+    Ok(())
+}
+  ```
+</Codeblock>
+
+> Alternatively, instead of minting new tokens, you can transfer existing tokens from the creator's wallet to the vault using a transfer instruction.

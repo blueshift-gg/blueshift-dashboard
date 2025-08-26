@@ -267,6 +267,19 @@ const allCourses: CourseMetadata[] = withCourseNumber([
       { slug: "conclusion" },
     ],
   },
+  {
+    slug: "merkle-trees-on-solana",
+    language: "General",
+    color: "0,255,255",
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "introduction" },
+      { slug: "merkle-trees-with-anchor" },
+      { slug: "merkle-trees-with-pinocchio" },
+      { slug: "conclusion" },
+    ],
+  },
 ]);
 
 const releasedCoursesSetting = process.env.NEXT_PUBLIC_RELEASED_COURSES?.trim();

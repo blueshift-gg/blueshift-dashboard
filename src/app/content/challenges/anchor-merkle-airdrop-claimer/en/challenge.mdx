@@ -1,0 +1,161 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { Codeblock } from "../../../../components/Codeblock/Codeblock";
+
+![Anchor Merkle Airdrop Claimer](/graphics/challenge-banners/anchor-merkle-airdrop-claimer.png)
+
+# The Airdrop Claimer
+
+Creating an airdrop is a crucial stage when launching a token. However, due to Solana's rent costs, protocols cannot simply airdrop tokens directly to wallets since this requires creating individual Token accounts for all receivers, costing approximately `0.002 SOL` each.
+
+To solve this, we'll use Merkle Trees to store recipient data on-chain in an efficient and cost-effective manner.
+
+> If you're unfamiliar with Merkle Trees, start by reading [Merkle Trees on Solana](/en/courses/merkle-trees-on-solana) to understand the core concepts and underlying cryptography.
+
+In this challenge, we'll implement this concept through two powerful instructions:
+- **Create Airdrop**: The token owner mints tokens for distribution and stores the merkle root containing all recipients and their allocations on-chain.
+- **Claim Airdrop**: Verifies that a user has a valid allocation and creates a unique identifier that signals they have already claimed their airdrop.
+
+> If you're unfamiliar with Anchor, start by reading [Anchor for Dummies](/en/courses/anchor-for-dummies) to understand the core concepts used in this program.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Let's start by creating a fresh Anchor workspace:
+
+<Codeblock lang="terminal">
+```bash
+anchor init blueshift-token-claimer
+cd blueshift-token-claimer
+```
+</Codeblock>
+
+Next, enable `init-if-needed` on the `anchor-lang` crate and add the `anchor-spl` crate:
+
+<Codeblock lang="terminal">
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+```
+</Codeblock>
+
+Since we're using `anchor-spl`, we also need to update the `Cargo.toml` file to include `anchor-spl/idl-build` in the `idl-build` feature. 
+
+Open `Cargo.toml` and you'll see an existing `idl-build` line that looks like this:
+
+```toml
+idl-build = ["anchor-lang/idl-build"]
+```
+
+Modify it to add `anchor-spl/idl-build` as well:
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+You can now open  the newly generated folder, and you're ready to start coding! 
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Since this program is complex, we'll organize it into focused modules instead of placing everything in `lib.rs`.
+
+The folder tree will look roughly like this:
+
+```
+src
+├── instructions
+│       ├── create.rs
+│       ├── update.rs
+│       └── claim.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+Which the `lib.rs` will look roughly like this:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::prelude::*;
+
+mod state;
+mod errors;
+mod instructions;
+use instructions::*;
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_escrow {
+    use super::*;
+
+    #[instruction(discriminator = 0)]
+    pub fn create(ctx: Context<Create>,  merkle_root: [u8; 32], amount: u64,) -> Result<()> {
+        //...
+    }
+
+    #[instruction(discriminator = 1)]
+    pub fn update(ctx: Context<Update>, merkle_root: [u8; 32]) -> Result<()> {
+        //...
+    }
+
+    #[instruction(discriminator = 2)]
+    pub fn claim(ctx: Context<Refund>, amount: u64, hashes: Vec<u8>, index: u64) -> Result<()> {
+        //...
+    }
+}
+```
+</Codeblock>
+
+As you see, we implemented custom discriminator for the instructions. So make sure to use an anchor version 0.31.0 or newer.
+
+<ArticleSection name="State" id="state" level="h2" />
+
+Now we'll implement the `state.rs` file, which contains all data for our `AirdropState`. We'll give it a custom discriminator and wrap the struct with the `#[account]` macro:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::prelude::*;
+
+#[derive(InitSpace)]
+#[account(discriminator = 1)]
+pub struct AirdropState {
+    pub merkle_root: [u8; 32],
+    pub authority: Pubkey,
+    pub mint: Pubkey,
+    pub airdrop_amount: u64,
+    pub amount_claimed: u64,
+    pub bump: u8,
+}
+  ```
+</Codeblock>
+
+What each field does:
+- **merkle_root**: A 32-byte hash representing the root of the merkle tree containing all eligible recipients and their allocations
+- **authority**: The public key of the account authorized to update the merkle root (typically the token creator)
+- **mint**: The token mint address being distributed in this airdrop
+- **airdrop_amount**: The total number of tokens allocated for distribution
+- **amount_claimed**: Running total of tokens already claimed by users
+- **bump**: Cached bump byte; deriving it on the fly costs compute, so we save it once.
+
+We use the `#[derive(InitSpace)]` macro to automatically calculate the account size for rent purposes.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+Finally, we'll create the `errors.rs` file to define custom error types:
+
+<Codeblock lang="rust">
+```rust
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum AirdropError {
+    #[msg("Invalid Proof")]
+    InvalidProof,
+    #[msg("Already Claimed")]
+    AlreadyClaimed,
+    #[msg("Arithmetic Overflow")]
+    ArithmeticOverflow,
+}
+```
+</Codeblock>
+
+Each enum variant maps to a clear, human-readable error message that Anchor will display when constraints fail or `require!()` macros are triggered.
