@@ -119,98 +119,100 @@ export default function TableOfContents() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.4, ease: anticipate }}
-      className="font-content order-1 lg:order-2 h-max lg:sticky top-24 md:col-span-2 lg:col-span-3 flex flex-col gap-y-8"
+      className="font-content order-1 lg:order-2 lg:sticky top-24 md:col-span-2 lg:col-span-3 flex flex-col gap-y-8 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
     >
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-2 lg:sticky lg:top-0 lg:bg-background lg:z-10 lg:pb-4">
         <Icon name="Table" />
         <span className="font-medium font-mono text-primary">
           {t("contents.contents")}
         </span>
       </div>
-      <div className="flex space-x-5 items-stretch">
-        {/* Scroll Spy Background */}
-        <div className="w-[3px] flex-shrink-0 bg-background-card rounded-full"></div>
-        <div className="flex flex-col gap-y-5 w-max">
-          {sections.map((section) => (
-            <div key={section.id} className="flex flex-col gap-y-4">
-              <a
-                href={`#${section.id}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setActiveSection(section.id);
-                  document
-                    .getElementById(section.id)
-                    ?.scrollIntoView({ behavior: "smooth" });
-                }}
-                className={`relative text-sm font-medium text-secondary transition hover:text-primary`}
-              >
-                {activeSection === section.id && (
-                  <motion.div
-                    className={classNames(
-                      "absolute -left-[calc(24px-1px)] w-[3px] bg-brand-secondary",
-                      {
-                        "rounded-t-full":
-                          activeSection === section.id &&
-                          sections[0].id === section.id,
-                        "rounded-b-full":
-                          activeSection === section.id &&
-                          sections[sections.length - 1].id === section.id,
-                      }
-                    )}
-                    style={{ height: "24px" }}
-                    layoutId={`article`}
-                    transition={{ duration: 0.4, ease: anticipate }}
-                  />
-                )}
-                {section.text}
-              </a>
-              {section.subsections.length > 0 && (
-                <div className="pl-4 flex flex-col gap-y-3">
-                  {section.subsections.map((subsection) => (
-                    <a
-                      key={subsection.id}
-                      href={`#${subsection.id}`}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setActiveSection(subsection.id);
-                        document
-                          .getElementById(subsection.id)
-                          ?.scrollIntoView({ behavior: "smooth" });
-                      }}
-                      className={`relative flex font-medium text-tertiary text-sm transition hover:text-primary`}
-                    >
-                      {activeSection === subsection.id && (
-                        <motion.div
-                          className="absolute -left-[calc(40px-1px)] w-[3px] bg-brand-secondary"
-                          style={{ height: "20px" }}
-                          layoutId={`article`}
-                          transition={{ duration: 0.4, ease: anticipate }}
-                        />
+      <div className="flex flex-col  lg:flex-1 lg:min-h-0 gap-y-8">
+        <div className="flex space-x-5 items-stretch">
+          {/* Scroll Spy Background */}
+          <div className="w-[3px] flex-shrink-0 bg-background-card rounded-full"></div>
+          <div className="flex flex-col gap-y-5 w-max">
+            {sections.map((section) => (
+              <div key={section.id} className="flex flex-col gap-y-4">
+                <a
+                  href={`#${section.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setActiveSection(section.id);
+                    document
+                      .getElementById(section.id)
+                      ?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                  className={`relative text-sm font-medium text-secondary transition hover:text-primary`}
+                >
+                  {activeSection === section.id && (
+                    <motion.div
+                      className={classNames(
+                        "absolute -left-[calc(24px-1px)] w-[3px] bg-brand-secondary",
+                        {
+                          "rounded-t-full":
+                            activeSection === section.id &&
+                            sections[0].id === section.id,
+                          "rounded-b-full":
+                            activeSection === section.id &&
+                            sections[sections.length - 1].id === section.id,
+                        }
                       )}
-                      <span /*className="truncate max-w-[80%]"*/>
-                        {subsection.text}
-                      </span>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+                      style={{ height: "24px" }}
+                      layoutId={`article`}
+                      transition={{ duration: 0.4, ease: anticipate }}
+                    />
+                  )}
+                  {section.text}
+                </a>
+                {section.subsections.length > 0 && (
+                  <div className="pl-4 flex flex-col gap-y-3">
+                    {section.subsections.map((subsection) => (
+                      <a
+                        key={subsection.id}
+                        href={`#${subsection.id}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setActiveSection(subsection.id);
+                          document
+                            .getElementById(subsection.id)
+                            ?.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        className={`relative flex font-medium text-tertiary text-sm transition hover:text-primary`}
+                      >
+                        {activeSection === subsection.id && (
+                          <motion.div
+                            className="absolute -left-[calc(40px-1px)] w-[3px] bg-brand-secondary"
+                            style={{ height: "20px" }}
+                            layoutId={`article`}
+                            transition={{ duration: 0.4, ease: anticipate }}
+                          />
+                        )}
+                        <span /*className="truncate max-w-[80%]"*/>
+                          {subsection.text}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
+        {githubUrl ? (
+          <a
+            href={githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center space-x-2 hover:text-tertiary text-primary"
+          >
+            <Icon name="Github" />
+            <span className="font-medium font-mono">
+              {t("contents.view_source")}
+            </span>
+          </a>
+        ) : null}
       </div>
-      {githubUrl ? (
-        <a
-          href={githubUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center space-x-2 hover:text-tertiary text-primary"
-        >
-          <Icon name="Github" />
-          <span className="font-medium font-mono">
-            {t("contents.view_source")}
-          </span>
-        </a>
-      ) : null}
     </motion.div>
   );
 }
