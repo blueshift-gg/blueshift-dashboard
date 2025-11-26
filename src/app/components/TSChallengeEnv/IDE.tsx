@@ -6,9 +6,12 @@ import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
 import { motion } from "motion/react";
 import {
   FetchDecision,
-  InterceptedRpcCallData, InterceptedWsReceiveData,
+  InterceptedRpcCallData,
+  InterceptedWsReceiveData,
   InterceptedWsSendData,
-  useEsbuildRunner, WsReceiveDecision, WsSendDecision
+  useEsbuildRunner,
+  WsReceiveDecision,
+  WsSendDecision,
 } from "@/hooks/useEsbuildRunner";
 import { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
 import { useEffect, useState } from "react";
@@ -28,7 +31,7 @@ interface IDEProps {
   title: string;
 }
 
-export default function IDE({initialCode, title, fileName}: IDEProps) {
+export default function IDE({ initialCode, title, fileName }: IDEProps) {
   const [ideView, setIdeView] = useState<"minified" | "expanded">("minified");
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
@@ -52,7 +55,7 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
       setWasSendTransactionIntercepted(true); // Keep this if useful for UI feedback
       const base64EncodedTx = rpcData.body?.params?.[0];
 
-      console.log("got tx")
+      console.log("got tx");
 
       const tx = Transaction.from(Buffer.from(base64EncodedTx, "base64"));
       const mockSignature = bs58.encode(tx?.signature ?? []);
@@ -77,7 +80,7 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
     }
 
     console.debug(
-      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`,
+      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`
     );
 
     // For all other calls, or if rpcMethod is null, proceed as normal
@@ -85,11 +88,11 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
   };
 
   const handleWsSendForDecision = async (
-    wsSendData: InterceptedWsSendData,
+    wsSendData: InterceptedWsSendData
   ): Promise<WsSendDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Send, Awaiting Decision:",
-      wsSendData,
+      wsSendData
     );
 
     const targetHost = new URL(rpcEndpoint!).host;
@@ -100,7 +103,7 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
         wsSendData.data.includes("signatureSubscribe")
       ) {
         console.log(
-          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe",
+          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe"
         );
 
         const data = JSON.parse(wsSendData.data);
@@ -144,17 +147,17 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
 
     console.log(
       "[ClientChallengesContent] WebSocket send allowed to PROCEED:",
-      wsSendData,
+      wsSendData
     );
     return { decision: "PROCEED" };
   };
 
   const handleWsReceiveForDecision = async (
-    wsReceiveData: InterceptedWsReceiveData,
+    wsReceiveData: InterceptedWsReceiveData
   ): Promise<WsReceiveDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Receive, Awaiting Decision:",
-      wsReceiveData,
+      wsReceiveData
     );
 
     return { decision: "PROCEED" };
@@ -264,12 +267,12 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
     >
       <div className="w-full h-full flex flex-col rounded-xl overflow-hidden border border-border">
         <div className="flex flex-col relative w-full h-full">
-          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-background-card rounded-t-xl flex items-center border-b border-border">
+          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-card-solid rounded-t-xl flex items-center border-b border-border">
             <div className="flex items-center gap-x-2">
-              <div className="w-[12px] h-[12px] bg-background-card-foreground rounded-full"></div>
+              <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
               <button
                 className={classNames(
-                  "w-[12px] h-[12px] bg-background-card-foreground rounded-full flex items-center justify-center group/minimize",
+                  "w-[12px] h-[12px] bg-card-solid-foreground rounded-full flex items-center justify-center group/minimize",
                   ideView === "expanded" && "!bg-[#FFBD2D]"
                 )}
                 onClick={() => setIdeView("minified")}
@@ -285,7 +288,7 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
               </button>
               <button
                 className={classNames(
-                  "w-[12px] h-[12px] bg-background-card-foreground rounded-full flex items-center justify-center group/expand",
+                  "w-[12px] h-[12px] bg-card-solid-foreground rounded-full flex items-center justify-center group/expand",
                   ideView === "minified" && "!bg-[#28C840]"
                 )}
                 onClick={() => setIdeView("expanded")}
@@ -300,12 +303,12 @@ export default function IDE({initialCode, title, fileName}: IDEProps) {
                 />
               </button>
             </div>
-            <div className="text-sm font-medium text-secondary absolute left-1/2 -translate-x-1/2 flex items-center gap-x-1.5">
+            <div className="text-sm font-medium text-shade-secondary absolute left-1/2 -translate-x-1/2 flex items-center gap-x-1.5">
               <Icon name="Challenge" size={12} className="hidden sm:block" />
               <span className="flex-shrink-0">{title}</span>
             </div>
           </div>
-          <div className="w-[calc(100%-2px)] py-2 bg-background-card/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
+          <div className="w-[calc(100%-2px)] py-2 bg-card-solid/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
             <LogoGlyph width={16} />
             <div className="flex items-center gap-x-2.5">
               {!isPanelOpen ? (

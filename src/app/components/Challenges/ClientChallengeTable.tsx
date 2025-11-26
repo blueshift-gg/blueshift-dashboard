@@ -80,7 +80,7 @@ export default function ChallengeTable({
         !isOpen && "pointer-events-none lg:pointer-events-auto"
       )}
     >
-      <div className="pb-24 bg-background-card/50 overflow-y-auto rounded-b-xl lg:rounded-none w-full min-w-full xl:min-w-[400px] px-2 lg:px-4 lg:right-4 lg:border-l lg:border-l-border lg:pt-6 flex flex-col lg:gap-y-8 justify-between overflow-hidden lg:pb-6 [mask:linear-gradient(to_bottom,black_85%,transparent_100%)]">
+      <div className="pb-24 bg-card-solid/50 overflow-y-auto rounded-b-xl lg:rounded-none w-full min-w-full xl:min-w-[400px] px-2 lg:px-4 lg:right-4 lg:border-l lg:border-l-border lg:pt-6 flex flex-col lg:gap-y-8 justify-between overflow-hidden lg:pb-6 [mask:linear-gradient(to_bottom,black_85%,transparent_100%)]">
         {(challengeStatuses[courseSlug] === "completed" ||
           challengeStatuses[courseSlug] === "claimed") &&
           !allowRedo && (
@@ -91,10 +91,10 @@ export default function ChallengeTable({
               className="absolute z-10 inset-0 w-full h-[20dvh] lg:h-full bg-background/80 backdrop-blur gap-y-5 flex flex-col items-center justify-center"
             >
               <div className="flex flex-col items-center justify-center gap-y-1">
-                <span className="text-lg font-medium text-primary">
+                <span className="text-lg font-medium text-shade-primary">
                   {t("ChallengePage.challenge_completed.title")}
                 </span>
-                <span className="text-tertiary">
+                <span className="text-shade-tertiary">
                   {t("ChallengePage.challenge_completed.body")}
                 </span>
               </div>
@@ -203,9 +203,9 @@ export default function ChallengeTable({
                 disabled={requirement.status === "incomplete"}
                 type="button"
                 className={classNames(
-                  "flex flex-col gap-y-4 group enabled:hover:cursor-pointer py-3 rounded-xl transition duration-200 enabled:hover:bg-background-card-foreground/50",
+                  "flex flex-col gap-y-4 group enabled:hover:cursor-pointer py-3 rounded-xl transition duration-200 enabled:hover:bg-card-solid-foreground/50",
                   selectedRequirement === requirement &&
-                    "pb-6 bg-background-card-foreground/50",
+                    "pb-6 bg-card-solid-foreground/50",
                   selectedRequirement !== null &&
                     selectedRequirement !== requirement &&
                     "opacity-40"
@@ -353,7 +353,7 @@ export default function ChallengeTable({
                                       delay: 1 + index * 0.1,
                                     }}
                                     key={index}
-                                    className="text-start font-fira-code font-medium text-nowrap text-secondary"
+                                    className="text-start font-fira-code font-medium text-nowrap text-shade-secondary"
                                   >
                                     {log.slice(7, log.length)}
                                   </motion.span>
@@ -361,7 +361,7 @@ export default function ChallengeTable({
                             </div>
                           </div>
 
-                          <div className="bg-background-card/80 rounded-lg px-4 py-2 flex gap-x-4 text-sm font-medium w-full justify-between items-center">
+                          <div className="bg-card-solid/80 rounded-lg px-4 py-2 flex gap-x-4 text-sm font-medium w-full justify-between items-center">
                             <Icon
                               name="ShiftArrow"
                               size={14}
@@ -369,7 +369,7 @@ export default function ChallengeTable({
                             />
                             <div className="flex items-center gap-x-2">
                               <div>
-                                <span className="text-text-tertiary">
+                                <span className="text-text-shade-tertiary">
                                   Compute Units:{" "}
                                 </span>
                                 <span className="font-medium text-brand-secondary">
@@ -383,7 +383,7 @@ export default function ChallengeTable({
                                 </span>
                               </div>
                               <div className="hidden lg:block">
-                                <span className="text-text-tertiary">
+                                <span className="text-text-shade-tertiary">
                                   Execution Time:{" "}
                                 </span>
                                 <span className="font-medium text-brand-secondary">

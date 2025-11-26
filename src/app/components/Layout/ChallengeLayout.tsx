@@ -80,7 +80,7 @@ export default async function ChallengeLayout({
                 target="_blank"
               >
                 <p
-                  className="text-secondary mt-1 text-sm"
+                  className="text-shade-secondary mt-1 text-sm"
                   style={{
                     color: `rgb(${
                       challengeColors[challengeMetadata.language]

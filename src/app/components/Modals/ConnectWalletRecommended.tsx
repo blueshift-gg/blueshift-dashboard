@@ -31,7 +31,7 @@ export default function ConnectWalletRecommended() {
           <div className="text-xl font-medium">
             {t("wallet_recommended.title")}
           </div>
-          <span className="text-secondary">
+          <span className="text-shade-secondary">
             {t("wallet_recommended.description")}
           </span>
         </div>
@@ -45,7 +45,7 @@ export default function ConnectWalletRecommended() {
             onClick={closeModal}
           />
           <div
-            className="text-mute transition hover:text-tertiary text-sm font-medium mx-auto cursor-pointer"
+            className="text-mute transition hover:text-shade-tertiary text-sm font-medium mx-auto cursor-pointer"
             onClick={() => {
               setConnectionRecommendedViewed(true);
               closeModal();

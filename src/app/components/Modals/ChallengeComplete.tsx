@@ -82,7 +82,7 @@ export default function ChallengeCompleted({
           <div className="text-xl font-medium">
             {t("ChallengePage.mint_modal_title")}
           </div>
-          <span className="text-secondary text-balance">
+          <span className="text-shade-secondary text-balance">
             {t("ChallengePage.mint_modal_description")}
           </span>
         </div>
@@ -107,7 +107,7 @@ export default function ChallengeCompleted({
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
-                className="hover:text-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
+                className="hover:text-shade-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
               >
                 <DecryptedText
                   text={t("ChallengePage.mint_modal_skip")}
@@ -117,10 +117,7 @@ export default function ChallengeCompleted({
             </>
           ) : (
             <>
-              <Link
-                href={challengeShareUrl}
-                target="_blank"
-              >
+              <Link href={challengeShareUrl} target="_blank">
                 <Button
                   label={t("ChallengePage.mint_modal_tweet")}
                   variant="primary"
@@ -133,7 +130,7 @@ export default function ChallengeCompleted({
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
-                className="hover:text-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
+                className="hover:text-shade-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
               >
                 <DecryptedText
                   text={t("ChallengePage.mint_modal_skip")}

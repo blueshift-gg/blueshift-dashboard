@@ -1,111 +1,257 @@
 "use client";
 
-import { courseColors, CourseMetadata } from "@/app/utils/course";
+import {
+  courseColors,
+  CourseMetadata,
+  CourseLanguages,
+} from "@/app/utils/course";
 import { usePersistentStore } from "@/stores/store";
 import CourseCard from "../CourseCard/CourseCard";
 import classNames from "classnames";
 import Icon from "../Icon/Icon";
 import { useTranslations } from "next-intl";
-import Divider from "../Divider/Divider";
+import { Divider } from "@blueshift-gg/ui-components";
 import CoursesEmpty from "./CoursesEmpty";
-import NewCourseFooter from "./NewCourseFooter";
 import { motion } from "motion/react";
 import { anticipate } from "motion";
 import { useStore } from "@/stores/store";
-import Button from "../Button/Button";
-import ReturningCourseFooter from "./ReturningCourseFooter";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect } from "react";
-
-const courseSections = {
-  Anchor: {
-    icon: "Anchor",
-    title: "languages.anchor",
-  },
-  Rust: {
-    icon: "Rust",
-    title: "languages.rust",
-  },
-  Typescript: {
-    icon: "Typescript",
-    title: "languages.typescript",
-  },
-  Assembly: {
-    icon: "Assembly",
-    title: "languages.assembly",
-  },
-  General: {
-    icon: "General",
-    title: "languages.general",
-  },
-} as const;
+import { useEffect, useRef, useState } from "react";
+import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
+import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
 
 type CoursesContentProps = {
   searchValue?: string;
-  initialCourses: CourseMetadata[];
-  courseLessons: {
+  initialCourses?: CourseMetadata[];
+  courseLessons?: {
     slug: string;
     totalLessons: number;
     lessons: { number: number; slug: string }[];
   }[];
+  isLoading?: boolean;
 };
 
 export default function CourseList({
-  initialCourses,
-  courseLessons,
+  initialCourses = [],
+  courseLessons = [],
+  isLoading = false,
 }: CoursesContentProps) {
   const t = useTranslations();
   const {
-    view,
-    setView,
     selectedLanguages,
+    toggleLanguage,
+    setLanguages,
+    selectedDifficulties,
+    toggleDifficulty,
+    setDifficulties,
     courseProgress,
     challengeStatuses,
   } = usePersistentStore();
-  const { searchValue } = useStore();
-  const isProgressEmpty = Object.keys(courseProgress).length === 0;
+  const { searchValue, setSearchValue } = useStore();
+  const [activeTab, setActiveTab] = useState("all-courses");
+  const { width } = useWindowSize();
+  const [isMobile, setIsMobile] = useState(false);
 
-  // Filter courses based on search value and selected languages
-  // Sort by difficulty (lower number means easier)
+  const [hoveredItem, setHoveredItem] = useState<number | null>(null);
+  const [scrollState, setScrollState] = useState({
+    isAtStart: true,
+    isAtEnd: false,
+  });
+
+  const carouselRef = useRef<HTMLDivElement>(null);
+
+  // Function to update scroll state
+  const updateScrollState = () => {
+    if (carouselRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
+      setScrollState({
+        isAtStart: scrollLeft === 0,
+        isAtEnd: scrollLeft === scrollWidth - clientWidth,
+      });
+    }
+  };
+
+  // Add scroll event listener
+  useEffect(() => {
+    const carousel = carouselRef.current;
+    if (carousel) {
+      // Set initial scroll state
+      updateScrollState();
+
+      // Add scroll event listener
+      carousel.addEventListener("scroll", updateScrollState);
+
+      // Cleanup
+      return () => carousel.removeEventListener("scroll", updateScrollState);
+    }
+  }, []);
+
+  const handleScrollLeft = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({
+        left: -300,
+        behavior: "smooth",
+      });
+    }
+  };
+
+  const handleScrollRight = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({
+        left: 300,
+        behavior: "smooth",
+      });
+    }
+  };
+
+  useEffect(() => {
+    setIsMobile(width < 768);
+  }, [width]);
+
+  const difficultyMap: Record<string, number> = {
+    beginner: 1,
+    intermediate: 2,
+    advanced: 3,
+    expert: 4,
+  };
+
+  const languageMap: Record<string, CourseLanguages> = {
+    assembly: "Assembly",
+    anchor: "Anchor",
+    general: "General",
+    rust: "Rust",
+    typescript: "Typescript",
+  };
+
+  const reverseDifficultyMap: Record<number, string> = {
+    1: "beginner",
+    2: "intermediate",
+    3: "advanced",
+    4: "expert",
+  };
+
+  const reverseLanguageMap: Record<string, string> = {
+    Assembly: "assembly",
+    Anchor: "anchor",
+    General: "general",
+    Rust: "rust",
+    Typescript: "typescript",
+  };
+
+  const handleFilterChange = (value: string | string[] | undefined) => {
+    if (Array.isArray(value)) {
+      const newLanguages: CourseLanguages[] = [];
+      const newDifficulties: number[] = [];
+      const statusOptions = ["in-progress", "completed"];
+      const selectedStatuses: string[] = [];
+
+      value.forEach((v) => {
+        if (v in difficultyMap) {
+          newDifficulties.push(difficultyMap[v]);
+        } else if (v in languageMap) {
+          newLanguages.push(languageMap[v]);
+        } else if (statusOptions.includes(v)) {
+          selectedStatuses.push(v);
+        }
+      });
+
+      setLanguages(newLanguages);
+      setDifficulties(newDifficulties);
+
+      if (selectedStatuses.length > 1) {
+        const newStatus = selectedStatuses.find((s) => s !== activeTab);
+        setActiveTab(newStatus || "all-courses");
+      } else if (selectedStatuses.length === 1) {
+        setActiveTab(selectedStatuses[0]);
+      } else {
+        setActiveTab("all-courses");
+      }
+    } else if (typeof value === "string") {
+      if (value in difficultyMap) {
+        toggleDifficulty(difficultyMap[value]);
+      } else if (value in languageMap) {
+        toggleLanguage(languageMap[value]);
+      } else if (["in-progress", "completed"].includes(value)) {
+        setActiveTab(value === activeTab ? "all-courses" : value);
+      }
+    }
+  };
+
+  // Calculate global in-progress courses to determine tab state
+  const globalInProgressCourses = initialCourses.filter((course) => {
+    const progress = courseProgress[course.slug] || 0;
+    const totalLessons = course.lessons.length;
+
+    if (progress === 0) return false;
+    if (progress < totalLessons) return true;
+    if (progress === totalLessons && course.challenge) {
+      const status = challengeStatuses[course.challenge];
+      return status !== "completed" && status !== "claimed";
+    }
+    return false;
+  });
+
+  const hasInProgress = globalInProgressCourses.length > 0;
+
+  // Disable In Progress tab if no courses are in progress
+  useEffect(() => {
+    if (!hasInProgress && activeTab === "in-progress") {
+      setActiveTab("all-courses");
+    }
+  }, [hasInProgress, activeTab]);
+
+  // Filter courses
   const filteredCourses = initialCourses
     .filter((course) => {
+      // 1. Search
       const matchesSearch = t(`courses.${course.slug}.title`)
         .toLowerCase()
         .includes((searchValue || "").toLowerCase());
+
+      // 2. Language Filter (Empty = All)
       const matchesLanguage =
         selectedLanguages.length === 0 ||
         selectedLanguages.includes(course.language);
-      return matchesSearch && matchesLanguage;
+
+      // 3. Difficulty Filter (Empty = All)
+      const matchesDifficulty =
+        selectedDifficulties.length === 0 ||
+        selectedDifficulties.includes(course.difficulty);
+
+      // 4. Tab Filter
+      let matchesTab = true;
+      const progress = courseProgress[course.slug] || 0;
+      const totalLessons = course.lessons.length;
+
+      if (activeTab === "in-progress") {
+        matchesTab =
+          (progress > 0 && progress < totalLessons) ||
+          (progress === totalLessons &&
+            !!course.challenge &&
+            !["completed", "claimed"].includes(
+              challengeStatuses[course.challenge]
+            ));
+      } else if (activeTab === "completed") {
+        const isChallengeComplete =
+          !course.challenge ||
+          ["completed", "claimed"].includes(
+            challengeStatuses[course.challenge]
+          );
+        matchesTab = progress === totalLessons && isChallengeComplete;
+      }
+
+      return (
+        matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
+      );
     })
     .sort((a, b) => a.difficulty - b.difficulty);
 
-  // In-progress courses are those where the user has started but not completed
-  // or has completed but has an associated challenge that is not yet completed.
-  const inProgressCourses = filteredCourses.filter(
-    (course) =>
-      (courseProgress[course.slug] > 0 &&
-        courseProgress[course.slug] < course.lessons.length) ||
-      (courseProgress[course.slug] === course.lessons.length &&
-        !!course.challenge),
-  );
-
-  // Completed courses are those where the user has finished all lessons
-  // and either has no challenge or the challenge is completed/claimed.
-  const completedCourses = filteredCourses.filter((course) => {
-    const hasFinishedLessons =
-      courseProgress[course.slug] === course.lessons.length;
-
-    return course.challenge
-      ? hasFinishedLessons &&
-          ["completed", "claimed"].includes(challengeStatuses[course.challenge])
-      : hasFinishedLessons;
-  });
-
   const hasNoResults = filteredCourses.length === 0;
-  const hasNoFilters = !searchValue && selectedLanguages.length === 0;
-  const showGetStarted =
-    hasNoFilters ||
-    selectedLanguages.length === Object.keys(courseSections).length;
+  const hasNoFilters =
+    !searchValue &&
+    selectedLanguages.length === 0 &&
+    selectedDifficulties.length === 0 &&
+    activeTab === "all-courses";
 
   // Helper function to get the current lesson slug
   const getCurrentLessonSlug = (courseSlug: string) => {
@@ -121,59 +267,136 @@ export default function CourseList({
 
     // Find the lesson with matching number
     const currentLesson = courseLessonData.lessons.find(
-      (lesson) => lesson.number === progress,
+      (lesson) => lesson.number === progress
     );
 
     return currentLesson?.slug || "";
   };
 
-  const { width } = useWindowSize();
-
-  useEffect(() => {
-    if (width < 768) {
-      setView("grid");
-    }
-  }, [setView, width]);
+  const dropdownItems = [
+    {
+      label: "Difficulty",
+      value: "difficulty",
+      icon: { name: "Difficulty" as const },
+      children: [
+        {
+          label: "Beginner",
+          value: "beginner",
+          icon: {
+            name: "Difficulty" as const,
+            difficulties: [1] as (1 | 2 | 3 | 4)[],
+          },
+        },
+        {
+          label: "Intermediate",
+          value: "intermediate",
+          icon: {
+            name: "Difficulty" as const,
+            difficulties: [2] as (1 | 2 | 3 | 4)[],
+          },
+        },
+        {
+          label: "Advanced",
+          value: "advanced",
+          icon: {
+            name: "Difficulty" as const,
+            difficulties: [3] as (1 | 2 | 3 | 4)[],
+          },
+        },
+        {
+          label: "Expert",
+          value: "expert",
+          icon: {
+            name: "Difficulty" as const,
+            difficulties: [4] as (1 | 2 | 3 | 4)[],
+          },
+        },
+      ],
+    },
+    {
+      label: "Category",
+      value: "programming",
+      icon: { name: "Code" as const },
+      children: [
+        {
+          label: "Assembly",
+          value: "assembly",
+          icon: { name: "Assembly" as const },
+        },
+        {
+          label: "Anchor",
+          value: "anchor",
+          icon: { name: "Anchor" as const },
+        },
+        {
+          label: "General",
+          value: "general",
+          icon: { name: "General" as const },
+        },
+        {
+          label: "Rust",
+          value: "rust",
+          icon: { name: "Rust" as const },
+        },
+        {
+          label: "TypeScript",
+          value: "typescript",
+          icon: { name: "Typescript" as const },
+        },
+      ],
+    },
+    ...(isMobile
+      ? [
+          {
+            label: "Status",
+            value: "status",
+            icon: { name: "Progress" as const },
+            children: [
+              {
+                label: "In Progress",
+                value: "in-progress",
+              },
+              {
+                label: "Completed",
+                value: "completed",
+              },
+            ],
+          },
+        ]
+      : []),
+  ];
 
   return (
-    <motion.div
-      key={`${view}`}
-      className="flex flex-col"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.4, ease: anticipate }}
+    <div
+      className={classNames(
+        "flex flex-col gap-y-12",
+        isLoading && "animate-pulse"
+      )}
     >
-      {hasNoFilters ? (
-        <CoursesEmpty type="no_filters" />
-      ) : hasNoResults ? (
-        <CoursesEmpty type="no_results" />
-      ) : (
-        <>
-          {/* Featured Courses For New Users */}
-          {isProgressEmpty && showGetStarted ? (
-            <div className="flex flex-col gap-y-8">
-              <div className="flex items-center gap-x-3">
-                <Icon name="Flag" className="text-brand-secondary" />
-                <span className="text-lg leading-none font-medium text-secondary">
-                  {t("lessons.get_started")}
-                </span>
-              </div>
-              <div
-                className={classNames(
-                  "grid",
-                  view === "grid"
-                    ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
-                    : "grid-cols-1",
-                  "gap-5",
-                )}
-              >
-                {filteredCourses
+      {/* Get Started */}
+      <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
+        <Banner title={t("lessons.get_started")} variant="Brand" />
+        <div className="px-1.5 py-3 sm:p-4">
+          <div
+            ref={carouselRef}
+            className={classNames(
+              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+            )}
+          >
+            {isLoading
+              ? Array.from({ length: 3 }).map((_, index) => (
+                  <CourseCardSkeleton key={`featured-skeleton-${index}`} />
+                ))
+              : initialCourses
                   .filter((course) => course.isFeatured)
+                  .slice(0, 3)
                   .map((course) => {
                     const totalLessons =
                       courseLessons.find((c) => c.slug === course.slug)
                         ?.totalLessons || 0;
                     const currentLessonSlug = getCurrentLessonSlug(course.slug);
+                    const completedLessonsCount =
+                      courseProgress[course.slug] || 0;
                     let link;
                     if (currentLessonSlug && course.slug) {
                       link = `/courses/${course.slug}/${currentLessonSlug}`;
@@ -182,233 +405,137 @@ export default function CourseList({
                     }
                     return (
                       <CourseCard
+                        className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
                         key={course.slug}
                         name={t(`courses.${course.slug}.title`)}
                         language={course.language}
                         color={course.color}
                         difficulty={course.difficulty}
                         link={link}
-                        footer={
-                          <NewCourseFooter
-                            courseSlug={course.slug}
-                            lessonCount={totalLessons}
-                          />
-                        }
+                        completedLessonsCount={completedLessonsCount}
+                        totalLessonCount={totalLessons}
+                        courseSlug={course.slug}
+                        currentLessonSlug={currentLessonSlug}
                       />
                     );
                   })}
-              </div>
-              <div className="pt-4 pb-12 relative w-full">
-                <Divider />
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-y-8">
-              {/* In-progress courses */}
-              {inProgressCourses.length > 0 && (
-                <>
-                  <div className="flex items-center gap-x-3">
-                    <span className="text-lg leading-none font-medium text-secondary">
-                      {t("lessons.continue_learning")}
-                    </span>
-                  </div>
-                  <div
-                    className={classNames(
-                      "grid",
-                      view === "grid"
-                        ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
-                        : "grid-cols-1",
-                      "gap-5",
-                    )}
-                  >
-                    {inProgressCourses.map((course) => {
-                      const totalLessons =
-                        courseLessons.find((c) => c.slug === course.slug)
-                          ?.totalLessons || 0;
-                      const currentLessonSlug = getCurrentLessonSlug(
-                        course.slug,
-                      );
-                      let link = "#";
-                      if (currentLessonSlug && course.slug) {
-                        link = `/courses/${course.slug}/${currentLessonSlug}`;
-                      } else if (course.slug && !currentLessonSlug) {
-                        link = `/courses/${course.slug}`;
-                      }
-                      return (
-                        <CourseCard
-                          key={course.slug}
-                          name={t(`courses.${course.slug}.title`)}
-                          language={course.language}
-                          color={course.color}
-                          difficulty={course.difficulty}
-                          link={link}
-                          footer={
-                            <ReturningCourseFooter
-                              courseName={course.slug}
-                              completedLessonsCount={
-                                courseProgress[course.slug]
-                              }
-                              totalLessonCount={totalLessons}
-                              currentLessonSlug={currentLessonSlug}
-                              isChallengeCompleted={
-                                !!course.challenge &&
-                                ["completed", "claimed"].includes(
-                                  challengeStatuses[course.challenge],
-                                )
-                              }
-                              challengeSlug={course.challenge}
-                            />
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                  <div className="pt-4 pb-12 relative w-full">
-                    <Divider />
-                  </div>
-                </>
-              )}
+          </div>
+          <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
+        </div>
+        <div className="w-full flex justify-center lg:hidden relative z-10">
+          <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
+          <div className="w-full h-[48px] flex justify-end">
+            <button
+              disabled={scrollState.isAtStart}
+              onClick={handleScrollLeft}
+              className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
+            >
+              <Icon name="Chevron" className="rotate-90" />
+            </button>
+            <button
+              disabled={scrollState.isAtEnd}
+              onClick={handleScrollRight}
+              className="mr-[1px] absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
+            >
+              <Icon name="Chevron" className="-rotate-90" />
+            </button>
+          </div>
+        </div>
+      </div>
 
-              {/* Open Courses Sections */}
-              {Object.entries(courseSections).map(([language, section]) => {
-                const languageCourses = filteredCourses.filter(
-                  (course) =>
-                    course.language === language &&
-                    courseProgress[course.slug] === undefined,
-                );
-
-                if (languageCourses.length === 0) return null;
-
+      {/* Full List */}
+      <div className="relative px-1 sm:p-4 pb-12 sm:pb-16 flex flex-col gap-y-6 w-full">
+        <div className="flex gap-y-3 flex-col lg:flex-row items-start lg:items-center justify-between w-full">
+          <div className="w-full md:w-max flex flex-col md:flex-row items-center gap-y-3 md:gap-x-3">
+            <Input
+              value={searchValue}
+              onChange={(value: string) => setSearchValue(value)}
+              placeholder="Search..."
+              className="w-full md:w-max min-w-[300px]"
+              hasMessage={false}
+              badge={{
+                icon: { name: "Search", size: 16 },
+                className: "!h-[30px] !w-[30px]",
+              }}
+            />
+            <Dropdown
+              className="w-full md:min-w-[150px]"
+              handleChange={handleFilterChange}
+              menuIcon={{ name: "Filter", size: 16 }}
+              label="Filters"
+              multiSelectLabel={`Filters`}
+              selectedItem={[
+                ...selectedLanguages.map((l) => reverseLanguageMap[l]),
+                ...selectedDifficulties.map((d) => reverseDifficultyMap[d]),
+                ...(activeTab !== "all-courses" ? [activeTab] : []),
+              ]}
+              multiple={true}
+              showSelectAll={false}
+              items={dropdownItems}
+            />
+          </div>
+          <Tabs
+            items={[
+              {
+                label: "In Progress",
+                value: "in-progress",
+                disabled: !hasInProgress,
+                className: "w-full md:!w-max",
+                selected: activeTab === "in-progress",
+                onClick: () => setActiveTab("in-progress"),
+              },
+              {
+                label: "All Courses",
+                value: "all-courses",
+                className: "w-full md:!w-max order-first",
+                selected: activeTab === "all-courses",
+                onClick: () => setActiveTab("all-courses"),
+              },
+            ]}
+            variant="segmented"
+            className="hidden md:flex"
+            theme="secondary"
+          />
+        </div>
+        <div
+          className={classNames(
+            "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+          )}
+        >
+          {isLoading
+            ? Array.from({ length: 6 }).map((_, index) => (
+                <CourseCardSkeleton key={`list-skeleton-${index}`} />
+              ))
+            : filteredCourses.map((course) => {
+                const totalLessons =
+                  courseLessons.find((c) => c.slug === course.slug)
+                    ?.totalLessons || 0;
+                const currentLessonSlug = getCurrentLessonSlug(course.slug);
+                const completedLessonsCount = courseProgress[course.slug] || 0;
+                let link;
+                if (currentLessonSlug && course.slug) {
+                  link = `/courses/${course.slug}/${currentLessonSlug}`;
+                } else if (course.slug && !currentLessonSlug) {
+                  link = `/courses/${course.slug}`;
+                }
                 return (
-                  <div key={language} className="flex flex-col">
-                    <div className="flex flex-col gap-y-8 ">
-                      <div className="flex items-center gap-x-3">
-                        <div
-                          className="w-[24px] h-[24px] rounded-sm flex items-center justify-center"
-                          style={{
-                            backgroundColor: `rgb(${courseColors[section.icon]},0.10)`,
-                          }}
-                        >
-                          <Icon name={section.icon} size={16 as 14} />
-                        </div>
-                        <span className="text-lg leading-none font-medium text-secondary">
-                          {t(section.title)}
-                        </span>
-                      </div>
-                      <div
-                        className={classNames(
-                          "grid",
-                          view === "grid"
-                            ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                            : "grid-cols-1",
-                          "gap-5",
-                        )}
-                      >
-                        {languageCourses.map((course) => {
-                          const currentLessonSlug = getCurrentLessonSlug(course.slug);
-                          let link = "#";
-                          if (currentLessonSlug && course.slug) {
-                            link = `/courses/${course.slug}/${currentLessonSlug}`;
-                          } else if (course.slug && !currentLessonSlug) {
-                            link = `/courses/${course.slug}`;
-                          }
-                          return (
-                            <CourseCard
-                              key={course.slug}
-                              name={t(`courses.${course.slug}.title`)}
-                              language={course.language}
-                              color={course.color}
-                              difficulty={course.difficulty}
-                              link={link}
-                              footer={
-                                <NewCourseFooter
-                                  courseSlug={course.slug}
-                                  lessonCount={course.lessons.length}
-                                />
-                              }
-                            />
-                          );
-                        })}
-                      </div>
-                      {/* <div className="pt-4 pb-12 relative w-full">
-                        {languageCourses.length > 4 && (
-                          <Button
-                            variant="tertiary"
-                            className="left-1/2 transform -translate-x-1/2 !absolute top-1/2 -translate-y-1/2 z-1"
-                            icon="Chevron"
-                            iconSide="right"
-                            label="Load More"
-                            iconSize={14}
-                          ></Button>
-                        )}
-                        <Divider />
-                      </div> */}
-                    </div>
-                  </div>
+                  <CourseCard
+                    key={course.slug}
+                    name={t(`courses.${course.slug}.title`)}
+                    language={course.language}
+                    color={course.color}
+                    difficulty={course.difficulty}
+                    link={link}
+                    completedLessonsCount={completedLessonsCount}
+                    totalLessonCount={totalLessons}
+                    courseSlug={course.slug}
+                    currentLessonSlug={currentLessonSlug}
+                  />
                 );
               })}
-
-              {/* Completed Courses */}
-              {completedCourses.length > 0 && (
-                <>
-                  <div className="flex items-center gap-x-3">
-                    <Icon
-                      name="SuccessCircle"
-                      className="text-brand-secondary"
-                    />
-                    <span className="text-lg leading-none font-medium text-secondary">
-                      {t("lessons.completed_courses")}
-                    </span>
-                  </div>
-                  <div
-                    className={classNames(
-                      "grid",
-                      view === "grid"
-                        ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
-                        : "grid-cols-1",
-                      "gap-5",
-                    )}
-                  >
-                    {completedCourses.map((course) => {
-                      const currentLessonSlug = getCurrentLessonSlug(
-                        course.slug,
-                      );
-                      let link;
-                      if (currentLessonSlug && course.slug) {
-                        link = `/courses/${course.slug}/${currentLessonSlug}`;
-                      } else if (course.slug && !currentLessonSlug) {
-                        link = `/courses/${course.slug}`;
-                      }
-                      return (
-                        <CourseCard
-                          key={course.slug}
-                          name={t(`courses.${course.slug}.title`)}
-                          language={course.language}
-                          color={course.color}
-                          difficulty={course.difficulty}
-                          link={link}
-                          footer={
-                            <ReturningCourseFooter
-                              courseName={course.slug}
-                              completedLessonsCount={
-                                courseProgress[course.slug]
-                              }
-                              totalLessonCount={course.lessons.length}
-                              currentLessonSlug={currentLessonSlug}
-                              isChallengeCompleted={true}
-                              challengeSlug={course.challenge}
-                            />
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </motion.div>
+        </div>
+      </div>
+      {hasNoResults && <CoursesEmpty />}
+    </div>
   );
 }

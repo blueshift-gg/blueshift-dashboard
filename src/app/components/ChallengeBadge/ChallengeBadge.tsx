@@ -19,7 +19,7 @@ export default function Badge({
       className={classNames(
         "px-2.5 py-1.5 rounded-full font-medium capitalize font-mono text-xs lg:text-[13px] flex items-center gap-x-2",
         variant === "incomplete" &&
-          "bg-background-card-foreground text-secondary",
+          "bg-card-solid-foreground text-shade-secondary",
         variant === "passed" && "bg-success/8 text-success",
         variant === "failed" && "bg-error/8 text-error",
         variant === "loading" &&

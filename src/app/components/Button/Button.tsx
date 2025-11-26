@@ -64,9 +64,9 @@ export default function Button({
             variant === "primary" || variant === "general",
           "transition bg-[linear-gradient(180deg,_#171A20_0%,_rgba(23,_26,_32,_0)_100%)] text-brand-secondary before:bg-[linear-gradient(180deg,_rgba(0,255,255,0.13)_0%,_rgba(0,255,255,0.08)_100%)]":
             variant === "secondary",
-          "transition bg-[linear-gradient(180deg,_#171A20_0%,_rgba(23,_26,_32,_0)_100%),linear-gradient(0deg,#0B0E14_0%,_#0B0E14_100%)] text-secondary before:bg-[linear-gradient(180deg,_rgba(206,213,228,0.2)_0%,_rgba(206,213,228,0.1)_100%)]":
+          "transition bg-[linear-gradient(180deg,_#171A20_0%,_rgba(23,_26,_32,_0)_100%),linear-gradient(0deg,#0B0E14_0%,_#0B0E14_100%)] text-shade-secondary before:bg-[linear-gradient(180deg,_rgba(206,213,228,0.2)_0%,_rgba(206,213,228,0.1)_100%)]":
             variant === "tertiary",
-          "text-secondary": variant === "link",
+          "text-shade-secondary": variant === "link",
           "transition before:[background:linear-gradient(180deg,_rgba(255,255,255,0.25)_0%,_rgba(255,255,255,0.15)_100%)] shadow-[0px_0px_12px_rgba(245,255,255,0.25)] [background:radial-gradient(161.28%_68.75%_at_50%_68.75%,_rgba(255,255,255,0)_0%,_rgba(255,255,255,0.5)_100%),_#DDEAE0] text-black before:bg-[linear-gradient(180deg,_rgba(0,255,255,0.13)_0%,_rgba(0,255,255,0.08)_100%)]":
             variant === "anchor",
           "transition before:[background:linear-gradient(180deg,_rgba(255,255,255,0.25)_0%,_rgba(255,255,255,0.15)_100%)] shadow-[0px_0px_12px_rgba(255,173,102,0.25)] [background:radial-gradient(161.28%_68.75%_at_50%_68.75%,_rgba(255,255,255,0)_0%,_rgba(255,255,255,0.25)_100%),_#FFAD66] text-black before:bg-[linear-gradient(180deg,_rgba(0,255,255,0.13)_0%,_rgba(0,255,255,0.08)_100%)]":

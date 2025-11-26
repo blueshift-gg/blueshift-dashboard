@@ -74,12 +74,14 @@ export default function CourseFilter({ className }: FiltersProps) {
       <button
         onMouseDown={() => setIsOpen(!isOpen)}
         className={classNames(
-          "cursor-pointer w-[160px] gap-x-4 pl-3 pr-4 py-3 transition outline-transparent focus-within:outline-border-active relative h-[50px] bg-card border hover:border-border-active border-border bg-background-card rounded-xl flex items-center justify-start",
+          "cursor-pointer w-[160px] gap-x-4 pl-3 pr-4 py-3 transition outline-transparent focus-within:outline-border-active relative h-[50px] bg-card border hover:border-border-active border-border bg-card-solid rounded-xl flex items-center justify-start",
           className
         )}
       >
-        <Icon name="Filter" className="text-tertiary" />
-        <span className="text-tertiary text-sm font-medium">{displayText}</span>
+        <Icon name="Filter" className="text-shade-tertiary" />
+        <span className="text-shade-tertiary text-sm font-medium">
+          {displayText}
+        </span>
       </button>
       <AnimatePresence>
         {isOpen && (
@@ -89,18 +91,18 @@ export default function CourseFilter({ className }: FiltersProps) {
             exit={{ opacity: 0, scale: 0.95, y: -10 }}
             transition={{ duration: 0.4, ease: anticipate }}
             className={classNames(
-              "border border-border z-50 min-w-[200px] rounded-xl flex w-max flex-col gap-y-1 absolute top-[calc(100%+6px)] p-1 bg-background-card",
+              "border border-border z-50 min-w-[200px] rounded-xl flex w-max flex-col gap-y-1 absolute top-[calc(100%+6px)] p-1 bg-card-solid",
               className
             )}
           >
             <button
               onClick={toggleAllLanguages}
-              className="flex items-center gap-x-4 py-3 px-2.5 pr-4 rounded-lg transition hover:bg-background-card-foreground"
+              className="flex items-center gap-x-4 py-3 px-2.5 pr-4 rounded-lg transition hover:bg-card-solid-foreground"
             >
               <Checkbox
                 checked={selectedLanguages.length === allLanguages.length}
               />
-              <span className="text-sm font-medium leading-none text-secondary">
+              <span className="text-sm font-medium leading-none text-shade-secondary">
                 {t("ui.search_language_filter__all_languages")}
               </span>
             </button>
@@ -114,7 +116,7 @@ export default function CourseFilter({ className }: FiltersProps) {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.1, ease: anticipate }}
                     className={classNames(
-                      "absolute top-0 left-0 w-full h-full bg-background-card-foreground rounded-lg"
+                      "absolute top-0 left-0 w-full h-full bg-card-solid-foreground rounded-lg"
                     )}
                   />
                 )}
@@ -124,11 +126,11 @@ export default function CourseFilter({ className }: FiltersProps) {
                   key={language}
                   onClick={() => handleLanguageClick(language)}
                   className={classNames(
-                    "flex items-center relative gap-x-4 py-3 px-2.5 pr-4 rounded-lg transition hover:bg-background-card-foreground",
+                    "flex items-center relative gap-x-4 py-3 px-2.5 pr-4 rounded-lg transition hover:bg-card-solid-foreground",
                     selectedLanguages.includes(language) &&
-                      "bg-background-card-foreground",
+                      "bg-card-solid-foreground",
                     selectedLanguages.includes(language) &&
-                      "hover:!bg-background-card-foreground/50"
+                      "hover:!bg-card-solid-foreground/50"
                   )}
                 >
                   {/* <Checkbox
@@ -140,8 +142,9 @@ export default function CourseFilter({ className }: FiltersProps) {
                     <Icon name={language as IconName} />
                     <span
                       className={classNames(
-                        "text-sm font-medium leading-none text-secondary",
-                        selectedLanguages.includes(language) && "!text-primary"
+                        "text-sm font-medium leading-none text-shade-secondary",
+                        selectedLanguages.includes(language) &&
+                          "!text-shade-primary"
                       )}
                     >
                       {courseLanguages[language]}

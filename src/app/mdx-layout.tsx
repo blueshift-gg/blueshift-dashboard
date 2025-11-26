@@ -2,10 +2,10 @@ export default function MdxLayout({ children }: { children: React.ReactNode }) {
   return (
     <article
       className="prose prose-invert max-w-none -mt-2
-      prose-p:text-secondary
-      prose-headings:text-primary
+      prose-p:text-shade-secondary
+      prose-headings:text-shade-primary
       prose-headings:font-semibold
-      prose-strong:text-primary prose-strong:font-medium
+      prose-strong:text-shade-primary prose-strong:font-medium
       prose-ul:pl-6 prose-ul:pb-3
       prose-ol:pl-6 prose-ol:pb-3
       prose-li:m-0 prose-li:relative
@@ -38,9 +38,9 @@ export default function MdxLayout({ children }: { children: React.ReactNode }) {
       prose-blockquote:font-content
       prose-pre:font-content
       prose-a:font-content
-      prose-li:text-primary
+      prose-li:text-shade-primary
       prose-li:mb-2
-      prose-pre:bg-background-card prose-code:rounded-lg prose-code:px-2 prose-code:py-1"
+      prose-pre:bg-card-solid prose-code:rounded-lg prose-code:px-2 prose-code:py-1"
     >
       {children}
     </article>

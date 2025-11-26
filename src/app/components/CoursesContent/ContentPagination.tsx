@@ -54,8 +54,8 @@ export default function ContentPagination(props: ContentPaginationProps) {
     <motion.div
       layoutId="course-pagination"
       className={classNames(
-        "font-content gradient-border !fixed xl:!sticky z-50 py-5 xl:pb-8 px-4 col-span-3 h-max left-1/2 xl:left-auto -translate-x-1/2 xl:translate-x-0 bottom-8 xl:bottom-auto xl:top-24 bg-background-card-foreground xl:[background:linear-gradient(180deg,rgba(0,179,179,0.08),rgba(0,179,179,0.02)),#11141A] flex flex-col gap-y-4 rounded-xl  xl:before:[background:linear-gradient(180deg,rgba(0,179,179,0.12),transparent)]",
-        className,
+        "font-content gradient-border !fixed xl:!sticky z-50 py-5 xl:pb-8 px-4 col-span-3 h-max left-1/2 xl:left-auto -translate-x-1/2 xl:translate-x-0 bottom-8 xl:bottom-auto xl:top-24 bg-card-solid-foreground xl:[background:linear-gradient(180deg,rgba(0,179,179,0.08),rgba(0,179,179,0.02)),#11141A] flex flex-col gap-y-4 rounded-xl  xl:before:[background:linear-gradient(180deg,rgba(0,179,179,0.12),transparent)]",
+        className
       )}
     >
       {props.type === "course" && (
@@ -66,12 +66,12 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 router.push(
                   `/courses/${props.course.slug}/${
                     props.course.lessons[props.currentLesson - 2].slug
-                  }`,
+                  }`
                 );
               }}
               disabled={props.currentLesson === 1}
               className={classNames(
-                "rounded-full text-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
+                "rounded-full text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
               )}
             >
               <Icon name="ArrowLeft" />
@@ -80,7 +80,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
               {t(
                 `courses.${props.course.slug}.lessons.${
                   props.course.lessons[props.currentLesson - 1].slug
-                }`,
+                }`
               )}
             </span>
             <button
@@ -88,19 +88,19 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 router.push(
                   `/courses/${props.course.slug}/${
                     props.course.lessons[props.currentLesson].slug
-                  }`,
+                  }`
                 );
               }}
               disabled={props.currentLesson === props.course.lessons.length}
               className={classNames(
-                "rounded-full text-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
+                "rounded-full text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
               )}
             >
               <Icon name="ArrowRight" />
             </button>
           </div>
           <div className="flex-col hidden xl:flex gap-y-4 pl-0">
-            <span className="font-mono text-sm pl-1 text-secondary">
+            <span className="font-mono text-sm pl-1 text-shade-secondary">
               {t("lessons.lessons")}
             </span>
             <div className="flex flex-col gap-y-3 pl-0">
@@ -116,7 +116,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                       <div
                         className={classNames(
                           "w-[18px] group-last:before:!hidden before:w-[2px] before:bg-mute before:h-[20px] before:content-[''] before:absolute before:left-1/2 before:-translate-x-1/2 before:top-[calc(100%+2px)] h-[18px] relative flex items-center justify-center rounded-full border-2 border-mute",
-                          isActive && "!border-brand-secondary",
+                          isActive && "!border-brand-secondary"
                         )}
                       >
                         {isActive && (
@@ -124,19 +124,19 @@ export default function ContentPagination(props: ContentPaginationProps) {
                             layoutId="lesson-pagination"
                             transition={{ duration: 0.1, ease: anticipate }}
                             className={classNames(
-                              "w-[6px] h-[6px] rounded-full bg-brand-secondary",
+                              "w-[6px] h-[6px] rounded-full bg-brand-secondary"
                             )}
                           ></motion.div>
                         )}
                       </div>
                       <span
                         className={classNames(
-                          "text-tertiary/70 hover:text-secondary font-medium truncate transition",
-                          isActive && "!text-primary",
+                          "text-shade-tertiary/70 hover:text-shade-secondary font-medium truncate transition",
+                          isActive && "!text-shade-primary"
                         )}
                       >
                         {t(
-                          `courses.${props.course.slug}.lessons.${lesson.slug}`,
+                          `courses.${props.course.slug}.lessons.${lesson.slug}`
                         )}
                       </span>
                     </div>
@@ -150,14 +150,14 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 >
                   <div
                     className={classNames(
-                      "w-[18px] h-[18px] relative flex items-center justify-center rounded-full border-2 border-mute",
+                      "w-[18px] h-[18px] relative flex items-center justify-center rounded-full border-2 border-mute"
                     )}
                   ></div>
                   <div className="flex items-center gap-x-2">
                     <Icon
                       name={
                         ["completed", "claimed"].includes(
-                          challengeStatuses[props.course.challenge],
+                          challengeStatuses[props.course.challenge]
                         )
                           ? "SuccessCircle"
                           : "Challenge"
@@ -165,7 +165,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                       size={16 as 14}
                       className={classNames("-ml-2 text-brand-tertiary", {
                         "!text-success": ["completed", "claimed"].includes(
-                          challengeStatuses[props.course.challenge],
+                          challengeStatuses[props.course.challenge]
                         ),
                       })}
                     />
@@ -174,13 +174,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         "text-sm font-medium text-brand-tertiary",
                         {
                           "!text-success": ["completed", "claimed"].includes(
-                            challengeStatuses[props.course.challenge],
+                            challengeStatuses[props.course.challenge]
                           ),
-                        },
+                        }
                       )}
                     >
                       {["completed", "claimed"].includes(
-                        challengeStatuses[props.course.challenge],
+                        challengeStatuses[props.course.challenge]
                       )
                         ? t("lessons.challenge_completed")
                         : t("lessons.challenge_incomplete")}
@@ -202,14 +202,12 @@ export default function ContentPagination(props: ContentPaginationProps) {
             },
             ...(challenge.pages?.map((p) => ({
               slug: p.slug,
-              title: t(
-                `challenges.${challenge.slug}.pages.${p.slug}.title`,
-              ),
+              title: t(`challenges.${challenge.slug}.pages.${p.slug}.title`),
             })) || []),
           ];
 
           const currentPageIndex = allChallengePages.findIndex(
-            (p) => p.slug === currentPageSlug,
+            (p) => p.slug === currentPageSlug
           );
 
           if (currentPageIndex === -1) return null;
@@ -231,7 +229,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   onClick={() => prevPage && router.push(getLink(prevPage))}
                   disabled={!prevPage}
                   className={classNames(
-                    "rounded-full text-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
+                    "rounded-full text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                   )}
                 >
                   <Icon name="ArrowLeft" />
@@ -241,7 +239,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   onClick={() => nextPage && router.push(getLink(nextPage))}
                   disabled={!nextPage}
                   className={classNames(
-                    "rounded-full text-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
+                    "rounded-full text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                   )}
                 >
                   <Icon name="ArrowRight" />
@@ -250,7 +248,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
 
               {/* Desktop Pagination */}
               <div className="flex-col hidden xl:flex gap-y-4 pl-0">
-                <span className="font-mono text-sm pl-1 text-secondary">
+                <span className="font-mono text-sm pl-1 text-shade-secondary">
                   {t("ChallengePage.pagination_header")}
                 </span>
                 <div className="flex flex-col gap-y-3 pl-0">
@@ -266,7 +264,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                           <div
                             className={classNames(
                               "w-[18px] group-last:before:!hidden before:w-[2px] before:bg-mute before:h-[20px] before:content-[''] before:absolute before:left-1/2 before:-translate-x-1/2 before:top-[calc(100%+2px)] h-[18px] relative flex items-center justify-center rounded-full border-2 border-mute",
-                              isActive && "!border-brand-secondary",
+                              isActive && "!border-brand-secondary"
                             )}
                           >
                             {isActive && (
@@ -277,15 +275,15 @@ export default function ContentPagination(props: ContentPaginationProps) {
                                   ease: anticipate,
                                 }}
                                 className={classNames(
-                                  "w-[6px] h-[6px] rounded-full bg-brand-secondary",
+                                  "w-[6px] h-[6px] rounded-full bg-brand-secondary"
                                 )}
                               ></motion.div>
                             )}
                           </div>
                           <span
                             className={classNames(
-                              "text-tertiary/70 hover:text-secondary font-medium truncate transition",
-                              isActive && "!text-primary",
+                              "text-shade-tertiary/70 hover:text-shade-secondary font-medium truncate transition",
+                              isActive && "!text-shade-primary"
                             )}
                           >
                             {page.title}

@@ -8,14 +8,14 @@ import { anticipate } from "motion";
 
 interface CodeblockProps {
   children: React.ReactNode;
-  'data-language'?: string;
+  "data-language"?: string;
 }
 
 export function Codeblock(props: CodeblockProps) {
   const preRef = useRef<HTMLDivElement>(null);
   const [isCopied, setIsCopied] = useState(false);
   const children = props.children;
-  const lang = props['data-language'];
+  const lang = props["data-language"];
 
   const handleClickCopy = async () => {
     const code = preRef.current?.textContent;
@@ -32,7 +32,7 @@ export function Codeblock(props: CodeblockProps) {
 
   return (
     <div className="flex flex-col w-full border border-border rounded-xl overflow-hidden !my-8 code-block">
-      <div className="text-sm font-medium text-brand-secondary flex items-center justify-between px-6 py-3 border-b-border bg-background-card-foreground rounded-t-xl">
+      <div className="text-sm font-medium text-brand-secondary flex items-center justify-between px-6 py-3 border-b-border bg-card-solid-foreground rounded-t-xl">
         {lang || "\u00A0"}
         {children && (
           <motion.div
@@ -50,7 +50,7 @@ export function Codeblock(props: CodeblockProps) {
               name={isCopied ? "Success" : "Copy"}
               size={16 as 18 | 14 | 12}
               className={classNames(
-                "text-mute hover:text-secondary transition cursor-pointer",
+                "text-mute hover:text-shade-secondary transition cursor-pointer",
                 {
                   "!text-brand-primary !cursor-default": isCopied,
                 }
@@ -59,7 +59,7 @@ export function Codeblock(props: CodeblockProps) {
           </motion.div>
         )}
       </div>
-      <div className="bg-background-card" ref={preRef}>
+      <div className="bg-card-solid" ref={preRef}>
         {children}
       </div>
     </div>

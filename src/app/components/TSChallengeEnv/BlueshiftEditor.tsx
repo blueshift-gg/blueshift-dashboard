@@ -389,7 +389,7 @@ export default function BlueshiftEditor({
         )}
 
         <button
-          className="group/refresh font-medium flex items-center gap-x-2 text-sm text-tertiary cursor-pointer hover:text-secondary transition-colors"
+          className="group/refresh font-medium flex items-center gap-x-2 text-sm text-shade-tertiary cursor-pointer hover:text-shade-secondary transition-colors"
           onClick={handleRefreshClick}
         >
           <Icon
@@ -425,7 +425,7 @@ export default function BlueshiftEditor({
                 y: 20,
                 transition: { duration: 0.2 },
               }}
-              className="bg-background-card border border-border rounded-xl p-6 max-w-md mx-4 shadow-xl"
+              className="bg-card-solid border border-border rounded-xl p-6 max-w-md mx-4 shadow-xl"
             >
               <div className="flex items-center gap-x-3 mb-4">
                 <Icon name="Warning" size={18} className="text-yellow-500" />
@@ -433,12 +433,12 @@ export default function BlueshiftEditor({
                   {t("ChallengePage.reset_code_modal.title")}
                 </h3>
               </div>
-              <p className="text-secondary mb-6">
+              <p className="text-shade-secondary mb-6">
                 {t("ChallengePage.reset_code_modal.description")}
               </p>
               <div className="flex gap-x-3 justify-end">
                 <button
-                  className="px-4 py-2 text-sm font-medium text-secondary hover:text-primary border border-border rounded-lg hover:bg-background-card-hover transition-colors cursor-pointer"
+                  className="px-4 py-2 text-sm font-medium text-shade-secondary hover:text-shade-primary border border-border rounded-lg hover:bg-card-solid-hover transition-colors cursor-pointer"
                   onClick={handleCancelRefresh}
                 >
                   {t("ChallengePage.reset_code_modal.cancel")}

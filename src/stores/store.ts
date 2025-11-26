@@ -45,7 +45,13 @@ interface PersistentStore {
   // Filters
   selectedLanguages: CourseLanguages[];
   toggleLanguage: (language: CourseLanguages) => void;
+  setLanguages: (languages: CourseLanguages[]) => void;
   clearLanguages: () => void;
+
+  selectedDifficulties: number[];
+  toggleDifficulty: (difficulty: number) => void;
+  setDifficulties: (difficulties: number[]) => void;
+  clearDifficulties: () => void;
 
   // Challenge Center
   selectedChallengeStatus: ReadonlyArray<ChallengeStatus>;
@@ -111,7 +117,7 @@ const migrate = (
     return { ...rest, challengeStatuses: newChallengeStatuses };
   }
 
-  if (version === 1) {
+    if (version === 1) {
     const oldState = persistedState as V1PersistentStore;
     // Migrate any "Research" language filters to "General"
     const migratedLanguages = oldState.selectedLanguages
@@ -120,7 +126,21 @@ const migrate = (
         Object.keys(courseLanguages).includes(lang as string)
       );
 
-    return { ...oldState, selectedLanguages: migratedLanguages };
+    return {
+      ...oldState,
+      selectedLanguages: migratedLanguages,
+      selectedDifficulties: [],
+    };
+  }
+
+  if (version === 2) {
+    // V3 Migration: Reset selectedLanguages to empty (Empty = All)
+    // and initialize selectedDifficulties
+    return {
+      ...(persistedState as PersistentStore),
+      selectedLanguages: [],
+      selectedDifficulties: [],
+    };
   }
 
   return persistedState as Partial<PersistentStore>;
@@ -153,14 +173,26 @@ export const usePersistentStore = create<PersistentStore>()(
         })),
 
       // Filters
-      selectedLanguages: Object.keys(courseLanguages) as CourseLanguages[],
+      selectedLanguages: [],
       toggleLanguage: (language) =>
         set((state) => ({
           selectedLanguages: state.selectedLanguages.includes(language)
             ? state.selectedLanguages.filter((l) => l !== language)
             : [...state.selectedLanguages, language],
         })),
+      setLanguages: (languages) => set({ selectedLanguages: languages }),
       clearLanguages: () => set({ selectedLanguages: [] }),
+
+      selectedDifficulties: [],
+      toggleDifficulty: (difficulty) =>
+        set((state) => ({
+          selectedDifficulties: state.selectedDifficulties.includes(difficulty)
+            ? state.selectedDifficulties.filter((d) => d !== difficulty)
+            : [...state.selectedDifficulties, difficulty],
+        })),
+      setDifficulties: (difficulties) =>
+        set({ selectedDifficulties: difficulties }),
+      clearDifficulties: () => set({ selectedDifficulties: [] }),
 
       // Challenge Center
       selectedChallengeStatus: challengeStatus,
@@ -233,7 +265,7 @@ export const usePersistentStore = create<PersistentStore>()(
     }),
     {
       name: "blueshift-storage",
-      version: 2,
+      version: 3,
       migrate,
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);

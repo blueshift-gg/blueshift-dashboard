@@ -4,21 +4,20 @@ export default function ChallengesEmpty() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col items-center justify-center relative">
-      <img
-        src="/graphics/empty-state-filters.svg"
-        alt="Empty State Filters"
-        className="sm:w-[500px]"
-      />
-
-      <div className="flex flex-col items-center justify-center gap-y-3 -mt-20 mx-auto w-[300px]">
-        <span className="text-lg font-medium text-primary leading-none text-center">
+    <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] pb-36">
+      <div className="flex items-center gap-x-2">
+        <img
+          src="/graphics/sad-face.svg"
+          alt="Sad Face"
+          className="w-[30px] h-[30px]"
+        />
+        <span className="text-lg font-mono font-medium text-brand-primary leading-none text-center">
           {t("ChallengeCenter.empty_title")}
         </span>
-        <span className="text-secondary leading-[140%] text-center">
-          {t("ChallengeCenter.empty_description")}
-        </span>
       </div>
+      <span className="text-shade-secondary leading-[140%] text-center">
+        {t("ChallengeCenter.empty_description")}
+      </span>
     </div>
   );
 }

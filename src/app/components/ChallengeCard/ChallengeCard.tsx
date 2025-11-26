@@ -1,36 +1,45 @@
-import { CourseDifficulty } from "@/app/utils/course";
-import { CourseLanguages } from "@/app/utils/course";
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import classNames from "classnames";
-import DifficultyBadge from "../DifficultyBadge/DifficultyBadge";
-import HeadingReveal from "../HeadingReveal/HeadingReveal";
 import { Link } from "@/i18n/navigation";
-import { motion } from "motion/react";
 import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import {
+  anticipate,
+  Badge,
+  breeze,
+  Button,
+  CrosshairCorners,
+  Divider,
+  glide,
+  IconName,
+} from "@blueshift-gg/ui-components";
+import { useTranslations } from "next-intl";
+import { AnimatePresence, motion } from "motion/react";
+import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import { Icon } from "@blueshift-gg/ui-components";
+import { ChallengeMetadata } from "@/app/utils/challenges";
+import { usePersistentStore } from "@/stores/store";
+import useMintNFT from "@/hooks/useMintNFT";
+import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
+import { useAuth } from "@/hooks/useAuth";
 
 type ChallengeCardProps = {
-  name: string;
-  color: string;
-  points?: number;
-  language: CourseLanguages;
-  difficulty?: CourseDifficulty;
-  footer?: React.ReactNode;
+  challenge: ChallengeMetadata;
+  setIsNFTViewerOpen: (isOpen: boolean) => void;
+  setSelectedChallenge: (challenge: ChallengeMetadata) => void;
   className?: string;
-  link?: string;
 };
 
 export default function ChallengeCard({
-  name,
-  color,
-  language,
-  difficulty,
-  footer,
+  challenge,
+  setIsNFTViewerOpen,
+  setSelectedChallenge,
   className,
-  link,
 }: ChallengeCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [hasHovered, setHasHovered] = useState(false);
+  const [isHoveredFooter, setIsHoveredFooter] = useState(false);
+
   const {
-    transform,
     isHovered,
     direction,
     swooshAngle,
@@ -38,63 +47,223 @@ export default function ChallengeCard({
     handleMouseLeave,
   } = useDirectionalHover(cardRef);
 
+  const t = useTranslations();
+  const { challengeStatuses } = usePersistentStore();
+  const status = challengeStatuses[challenge.slug] || "open";
+  const { mint, isLoading } = useMintNFT();
+  const auth = useAuth();
+  const challengeShareUrl = useShareChallengeOnX(challenge);
+
+  const handleMint = async () => {
+    mint(challenge).catch((error) => {
+      console.error("Error minting NFT:", error);
+    });
+  };
+
+  let badgeDifficulty: string;
+  switch (challenge.difficulty) {
+    case 1:
+      badgeDifficulty = "Beginner";
+      break;
+    case 2:
+      badgeDifficulty = "Intermediate";
+      break;
+    case 3:
+      badgeDifficulty = "Advanced";
+      break;
+    default:
+      badgeDifficulty = "Expert";
+      break;
+  }
+
   return (
-    <motion.div
+    <div
       ref={cardRef}
-      onMouseEnter={handleMouseEnter}
+      onMouseEnter={(e) => {
+        handleMouseEnter(e);
+        setHasHovered(true);
+      }}
       onMouseLeave={handleMouseLeave}
       style={
         {
-          "--courseColor": color,
           "--swoosh-angle": `${swooshAngle}deg`,
-          // transform: `translate(${transform.x}px, ${transform.y}px)`,
+          willChange: "opacity",
         } as React.CSSProperties
       }
       className={classNames(
-        "transition-transform flex overflow-hidden duration-300",
-        "gradient-border rounded-[18px] pt-5 pb-8 px-5 aspect-square sm:aspect-[3/4] relative [background:linear-gradient(180deg,rgb(var(--courseColor),0.05),transparent_75%),linear-gradient(180deg,#11141A_0%,#0B0E14_125%)]",
-        "before:[background:linear-gradient(145deg,rgba(97,99,107,0.25)_30%,rgba(129,105,196,0.33)_40%,rgba(142,179,212,0.33)_45%,rgba(157,211,187,0.33)_50%,rgba(189,199,128,0.33)_55%,rgba(145,119,94,0.33)_60%,rgba(97,99,107,0.25)_70%),linear-gradient(180deg,rgba(173,185,210,0.05)_0%,rgba(173,185,210,0.05)_100%)]",
+        "max-w-[330px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border",
         isHovered && `swoosh-${direction}`,
         className
       )}
     >
-      {link && (
-        <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
-      )}
-      {difficulty && (
-        <div className="absolute top-6 right-5">
-          <DifficultyBadge difficulty={difficulty} />
-        </div>
-      )}
+      <Link
+        href={`/challenges/${challenge.slug}`}
+        className="absolute inset-0 z-1 w-full h-full"
+      ></Link>
+
       <div
+        style={{
+          color:
+            BRAND_COLOURS[challenge.language as keyof typeof BRAND_COLOURS],
+        }}
         className={classNames(
-          "flex flex-col gap-y-24 flex-grow justify-between"
+          "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20"
         )}
       >
-        <div className={classNames("flex", "flex-col gap-y-6 items-start")}>
-          <img
-            src={`/graphics/challenge-${language.toLowerCase()}.svg`}
-            className="h-16 -ml-1.5 [filter:drop-shadow(0_6px_4px_rgba(0,0,0,0.25))]"
-          />
-          <div className="flex flex-col gap-y-2.5">
-            <div className="flex items-center gap-x-3">
-              <HeadingReveal
-                headingLevel="h3"
-                text={language}
-                className="font-mono font-medium leading-none tracking-normal"
-                color={`rgb(${color})`}
-                cursorColor={`rgb(${color})`}
-                splitBy="chars"
-                baseDelay={0.2}
-              />
-            </div>
-            <div className="text-xl font-medium text-primary leading-[120%]">
-              {name}
-            </div>
-          </div>
+        <CrosshairCorners
+          corners={["top-left", "bottom-right"]}
+          size={4}
+          spacingX={-1}
+          animationDelay={0}
+          animationDuration={0}
+        />
+        <span className="text-xs font-medium font-mono text-shade-primary">
+          {t("ChallengeCenter.complete_to_earn")}
+        </span>
+        <div className="flex items-center gap-x-1.5">
+          <span className="text-xs font-medium font-mono bg-nft-gradient bg-clip-text text-transparent">
+            1 NFT
+          </span>
+          <Divider direction="vertical" className="!h-[12px] !w-[2px]" />
+          <span className="text-xs font-medium font-mono bg-xp-gradient bg-clip-text text-transparent">
+            50 XP
+          </span>
         </div>
-        {footer && footer}
       </div>
-    </motion.div>
+
+      <div className={classNames("flex flex-col gap-y-6 px-4 py-5")}>
+        <div className="flex flex-col gap-y-2 min-h-[90px]">
+          <div className="flex items-center gap-x-3 overflow-hidden">
+            <span
+              style={{
+                color:
+                  BRAND_COLOURS[
+                    challenge.language as keyof typeof BRAND_COLOURS
+                  ],
+              }}
+              className={classNames("font-mono leading-[100%]")}
+            >
+              {challenge.language}
+            </span>
+            <Divider direction="vertical" className="h-[20px]" />
+            <Badge
+              size="sm"
+              variant={
+                badgeDifficulty as
+                  | "Beginner"
+                  | "Intermediate"
+                  | "Advanced"
+                  | "Expert"
+              }
+              label={badgeDifficulty}
+              className="leading-[100%] min-h-[20px]!"
+              crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
+              icon={{
+                name: "Difficulty",
+                size: 12,
+                difficulties: [challenge.difficulty as 1 | 2 | 3 | 4],
+              }}
+            />
+          </div>
+          <span
+            className={classNames("text-xl font-medium text-shade-primary")}
+          >
+            {t(`challenges.${challenge.slug}.title`)}
+          </span>
+        </div>
+
+        {/* Footer Logic Moved Here */}
+        <div className="relative z-20 flex flex-col gap-y-4">
+          {status === "open" && (
+            <>
+              <Button
+                variant="primary"
+                size="md"
+                label={t("lessons.take_challenge")}
+                icon={{ name: "Challenge" as IconName }}
+                className="!w-full z-20 relative"
+              />
+              <div className="flex items-center justify-center gap-x-2">
+                <button
+                  className="font-mono flex items-center justify-center gap-x-1.5 text-xs text-shade-tertiary/50 cursor-not-allowed w-full flex-shrink uppercase"
+                  onMouseEnter={() => setIsHoveredFooter(true)}
+                  onMouseLeave={() => setIsHoveredFooter(false)}
+                >
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={isHoveredFooter ? "complete" : "share"}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
+                      transition={{ duration: 0.1 }}
+                      className="flex items-center gap-x-1.5"
+                    >
+                      <Icon name={isHoveredFooter ? "Locked" : "X"} size={12} />
+                      <span>
+                        {isHoveredFooter
+                          ? t("ChallengeCenter.complete_to_share")
+                          : t("ChallengePage.share_on_x")}
+                      </span>
+                    </motion.div>
+                  </AnimatePresence>
+                </button>
+              </div>
+            </>
+          )}
+          {status === "completed" && !auth.isLoggedIn && (
+            <span className="text-shade-tertiary font-medium gap-x-1.5 flex items-center">
+              <Icon name="Locked" />
+              {t("ChallengeCenter.locked_description")}
+            </span>
+          )}
+          {status === "completed" && auth.isLoggedIn && (
+            <Button
+              variant="primary"
+              size="md"
+              label={
+                isLoading
+                  ? t("ChallengePage.minting")
+                  : t("ChallengeCenter.claim")
+              }
+              icon={{ name: "Claim" as IconName }}
+              className="!w-full"
+              onClick={() => {
+                handleMint();
+              }}
+              disabled={isLoading}
+            />
+          )}
+          {status === "claimed" && (
+            <div className="flex flex-col items-center gap-4 w-full">
+              <Button
+                variant="primary"
+                size="md"
+                label={t("ChallengeCenter.view_nft")}
+                icon={{ name: "Link" as IconName }}
+                className="!w-full"
+                onClick={() => {
+                  setIsNFTViewerOpen(true);
+                  setSelectedChallenge(challenge);
+                }}
+              />
+              <Link
+                href={challengeShareUrl}
+                target="_blank"
+                className="w-full flex justify-center"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Button
+                  label={t("ChallengePage.share_on_x")}
+                  variant="secondary"
+                  size="sm"
+                  icon={{ name: "X" as IconName }}
+                  className="!w-full !flex-shrink !text-xs !text-shade-tertiary !gap-x-3"
+                />
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

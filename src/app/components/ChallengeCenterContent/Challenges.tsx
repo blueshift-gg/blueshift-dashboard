@@ -1,26 +1,19 @@
-import ChallengeFilter from "../Filters/ChallengeFilter";
-import ViewToggle from "../ViewToggle/ViewToggle";
-import ChallengesListWrapper from "./ChallengesListWrapper";
+import { getAllChallenges } from "@/app/utils/content";
+import ChallengesList from "./ChallengesList";
+import { Suspense } from "react";
+
+async function ChallengesContent() {
+  const challenges = await getAllChallenges();
+
+  return <ChallengesList initialChallenges={challenges} />;
+}
 
 export default function Challenges() {
   return (
-    <div className="w-full flex flex-col gap-y-16 pb-24">
-      <div className="relative">
-        <div className="content-wrapper">
-          <div className="flex flex-wrap md:flex-row gap-y-4 md:gap-y-0 md:items-center gap-x-3 w-full">
-            <ChallengeFilter className="!w-[200px]" />
-          </div>
-        </div>
-        <img
-          src="/graphics/challenges-graphic.webp"
-          alt="Challenges Graphic"
-          className="absolute -bottom-16 right-16 hidden lg:block w-[350px] xl:w-[500px]"
-        />
-      </div>
-      <div className="h-px w-full border-t-border border-t" />
-      <div className="content-wrapper">
-        <ChallengesListWrapper />
-      </div>
+    <div className="relative content-wrapper">
+      <Suspense fallback={<ChallengesList isLoading={true} />}>
+        <ChallengesContent />
+      </Suspense>
     </div>
   );
 }

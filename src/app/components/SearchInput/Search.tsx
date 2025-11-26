@@ -2,7 +2,7 @@
 
 import classNames from "classnames";
 import Icon from "../Icon/Icon";
-import {useTranslations} from "next-intl";
+import { useTranslations } from "next-intl";
 import { useStore } from "@/stores/store";
 
 interface SearchInputProps {
@@ -23,13 +23,13 @@ export default function SearchInput({
   return (
     <div
       className={classNames(
-        "w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-background-card rounded-xl flex items-center gap-x-3",
+        "w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid rounded-xl flex items-center gap-x-3",
         className
       )}
     >
       <Icon
         name="Search"
-        className="text-mute group-focus-within:text-tertiary transition flex-shrink-0 w-max"
+        className="text-mute group-focus-within:text-shade-tertiary transition flex-shrink-0 w-max"
       />
       <input
         disabled={disabled}

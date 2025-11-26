@@ -14,7 +14,7 @@ const ProgressCircle = ({
   return (
     <div
       className={classNames(
-        "w-[18px] h-[18px] flex items-center justify-center border-[1.5px] border-secondary rounded-full",
+        "w-[16px] h-[16px] flex items-center justify-center border-[1.5px] border-shade-secondary rounded-full",
         className
       )}
     >
@@ -23,7 +23,7 @@ const ProgressCircle = ({
         animate={{ ["--percentFilled" as string]: `${angleDegrees}deg` }}
         transition={{ duration: 1, ease: "easeInOut" }}
         className={classNames(
-          "h-[10px] w-[10px] flex-shrink-0 rounded-full bg-[conic-gradient(#ced5e4_var(--percentFilled)_,transparent_0)]",
+          "h-[8px] w-[8px] flex-shrink-0 rounded-full bg-[conic-gradient(#ced5e4_var(--percentFilled)_,transparent_0)]",
           innerClassName
         )}
       ></motion.div>

@@ -123,13 +123,13 @@ export default function TableOfContents() {
     >
       <div className="flex items-center space-x-2">
         <Icon name="Table" />
-        <span className="font-medium font-mono text-primary">
+        <span className="font-medium font-mono text-shade-primary">
           {t("contents.contents")}
         </span>
       </div>
       <div className="flex space-x-5 items-stretch">
         {/* Scroll Spy Background */}
-        <div className="w-[3px] flex-shrink-0 bg-background-card rounded-full"></div>
+        <div className="w-[3px] flex-shrink-0 bg-card-solid rounded-full"></div>
         <div className="flex flex-col gap-y-5 w-max">
           {sections.map((section) => (
             <div key={section.id} className="flex flex-col gap-y-4">
@@ -142,7 +142,7 @@ export default function TableOfContents() {
                     .getElementById(section.id)
                     ?.scrollIntoView({ behavior: "smooth" });
                 }}
-                className={`relative text-sm font-medium text-secondary transition hover:text-primary`}
+                className={`relative text-sm font-medium text-shade-secondary transition hover:text-shade-primary`}
               >
                 {activeSection === section.id && (
                   <motion.div
@@ -177,7 +177,7 @@ export default function TableOfContents() {
                           .getElementById(subsection.id)
                           ?.scrollIntoView({ behavior: "smooth" });
                       }}
-                      className={`relative flex font-medium text-tertiary text-sm transition hover:text-primary`}
+                      className={`relative flex font-medium text-shade-tertiary text-sm transition hover:text-shade-primary`}
                     >
                       {activeSection === subsection.id && (
                         <motion.div
@@ -203,7 +203,7 @@ export default function TableOfContents() {
           href={githubUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center space-x-2 hover:text-tertiary text-primary"
+          className="flex items-center space-x-2 hover:text-shade-tertiary text-shade-primary"
         >
           <Icon name="Github" />
           <span className="font-medium font-mono">

@@ -64,7 +64,7 @@ export default function ChallengesContent({
             <div className="text-center text-lg sm:text-xl font-medium leading-none">
               {t("ChallengePage.connect_wallet")}
             </div>
-            <div className="text-center text-secondary mx-auto sm:w-2/3 w-full">
+            <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
               {t("ChallengePage.connect_wallet_description")}
             </div>
           </div>
@@ -83,10 +83,10 @@ export default function ChallengesContent({
           {/*    >*/}
           {/*      <div className="flex flex-col gap-y-4 sm:!-mt-24 max-w-[90dvw]">*/}
           {/*        <div className="text-center justify-center text-lg sm:text-xl font-medium leading-none gap-x-2 items-center flex">*/}
-          {/*          <Icon name="Locked" className="text-secondary" />*/}
+          {/*          <Icon name="Locked" className="text-shade-secondary" />*/}
           {/*          {t("challenge_status_descriptions.locked")}*/}
           {/*        </div>*/}
-          {/*        <div className="text-center text-secondary mx-auto w-full">*/}
+          {/*        <div className="text-center text-shade-secondary mx-auto w-full">*/}
           {/*          {t("challenge_status_descriptions.locked_cta")}*/}
           {/*        </div>*/}
           {/*      </div>*/}

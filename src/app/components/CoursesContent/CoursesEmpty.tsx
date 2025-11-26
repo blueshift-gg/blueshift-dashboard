@@ -1,41 +1,23 @@
 import { useTranslations } from "next-intl";
 
-type CoursesEmptyProps = {
-  type: "no_filters" | "no_results";
-};
-
-export default function CoursesEmpty({ type }: CoursesEmptyProps) {
+export default function CoursesEmpty() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col items-center justify-center relative">
-      {type === "no_filters" && (
+    <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] pb-36">
+      <div className="flex items-center gap-x-2">
         <img
-          src="/graphics/empty-state-filters.svg"
-          alt="Empty State Filters"
-          className="sm:w-[500px]"
+          src="/graphics/sad-face.svg"
+          alt="Sad Face"
+          className="w-[30px] h-[30px]"
         />
-      )}
-      {type === "no_results" && (
-        <img
-          src="/graphics/empty-state-search.svg"
-          alt="Empty State Results"
-          className="sm:w-[500px]"
-        />
-      )}
-
-      <div className="flex flex-col items-center justify-center gap-y-3 -mt-20 mx-auto w-[300px]">
-        <span className="text-lg font-medium text-primary leading-none text-center">
-          {type === "no_filters"
-            ? t("lessons.empty_filters_title")
-            : t("lessons.empty_results_title")}
-        </span>
-        <span className="text-secondary leading-[140%] text-center">
-          {type === "no_filters"
-            ? t("lessons.empty_filters_description")
-            : t("lessons.empty_results_description")}
+        <span className="text-lg font-mono font-medium text-brand-primary leading-none text-center">
+          {t("lessons.empty_results_title")}
         </span>
       </div>
+      <span className="text-shade-secondary leading-[140%] text-center">
+        {t("lessons.empty_results_description")}
+      </span>
     </div>
   );
 }

@@ -17,7 +17,9 @@ export default function ShiftGoal() {
       <div className="flex flex-col gap-y-8">
         <div className="flex flex-col gap-y-2 text-center">
           <div className="text-xl font-medium">{t("shift_goal.title")}</div>
-          <span className="text-secondary">{t("shift_goal.description")}</span>
+          <span className="text-shade-secondary">
+            {t("shift_goal.description")}
+          </span>
         </div>
         <Button
           label={t("shift_goal.connect_discord")}

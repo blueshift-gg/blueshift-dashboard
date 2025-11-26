@@ -480,7 +480,7 @@ export default function ChallengesContent({
             <div className="text-center text-lg sm:text-xl font-medium leading-none">
               {t("ChallengePage.connect_wallet")}
             </div>
-            <div className="text-center text-secondary mx-auto sm:w-2/3 w-full">
+            <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
               {t("ChallengePage.connect_wallet_description")}
             </div>
           </div>
@@ -519,23 +519,23 @@ export default function ChallengesContent({
                   dragMomentum={true}
                   dragConstraints={{ top: 0, bottom: 0 }}
                   dragElastic={0}
-                  className="z-10 w-full py-3 relative px-4 bg-background-card rounded-t-2xl lg:rounded-t-xl flex gap-y-4 lg:gap-y-0 flex-col lg:flex-row items-center justify-center lg:justify-start border-b border-border"
+                  className="z-10 w-full py-3 relative px-4 bg-card-solid rounded-t-2xl lg:rounded-t-xl flex gap-y-4 lg:gap-y-0 flex-col lg:flex-row items-center justify-center lg:justify-start border-b border-border"
                 >
                   {/* Mobile Thumb */}
-                  <div className="h-[8px] w-[72px] rounded-full bg-background-card-foreground mx-auto flex lg:hidden" />
+                  <div className="h-[8px] w-[72px] rounded-full bg-card-solid-foreground mx-auto flex lg:hidden" />
                   <div className="items-center gap-x-2 hidden lg:flex">
-                    <div className="w-[12px] h-[12px] bg-background-card-foreground rounded-full"></div>
-                    <div className="w-[12px] h-[12px] bg-background-card-foreground rounded-full"></div>
-                    <div className="w-[12px] h-[12px] bg-background-card-foreground rounded-full"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
                   </div>
-                  <div className="text-sm font-medium text-secondary lg:absolute lg:left-1/2 lg:-translate-x-1/2 flex items-center gap-x-1.5">
+                  <div className="text-sm font-medium text-shade-secondary lg:absolute lg:left-1/2 lg:-translate-x-1/2 flex items-center gap-x-1.5">
                     <Icon name="Challenge" size={12} />
                     <span className="flex-shrink-0">
                       {t(`challenges.${currentChallenge.slug}.title`)}
                     </span>
                   </div>
                 </motion.div>
-                <div className="lg:left-[1px] w-full lg:w-[calc(100%-2px)] py-2 bg-background-card/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
+                <div className="lg:left-[1px] w-full lg:w-[calc(100%-2px)] py-2 bg-card-solid/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
                   <LogoGlyph width={16} />
                   <div className="flex items-center gap-x-2.5">
                     <Button

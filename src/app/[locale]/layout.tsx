@@ -46,7 +46,7 @@ const Switzer = localFont({
 });
 
 const MontechV2 = localFont({
-  src: "../fonts/MontechV2-Medium.ttf",
+  src: "../../../node_modules/@blueshift-gg/ui-components/src/fonts/MONTECHV02-Medium.woff2",
   weight: "500",
   style: "normal",
   variable: "--font-montech",
@@ -120,7 +120,7 @@ export default async function RootLayout({
                 {!pathname?.includes("/nft-generator") ? (
                   <>
                     <Header />
-                    <div className="pt-[69px] min-h-[calc(100dvh-69px)]">
+                    <div className="pt-[82px] min-h-[calc(100dvh-82px)]">
                       {children}
                     </div>
                     <Footer />

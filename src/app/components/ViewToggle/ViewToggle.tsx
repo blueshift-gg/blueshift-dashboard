@@ -15,12 +15,12 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
   return (
     <div
       className={classNames(
-        "hidden md:flex w-max items-center gap-x-2 rounded-xl bg-background-card p-1 relative",
+        "hidden md:flex w-max items-center gap-x-2 rounded-xl bg-card-solid p-1 relative",
         className
       )}
     >
       <button
-        className="p-3 relative cursor-pointer text-tertiary hover:!text-primary transition"
+        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
         onClick={() => setView("grid")}
       >
         <Icon
@@ -38,7 +38,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         )}
       </button>
       <button
-        className="p-3 relative cursor-pointer text-tertiary hover:!text-primary transition"
+        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
         onClick={() => setView("list")}
       >
         <Icon

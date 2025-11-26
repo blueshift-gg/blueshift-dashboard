@@ -181,7 +181,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
                 target="_blank"
               >
                 <p
-                  className="text-secondary mt-1 text-sm"
+                  className="text-shade-secondary mt-1 text-sm"
                   style={{
                     color: `rgb(${courseColors[courseMetadata.language]})`,
                   }}
@@ -224,13 +224,13 @@ export default async function LessonPage({ params }: LessonPageProps) {
                   {/*</div>*/}
                   <Link
                     href={`/courses/${courseMetadata.slug}/${nextLessonSlug}`}
-                    className="flex justify-between items-center w-full bg-background-card border border-border group py-5 px-5 rounded-xl"
+                    className="flex justify-between items-center w-full bg-card-solid border border-border group py-5 px-5 rounded-xl"
                   >
                     <div className="flex items-center gap-x-2">
                       <span className="text-mute text-sm font-mono pt-1">
                         Next Lesson
                       </span>
-                      <span className="font-medium text-primary">
+                      <span className="font-medium text-shade-primary">
                         {t(
                           `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}`
                         )}
@@ -238,7 +238,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
                     </div>
                     <Icon
                       name="ArrowRight"
-                      className="text-mute text-sm group-hover:text-primary group-hover:translate-x-1 transition"
+                      className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
                     />
                   </Link>
                 </>
@@ -246,7 +246,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
               {!nextLesson && challenge && (
                 <div className="w-[calc(100%+32px)] md:w-[calc(100%+64px)] lg:w-[calc(100%+48px)] gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12 group -mt-12 pt-24 pb-16 px-8 [background:linear-gradient(180deg,rgba(0,255,255,0)_0%,rgba(0,255,255,0.08)_50%,rgba(0,255,255,0)_100%)]">
-                  <span className="text-primary w-auto flex-shrink-0 font-mono">
+                  <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
                     {t("lessons.take_challenge_cta")}
                   </span>
                   <Link
@@ -266,7 +266,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
               {!nextLesson && !challenge && (
                 <div className="w-[calc(100%+32px)] md:w-[calc(100%+64px)] lg:w-[calc(100%+48px)] gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12 group -mt-12 pt-24 pb-16 px-8 [background:linear-gradient(180deg,rgba(0,255,255,0)_0%,rgba(0,255,255,0.08)_50%,rgba(0,255,255,0)_100%)]">
-                  <span className="text-primary w-auto flex-shrink-0 font-mono">
+                  <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
                     {t("lessons.lesson_completed")}
                   </span>
                   <Link href={`/courses`} className="w-max">

@@ -6,6 +6,8 @@ import { Metadata } from "next";
 import { getPathname } from "@/i18n/navigation";
 import { getTranslations } from "next-intl/server";
 import { URLS } from "@/constants/urls";
+import Courses from "@/app/components/CoursesContent/Courses";
+import PageHero from "@/app/components/PageHero/PageHero";
 
 interface ChallengesPageProps {
   params: Promise<{
@@ -49,30 +51,11 @@ export default function RewardsPage() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col w-full gap-y-8">
-      <div className="w-full [background:linear-gradient(180deg,rgba(0,179,179,0.04)_0%,rgba(0,179,179,0)_100%),linear-gradient(180deg,rgba(17,20,26,0.35)_0%,rgba(17,20,26,0)_100%)]">
-        <div className="relative px-4 pt-14 md:pt-14 max-w-app md:px-8 lg:px-14 mx-auto w-full">
-          <div className="flex flex-col gap-y-2">
-            <div className="relative w-max">
-              <span className="text-secondary font-medium text-xl leading-none font-mono">
-                {t("ChallengeCenter.subtitle")}
-              </span>
-              <CrosshairCorners
-                size={5}
-                spacingY={4}
-                spacingX={5}
-                baseDelay={0}
-              />
-            </div>
-            <span className="sr-only">{t("ChallengeCenter.title")}</span>
-            <HeadingReveal
-              text={t("ChallengeCenter.title")}
-              headingLevel="h1"
-              className="text-3xl font-semibold"
-            />
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
+      <PageHero
+        badge={t("ChallengeCenter.subtitle")}
+        title={t("ChallengeCenter.title")}
+      />
       <Challenges />
     </div>
   );

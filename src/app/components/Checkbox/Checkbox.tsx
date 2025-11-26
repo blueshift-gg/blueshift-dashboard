@@ -35,7 +35,7 @@ export default function Checkbox({
             {
               "checked:border-brand-secondary indeterminate:border-brand-secondary focus-visible:outline-brand-secondary":
                 theme === "primary",
-              "checked:border-secondary indeterminate:border-secondary focus-visible:outline-secondary":
+              "checked:border-shade-secondary indeterminate:border-shade-secondary focus-visible:outline-secondary":
                 theme === "secondary",
             }
           )}
@@ -45,7 +45,7 @@ export default function Checkbox({
             "rounded-[1px] pointer-events-none col-start-1 row-start-1 size-1.25 self-center justify-self-center opacity-0 group-has-[:checked]:opacity-100",
             {
               "bg-brand-primary": theme === "primary",
-              "bg-secondary": theme === "secondary",
+              "bg-shade-secondary": theme === "secondary",
             }
           )}
         ></div>

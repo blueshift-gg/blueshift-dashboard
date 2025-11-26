@@ -1,22 +1,35 @@
-import CourseFilter from "../Filters/CourseFilter";
-import SearchInput from "../SearchInput/Search";
-import ViewToggle from "../ViewToggle/ViewToggle";
-import CourseListWrapper from "./CourseListWrapper";
+import { getAllCourses, getCourseLessons } from "@/app/utils/content";
+import CourseList from "./CourseList";
+import { Suspense } from "react";
+
+async function CoursesContent() {
+  const courses = await getAllCourses();
+
+  // Get lesson metadata for each course
+  const courseLessons = await Promise.all(
+    courses.map(async (course) => {
+      const lessons = await getCourseLessons(course.slug);
+
+      return {
+        slug: course.slug,
+        totalLessons: lessons.length,
+        lessons: lessons.map((lesson) => ({
+          number: lesson.lessonNumber,
+          slug: lesson.slug.toLowerCase().replace(/\s+/g, "-"),
+        })),
+      };
+    })
+  );
+
+  return <CourseList initialCourses={courses} courseLessons={courseLessons} />;
+}
 
 export default function Courses() {
   return (
-    <div className="w-full flex flex-col gap-y-16 pb-24">
-      <div className="content-wrapper">
-        <div className="flex flex-wrap md:flex-row gap-y-4 md:gap-y-0 md:items-center gap-x-3 w-full">
-          <SearchInput className="md:w-1/3" />
-          <CourseFilter />
-          <ViewToggle layoutName="lessons-view-toggle" className="md:ml-auto" />
-        </div>
-      </div>
-      <div className="h-px w-full border-t-border border-t" />
-      <div className="content-wrapper">
-        <CourseListWrapper />
-      </div>
+    <div className="relative content-wrapper">
+      <Suspense fallback={<CourseList isLoading={true} />}>
+        <CoursesContent />
+      </Suspense>
     </div>
   );
 }

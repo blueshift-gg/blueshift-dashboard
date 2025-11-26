@@ -1,12 +1,14 @@
-import { redirect } from "@/i18n/navigation";
+import { useTranslations } from "next-intl";
+import Courses from "@/app/components/CoursesContent/Courses";
+import PageHero from "@/app/components/PageHero/PageHero";
 
-interface CourseRedirectPageProps {
-  params: Promise<{
-    locale: string;
-  }>
-}
+export default function CoursesPage() {
+  const t = useTranslations();
 
-export default async function CourseRedirectPage({params}: CourseRedirectPageProps) {
-  const { locale } = await params;
-  redirect({ href: "/", locale })
+  return (
+    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
+      <PageHero badge={t("lessons.subtitle")} title={t("lessons.title")} />
+      <Courses />
+    </div>
+  );
 }

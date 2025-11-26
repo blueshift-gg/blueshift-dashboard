@@ -36,19 +36,19 @@ export default async function ChallengePageContainer({
   let challengeLocale = locale;
   if (pageSlug) {
     const pageExists = challengeMetadata.pages?.some(
-      (p) => p.slug === pageSlug,
+      (p) => p.slug === pageSlug
     );
     if (!pageExists) {
       notFound();
     }
     try {
       MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`,
+        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`
       );
     } catch (error) {
       try {
         MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`,
+          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`
         );
         challengeLocale = "en";
       } catch (error) {
@@ -58,12 +58,12 @@ export default async function ChallengePageContainer({
   } else {
     try {
       MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/challenge.mdx`,
+        `challenges/${challengeSlug}/${locale}/challenge.mdx`
       );
     } catch (error) {
       try {
         MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/challenge.mdx`,
+          `challenges/${challengeSlug}/en/challenge.mdx`
         );
         challengeLocale = "en";
       } catch (error) {
@@ -88,18 +88,18 @@ export default async function ChallengePageContainer({
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
           console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`,
+            `Failed to decode num_minted for collection ${collectionMintAddress}`
           );
         }
       } else {
         console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`,
+          `Failed to fetch account info for ${collectionMintAddress}`
         );
       }
     } catch (error) {
       console.error(
         `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error,
+        error
       );
     }
   }
@@ -107,7 +107,7 @@ export default async function ChallengePageContainer({
   let nextPage;
   if (pageSlug) {
     const currentPageIndex = challengeMetadata.pages?.findIndex(
-      (p) => p.slug === pageSlug,
+      (p) => p.slug === pageSlug
     );
     nextPage =
       currentPageIndex !== undefined &&
@@ -134,19 +134,19 @@ export default async function ChallengePageContainer({
     <>
       <Link
         href={`/challenges/${challengeMetadata.slug}/${nextPage.slug}`}
-        className="flex justify-between items-center w-full bg-background-card border border-border group py-5 px-5 rounded-xl"
+        className="flex justify-between items-center w-full bg-card-solid border border-border group py-5 px-5 rounded-xl"
       >
         <div className="flex items-center gap-x-2">
           <span className="text-mute text-sm font-mono pt-1">Next Page</span>
-          <span className="font-medium text-primary">
+          <span className="font-medium text-shade-primary">
             {t(
-              `challenges.${challengeMetadata.slug}.pages.${nextPage.slug}.title`,
+              `challenges.${challengeMetadata.slug}.pages.${nextPage.slug}.title`
             )}
           </span>
         </div>
         <Icon
           name="ArrowRight"
-          className="text-mute text-sm group-hover:text-primary group-hover:translate-x-1 transition"
+          className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
         />
       </Link>
       <div className="relative w-full">
@@ -160,13 +160,10 @@ export default async function ChallengePageContainer({
         </div>
       </div>
       <div className="w-[calc(100%+32px)] md:w-[calc(100%+64px)] lg:w-[calc(100%+48px)] gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12 group px-8">
-        <span className="text-primary w-auto flex-shrink-0 font-mono">
+        <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
           {t("lessons.take_challenge_cta")}
         </span>
-        <Link
-          href={`/challenges/${challengeSlug}/verify`}
-          className="w-max"
-        >
+        <Link href={`/challenges/${challengeSlug}/verify`} className="w-max">
           <Button
             variant="primary"
             size="lg"
@@ -179,13 +176,10 @@ export default async function ChallengePageContainer({
     </>
   ) : (
     <div className="w-[calc(100%+32px)] md:w-[calc(100%+64px)] lg:w-[calc(100%+48px)] gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12 group -mt-12 pt-24 pb-16 px-8 [background:linear-gradient(180deg,rgba(0,255,255,0)_0%,rgba(0,255,255,0.08)_50%,rgba(0,255,255,0)_100%)]">
-      <span className="text-primary w-auto flex-shrink-0 font-mono">
+      <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
         {t("lessons.take_challenge_cta")}
       </span>
-      <Link
-        href={`/challenges/${challengeSlug}/verify`}
-        className="w-max"
-      >
+      <Link href={`/challenges/${challengeSlug}/verify`} className="w-max">
         <Button
           variant="primary"
           size="lg"
@@ -205,7 +199,10 @@ export default async function ChallengePageContainer({
       footer={footer}
     >
       <MdxLayout>
-        <ContentFallbackNotice locale={locale} originalLocale={challengeLocale} />
+        <ContentFallbackNotice
+          locale={locale}
+          originalLocale={challengeLocale}
+        />
         {MdxComponent}
       </MdxLayout>
     </ChallengeLayout>

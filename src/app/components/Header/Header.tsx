@@ -12,7 +12,7 @@ import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
 import { usePersistentStore } from "@/stores/store";
 
 import Logo from "../Logo/Logo";
-import Button from "@/app/components/Button/Button";
+import { Button, Tabs } from "@blueshift-gg/ui-components";
 import LogoGlyph from "../Logo/LogoGlyph";
 import MarketingBanner from "../MarketingBanner/MarketingBanner";
 
@@ -23,8 +23,7 @@ export default function HeaderContent() {
   const t = useTranslations();
   const currentLocale = useLocale();
   const { locales } = routing;
-  const { marketingBannerViewed, _hasHydrated } =
-    usePersistentStore();
+  const { marketingBannerViewed, _hasHydrated } = usePersistentStore();
 
   const router = useRouter();
   const languageDropdownRef = useRef<HTMLDivElement>(null);
@@ -38,11 +37,15 @@ export default function HeaderContent() {
     setIsLanguageDropdownOpen(false);
   };
 
-  const isRootOrCourses =
-    pathname === "/" ||
-    pathname === `/${currentLocale}` ||
+  const isCourses =
     pathname.startsWith("/courses") ||
     pathname.startsWith(`/${currentLocale}/courses`);
+
+  const isPaths =
+    pathname === "/" ||
+    pathname === `/${currentLocale}` ||
+    pathname.startsWith("/paths") ||
+    pathname.startsWith(`/${currentLocale}/paths`);
 
   return (
     <motion.div
@@ -52,95 +55,63 @@ export default function HeaderContent() {
       })}
     >
       <div className="fixed w-full flex flex-col z-40">
-        <div className="bg-background/80 backdrop-blur-lg z-40 w-full border-b border-b-border">
-          <div className="flex w-full items-center justify-between max-w-app mx-auto py-3 px-4 md:px-8">
-            <div className="flex gap-x-16 items-center">
-              <Link href="/" className="md:hidden flex">
+        <div className="bg-background/80 backdrop-blur-lg z-40 w-full border-b border-b-border-light">
+          <div className="flex w-full items-center justify-between max-w-[1440px] mx-auto py-5 px-4 lg:px-8">
+            <div className="flex gap-x-8 lg:gap-x-12 items-center">
+              <Link href="/" className="lg:hidden flex">
                 <LogoGlyph height={18} />
               </Link>
-              <Link href="/" className="hidden md:flex">
+              <Link href="/" className="hidden lg:flex">
                 <Logo showText={true} height={18} />
               </Link>
 
-              {/* Desktop Header */}
-              <motion.div
-                style={{ originY: "0px" }}
-                className="gap-x-6 hidden md:flex"
-              >
-                {/* Desktop Nav Links - Courses */}
-                <Link
-                  className={classNames(
-                    "py-2.5 px-3 relative rounded-xl transition flex items-center text-secondary hover:text-primary justify-center gap-x-2 font-medium",
-                    {
-                      " !text-brand-primary": isRootOrCourses,
-                    }
-                  )}
-                  href="/"
-                >
-                  {isRootOrCourses && (
-                    <motion.div
-                      layoutId="nav-desktop"
-                      style={{ originY: "0px" }}
-                      transition={{ duration: 0.4, ease: anticipate }}
-                      className="w-full absolute left-0 top-0 rounded-xl h-full bg-background-primary"
-                    ></motion.div>
-                  )}
-                  <Icon
-                    name="Lessons"
-                    className={classNames("text-text-tertiary", {
-                      "!text-brand-primary": isRootOrCourses,
-                    })}
-                  />
-                  <span
-                    className={classNames("font-mono text-[15px] pt-0.5", {
-                      "text-brand-secondary": isRootOrCourses,
-                    })}
-                  >
-                    {t("header.courses")}
-                  </span>
-                </Link>
-                {/* Desktop Nav Links - Challenges */}
-                <Link
-                  className={classNames(
-                    "py-2.5 px-3 relative transition rounded-xl flex items-center text-secondary hover:text-primary justify-center gap-x-2 font-medium",
-                    {
-                      "!text-brand-primary": pathname.includes("/challenges"),
-                    }
-                  )}
-                  href="/challenges"
-                >
-                  {pathname.includes("/challenges") && (
-                    <motion.div
-                      layoutId="nav-desktop"
-                      style={{ originY: "0px" }}
-                      transition={{ duration: 0.4, ease: anticipate }}
-                      className="w-full absolute left-0 top-0 rounded-xl h-full bg-background-primary"
-                    ></motion.div>
-                  )}
-                  <Icon
-                    name="Challenge"
-                    className={classNames("text-text-tertiary", {
-                      "!text-brand-primary": pathname === "/challenges",
-                    })}
-                  />
-                  <span
-                    className={classNames("font-mono text-[15px] pt-0.5", {
-                      "text-brand-secondary": pathname === "/challenges",
-                    })}
-                  >
-                    {t("header.challenges")}
-                  </span>
-                </Link>
-              </motion.div>
+              <Tabs
+                items={[
+                  {
+                    label: t("header.paths"),
+                    value: "paths",
+                    icon: { name: "Path", size: 18 },
+                    selected: isPaths,
+                    onClick: () => router.push("/"),
+                  },
+                  {
+                    label: t("header.courses"),
+                    value: "courses",
+                    icon: { name: "Lessons", size: 18 },
+                    selected: isCourses,
+                    onClick: () => router.push("/courses"),
+                  },
+                  {
+                    label: t("header.challenges"),
+                    value: "challenges",
+                    icon: { name: "Challenge", size: 18 },
+                    selected: pathname === "/challenges",
+                    onClick: () => router.push("/challenges"),
+                  },
+                  {
+                    label: t("header.perks"),
+                    value: "perks",
+                    icon: { name: "Perks", size: 18 },
+                    selected: pathname === "/perks",
+                    onClick: () => router.push("/perks"),
+                  },
+                ]}
+                variant="tab"
+                theme="primary"
+                className="hidden lg:flex"
+              />
             </div>
 
             <div className="flex gap-x-2 md:gap-x-3 items-center">
               {/* Language Switcher */}
               <div className="relative" ref={languageDropdownRef}>
                 <Button
-                  variant="tertiary"
-                  icon="Globe"
-                  className="!w-[42px] flex"
+                  variant="outline"
+                  icon={{ name: "Globe", size: 18 }}
+                  className="!p-3 flex"
+                  crosshairProps={{
+                    size: 0,
+                  }}
                   onClick={() =>
                     setIsLanguageDropdownOpen(!isLanguageDropdownOpen)
                   }
@@ -152,24 +123,24 @@ export default function HeaderContent() {
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95, y: -10 }}
                       transition={{ duration: 0.4, ease: anticipate }}
-                      className="border border-border z-50 rounded-xl flex w-max flex-col gap-y-1 absolute top-[calc(100%+6px)] right-0 p-1 bg-background-card"
+                      className="border border-border z-50 rounded-xl flex w-max flex-col gap-y-1 absolute top-[calc(100%+6px)] right-0 p-1 bg-card-solid"
                     >
                       {locales.map((locale) => (
                         <button
                           key={locale}
                           onClick={() => handleLanguageChange(locale)}
                           className={classNames(
-                            "flex items-center relative gap-x-4 py-3 px-4 rounded-lg transition hover:bg-background-card-foreground",
+                            "flex items-center relative gap-x-4 py-3 px-4 rounded-lg transition hover:bg-card-solid-foreground",
                             locale === currentLocale &&
-                              "bg-background-card-foreground"
+                              "bg-card-solid-foreground"
                           )}
                         >
                           <span
                             className={classNames(
                               "text-sm font-medium leading-none",
                               locale === currentLocale
-                                ? "text-primary"
-                                : "text-secondary"
+                                ? "text-shade-primary"
+                                : "text-shade-secondary"
                             )}
                           >
                             {localeNames[locale]}
@@ -188,10 +159,13 @@ export default function HeaderContent() {
 
               {/* Mobile Menu Button */}
               <Button
-                variant="tertiary"
-                icon="Table"
-                className="!px-0 !w-[42px] flex md:hidden"
+                variant="outline"
+                icon={{ name: "Table", size: 18 }}
+                className="!p-3 flex md:hidden"
                 onClick={() => setIsOpen(true)}
+                crosshairProps={{
+                  size: 0,
+                }}
               />
               {/* Mobile Menu Panel */}
               <AnimatePresence>
@@ -202,85 +176,7 @@ export default function HeaderContent() {
                     animate={{ x: 0 }}
                     exit={{ x: "100dvw" }}
                     transition={{ duration: 0.15, ease: anticipate }}
-                  >
-                    <div className="flex gap-x-6 items-center">
-                      {/* Mobile Nav Links - Courses */}
-                      <Link
-                        className={classNames(
-                          "py-2.5 px-3 relative rounded-xl flex items-center text-secondary hover:text-primary justify-center gap-x-2 font-medium",
-                          {
-                            " !text-brand-primary": isRootOrCourses,
-                          }
-                        )}
-                        href="/"
-                      >
-                        {isRootOrCourses && (
-                          <motion.div
-                            layoutId="nav-mobile"
-                            transition={{ duration: 0.4, ease: anticipate }}
-                            className="w-full absolute left-0 top-0 rounded-xl h-full bg-background-primary"
-                          ></motion.div>
-                        )}
-                        <Icon
-                          name="Lessons"
-                          className={classNames("text-text-tertiary", {
-                            "!text-brand-primary": isRootOrCourses,
-                          })}
-                        />
-                        <span
-                          className={classNames(
-                            "font-mono text-[15px] pt-0.5",
-                            {
-                              "text-brand-secondary": isRootOrCourses,
-                            }
-                          )}
-                        >
-                          {t("header.courses")}
-                        </span>
-                      </Link>
-                      {/* Mobile Nav Links - Challenges */}
-                      <Link
-                        className={classNames(
-                          "py-2.5 relative px-3 rounded-xl flex items-center text-secondary hover:text-primary justify-center gap-x-2 font-medium",
-                          {
-                            " !text-brand-primary": pathname === "/challenges",
-                          }
-                        )}
-                        href="/challenges"
-                      >
-                        {pathname === "/challengesk" && (
-                          <motion.div
-                            layoutId="nav-mobile"
-                            transition={{ duration: 0.4, ease: anticipate }}
-                            className="w-full absolute left-0 top-0 rounded-xl h-full bg-background-primary"
-                          ></motion.div>
-                        )}
-                        <Icon
-                          name="Challenge"
-                          className={classNames("text-text-tertiary", {
-                            "!text-brand-primary": pathname === "/challenges",
-                          })}
-                        />
-                        <span
-                          className={classNames(
-                            "font-mono text-[15px] pt-0.5",
-                            {
-                              "text-brand-secondary":
-                                pathname === "/challenges",
-                            }
-                          )}
-                        >
-                          {t("header.challenges")}
-                        </span>
-                      </Link>
-                    </div>
-                    <Button
-                      variant="tertiary"
-                      icon="ArrowRight"
-                      className="!px-0 !w-[42px] flex md:hidden"
-                      onClick={() => setIsOpen(false)}
-                    />
-                  </motion.div>
+                  ></motion.div>
                 )}
               </AnimatePresence>
             </div>
