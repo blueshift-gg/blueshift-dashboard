@@ -11,7 +11,8 @@ import {
 import { usePersistentStore } from "@/stores/store";
 import PathCard from "../PathCard/PathCard";
 import classNames from "classnames";
-import { Icon, Difficulty } from "@blueshift-gg/ui-components";
+import { Icon } from "@blueshift-gg/ui-components";
+import { getPathDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
 import { Divider, Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
 import { motion } from "motion/react";
@@ -168,67 +169,7 @@ export default function PathList({
 
   const hasNoResults = filteredPaths.length === 0;
 
-  const dropdownItems = [
-    {
-      label: "Difficulty",
-      value: "difficulty",
-      icon: <Difficulty size={16} />,
-      children: [
-        {
-          label: "Beginner",
-          value: "beginner",
-          icon: <Difficulty size={16} difficulties={[1]} />,
-        },
-        {
-          label: "Intermediate",
-          value: "intermediate",
-          icon: <Difficulty size={16} difficulties={[2]} />,
-        },
-        {
-          label: "Advanced",
-          value: "advanced",
-          icon: <Difficulty size={16} difficulties={[3]} />,
-        },
-        {
-          label: "Expert",
-          value: "expert",
-          icon: <Difficulty size={16} difficulties={[4]} />,
-        },
-      ],
-    },
-    {
-      label: "Category",
-      value: "programming",
-      icon: { name: "Code" as const },
-      children: [
-        {
-          label: "Assembly",
-          value: "assembly",
-          icon: { name: "Assembly" as const },
-        },
-        {
-          label: "Anchor",
-          value: "anchor",
-          icon: { name: "Anchor" as const },
-        },
-        {
-          label: "General",
-          value: "general",
-          icon: { name: "General" as const },
-        },
-        {
-          label: "Rust",
-          value: "rust",
-          icon: { name: "Rust" as const },
-        },
-        {
-          label: "TypeScript",
-          value: "typescript",
-          icon: { name: "Typescript" as const },
-        },
-      ],
-    },
-  ];
+  const dropdownItems = getPathDropdownItems();
 
   // Get counts for path stats
   const getPathStats = (path: PathMetadata) => {

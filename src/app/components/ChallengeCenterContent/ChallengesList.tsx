@@ -2,8 +2,9 @@
 
 import { usePersistentStore, useStore } from "@/stores/store";
 import classNames from "classnames";
-import { Icon, Difficulty } from "@blueshift-gg/ui-components";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
+import { getChallengeDropdownItems } from "@/app/utils/dropdownItems";
 import { useEffect, useState, useMemo, useRef, forwardRef } from "react";
 import { ChallengeMetadata } from "@/app/utils/challenges";
 import ChallengeCard from "../ChallengeCard/ChallengeCard";
@@ -424,90 +425,7 @@ export default function ChallengesList({
     }
   };
 
-  const dropdownItems = [
-    {
-      label: "Difficulty",
-      value: "difficulty",
-      icon: <Difficulty size={16} />,
-      children: [
-        {
-          label: "Beginner",
-          value: "beginner",
-          icon: <Difficulty size={16} difficulties={[1]} />,
-        },
-        {
-          label: "Intermediate",
-          value: "intermediate",
-          icon: <Difficulty size={16} difficulties={[2]} />,
-        },
-        {
-          label: "Advanced",
-          value: "advanced",
-          icon: <Difficulty size={16} difficulties={[3]} />,
-        },
-        {
-          label: "Expert",
-          value: "expert",
-          icon: <Difficulty size={16} difficulties={[4]} />,
-        },
-      ],
-    },
-    {
-      label: "Category",
-      value: "programming",
-      icon: { name: "Code" as const },
-      children: [
-        {
-          label: "Assembly",
-          value: "assembly",
-          icon: { name: "Assembly" as const },
-        },
-        {
-          label: "Anchor",
-          value: "anchor",
-          icon: { name: "Anchor" as const },
-        },
-        {
-          label: "General",
-          value: "general",
-          icon: { name: "General" as const },
-        },
-        {
-          label: "Rust",
-          value: "rust",
-          icon: { name: "Rust" as const },
-        },
-        {
-          label: "TypeScript",
-          value: "typescript",
-          icon: { name: "Typescript" as const },
-        },
-      ],
-    },
-    ...(isMobile
-      ? [
-          {
-            label: "Status",
-            value: "status",
-            icon: { name: "Progress" as const },
-            children: [
-              {
-                label: "Open",
-                value: "open",
-              },
-              {
-                label: "Completed",
-                value: "completed",
-              },
-              {
-                label: "Claimed",
-                value: "claimed",
-              },
-            ],
-          },
-        ]
-      : []),
-  ];
+  const dropdownItems = getChallengeDropdownItems(isMobile);
 
   return (
     <div
