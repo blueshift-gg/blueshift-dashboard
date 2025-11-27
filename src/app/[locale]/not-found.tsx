@@ -1,6 +1,6 @@
 "use client";
 import { Link } from "@/i18n/navigation";
-import Button from "../components/Button/Button";
+import { Button } from "@blueshift-gg/ui-components";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 
@@ -20,7 +20,7 @@ export default function NotFound() {
     buttons = (
       <Link href="/challenges">
         <Button
-          icon="ArrowLeft"
+          icon={{ name: "ArrowLeft" }}
           label={t("ChallengePage.head_to_challenges")}
         />
       </Link>
@@ -29,14 +29,20 @@ export default function NotFound() {
     message = "The course or lesson you are looking for doesn't exist.";
     buttons = (
       <Link href="/">
-        <Button icon="ArrowLeft" label={t("ChallengePage.back_to_lessons")} />
+        <Button
+          icon={{ name: "ArrowLeft" }}
+          label={t("ChallengePage.back_to_lessons")}
+        />
       </Link>
     );
   } else {
     message = "The page you are looking for doesn't exist.";
     buttons = (
       <Link href="/">
-        <Button icon="ArrowLeft" label={t("ChallengePage.back_to_homepage")} />
+        <Button
+          icon={{ name: "ArrowLeft" }}
+          label={t("ChallengePage.back_to_homepage")}
+        />
       </Link>
     );
   }

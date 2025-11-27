@@ -1,7 +1,7 @@
 "use client";
 
 import classNames from "classnames";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { useStore } from "@/stores/store";
 

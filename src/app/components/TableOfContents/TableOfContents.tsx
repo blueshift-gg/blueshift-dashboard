@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "motion/react";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useEffect, useState } from "react";
 import { anticipate } from "motion";
 import classNames from "classnames";
@@ -10,8 +10,7 @@ import { usePathname } from "next/navigation";
 import { URLS } from "@/constants/urls";
 
 function getGithubSourceUrl(pathname: string): string {
-  const url =
-    `${URLS.BLUESHIFT_EDUCATION_REPO}/tree/master/src/app/content`;
+  const url = `${URLS.BLUESHIFT_EDUCATION_REPO}/tree/master/src/app/content`;
   const pathParts = pathname.replace(/^\//, "").split("/");
   const [locale, type, courseOrChallenge, lessonOrPage] = pathParts;
 
@@ -119,17 +118,17 @@ export default function TableOfContents() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.4, ease: anticipate }}
-      className="font-content order-1 lg:order-2 h-max lg:sticky top-24 md:col-span-2 lg:col-span-3 flex flex-col gap-y-8"
+      className="font-content order-1 lg:order-2 h-max lg:sticky top-[calc(86px)] md:col-span-2 lg:col-span-3 xl:col-span-3 flex flex-col gap-y-6 py-6 px-5 lg:py-6 xl:px-4"
     >
       <div className="flex items-center space-x-2">
-        <Icon name="Table" />
-        <span className="font-medium font-mono text-shade-primary">
+        <Icon name="Table" size={16} />
+        <span className="font-medium font-mono text-shade-primary text-sm">
           {t("contents.contents")}
         </span>
       </div>
       <div className="flex space-x-5 items-stretch">
         {/* Scroll Spy Background */}
-        <div className="w-[3px] flex-shrink-0 bg-card-solid rounded-full"></div>
+        <div className="w-[1.5px] flex-shrink-0 bg-card-solid rounded-full"></div>
         <div className="flex flex-col gap-y-5 w-max">
           {sections.map((section) => (
             <div key={section.id} className="flex flex-col gap-y-4">
@@ -142,20 +141,12 @@ export default function TableOfContents() {
                     .getElementById(section.id)
                     ?.scrollIntoView({ behavior: "smooth" });
                 }}
-                className={`relative text-sm font-medium text-shade-secondary transition hover:text-shade-primary`}
+                className={`font-mono relative text-sm font-medium text-shade-primary transition hover:text-shade-primary`}
               >
                 {activeSection === section.id && (
                   <motion.div
                     className={classNames(
-                      "absolute -left-[calc(24px-1px)] w-[3px] bg-brand-secondary",
-                      {
-                        "rounded-t-full":
-                          activeSection === section.id &&
-                          sections[0].id === section.id,
-                        "rounded-b-full":
-                          activeSection === section.id &&
-                          sections[sections.length - 1].id === section.id,
-                      }
+                      "absolute -left-[calc(24px-2.5px)] w-[1.5px] bg-brand-secondary"
                     )}
                     style={{ height: "24px" }}
                     layoutId={`article`}
@@ -165,7 +156,7 @@ export default function TableOfContents() {
                 {section.text}
               </a>
               {section.subsections.length > 0 && (
-                <div className="pl-4 flex flex-col gap-y-3">
+                <div className="pl-2 flex flex-col gap-y-3">
                   {section.subsections.map((subsection) => (
                     <a
                       key={subsection.id}
@@ -177,11 +168,11 @@ export default function TableOfContents() {
                           .getElementById(subsection.id)
                           ?.scrollIntoView({ behavior: "smooth" });
                       }}
-                      className={`relative flex font-medium text-shade-tertiary text-sm transition hover:text-shade-primary`}
+                      className={`font-mono relative flex font-medium text-shade-tertiary text-xs transition hover:text-shade-primary`}
                     >
                       {activeSection === subsection.id && (
                         <motion.div
-                          className="absolute -left-[calc(40px-1px)] w-[3px] bg-brand-secondary"
+                          className="absolute -left-[calc(32px-2.5px)] w-[1.5px] bg-brand-secondary"
                           style={{ height: "20px" }}
                           layoutId={`article`}
                           transition={{ duration: 0.4, ease: anticipate }}
@@ -205,8 +196,8 @@ export default function TableOfContents() {
           rel="noopener noreferrer"
           className="flex items-center space-x-2 hover:text-shade-tertiary text-shade-primary"
         >
-          <Icon name="Github" />
-          <span className="font-medium font-mono">
+          <Icon name="Github" size={16} />
+          <span className="font-medium font-mono text-sm">
             {t("contents.view_source")}
           </span>
         </a>

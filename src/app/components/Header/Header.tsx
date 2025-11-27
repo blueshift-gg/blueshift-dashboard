@@ -1,7 +1,7 @@
 "use client";
 
 import classNames from "classnames";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { AnimatePresence, anticipate, motion } from "motion/react";
 import { useState, useRef, RefObject } from "react";
 import { useTranslations, useLocale } from "next-intl";

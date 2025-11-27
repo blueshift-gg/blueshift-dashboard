@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useRef, useState } from "react";
 import classNames from "classnames";
 import { Link } from "@/i18n/navigation";
@@ -176,13 +178,19 @@ export default function ChallengeCard({
         <div className="relative z-20 flex flex-col gap-y-4">
           {status === "open" && (
             <>
-              <Button
-                variant="primary"
-                size="md"
-                label={t("lessons.take_challenge")}
-                icon={{ name: "Challenge" as IconName }}
-                className="!w-full z-20 relative"
-              />
+              <Link
+                href={`/challenges/${challenge.slug}`}
+                onClick={(e) => e.stopPropagation()}
+                className="z-20 relative"
+              >
+                <Button
+                  variant="primary"
+                  size="md"
+                  label={t("lessons.take_challenge")}
+                  icon={{ name: "Challenge" as IconName }}
+                  className="!w-full"
+                />
+              </Link>
               <div className="flex items-center justify-center gap-x-2">
                 <button
                   className="font-mono flex items-center justify-center gap-x-1.5 text-xs text-shade-tertiary/50 cursor-not-allowed w-full flex-shrink uppercase"

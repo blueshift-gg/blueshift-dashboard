@@ -2,7 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { anticipate } from "motion";
-import Button from "../Button/Button";
+import { Button } from "@blueshift-gg/ui-components";
 import { motion } from "motion/react";
 import classNames from "classnames";
 import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
@@ -11,9 +11,9 @@ import {
   ChallengeRequirement,
   VerificationApiResponse,
 } from "@/hooks/useChallengeVerifier";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import Divider from "../Divider/Divider";
-import HeadingReveal from "../HeadingReveal/HeadingReveal";
+import { HeadingReveal } from "@blueshift-gg/ui-components";
 import { usePersistentStore } from "@/stores/store";
 import ChallengeCompleted from "../Modals/ChallengeComplete";
 import { Link } from "@/i18n/navigation";
@@ -241,7 +241,7 @@ export default function ChallengeTable({
                 <Button
                   variant="primary"
                   size="md"
-                  icon="Lessons"
+                  icon={{ name: "Lessons" }}
                   label={t(
                     fromCourse
                       ? "ChallengePage.challenge_completed.view_other_courses"
@@ -260,7 +260,7 @@ export default function ChallengeTable({
               <Button
                 variant="secondary"
                 size="md"
-                icon="Refresh"
+                icon={{ name: "Refresh" }}
                 label={t("ChallengePage.challenge_completed.redo")}
                 onClick={() => {
                   handleRedoChallenge();
@@ -325,7 +325,7 @@ export default function ChallengeTable({
 
           <Button
             variant="primary"
-            icon="Upload"
+            icon={{ name: "Upload" }}
             size="lg"
             label={t("ChallengePage.upload_program_btn")}
             className="w-full sm:w-auto"
@@ -562,7 +562,7 @@ export default function ChallengeTable({
 
                         <div className="bg-card-solid/80 rounded-lg px-4 py-2 flex gap-x-4 text-sm font-medium w-full justify-between items-center">
                           <Icon
-                            name="ShiftArrow"
+                            name="General"
                             size={14}
                             className="text-brand-primary"
                           />

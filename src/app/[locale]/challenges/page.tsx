@@ -1,12 +1,9 @@
 import { useTranslations } from "next-intl";
-import HeadingReveal from "@/app/components/HeadingReveal/HeadingReveal";
 import Challenges from "@/app/components/ChallengeCenterContent/Challenges";
-import CrosshairCorners from "@/app/components/Graphics/CrosshairCorners";
 import { Metadata } from "next";
 import { getPathname } from "@/i18n/navigation";
 import { getTranslations } from "next-intl/server";
 import { URLS } from "@/constants/urls";
-import Courses from "@/app/components/CoursesContent/Courses";
 import PageHero from "@/app/components/PageHero/PageHero";
 
 interface ChallengesPageProps {

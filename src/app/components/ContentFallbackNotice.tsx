@@ -1,4 +1,4 @@
-import Icon from "@/app/components/Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { getTranslations } from "next-intl/server";
 
 interface ContentFallbackNoticeProps {

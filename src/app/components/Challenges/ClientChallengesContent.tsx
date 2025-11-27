@@ -1,8 +1,8 @@
 "use client";
 
 import { ReactNode, useEffect, useState, useRef } from "react";
-import Button from "../Button/Button";
-import Icon from "../Icon/Icon";
+import { Button } from "@blueshift-gg/ui-components";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import ClientChallengeTable from "./ClientChallengeTable";
 import { motion, useDragControls } from "motion/react";
@@ -540,8 +540,7 @@ export default function ChallengesContent({
                   <div className="flex items-center gap-x-2.5">
                     <Button
                       variant="link"
-                      icon={"Play"}
-                      iconSize={12}
+                      icon={{ name: "Play", size: 12 }}
                       size="sm"
                       label={
                         isCodeRunning
@@ -556,8 +555,7 @@ export default function ChallengesContent({
                     />
                     <Button
                       variant="link"
-                      icon={"Logs"}
-                      iconSize={12}
+                      icon={{ name: "Logs", size: 12 }}
                       size="sm"
                       label={t("ChallengePage.view_logs_btn")}
                       className={classNames(
@@ -572,8 +570,7 @@ export default function ChallengesContent({
 
                     <Button
                       variant="link"
-                      icon={"ArrowLeft"}
-                      iconSize={12}
+                      icon={{ name: "ArrowLeft", size: 12 }}
                       size="sm"
                       label={t("ChallengePage.back_to_editor_btn")}
                       className={classNames(

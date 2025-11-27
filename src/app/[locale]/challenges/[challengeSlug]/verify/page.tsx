@@ -1,12 +1,14 @@
 import { getTranslations } from "next-intl/server";
 import MdxLayout from "@/app/mdx-layout";
 import Divider from "@/app/components/Divider/Divider";
-import HeadingReveal from "@/app/components/HeadingReveal/HeadingReveal";
-import Icon from "@/app/components/Icon/Icon";
+import {
+  HeadingReveal,
+  Icon,
+  CrosshairCorners,
+} from "@blueshift-gg/ui-components";
 import { challengeColors } from "@/app/utils/challenges";
 import ProgramChallengesContent from "@/app/components/Challenges/ProgramChallengesContent";
 import ClientChallengesContent from "@/app/components/Challenges/ClientChallengesContent";
-import CrosshairCorners from "@/app/components/Graphics/CrosshairCorners";
 import { notFound } from "next/navigation";
 import { getChallenge } from "@/app/utils/content";
 import { getCompiledMdx } from "@/app/utils/mdx";
@@ -73,12 +75,12 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
   let challengeLocale = locale;
   try {
     ChallengeContent = await getCompiledMdx(
-      `challenges/${challengeMetadata.slug}/${locale}/verify.mdx`,
+      `challenges/${challengeMetadata.slug}/${locale}/verify.mdx`
     );
   } catch {
     try {
       ChallengeContent = await getCompiledMdx(
-        `challenges/${challengeMetadata.slug}/en/verify.mdx`,
+        `challenges/${challengeMetadata.slug}/en/verify.mdx`
       );
       challengeLocale = "en";
     } catch {
@@ -96,15 +98,18 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
       >
         <div className="px-4 py-14 lg:pb-20 max-w-app md:px-8 lg:px-14 mx-auto w-full flex lg:flex-row flex-col lg:items-center gap-y-12 lg:gap-y-0 justify-start lg:justify-between">
           <div className="flex flex-col gap-y-2">
-            <div className="flex items-center gap-x-2 relative w-max">
+            <div
+              style={{
+                color: `rgb(${challengeColors[challengeMetadata.language]},1)`,
+              }}
+              className="flex items-center gap-x-2 relative w-max"
+            >
               <CrosshairCorners
                 size={6}
                 spacingY={2}
                 spacingX={6}
-                style={{
-                  color: `rgb(${challengeColors[challengeMetadata.language]},1)`,
-                }}
-                baseDelay={0}
+                className="text-current"
+                animationDelay={0}
               />
               <div
                 className="w-[24px] h-[24px] rounded-sm flex items-center justify-center"

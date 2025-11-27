@@ -2,7 +2,7 @@
 
 import Modal from "./Modal";
 import { useTranslations } from "next-intl";
-import Button from "../Button/Button";
+import { Button } from "@blueshift-gg/ui-components";
 import DecryptedText from "../HeadingReveal/DecryptText";
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
@@ -98,7 +98,7 @@ export default function ChallengeCompleted({
                 }
                 variant="primary"
                 size="lg"
-                icon="Claimed"
+                icon={{ name: "Claimed" }}
                 className="!w-full !flex-shrink"
                 onClick={handleMint}
                 disabled={isLoading}
@@ -122,7 +122,7 @@ export default function ChallengeCompleted({
                   label={t("ChallengePage.mint_modal_tweet")}
                   variant="primary"
                   size="lg"
-                  icon="X"
+                  icon={{ name: "X" }}
                   className="!w-full !flex-shrink"
                 />
               </Link>

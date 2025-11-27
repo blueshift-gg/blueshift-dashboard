@@ -4,7 +4,6 @@ import { usePersistentStore, useStore } from "@/stores/store";
 import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
-import { Divider } from "@blueshift-gg/ui-components";
 import { useEffect, useState, useMemo, useRef, forwardRef } from "react";
 import { ChallengeMetadata } from "@/app/utils/challenges";
 import ChallengeCard from "../ChallengeCard/ChallengeCard";

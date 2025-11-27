@@ -5,7 +5,7 @@ import "./style.css";
 import Editor, { Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import classNames from "classnames";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "motion/react";
 import { anticipate } from "motion";

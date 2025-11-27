@@ -2,7 +2,7 @@
 
 import { anticipate, motion } from "motion/react";
 import classNames from "classnames";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { usePersistentStore } from "@/stores/store";
 
 type ViewToggleProps = {

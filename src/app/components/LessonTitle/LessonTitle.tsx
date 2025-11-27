@@ -1,7 +1,7 @@
 "use client";
 
 import CopyClipboard from "../CopyClipboard/CopyClipboard";
-import HeadingReveal from "../HeadingReveal/HeadingReveal";
+import { HeadingReveal } from "@blueshift-gg/ui-components";
 import { usePathname } from "@/i18n/navigation";
 import { useEffect, useState } from "react";
 

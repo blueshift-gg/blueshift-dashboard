@@ -1,9 +1,8 @@
 "use client";
 import { useRef, useState, useEffect } from "react";
-import CrosshairCorners from "../Graphics/CrosshairCorners";
+import { CrosshairCorners } from "@blueshift-gg/ui-components";
 import NFTScene from "./NFTScene";
 import { useOnClickOutside } from "usehooks-ts";
-import Icon from "../Icon/Icon";
 import { AnimatePresence, motion } from "motion/react";
 import { anticipate } from "motion";
 import { CourseDifficulty } from "@/app/utils/course";
@@ -141,7 +140,7 @@ export default function NFTViewer({
                 transformOrigin: getTransformOrigin(),
               }}
             >
-              <CrosshairCorners baseDelay={0} />
+              <CrosshairCorners animationDelay={0} />
               <div className="relative aspect-[3/4] md:aspect-square w-[95dvw] xs:w-[80dvw] md:w-[480px] md:h-[480px] overflow-hidden p-2 pb-2 col-span-3">
                 <NFTScene
                   isAnimationComplete={isAnimationComplete}

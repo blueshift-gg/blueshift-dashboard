@@ -1,3 +1,5 @@
+"use client";
+
 import { CourseDifficulty } from "@/app/utils/course";
 import { CourseLanguages } from "@/app/utils/course";
 import React, { useRef, useState } from "react";
@@ -16,7 +18,7 @@ import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 
 type CourseCardProps = {
   name: string;

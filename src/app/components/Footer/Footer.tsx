@@ -1,5 +1,5 @@
 import { Link } from "@/i18n/navigation";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { URLS } from "@/constants/urls";
 
 export default function Footer() {

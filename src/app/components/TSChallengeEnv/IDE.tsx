@@ -15,8 +15,8 @@ import {
 } from "@/hooks/useEsbuildRunner";
 import { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
 import { useEffect, useState } from "react";
-import Icon from "../Icon/Icon";
-import Button from "../Button/Button";
+import { Icon } from "@blueshift-gg/ui-components";
+import { Button } from "@blueshift-gg/ui-components";
 import LogoGlyph from "../Logo/LogoGlyph";
 import { useTranslations } from "next-intl";
 
@@ -315,8 +315,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
                 <>
                   <Button
                     variant="link"
-                    icon={"Play"}
-                    iconSize={12}
+                    icon={{ name: "Play", size: 12 }}
                     size="sm"
                     label={
                       isCodeRunning

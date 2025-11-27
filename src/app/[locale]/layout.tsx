@@ -14,7 +14,7 @@ import { Fira_Code, Funnel_Display } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
-import Icon from "@/app/components/Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { URLS } from "@/constants/urls";
 
 const FiraCode = Fira_Code({

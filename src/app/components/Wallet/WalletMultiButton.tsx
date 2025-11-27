@@ -1,10 +1,11 @@
+"use client";
+
 import React, { useCallback, useState } from "react";
 import { breeze, Button, crisp } from "@blueshift-gg/ui-components";
 import DecryptedText from "../HeadingReveal/DecryptText";
 import { useAuth } from "@/hooks/useAuth";
 import { motion } from "motion/react";
-import { anticipate } from "motion";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 
 interface WalletButtonProps {
   disabled?: boolean;

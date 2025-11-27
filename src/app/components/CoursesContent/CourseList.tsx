@@ -8,7 +8,7 @@ import {
 import { usePersistentStore } from "@/stores/store";
 import CourseCard from "../CourseCard/CourseCard";
 import classNames from "classnames";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { Divider } from "@blueshift-gg/ui-components";
 import CoursesEmpty from "./CoursesEmpty";

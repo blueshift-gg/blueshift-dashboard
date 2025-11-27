@@ -2,7 +2,7 @@
 import Modal from "./Modal";
 import { useStore, usePersistentStore } from "@/stores/store";
 import { useTranslations } from "next-intl";
-import Button from "../Button/Button";
+import { Button } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
 export default function ConnectWalletRecommended() {
   const t = useTranslations();
@@ -41,7 +41,7 @@ export default function ConnectWalletRecommended() {
             variant="primary"
             size="lg"
             className="!w-full"
-            icon="Wallet"
+            icon={{ name: "Wallet" }}
             onClick={closeModal}
           />
           <div

@@ -3,7 +3,7 @@ import "server-only";
 import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
 import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
 import Codeblock from "@/app/components/Codeblock/Codeblock";
-import Icon from "@/app/components/Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import IDE from "@/app/components/TSChallengeEnv/IDE";
 import { Requirement } from "@/app/components/Challenges/Requirement";
 import { RequirementList } from "@/app/components/Challenges/RequirementList";

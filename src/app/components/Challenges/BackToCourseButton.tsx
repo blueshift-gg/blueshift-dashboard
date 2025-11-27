@@ -1,7 +1,7 @@
 "use client";
 
 import { Link } from "@/i18n/navigation";
-import Button from "../Button/Button";
+import { Button } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { CourseMetadata } from "@/app/utils/course";
 import { useCurrentLessonSlug } from "@/hooks/useCurrentLessonSlug";
@@ -20,8 +20,8 @@ export default function BackToCourseButton({
     <Link href={`/courses/${course.slug}/${lastLessonSlug}`} className="!mt-4">
       <Button
         label={t("ChallengePage.back_to_lessons")}
-        icon="ArrowLeft"
-        variant="tertiary"
+        icon={{ name: "ArrowLeft" }}
+        variant="outline"
       />
     </Link>
   );

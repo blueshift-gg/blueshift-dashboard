@@ -1,11 +1,12 @@
 "use client";
 import { AnimatePresence, anticipate, motion } from "motion/react";
-import CrosshairCorners from "../Graphics/CrosshairCorners";
+import { CrosshairCorners } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
-import Icon from "../Icon/Icon";
-import Button from "../Button/Button";
+import { Icon } from "@blueshift-gg/ui-components";
+import { Button } from "@blueshift-gg/ui-components";
+
 import { usePersistentStore } from "@/stores/store";
-import DepletingHeart from "../Icon/icons/DepletingHeart";
+import DepletingHeart from "../Graphics/DepletingHeart";
 import { useState } from "react";
 import { URLS } from "@/constants/urls";
 
@@ -64,11 +65,7 @@ export default function MarketingBanner() {
               </span>
             </div>
 
-            <a
-              href={stakingUrl}
-              target="_blank"
-              className="hidden sm:block"
-            >
+            <a href={stakingUrl} target="_blank" className="hidden sm:block">
               <Button size="xs" label={t("marketing_banner.button")} />
             </a>
 
@@ -76,7 +73,7 @@ export default function MarketingBanner() {
               className="text-brand-primary hidden sm:flex"
               size={6}
               thickness={1.25}
-              baseDelay={0.3}
+              animationDelay={0.3}
             />
           </motion.div>
           <button
@@ -95,7 +92,7 @@ export default function MarketingBanner() {
               thickness={1.5}
               size={6}
               animationDuration={0}
-              baseDelay={0}
+              animationDelay={0}
               variant="bordered"
               className="text-brand-primary"
             />

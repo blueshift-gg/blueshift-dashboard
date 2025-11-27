@@ -1,4 +1,6 @@
-import Icon from "../Icon/Icon";
+"use client";
+
+import { Icon } from "@blueshift-gg/ui-components";
 import DecryptedText from "../HeadingReveal/DecryptText";
 import { useState, useEffect } from "react";
 import { AnimatePresence, motion } from "motion/react";

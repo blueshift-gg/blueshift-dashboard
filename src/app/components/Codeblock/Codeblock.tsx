@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 import { motion } from "motion/react";
 import classNames from "classnames";
 import { anticipate } from "motion";
