@@ -3,7 +3,7 @@
 import { getPathCompletedSteps, PathStep } from "@/app/utils/path";
 import { usePersistentStore } from "@/stores/store";
 import { useTranslations } from "next-intl";
-import Icon from "../Icon/Icon";
+import { Icon } from "@blueshift-gg/ui-components";
 
 interface PathDetailHeaderProps {
   slug: string;

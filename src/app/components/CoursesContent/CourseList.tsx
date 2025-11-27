@@ -14,7 +14,7 @@ import {
 import { usePersistentStore } from "@/stores/store";
 import CourseCard from "../CourseCard/CourseCard";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
+import { Icon, Difficulty } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { Divider } from "@blueshift-gg/ui-components";
 import CoursesEmpty from "./CoursesEmpty";
@@ -253,39 +253,27 @@ export default function CourseList({
     {
       label: "Difficulty",
       value: "difficulty",
-      icon: { name: "Difficulty" as const },
+      icon: <Difficulty size={16} />,
       children: [
         {
           label: "Beginner",
           value: "beginner",
-          icon: {
-            name: "Difficulty" as const,
-            difficulties: [1] as (1 | 2 | 3 | 4)[],
-          },
+          icon: <Difficulty size={16} difficulties={[1]} />,
         },
         {
           label: "Intermediate",
           value: "intermediate",
-          icon: {
-            name: "Difficulty" as const,
-            difficulties: [2] as (1 | 2 | 3 | 4)[],
-          },
+          icon: <Difficulty size={16} difficulties={[2]} />,
         },
         {
           label: "Advanced",
           value: "advanced",
-          icon: {
-            name: "Difficulty" as const,
-            difficulties: [3] as (1 | 2 | 3 | 4)[],
-          },
+          icon: <Difficulty size={16} difficulties={[3]} />,
         },
         {
           label: "Expert",
           value: "expert",
-          icon: {
-            name: "Difficulty" as const,
-            difficulties: [4] as (1 | 2 | 3 | 4)[],
-          },
+          icon: <Difficulty size={16} difficulties={[4]} />,
         },
       ],
     },

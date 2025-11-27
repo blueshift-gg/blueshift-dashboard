@@ -1,4 +1,4 @@
-import { IconName } from "@/app/components/Icon/icons";
+import { IconName } from "@blueshift-gg/ui-components";
 
 export const challengeLanguages = {
   Anchor: "Anchor",
@@ -49,12 +49,12 @@ type ChallengeDifficulty = keyof typeof challengeDifficulty;
 export const challengeStatusToIconName = (status: ChallengeStatus): IconName => {
   switch (status) {
     case "open":
-      return "Open";
+      return "Unlocked";
     case "completed":
-      return "Completed";
+      return "Success";
     case "claimed":
       return "Claimed";
     default:
-      return "Open"; // Fallback icon
+      return "Unlocked"; // Fallback icon
   }
 }

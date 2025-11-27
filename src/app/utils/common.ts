@@ -57,4 +57,4 @@ export const difficultyFilterMap: Record<string, Difficulty> = {
 
 export const reverseDifficultyFilterMap = Object.fromEntries(
   Object.entries(difficultyFilterMap).map(([k, v]) => [v, k])
-) as Record<Difficulty, string>;
+) as Record<number, string>;

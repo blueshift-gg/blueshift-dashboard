@@ -11,6 +11,7 @@ import {
   Badge,
   breeze,
   Button,
+  Difficulty,
   Divider,
   glide,
 } from "@blueshift-gg/ui-components";
@@ -125,11 +126,7 @@ export default function CourseCard({
                   label="Beginner"
                   className="leading-[100%] min-h-[20px]!"
                   crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
-                  icon={{
-                    name: "Difficulty",
-                    size: 12,
-                    difficulties: [1],
-                  }}
+                  icon={<Difficulty size={12} difficulties={[1]} />}
                 />
               </motion.div>
             )}

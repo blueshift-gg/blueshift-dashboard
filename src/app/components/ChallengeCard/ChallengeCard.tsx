@@ -10,6 +10,7 @@ import {
   breeze,
   Button,
   CrosshairCorners,
+  Difficulty,
   Divider,
   glide,
   IconName,
@@ -147,11 +148,12 @@ export default function ChallengeCard({
               label={badgeDifficulty}
               className="leading-[100%] min-h-[20px]!"
               crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
-              icon={{
-                name: "Difficulty",
-                size: 12,
-                difficulties: [challenge.difficulty as 1 | 2 | 3 | 4],
-              }}
+              icon={
+                <Difficulty
+                  size={12}
+                  difficulties={[challenge.difficulty]}
+                />
+              }
             />
           </div>
           <span

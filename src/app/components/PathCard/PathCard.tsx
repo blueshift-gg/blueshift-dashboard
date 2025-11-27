@@ -11,14 +11,14 @@ import {
   Badge,
   breeze,
   Button,
+  Difficulty,
   Divider,
   glide,
 } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import { BRAND_COLOURS, Icon } from "@blueshift-gg/ui-components";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
-import Icon from "../Icon/Icon";
 
 type PathCardProps = {
   name: string;
@@ -142,11 +142,7 @@ export default function PathCard({
                   label={badgeDifficulty}
                   className="leading-[100%] min-h-[20px]!"
                   crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
-                  icon={{
-                    name: "Difficulty",
-                    size: 12,
-                    difficulties: [difficulty ?? 1],
-                  }}
+                  icon={<Difficulty size={12} difficulties={[difficulty ?? 1]} />}
                 />
               </motion.div>
             )}
