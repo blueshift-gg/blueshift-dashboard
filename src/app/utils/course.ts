@@ -1,32 +1,17 @@
-export const courseLanguages = {
-  Anchor: "Anchor",
-  Rust: "Rust",
-  Typescript: "TypeScript",
-  Assembly: "Assembly",
-  General: "General",
-} as const;
+import {
+  languages,
+  languageColors,
+  difficulty,
+  difficultyColors,
+  Language,
+  Difficulty,
+} from "./common";
 
-export const courseColors = {
-  Anchor: "221,234,224",
-  Rust: "255,173,102",
-  Typescript: "105,162,241",
-  Assembly: "140,255,102",
-  General: "0,255,255",
-} as const;
-
-export const courseDifficulty = {
-  1: "Beginner",
-  2: "Intermediate",
-  3: "Advanced",
-  4: "Expert",
-} as const;
-
-export const difficultyColors = {
-  1: "#00C7E6",
-  2: "#00E66B",
-  3: "#E6D700",
-  4: "#FF285A",
-} as const;
+// Re-export with course-specific names for backward compatibility
+export const courseLanguages = languages;
+export const courseColors = languageColors;
+export const courseDifficulty = difficulty;
+export { difficultyColors };
 
 export const courseStatus = {
   Incomplete: "Incomplete",

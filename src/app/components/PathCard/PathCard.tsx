@@ -1,6 +1,6 @@
 "use client";
 
-import { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
+import { PathDifficulty, PathLanguages } from "@/app/utils/path";
 import { difficulty as difficultyMap } from "@/app/utils/common";
 import React, { useRef, useState } from "react";
 import classNames from "classnames";
@@ -18,34 +18,39 @@ import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
-import { Icon } from "@blueshift-gg/ui-components";
+import Icon from "../Icon/Icon";
 
-type CourseCardProps = {
+type PathCardProps = {
   name: string;
+  description?: string;
   color: string;
-  points?: number;
-  language: CourseLanguages;
-  difficulty?: CourseDifficulty;
+  language: PathLanguages;
+  difficulty?: PathDifficulty;
   className?: string;
   link?: string;
-  completedLessonsCount?: number;
-  totalLessonCount?: number;
-  courseSlug?: string;
-  currentLessonSlug?: string;
+  completedStepsCount?: number;
+  totalStepsCount?: number;
+  pathSlug?: string;
+  estimatedHours?: number;
+  courseCount?: number;
+  challengeCount?: number;
 };
 
-export default function CourseCard({
+export default function PathCard({
   name,
+  description,
   color,
   language,
   difficulty,
   className,
   link,
-  completedLessonsCount,
-  totalLessonCount,
-  courseSlug,
-  currentLessonSlug,
-}: CourseCardProps) {
+  completedStepsCount = 0,
+  totalStepsCount = 0,
+  pathSlug,
+  estimatedHours,
+  courseCount = 0,
+  challengeCount = 0,
+}: PathCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [hasHovered, setHasHovered] = useState(false);
   const {
@@ -60,6 +65,9 @@ export default function CourseCard({
 
   const badgeDifficulty = difficultyMap[difficulty ?? 1];
 
+  const isCompleted = completedStepsCount === totalStepsCount && totalStepsCount > 0;
+  const hasProgress = completedStepsCount > 0;
+
   return (
     <div
       ref={cardRef}
@@ -70,7 +78,7 @@ export default function CourseCard({
       onMouseLeave={handleMouseLeave}
       style={
         {
-          "--courseColor": color,
+          "--pathColor": color,
           "--swoosh-angle": `${swooshAngle}deg`,
           willChange: "opacity",
         } as React.CSSProperties
@@ -84,10 +92,20 @@ export default function CourseCard({
       {link && (
         <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
       )}
-      <div className="w-full bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
+      <div 
+        className="w-full bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide flex items-center justify-center"
+        style={{ background: `linear-gradient(135deg, rgba(${color}, 0.1), rgba(${color}, 0.05))` }}
+      >
+        <div className="flex items-center gap-2 opacity-60">
+          <Icon name="Lessons" size={18} />
+          <span className="text-xs font-mono text-shade-tertiary uppercase tracking-wider">
+            {t("paths.learning_path")}
+          </span>
+        </div>
+      </div>
       <div
         className={classNames(
-          "flex flex-col gap-y-12 flex-grow justify-between px-4 py-5"
+          "flex flex-col gap-y-8 flex-grow justify-between px-4 py-5"
         )}
       >
         <div className="flex flex-col min-h-[150px] sm:min-h-[125px]">
@@ -111,8 +129,7 @@ export default function CourseCard({
               >
                 <span
                   style={{
-                    color:
-                      BRAND_COLOURS[language as keyof typeof BRAND_COLOURS],
+                    color: BRAND_COLOURS[language as keyof typeof BRAND_COLOURS],
                   }}
                   className={classNames("font-mono leading-[100%]")}
                 >
@@ -121,14 +138,14 @@ export default function CourseCard({
                 <Divider direction="vertical" className="h-[20px]" />
                 <Badge
                   size="sm"
-                  variant="Beginner"
-                  label="Beginner"
+                  variant={badgeDifficulty as "Beginner" | "Intermediate" | "Advanced" | "Expert"}
+                  label={badgeDifficulty}
                   className="leading-[100%] min-h-[20px]!"
                   crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
                   icon={{
                     name: "Difficulty",
                     size: 12,
-                    difficulties: [1],
+                    difficulties: [difficulty ?? 1],
                   }}
                 />
               </motion.div>
@@ -141,7 +158,7 @@ export default function CourseCard({
             {name}
           </motion.span>
           <AnimatePresence>
-            {isHovered && (
+            {isHovered && description && (
               <motion.div
                 initial={{ opacity: 0, height: 0, marginTop: 0 }}
                 animate={{
@@ -163,12 +180,31 @@ export default function CourseCard({
                 className="overflow-hidden"
               >
                 <span className="flex leading-[150%] flex-wrap items-center gap-x-3 text-sm text-shade-tertiary">
-                  To understand sBPF Assembly and its role in Solana programs,
-                  we first need to understand assembly.
+                  {description}
                 </span>
               </motion.div>
             )}
           </AnimatePresence>
+          
+          {/* Path stats */}
+          <div className="flex items-center gap-x-4 mt-3 text-xs text-shade-tertiary">
+            <div className="flex items-center gap-x-1.5">
+              <Icon name="Lessons" size={12} />
+              <span>{courseCount} {courseCount === 1 ? t("paths.course") : t("paths.courses")}</span>
+            </div>
+            {challengeCount > 0 && (
+              <div className="flex items-center gap-x-1.5">
+                <Icon name="Challenge" size={12} />
+                <span>{challengeCount} {challengeCount === 1 ? t("paths.challenge") : t("paths.challenges")}</span>
+              </div>
+            )}
+            {estimatedHours && (
+              <div className="flex items-center gap-x-1.5">
+                <Icon name="Target" size={12} />
+                <span>{estimatedHours}h</span>
+              </div>
+            )}
+          </div>
         </div>
         <div className="relative z-20">
           <Button
@@ -176,30 +212,32 @@ export default function CourseCard({
             size="md"
             className="w-max"
             label={
-              completedLessonsCount === 0
-                ? t("lessons.start_course")
-                : t("lessons.continue_learning")
+              isCompleted
+                ? t("paths.review_path")
+                : hasProgress
+                ? t("paths.continue_path")
+                : t("paths.start_path")
             }
             children={
-              completedLessonsCount === 0 ? (
+              hasProgress ? (
                 <div className="flex items-center gap-x-2 order-last">
                   <Divider direction="vertical" className="!h-[20px]" />
-                  <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
-                    50 XP
+                  <ProgressCircle
+                    percentFilled={
+                      totalStepsCount > 0
+                        ? (completedStepsCount / totalStepsCount) * 100
+                        : 0
+                    }
+                  />
+                  <span className="text-sm text-shade-tertiary font-mono">
+                    {completedStepsCount}/{totalStepsCount}
                   </span>
                 </div>
               ) : (
                 <div className="flex items-center gap-x-2 order-last">
                   <Divider direction="vertical" className="!h-[20px]" />
-                  <ProgressCircle
-                    percentFilled={
-                      completedLessonsCount && totalLessonCount
-                        ? (completedLessonsCount / totalLessonCount) * 100
-                        : 0
-                    }
-                  />
-                  <span className="text-sm text-shade-tertiary font-mono">
-                    {completedLessonsCount ?? 0}/{totalLessonCount ?? 0}
+                  <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
+                    {totalStepsCount} {t("paths.steps")}
                   </span>
                 </div>
               )

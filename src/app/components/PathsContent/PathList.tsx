@@ -1,10 +1,7 @@
 "use client";
 
-import {
-  courseColors,
-  CourseMetadata,
-  CourseLanguages,
-} from "@/app/utils/course";
+import { PathMetadata, PathLanguages, getPathCompletedSteps } from "@/app/utils/path";
+import { CourseLanguages } from "@/app/utils/course";
 import {
   languageFilterMap,
   reverseLanguageFilterMap,
@@ -12,36 +9,27 @@ import {
   reverseDifficultyFilterMap,
 } from "@/app/utils/common";
 import { usePersistentStore } from "@/stores/store";
-import CourseCard from "../CourseCard/CourseCard";
+import PathCard from "../PathCard/PathCard";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
+import Icon from "../Icon/Icon";
 import { useTranslations } from "next-intl";
-import { Divider } from "@blueshift-gg/ui-components";
-import CoursesEmpty from "./CoursesEmpty";
+import { Divider, Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
 import { motion } from "motion/react";
 import { anticipate } from "motion";
 import { useStore } from "@/stores/store";
 import { useWindowSize } from "usehooks-ts";
 import { useEffect, useRef, useState } from "react";
-import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import PathCardSkeleton from "./PathCardSkeleton";
 
-type CoursesContentProps = {
-  searchValue?: string;
-  initialCourses?: CourseMetadata[];
-  courseLessons?: {
-    slug: string;
-    totalLessons: number;
-    lessons: { number: number; slug: string }[];
-  }[];
+type PathsContentProps = {
+  initialPaths?: PathMetadata[];
   isLoading?: boolean;
 };
 
-export default function CourseList({
-  initialCourses = [],
-  courseLessons = [],
+export default function PathList({
+  initialPaths = [],
   isLoading = false,
-}: CoursesContentProps) {
+}: PathsContentProps) {
   const t = useTranslations();
   const {
     selectedLanguages,
@@ -54,11 +42,10 @@ export default function CourseList({
     challengeStatuses,
   } = usePersistentStore();
   const { searchValue, setSearchValue } = useStore();
-  const [activeTab, setActiveTab] = useState("all-courses");
+  const [activeTab, setActiveTab] = useState("all-paths");
   const { width } = useWindowSize();
   const [isMobile, setIsMobile] = useState(false);
 
-  const [hoveredItem, setHoveredItem] = useState<number | null>(null);
   const [scrollState, setScrollState] = useState({
     isAtStart: true,
     isAtEnd: false,
@@ -81,34 +68,11 @@ export default function CourseList({
   useEffect(() => {
     const carousel = carouselRef.current;
     if (carousel) {
-      // Set initial scroll state
       updateScrollState();
-
-      // Add scroll event listener
       carousel.addEventListener("scroll", updateScrollState);
-
-      // Cleanup
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
   }, []);
-
-  const handleScrollLeft = () => {
-    if (carouselRef.current) {
-      carouselRef.current.scrollBy({
-        left: -300,
-        behavior: "smooth",
-      });
-    }
-  };
-
-  const handleScrollRight = () => {
-    if (carouselRef.current) {
-      carouselRef.current.scrollBy({
-        left: 300,
-        behavior: "smooth",
-      });
-    }
-  };
 
   useEffect(() => {
     setIsMobile(width < 768);
@@ -136,11 +100,11 @@ export default function CourseList({
 
       if (selectedStatuses.length > 1) {
         const newStatus = selectedStatuses.find((s) => s !== activeTab);
-        setActiveTab(newStatus || "all-courses");
+        setActiveTab(newStatus || "all-paths");
       } else if (selectedStatuses.length === 1) {
         setActiveTab(selectedStatuses[0]);
       } else {
-        setActiveTab("all-courses");
+        setActiveTab("all-paths");
       }
     } else if (typeof value === "string") {
       if (value in difficultyFilterMap) {
@@ -148,106 +112,61 @@ export default function CourseList({
       } else if (value in languageFilterMap) {
         toggleLanguage(languageFilterMap[value]);
       } else if (["in-progress", "completed"].includes(value)) {
-        setActiveTab(value === activeTab ? "all-courses" : value);
+        setActiveTab(value === activeTab ? "all-paths" : value);
       }
     }
   };
 
-  // Calculate global in-progress courses to determine tab state
-  const globalInProgressCourses = initialCourses.filter((course) => {
-    const progress = courseProgress[course.slug] || 0;
-    const totalLessons = course.lessons.length;
-
-    if (progress === 0) return false;
-    if (progress < totalLessons) return true;
-    if (progress === totalLessons && course.challenge) {
-      const status = challengeStatuses[course.challenge];
-      return status !== "completed" && status !== "claimed";
-    }
-    return false;
+  // Calculate global in-progress paths
+  const globalInProgressPaths = initialPaths.filter((path) => {
+    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+    const totalSteps = path.steps.length;
+    return completedSteps > 0 && completedSteps < totalSteps;
   });
 
-  const hasInProgress = globalInProgressCourses.length > 0;
+  const hasInProgress = globalInProgressPaths.length > 0;
 
-  // Disable In Progress tab if no courses are in progress
+  // Disable In Progress tab if no paths are in progress
   useEffect(() => {
     if (!hasInProgress && activeTab === "in-progress") {
-      setActiveTab("all-courses");
+      setActiveTab("all-paths");
     }
   }, [hasInProgress, activeTab]);
 
-  // Filter courses
-  const filteredCourses = initialCourses
-    .filter((course) => {
+  // Filter paths
+  const filteredPaths = initialPaths
+    .filter((path) => {
       // 1. Search
-      const matchesSearch = t(`courses.${course.slug}.title`)
+      const matchesSearch = t(`paths.${path.slug}.title`)
         .toLowerCase()
         .includes((searchValue || "").toLowerCase());
 
       // 2. Language Filter (Empty = All)
       const matchesLanguage =
         selectedLanguages.length === 0 ||
-        selectedLanguages.includes(course.language);
+        selectedLanguages.includes(path.language as CourseLanguages);
 
       // 3. Difficulty Filter (Empty = All)
       const matchesDifficulty =
         selectedDifficulties.length === 0 ||
-        selectedDifficulties.includes(course.difficulty);
+        selectedDifficulties.includes(path.difficulty);
 
       // 4. Tab Filter
       let matchesTab = true;
-      const progress = courseProgress[course.slug] || 0;
-      const totalLessons = course.lessons.length;
+      const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+      const totalSteps = path.steps.length;
 
       if (activeTab === "in-progress") {
-        matchesTab =
-          (progress > 0 && progress < totalLessons) ||
-          (progress === totalLessons &&
-            !!course.challenge &&
-            !["completed", "claimed"].includes(
-              challengeStatuses[course.challenge]
-            ));
+        matchesTab = completedSteps > 0 && completedSteps < totalSteps;
       } else if (activeTab === "completed") {
-        const isChallengeComplete =
-          !course.challenge ||
-          ["completed", "claimed"].includes(
-            challengeStatuses[course.challenge]
-          );
-        matchesTab = progress === totalLessons && isChallengeComplete;
+        matchesTab = completedSteps === totalSteps;
       }
 
-      return (
-        matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
-      );
+      return matchesSearch && matchesLanguage && matchesDifficulty && matchesTab;
     })
     .sort((a, b) => a.difficulty - b.difficulty);
 
-  const hasNoResults = filteredCourses.length === 0;
-  const hasNoFilters =
-    !searchValue &&
-    selectedLanguages.length === 0 &&
-    selectedDifficulties.length === 0 &&
-    activeTab === "all-courses";
-
-  // Helper function to get the current lesson slug
-  const getCurrentLessonSlug = (courseSlug: string) => {
-    const progress = courseProgress[courseSlug];
-    if (!progress) return "";
-
-    // Find the course lessons
-    const courseLessonData = courseLessons.find((c) => c.slug === courseSlug);
-    if (!courseLessonData) return "";
-
-    // If progress is 0, return empty string (no current lesson)
-    if (progress === 0) return "";
-
-    // Find the lesson with matching number
-    const currentLesson = courseLessonData.lessons.find(
-      (lesson) => lesson.number === progress
-    );
-
-    return currentLesson?.slug || "";
-  };
+  const hasNoResults = filteredPaths.length === 0;
 
   const dropdownItems = [
     {
@@ -321,26 +240,32 @@ export default function CourseList({
         },
       ],
     },
-    ...(isMobile
-      ? [
-          {
-            label: "Status",
-            value: "status",
-            icon: { name: "Progress" as const },
-            children: [
-              {
-                label: "In Progress",
-                value: "in-progress",
-              },
-              {
-                label: "Completed",
-                value: "completed",
-              },
-            ],
-          },
-        ]
-      : []),
   ];
+
+  // Get counts for path stats
+  const getPathStats = (path: PathMetadata) => {
+    const courseCount = path.steps.filter((s) => s.type === "course").length;
+    const challengeCount = path.steps.filter((s) => s.type === "challenge").length;
+    return { courseCount, challengeCount };
+  };
+
+  const handleScrollLeft = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({
+        left: -300,
+        behavior: "smooth",
+      });
+    }
+  };
+
+  const handleScrollRight = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({
+        left: 300,
+        behavior: "smooth",
+      });
+    }
+  };
 
   return (
     <div
@@ -349,9 +274,9 @@ export default function CourseList({
         isLoading && "animate-pulse"
       )}
     >
-      {/* Get Started */}
+      {/* Featured Paths */}
       <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
-        <Banner title={t("lessons.get_started")} variant="Brand" />
+        <Banner title={t("paths.get_started")} variant="Brand" />
         <div className="px-1.5 py-3 sm:p-4">
           <div
             ref={carouselRef}
@@ -361,37 +286,30 @@ export default function CourseList({
           >
             {isLoading
               ? Array.from({ length: 3 }).map((_, index) => (
-                  <CourseCardSkeleton key={`featured-skeleton-${index}`} />
+                  <PathCardSkeleton key={`featured-skeleton-${index}`} />
                 ))
-              : initialCourses
-                  .filter((course) => course.isFeatured)
+              : initialPaths
+                  .filter((path) => path.isFeatured)
                   .slice(0, 3)
-                  .map((course) => {
-                    const totalLessons =
-                      courseLessons.find((c) => c.slug === course.slug)
-                        ?.totalLessons || 0;
-                    const currentLessonSlug = getCurrentLessonSlug(course.slug);
-                    const completedLessonsCount =
-                      courseProgress[course.slug] || 0;
-                    let link;
-                    if (currentLessonSlug && course.slug) {
-                      link = `/courses/${course.slug}/${currentLessonSlug}`;
-                    } else if (course.slug && !currentLessonSlug) {
-                      link = `/courses/${course.slug}`;
-                    }
+                  .map((path) => {
+                    const { courseCount, challengeCount } = getPathStats(path);
+                    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
                     return (
-                      <CourseCard
+                      <PathCard
                         className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
-                        key={course.slug}
-                        name={t(`courses.${course.slug}.title`)}
-                        language={course.language}
-                        color={course.color}
-                        difficulty={course.difficulty}
-                        link={link}
-                        completedLessonsCount={completedLessonsCount}
-                        totalLessonCount={totalLessons}
-                        courseSlug={course.slug}
-                        currentLessonSlug={currentLessonSlug}
+                        key={path.slug}
+                        name={t(`paths.${path.slug}.title`)}
+                        description={t(`paths.${path.slug}.description`)}
+                        language={path.language}
+                        color={path.color}
+                        difficulty={path.difficulty}
+                        link={`/paths/${path.slug}`}
+                        completedStepsCount={completedSteps}
+                        totalStepsCount={path.steps.length}
+                        pathSlug={path.slug}
+                        estimatedHours={path.estimatedHours}
+                        courseCount={courseCount}
+                        challengeCount={challengeCount}
                       />
                     );
                   })}
@@ -442,8 +360,8 @@ export default function CourseList({
               multiSelectLabel={`Filters`}
               selectedItem={[
                 ...selectedLanguages.map((l) => reverseLanguageFilterMap[l]),
-                ...selectedDifficulties.map((d) => reverseDifficultyFilterMap[d as keyof typeof reverseDifficultyFilterMap]),
-                ...(activeTab !== "all-courses" ? [activeTab] : []),
+                ...selectedDifficulties.map((d) => reverseDifficultyFilterMap[d]),
+                ...(activeTab !== "all-paths" ? [activeTab] : []),
               ]}
               multiple={true}
               showSelectAll={false}
@@ -461,11 +379,11 @@ export default function CourseList({
                 onClick: () => setActiveTab("in-progress"),
               },
               {
-                label: "All Courses",
-                value: "all-courses",
+                label: "All Paths",
+                value: "all-paths",
                 className: "w-full md:!w-max order-first",
-                selected: activeTab === "all-courses",
-                onClick: () => setActiveTab("all-courses"),
+                selected: activeTab === "all-paths",
+                onClick: () => setActiveTab("all-paths"),
               },
             ]}
             variant="segmented"
@@ -473,45 +391,54 @@ export default function CourseList({
             theme="secondary"
           />
         </div>
-        <div
-          className={classNames(
-            "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
-          )}
-        >
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {isLoading
             ? Array.from({ length: 6 }).map((_, index) => (
-                <CourseCardSkeleton key={`list-skeleton-${index}`} />
+                <PathCardSkeleton key={`list-skeleton-${index}`} />
               ))
-            : filteredCourses.map((course) => {
-                const totalLessons =
-                  courseLessons.find((c) => c.slug === course.slug)
-                    ?.totalLessons || 0;
-                const currentLessonSlug = getCurrentLessonSlug(course.slug);
-                const completedLessonsCount = courseProgress[course.slug] || 0;
-                let link;
-                if (currentLessonSlug && course.slug) {
-                  link = `/courses/${course.slug}/${currentLessonSlug}`;
-                } else if (course.slug && !currentLessonSlug) {
-                  link = `/courses/${course.slug}`;
-                }
+            : filteredPaths.map((path) => {
+                const { courseCount, challengeCount } = getPathStats(path);
+                const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
                 return (
-                  <CourseCard
-                    key={course.slug}
-                    name={t(`courses.${course.slug}.title`)}
-                    language={course.language}
-                    color={course.color}
-                    difficulty={course.difficulty}
-                    link={link}
-                    completedLessonsCount={completedLessonsCount}
-                    totalLessonCount={totalLessons}
-                    courseSlug={course.slug}
-                    currentLessonSlug={currentLessonSlug}
+                  <PathCard
+                    key={path.slug}
+                    name={t(`paths.${path.slug}.title`)}
+                    description={t(`paths.${path.slug}.description`)}
+                    language={path.language}
+                    color={path.color}
+                    difficulty={path.difficulty}
+                    link={`/paths/${path.slug}`}
+                    completedStepsCount={completedSteps}
+                    totalStepsCount={path.steps.length}
+                    pathSlug={path.slug}
+                    estimatedHours={path.estimatedHours}
+                    courseCount={courseCount}
+                    challengeCount={challengeCount}
                   />
                 );
               })}
         </div>
+        {hasNoResults && <PathsEmpty />}
       </div>
-      {hasNoResults && <CoursesEmpty />}
+    </div>
+  );
+}
+
+function PathsEmpty() {
+  const t = useTranslations();
+
+  return (
+    <div className="flex flex-col items-center justify-center py-12 gap-4">
+      <Icon name="Lessons" size={18} className="text-shade-tertiary" />
+      <div className="text-center">
+        <h3 className="text-lg font-medium text-shade-primary">
+          {t("paths.empty_title")}
+        </h3>
+        <p className="text-sm text-shade-tertiary">
+          {t("paths.empty_description")}
+        </p>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,9 @@ import { CourseMetadata, LessonMetadata } from "./course";
 import { notFound } from "next/navigation";
 import { courses } from "@/app/content/courses/courses";
 import { challenges } from "@/app/content/challenges/challenges";
+import { paths } from "@/app/content/paths/paths";
 import { ChallengeMetadata } from "./challenges";
+import { PathMetadata } from "./path";
 
 export async function getCourse(courseSlug: string): Promise<CourseMetadata> {
   const course = courses.find((course) => course.slug === courseSlug);
@@ -48,4 +50,56 @@ export async function getChallenge(
 
 export async function getAllChallenges(): Promise<ChallengeMetadata[]> {
   return structuredClone(challenges);
+}
+
+export async function getPath(pathSlug: string): Promise<PathMetadata> {
+  const path = paths.find((path) => path.slug === pathSlug);
+
+  if (!path) {
+    notFound();
+  }
+
+  return structuredClone(path);
+}
+
+export async function getAllPaths(): Promise<PathMetadata[]> {
+  return structuredClone(paths);
+}
+
+export async function getPathStepsWithMetadata(pathSlug: string): Promise<{
+  path: PathMetadata;
+  stepsWithMetadata: Array<{
+    type: "course" | "challenge";
+    slug: string;
+    description?: string;
+    metadata: CourseMetadata | ChallengeMetadata | undefined;
+  }>;
+}> {
+  const path = await getPath(pathSlug);
+
+  const stepsWithMetadata = await Promise.all(
+    path.steps.map(async (step) => {
+      let metadata: CourseMetadata | ChallengeMetadata | undefined;
+
+      if (step.type === "course") {
+        try {
+          metadata = await getCourse(step.slug);
+        } catch {
+          metadata = undefined;
+        }
+      } else {
+        metadata = await getChallenge(step.slug);
+      }
+
+      return {
+        ...step,
+        metadata,
+      };
+    })
+  );
+
+  return {
+    path,
+    stepsWithMetadata,
+  };
 }

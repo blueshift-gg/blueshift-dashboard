@@ -2,7 +2,7 @@ import { useTranslations } from "next-intl";
 import Paths from "@/app/components/PathsContent/Paths";
 import PageHero from "@/app/components/PageHero/PageHero";
 
-export default function Home() {
+export default function PathsPage() {
   const t = useTranslations();
 
   return (

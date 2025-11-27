@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 import { Icon } from "@blueshift-gg/ui-components";
 import { ChallengeMetadata } from "@/app/utils/challenges";
+import { difficulty as difficultyMap } from "@/app/utils/common";
 import { usePersistentStore } from "@/stores/store";
 import useMintNFT from "@/hooks/useMintNFT";
 import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
@@ -62,21 +63,7 @@ export default function ChallengeCard({
     });
   };
 
-  let badgeDifficulty: string;
-  switch (challenge.difficulty) {
-    case 1:
-      badgeDifficulty = "Beginner";
-      break;
-    case 2:
-      badgeDifficulty = "Intermediate";
-      break;
-    case 3:
-      badgeDifficulty = "Advanced";
-      break;
-    default:
-      badgeDifficulty = "Expert";
-      break;
-  }
+  const badgeDifficulty = difficultyMap[challenge.difficulty ?? 1];
 
   return (
     <div
