@@ -1,6 +1,6 @@
 "use client";
 
-import { PathMetadata, PathLanguages, getPathCompletedSteps } from "@/app/utils/path";
+import { PathMetadata, getPathCompletedSteps } from "@/app/utils/path";
 import { CourseLanguages } from "@/app/utils/course";
 import {
   languageFilterMap,
@@ -11,12 +11,15 @@ import {
 import { usePersistentStore } from "@/stores/store";
 import PathCard from "../PathCard/PathCard";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
 import { getPathDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import { Divider, Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import { motion } from "motion/react";
-import { anticipate } from "motion";
+import {
+  Banner,
+  Dropdown,
+  Input,
+  Icon,
+  Tabs,
+} from "@blueshift-gg/ui-components";
 import { useStore } from "@/stores/store";
 import { useWindowSize } from "usehooks-ts";
 import { useEffect, useRef, useState } from "react";
@@ -120,7 +123,11 @@ export default function PathList({
 
   // Calculate global in-progress paths
   const globalInProgressPaths = initialPaths.filter((path) => {
-    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+    const completedSteps = getPathCompletedSteps(
+      path.steps,
+      courseProgress,
+      challengeStatuses
+    );
     const totalSteps = path.steps.length;
     return completedSteps > 0 && completedSteps < totalSteps;
   });
@@ -154,7 +161,11 @@ export default function PathList({
 
       // 4. Tab Filter
       let matchesTab = true;
-      const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+      const completedSteps = getPathCompletedSteps(
+        path.steps,
+        courseProgress,
+        challengeStatuses
+      );
       const totalSteps = path.steps.length;
 
       if (activeTab === "in-progress") {
@@ -163,7 +174,9 @@ export default function PathList({
         matchesTab = completedSteps === totalSteps;
       }
 
-      return matchesSearch && matchesLanguage && matchesDifficulty && matchesTab;
+      return (
+        matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
+      );
     })
     .sort((a, b) => a.difficulty - b.difficulty);
 
@@ -174,7 +187,9 @@ export default function PathList({
   // Get counts for path stats
   const getPathStats = (path: PathMetadata) => {
     const courseCount = path.steps.filter((s) => s.type === "course").length;
-    const challengeCount = path.steps.filter((s) => s.type === "challenge").length;
+    const challengeCount = path.steps.filter(
+      (s) => s.type === "challenge"
+    ).length;
     return { courseCount, challengeCount };
   };
 
@@ -222,7 +237,11 @@ export default function PathList({
                   .slice(0, 3)
                   .map((path) => {
                     const { courseCount, challengeCount } = getPathStats(path);
-                    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+                    const completedSteps = getPathCompletedSteps(
+                      path.steps,
+                      courseProgress,
+                      challengeStatuses
+                    );
                     return (
                       <PathCard
                         className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
@@ -281,21 +300,6 @@ export default function PathList({
                 className: "!h-[30px] !w-[30px]",
               }}
             />
-            <Dropdown
-              className="w-full md:min-w-[150px]"
-              handleChange={handleFilterChange}
-              menuIcon={{ name: "Filter", size: 16 }}
-              label="Filters"
-              multiSelectLabel={`Filters`}
-              selectedItem={[
-                ...selectedLanguages.map((l) => reverseLanguageFilterMap[l]),
-                ...selectedDifficulties.map((d) => reverseDifficultyFilterMap[d]),
-                ...(activeTab !== "all-paths" ? [activeTab] : []),
-              ]}
-              multiple={true}
-              showSelectAll={false}
-              items={dropdownItems}
-            />
           </div>
           <Tabs
             items={[
@@ -328,7 +332,11 @@ export default function PathList({
               ))
             : filteredPaths.map((path) => {
                 const { courseCount, challengeCount } = getPathStats(path);
-                const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
+                const completedSteps = getPathCompletedSteps(
+                  path.steps,
+                  courseProgress,
+                  challengeStatuses
+                );
                 return (
                   <PathCard
                     key={path.slug}

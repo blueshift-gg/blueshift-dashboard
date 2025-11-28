@@ -72,37 +72,6 @@ export default function ChallengesContent({
         </div>
       ) : (
         <>
-          {/*/!* Overlay for locked course *!/*/}
-          {/*<AnimatePresence>*/}
-          {/*  {!isCourseCompleted && (*/}
-          {/*    <motion.div*/}
-          {/*      initial={{ opacity: 0 }}*/}
-          {/*      animate={{ opacity: 1 }}*/}
-          {/*      exit={{ opacity: 0 }}*/}
-          {/*      className="absolute z-10 flex-col gap-y-8 flex items-center justify-center top-0 left-0 w-full h-full bg-background/80 backdrop-blur-sm"*/}
-          {/*    >*/}
-          {/*      <div className="flex flex-col gap-y-4 sm:!-mt-24 max-w-[90dvw]">*/}
-          {/*        <div className="text-center justify-center text-lg sm:text-xl font-medium leading-none gap-x-2 items-center flex">*/}
-          {/*          <Icon name="Locked" className="text-shade-secondary" />*/}
-          {/*          {t("challenge_status_descriptions.locked")}*/}
-          {/*        </div>*/}
-          {/*        <div className="text-center text-shade-secondary mx-auto w-full">*/}
-          {/*          {t("challenge_status_descriptions.locked_cta")}*/}
-          {/*        </div>*/}
-          {/*      </div>*/}
-          {/*      <Link href={`/courses/${currentCourse.slug}/${lastLessonSlug}`}>*/}
-          {/*        <Button*/}
-          {/*          label="Back to Course"*/}
-          {/*          variant="primary"*/}
-          {/*          size="lg"*/}
-          {/*          className="!w-[2/3]"*/}
-          {/*          icon="ArrowLeft"*/}
-          {/*        />*/}
-          {/*      </Link>*/}
-          {/*    </motion.div>*/}
-          {/*  )}*/}
-          {/*</AnimatePresence>*/}
-
           <motion.div
             initial={{ opacity: 0 }}
             animate={{
@@ -112,7 +81,7 @@ export default function ChallengesContent({
             exit={{ opacity: 0 }}
             className="px-4 py-14 relative max-w-app md:px-8 lg:px-14 mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-2 gap-y-12 lg:gap-x-24"
           >
-            <div className="hidden lg:block absolute top-0 right-0 w-1/2 h-full border-l border-border bg-gradient-to-b from-background-card/50 to-transparent"></div>
+            <div className="hidden lg:block absolute top-0 right-0 w-1/2 h-full"></div>
             <ChallengeRequirements content={content} />
             <ChallengeTable
               isLoading={isLoading}

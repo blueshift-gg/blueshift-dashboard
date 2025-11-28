@@ -13,7 +13,7 @@ export default function CourseCardSkeleton() {
           <div className="bg-card-foreground w-[100px] h-[24px]"></div>
           <div className="bg-card-foreground w-[250px] h-[28px]"></div>
         </div>
-        <div className="bg-card-foreground w-[150px] h-[42px]"></div>
+        <div className="bg-card-foreground w-[150px] h-[48px]"></div>
       </div>
     </div>
   );

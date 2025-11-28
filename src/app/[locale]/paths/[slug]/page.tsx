@@ -5,6 +5,7 @@ import PathStepsList from "@/app/components/PathsContent/PathStepsList";
 import PathDetailHeader from "@/app/components/PathsContent/PathDetailHeader";
 import { Metadata } from "next";
 import { getPathname } from "@/i18n/navigation";
+import Breadcrumbs from "@/app/components/Breadcrumbs";
 
 interface PathPageProps {
   params: Promise<{
@@ -39,6 +40,7 @@ export async function generateMetadata({
 }
 
 export default async function PathPage({ params }: PathPageProps) {
+  const t = await getTranslations();
   const { slug, locale } = await params;
 
   let pathData;
@@ -49,16 +51,26 @@ export default async function PathPage({ params }: PathPageProps) {
   }
 
   const { path, stepsWithMetadata } = pathData;
+  const pathTitle = t(`paths.${slug}.title`);
 
   return (
-    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
-      <PathDetailHeader 
-        slug={slug}
+    <div className="flex flex-col w-full gap-y-0">
+      <div className="relative max-w-app mx-auto w-full xl:border-x border-border-light">
+        <Breadcrumbs
+          items={[
+            { label: t("header.paths"), href: "/" },
+            { label: pathTitle },
+          ]}
+        />
+        <PathDetailHeader
+          slug={slug}
+          steps={stepsWithMetadata}
+          showBorder={false}
+        />
+      </div>
+      <PathStepsList
+        path={path}
         steps={stepsWithMetadata}
-      />
-      <PathStepsList 
-        path={path} 
-        steps={stepsWithMetadata} 
         locale={locale}
       />
     </div>

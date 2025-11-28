@@ -142,7 +142,7 @@ function ChallengeSection({
             <ChallengeCard
               key={challenge.slug}
               challenge={challenge}
-              className="shrink-0 w-full sm:w-[calc(50%-12px)] lg:w-[calc(33.33%-12px)] xl:w-[calc(25%-12px)] snap-center"
+              className="shrink-0 w-full sm:w-[calc(50%-12px)] lg:w-[calc(33.33%-12px)] snap-center"
               setIsNFTViewerOpen={setIsNFTViewerOpen}
               setSelectedChallenge={setSelectedChallenge}
             />
@@ -347,7 +347,7 @@ export default function ChallengesList({
   const featuredChallenges = useMemo(() => {
     return initialChallenges
       .filter((c) => c.isFeatured)
-      .slice(0, 4)
+      .slice(0, 3)
       .sort((a, b) => {
         const statusOrder = { open: 0, completed: 1, claimed: 2 };
         const aStatus = challengeStatuses[a.slug] || "open";
@@ -450,18 +450,18 @@ export default function ChallengesList({
             <div
               ref={carouselRef}
               className={classNames(
-                "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-4 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+                "flex pl-4 -mx-4 lg:mx-0 lg:pl-0 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
               )}
             >
               {isLoading
-                ? Array.from({ length: 4 }).map((_, index) => (
+                ? Array.from({ length: 3 }).map((_, index) => (
                     <ChallengeCardSkeleton />
                   ))
                 : featuredChallenges.map((challenge) => (
                     <ChallengeCard
                       key={challenge.slug}
                       challenge={challenge}
-                      className="shrink-0 w-full snap-center"
+                      className="shrink-0 w-full sm:w-[calc(50%-8px)] lg:w-[calc(33.33%-8px)] snap-center max-w-none"
                       setIsNFTViewerOpen={setIsNFTViewerOpen}
                       setSelectedChallenge={setSelectedChallenge}
                     />

@@ -21,10 +21,12 @@ export default function ChallengeFooter({
     <>
       <Link
         href={`/challenges/${challengeMetadata.slug}/${nextPage.slug}`}
-        className="flex justify-between items-center w-full bg-card-solid border border-border group py-5 px-5 rounded-xl"
+        className="flex justify-between items-center w-full bg-card-solid border border-border group py-5 px-5"
       >
         <div className="flex items-center gap-x-2">
-          <span className="text-mute text-sm font-mono pt-1">Next Page</span>
+          <span className="text-mute text-sm font-mono text-shade-tertiary">
+            Next Page
+          </span>
           <span className="font-medium text-shade-primary">
             {t(
               `challenges.${challengeMetadata.slug}.pages.${nextPage.slug}.title`

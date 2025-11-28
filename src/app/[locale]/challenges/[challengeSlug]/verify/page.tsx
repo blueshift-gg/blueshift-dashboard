@@ -1,6 +1,5 @@
 import { getTranslations } from "next-intl/server";
 import MdxLayout from "@/app/mdx-layout";
-import Divider from "@/app/components/Divider/Divider";
 import ProgramChallengesContent from "@/app/components/Challenges/ProgramChallengesContent";
 import ClientChallengesContent from "@/app/components/Challenges/ClientChallengesContent";
 import { notFound } from "next/navigation";
@@ -9,7 +8,9 @@ import { getCompiledMdx } from "@/app/utils/mdx";
 import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
 import { Metadata } from "next";
 import { getPathname } from "@/i18n/navigation";
-import ChallengeVerifyHeader from "./ChallengeVerifyHeader";
+import ChallengeLayout from "@/app/components/Layout/ChallengeLayout";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 
 interface ChallengePageProps {
   params: Promise<{
@@ -81,38 +82,75 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
     }
   }
 
-  return (
-    <div className="flex flex-col w-full">
-      <ChallengeVerifyHeader challengeMetadata={challengeMetadata} />
-      <Divider />
+  const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+  if (!rpcEndpoint) {
+    throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
+  }
 
-      {challengeMetadata.language === "Typescript" ? (
-        <ClientChallengesContent
-          currentChallenge={challengeMetadata}
-          content={
-            <MdxLayout>
-              <ContentFallbackNotice
-                locale={locale}
-                originalLocale={challengeLocale}
-              />
-              {ChallengeContent}
-            </MdxLayout>
-          }
-        />
-      ) : (
-        <ProgramChallengesContent
-          currentChallenge={challengeMetadata}
-          content={
-            <MdxLayout>
-              <ContentFallbackNotice
-                locale={locale}
-                originalLocale={challengeLocale}
-              />
-              {ChallengeContent}
-            </MdxLayout>
-          }
-        />
-      )}
-    </div>
+  let collectionSize: number | null = null;
+  const collectionMintAddress = challengeMetadata.collectionMintAddress;
+  if (collectionMintAddress) {
+    try {
+      const connection = new Connection(rpcEndpoint, { httpAgent: false });
+      const collectionPublicKey = new PublicKey(collectionMintAddress);
+      const accountInfo = await connection.getAccountInfo(collectionPublicKey);
+      if (accountInfo) {
+        collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
+        if (collectionSize === null) {
+          console.error(
+            `Failed to decode num_minted for collection ${collectionMintAddress}`
+          );
+        }
+      } else {
+        console.error(
+          `Failed to fetch account info for ${collectionMintAddress}`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Failed to fetch collection details for ${collectionMintAddress}:`,
+        error
+      );
+    }
+  }
+
+  return (
+    <ChallengeLayout
+      challengeMetadata={challengeMetadata}
+      collectionSize={collectionSize}
+      pagination={<></>}
+      footer={<></>}
+      isTestPage={true}
+    >
+      <div className="flex flex-col w-full">
+        {challengeMetadata.language === "Typescript" ? (
+          <ClientChallengesContent
+            currentChallenge={challengeMetadata}
+            content={
+              <MdxLayout>
+                <ContentFallbackNotice
+                  locale={locale}
+                  originalLocale={challengeLocale}
+                />
+                {ChallengeContent}
+              </MdxLayout>
+            }
+          />
+        ) : (
+          <ProgramChallengesContent
+            currentChallenge={challengeMetadata}
+            content={
+              <MdxLayout>
+                <ContentFallbackNotice
+                  locale={locale}
+                  originalLocale={challengeLocale}
+                />
+                {ChallengeContent}
+              </MdxLayout>
+            }
+          />
+        )}
+      </div>
+    </ChallengeLayout>
   );
 }

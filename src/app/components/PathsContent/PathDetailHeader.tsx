@@ -5,12 +5,15 @@ import { usePersistentStore } from "@/stores/store";
 import { useTranslations } from "next-intl";
 import { Icon } from "@blueshift-gg/ui-components";
 
+import classNames from "classnames";
+
 interface PathDetailHeaderProps {
   slug: string;
   steps: PathStep[];
+  showBorder?: boolean;
 }
 
-export default function PathDetailHeader({ slug, steps }: PathDetailHeaderProps) {
+export default function PathDetailHeader({ slug, steps, showBorder = true }: PathDetailHeaderProps) {
   const t = useTranslations();
   const { courseProgress, challengeStatuses } = usePersistentStore();
 
@@ -18,7 +21,12 @@ export default function PathDetailHeader({ slug, steps }: PathDetailHeaderProps)
   const totalSteps = steps.length;
 
   return (
-    <div className="max-w-app mx-auto w-full relative border-x border-border-light">
+    <div
+      className={classNames(
+        "max-w-app mx-auto w-full relative",
+        showBorder && "border-x border-border-light"
+      )}
+    >
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-dvw h-px bg-border-light"></div>
       <div className="flex flex-col gap-y-3 px-6 py-8 md:py-12 md:px-12">
         {/* Progress indicator */}

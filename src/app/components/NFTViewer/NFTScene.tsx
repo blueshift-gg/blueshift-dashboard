@@ -17,6 +17,7 @@ import { Text } from "@react-three/drei";
 import { useWindowSize } from "usehooks-ts";
 import { CourseLanguages } from "@/app/utils/course";
 import classNames from "classnames";
+import { resolveColorVar } from "@/app/utils/color-helper";
 
 // Custom shader material that combines all effects
 const NFTMaterial = shaderMaterial(
@@ -366,7 +367,7 @@ function NFTMesh({
     const colorString =
       courseColors[challengeLanguage as keyof typeof courseColors] ||
       courseColors.Typescript;
-    const [r, g, b] = colorString.split(",").map(Number);
+    const [r, g, b] = resolveColorVar(colorString);
     return new THREE.Vector3(r / 255, g / 255, b / 255);
   }, [challengeLanguage]);
 

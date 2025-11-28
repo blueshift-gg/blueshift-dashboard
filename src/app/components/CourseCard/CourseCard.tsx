@@ -168,40 +168,42 @@ export default function CourseCard({
           </AnimatePresence>
         </div>
         <div className="relative z-20">
-          <Button
-            variant="secondary"
-            size="md"
-            className="w-max"
-            label={
-              completedLessonsCount === 0
-                ? t("lessons.start_course")
-                : t("lessons.continue_learning")
-            }
-            children={
-              completedLessonsCount === 0 ? (
-                <div className="flex items-center gap-x-2 order-last">
-                  <Divider direction="vertical" className="!h-[20px]" />
-                  <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
-                    50 XP
-                  </span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-x-2 order-last">
-                  <Divider direction="vertical" className="!h-[20px]" />
-                  <ProgressCircle
-                    percentFilled={
-                      completedLessonsCount && totalLessonCount
-                        ? (completedLessonsCount / totalLessonCount) * 100
-                        : 0
-                    }
-                  />
-                  <span className="text-sm text-shade-tertiary font-mono">
-                    {completedLessonsCount ?? 0}/{totalLessonCount ?? 0}
-                  </span>
-                </div>
-              )
-            }
-          />
+          <Link href={link!}>
+            <Button
+              variant="secondary"
+              size="lg"
+              className="w-max"
+              label={
+                completedLessonsCount === 0
+                  ? t("lessons.start_course")
+                  : t("lessons.continue_learning")
+              }
+              children={
+                completedLessonsCount === 0 ? (
+                  <div className="flex items-center gap-x-2 order-last">
+                    <Divider direction="vertical" className="!h-[20px]" />
+                    <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
+                      50 XP
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-x-2 order-last">
+                    <Divider direction="vertical" className="!h-[20px]" />
+                    <ProgressCircle
+                      percentFilled={
+                        completedLessonsCount && totalLessonCount
+                          ? (completedLessonsCount / totalLessonCount) * 100
+                          : 0
+                      }
+                    />
+                    <span className="text-sm text-shade-tertiary font-mono">
+                      {completedLessonsCount ?? 0}/{totalLessonCount ?? 0}
+                    </span>
+                  </div>
+                )
+              }
+            />
+          </Link>
         </div>
       </div>
     </div>

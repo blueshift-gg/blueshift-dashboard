@@ -16,6 +16,7 @@ export default function PageHero({
   className,
   collectionSize,
   collectionMintAddress,
+  showBorder = true,
 }: {
   badge: string;
   title: string;
@@ -23,6 +24,7 @@ export default function PageHero({
   className?: string;
   collectionSize?: number | null;
   collectionMintAddress?: string;
+  showBorder?: boolean;
 }) {
   const t = useTranslations();
   const color = badgeColor
@@ -32,7 +34,8 @@ export default function PageHero({
   return (
     <div
       className={classNames(
-        "max-w-app mx-auto w-full relative border-x border-border-light",
+        "max-w-app mx-auto w-full relative",
+        showBorder && "border-x border-border-light",
         className
       )}
     >
@@ -48,32 +51,33 @@ export default function PageHero({
             spacingX={0}
             className="text-current"
             animationDelay={0}
+            animationDuration={0.5}
           />
         </div>
         <span className="sr-only">{title}</span>
         <HeadingReveal
           text={title}
           headingLevel="h1"
-          className="text-[28px] leading-[120%] sm:text-3xl font-semibold -ml-1"
+          className="text-[28px] leading-[120%] sm:text-3xl font-semibold"
         />
-      </div>
-      {collectionMintAddress && typeof collectionSize === "number" && (
-        <div className="px-6 md:px-12 pb-4">
+        {collectionMintAddress && typeof collectionSize === "number" && (
           <Link
             href={`https://solana.fm/address/${collectionMintAddress}`}
             target="_blank"
+            className="pt-2"
           >
             <p
-              className="text-shade-secondary text-sm"
+              className="text-shade-secondary text-sm font-mono"
               style={{
                 color: color,
               }}
             >
-              {collectionSize.toString()} Graduates
+              {collectionSize.toString()}{" "}
+              {collectionSize === 1 ? "Graduate" : "Graduates"}
             </p>
           </Link>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

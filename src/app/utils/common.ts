@@ -1,3 +1,5 @@
+import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+
 /**
  * Common/shared constants and types used across courses, challenges, and paths.
  */
@@ -11,11 +13,11 @@ export const languages = {
 } as const;
 
 export const languageColors = {
-  Anchor: "221,234,224",
-  Rust: "255,173,102",
-  Typescript: "105,162,241",
-  Assembly: "140,255,102",
-  General: "0,255,255",
+  Anchor: BRAND_COLOURS.Anchor,
+  Rust: BRAND_COLOURS.Rust,
+  Typescript: BRAND_COLOURS.Typescript,
+  Assembly: BRAND_COLOURS.Assembly,
+  General: BRAND_COLOURS.General,
 } as const;
 
 export const difficulty = {
@@ -26,10 +28,10 @@ export const difficulty = {
 } as const;
 
 export const difficultyColors = {
-  1: "#00C7E6",
-  2: "#00E66B",
-  3: "#E6D700",
-  4: "#FF285A",
+  1: BRAND_COLOURS.Beginner,
+  2: BRAND_COLOURS.Intermediate,
+  3: BRAND_COLOURS.Advanced,
+  4: BRAND_COLOURS.Expert,
 } as const;
 
 export type Language = keyof typeof languages;

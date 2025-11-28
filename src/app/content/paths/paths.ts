@@ -1,10 +1,11 @@
 import { PathMetadata } from "@/app/utils/path";
+import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 
 export const paths: PathMetadata[] = [
   {
     slug: "solana-developer-foundations",
     language: "General",
-    color: "0,255,255",
+    color: BRAND_COLOURS.General,
     difficulty: 1,
     isFeatured: true,
     estimatedHours: 8,
@@ -17,7 +18,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "anchor-mastery",
     language: "Anchor",
-    color: "221,234,224",
+    color: BRAND_COLOURS.Anchor,
     difficulty: 2,
     isFeatured: true,
     estimatedHours: 20,
@@ -34,7 +35,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "native-rust-developer",
     language: "Rust",
-    color: "255,173,102",
+    color: BRAND_COLOURS.Rust,
     difficulty: 3,
     isFeatured: true,
     estimatedHours: 30,
@@ -51,7 +52,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "typescript-client-developer",
     language: "Typescript",
-    color: "105,162,241",
+    color: BRAND_COLOURS.Typescript,
     difficulty: 1,
     isFeatured: true,
     estimatedHours: 15,
@@ -66,7 +67,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "security-specialist",
     language: "General",
-    color: "0,255,255",
+    color: BRAND_COLOURS.General,
     difficulty: 2,
     isFeatured: true,
     estimatedHours: 12,
@@ -80,7 +81,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "testing-and-tooling",
     language: "General",
-    color: "0,255,255",
+    color: BRAND_COLOURS.General,
     difficulty: 2,
     isFeatured: false,
     estimatedHours: 10,
@@ -94,7 +95,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "advanced-low-level",
     language: "Assembly",
-    color: "140,255,102",
+    color: BRAND_COLOURS.Assembly,
     difficulty: 4,
     isFeatured: false,
     estimatedHours: 25,
@@ -110,7 +111,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "token-developer",
     language: "General",
-    color: "0,255,255",
+    color: BRAND_COLOURS.General,
     difficulty: 2,
     isFeatured: false,
     estimatedHours: 18,
@@ -126,7 +127,7 @@ export const paths: PathMetadata[] = [
   {
     slug: "payments-and-commerce",
     language: "General",
-    color: "0,255,255",
+    color: BRAND_COLOURS.General,
     difficulty: 1,
     isFeatured: false,
     estimatedHours: 6,

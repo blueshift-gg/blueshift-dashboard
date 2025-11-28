@@ -12,6 +12,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
 import CourseFooter from "@/app/components/CoursesContent/CourseFooter";
+import Breadcrumbs from "@/app/components/Breadcrumbs";
 
 interface LessonPageProps {
   params: Promise<{
@@ -131,14 +132,20 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
   return (
     <div className="flex flex-col w-full border-b border-b-border">
-      <div className="w-full">
+      <div className="relative max-w-app mx-auto w-full xl:border-x border-border-light">
+        <Breadcrumbs
+          items={[
+            { label: t("header.courses"), href: "/courses" },
+            { label: coursePageTitle },
+          ]}
+        />
         <PageHero
           badge={courseMetadata.language}
           title={coursePageTitle}
           badgeColor={courseMetadata.language}
-          className="border-x-0 xl:border-x"
           collectionSize={collectionSize}
           collectionMintAddress={collectionMintAddress}
+          showBorder={false}
         />
       </div>
 
