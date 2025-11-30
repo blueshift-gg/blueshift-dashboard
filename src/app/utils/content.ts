@@ -63,7 +63,39 @@ export async function getPath(pathSlug: string): Promise<PathMetadata> {
 }
 
 export async function getAllPaths(): Promise<PathMetadata[]> {
-  return structuredClone(paths);
+  const allPaths = structuredClone(paths);
+
+  const enrichedPaths = await Promise.all(
+    allPaths.map(async (path) => {
+      const stepsWithMetadata = await Promise.all(
+        path.steps.map(async (step) => {
+          let metadata: CourseMetadata | ChallengeMetadata | undefined;
+
+          if (step.type === "course") {
+            try {
+              metadata = await getCourse(step.slug);
+            } catch {
+              metadata = undefined;
+            }
+          } else {
+            metadata = await getChallenge(step.slug);
+          }
+
+          return {
+            ...step,
+            metadata,
+          };
+        })
+      );
+
+      return {
+        ...path,
+        steps: stepsWithMetadata,
+      };
+    })
+  );
+
+  return enrichedPaths;
 }
 
 export async function getPathStepsWithMetadata(pathSlug: string): Promise<{

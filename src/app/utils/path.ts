@@ -5,7 +5,8 @@ import {
   Language,
   Difficulty,
 } from "./common";
-import { CourseDifficulty } from "./course";
+import { CourseDifficulty, CourseMetadata } from "./course";
+import { ChallengeMetadata } from "./challenges";
 
 // Re-export with path-specific names for consistency
 export const pathLanguages = languages;
@@ -23,6 +24,10 @@ export type PathStep = {
   description?: string;
 };
 
+export type PathStepWithMetadata = PathStep & {
+  metadata: CourseMetadata | ChallengeMetadata | undefined;
+};
+
 export type PathMetadata = {
   /** Unique identifier for the path */
   slug: string;
@@ -35,7 +40,7 @@ export type PathMetadata = {
   /** Whether to feature this path prominently */
   isFeatured: boolean;
   /** Ordered list of steps (courses and challenges) in this path */
-  steps: PathStep[];
+  steps: PathStepWithMetadata[];
   /** Estimated total time to complete in hours */
   estimatedHours?: number;
 };
@@ -66,14 +71,18 @@ export function hasMultipleLanguages(langs: Language[]): boolean {
  * A challenge step is considered completed if status is "completed" or "claimed".
  */
 export function getPathCompletedSteps(
-  steps: PathStep[],
+  steps: PathStepWithMetadata[],
   courseProgress: Record<string, number>,
   challengeStatuses: Record<string, string>
 ): number {
   return steps.filter((step) => {
     if (step.type === "course") {
       const progress = courseProgress[step.slug] || 0;
-      return progress > 0;
+      const metadata = step.metadata as CourseMetadata | undefined;
+      if (metadata?.lessons) {
+        return progress >= metadata.lessons.length;
+      }
+      return false;
     }
 
     if (step.type === "challenge") {

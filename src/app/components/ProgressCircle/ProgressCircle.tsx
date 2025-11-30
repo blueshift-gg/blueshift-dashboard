@@ -10,7 +10,9 @@ const ProgressCircle = ({
   className?: string;
   innerClassName?: string;
 }) => {
-  const angleDegrees = percentFilled * 3.6;
+  // Always show a minimum of 5% progress, even if percentFilled is 0
+  const safePercentFilled = Math.max(percentFilled, 5);
+  const angleDegrees = safePercentFilled * 3.6;
   return (
     <div
       className={classNames(
