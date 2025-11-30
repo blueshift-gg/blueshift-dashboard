@@ -2,7 +2,7 @@ import "server-only";
 
 import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
 import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
-import Codeblock from "@/app/components/Codeblock/Codeblock";
+import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
 import { Icon } from "@blueshift-gg/ui-components";
 import IDE from "@/app/components/TSChallengeEnv/IDE";
 import { Requirement } from "@/app/components/Challenges/Requirement";
@@ -53,7 +53,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
         Requirement,
         AnchorDiscriminatorCalculator,
         blockquote: ({ children }: { children: React.ReactNode }) => (
-          <blockquote className="bg-background-primary rounded-xl flex items-start gap-x-2 py-4 px-6">
+          <blockquote className="bg-background-primary flex items-start gap-x-2 py-4 px-6">
             <Icon
               name="Warning"
               className="text-brand-secondary flex-shrink-0 top-1.5 relative"
@@ -84,9 +84,9 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             const highlighted = compiled.highlightedCode[highlightId];
             if (highlighted) {
               return (
-                <Codeblock data-language={highlighted.lang}>
+                <CodeblockWrapper data-language={highlighted.lang}>
                   {toJsxRuntime(highlighted.hast, { Fragment, jsxs, jsx })}
-                </Codeblock>
+                </CodeblockWrapper>
               );
             }
           }
@@ -99,9 +99,9 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             });
 
             return (
-              <Codeblock data-language={lang}>
+              <CodeblockWrapper data-language={lang}>
                 {toJsxRuntime(codeHtml, { Fragment, jsxs, jsx })}
-              </Codeblock>
+              </CodeblockWrapper>
             );
           }
         }

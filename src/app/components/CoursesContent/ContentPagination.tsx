@@ -52,11 +52,11 @@ export default function ContentPagination(props: ContentPaginationProps) {
   }, [props, setCourseProgress]);
 
   return (
-    <div className="w-[calc(100dvw-2rem)] md:max-w-[350px] xl:w-full z-30 xl:p-4.5 col-span-3 xl:col-span-3 bottom-8 !fixed left-1/2 -translate-x-1/2 xl:bottom-0 xl:!relative">
+    <div className="w-[calc(100dvw-2rem)] md:max-w-[350px] xl:w-full z-30 xl:p-5 col-span-3 xl:col-span-3 bottom-8 !fixed left-1/2 -translate-x-1/2 xl:bottom-0 xl:!relative">
       <motion.div
         layoutId="course-pagination"
         className={classNames(
-          "bg-card-solid/50 backdrop-blur-xl border border-border flex flex-col gap-y-4 py-4 relative xl:!sticky xl:top-[calc(86px+1rem)]",
+          "bg-card-solid/50 backdrop-blur-xl border border-border flex flex-col gap-y-4 py-4 relative xl:!sticky xl:top-[calc(78px+1rem)]",
           className
         )}
       >

@@ -17,7 +17,7 @@ export default function Badge({
       transition={{ duration: 0.2, ease: anticipate }}
       key={variant}
       className={classNames(
-        "px-2.5 py-1.5 rounded-full font-medium capitalize font-mono text-xs lg:text-[13px] flex items-center gap-x-2",
+        "px-2.5 py-1.5 font-medium capitalize font-mono text-xs lg:text-[13px] flex items-center gap-x-2",
         variant === "incomplete" &&
           "bg-card-solid-foreground text-shade-secondary",
         variant === "passed" && "bg-success/8 text-success",

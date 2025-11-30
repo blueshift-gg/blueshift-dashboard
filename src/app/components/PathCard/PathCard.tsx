@@ -6,18 +6,10 @@ import React, { useRef, useState } from "react";
 import classNames from "classnames";
 import { Link } from "@/i18n/navigation";
 import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
-import {
-  anticipate,
-  Badge,
-  breeze,
-  Button,
-  Difficulty,
-  Divider,
-  glide,
-} from "@blueshift-gg/ui-components";
+import { Button } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
-import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS, Icon } from "@blueshift-gg/ui-components";
+import { motion } from "motion/react";
+import { Icon } from "@blueshift-gg/ui-components";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 type PathCardProps = {
@@ -40,13 +32,11 @@ export default function PathCard({
   name,
   description,
   color,
-  language,
   difficulty,
   className,
   link,
   completedStepsCount = 0,
   totalStepsCount = 0,
-  pathSlug,
   estimatedHours,
   courseCount = 0,
   challengeCount = 0,
@@ -98,7 +88,27 @@ export default function PathCard({
           "flex flex-col gap-y-24 flex-grow justify-between px-4 py-5 pb-6"
         )}
       >
-        <div className="flex flex-col gap-y-10">
+        <div className="flex flex-col gap-y-5">
+          <img
+            src="/graphics/icons/path-test.svg"
+            alt="Path Test"
+            className="w-12 h-12"
+          />
+          <div className="flex flex-col gap-y-2">
+            <motion.span
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className={classNames(
+                "text-xl font-medium text-shade-primary leading-[140%]"
+              )}
+            >
+              {name}
+            </motion.span>
+            <span className="flex leading-[160%] flex-wrap items-center gap-x-3  text-shade-tertiary">
+              {description}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-col gap-y-5">
           {/* Path stats */}
           <div className="w-full h-[28px] bg-background/50 absolute left-0"></div>
           <div className="flex h-[28px] w-full items-center relative z-10 gap-x-4 text-xs text-shade-tertiary font-mono justify-center">
@@ -131,29 +141,6 @@ export default function PathCard({
               </div>
             )}
           </div>
-
-          <div className="flex flex-col gap-y-5">
-            <img
-              src="/graphics/icons/path-test.svg"
-              alt="Path Test"
-              className="w-12 h-12"
-            />
-            <div className="flex flex-col gap-y-2">
-              <motion.span
-                transition={{ duration: 0.2, ease: "easeInOut" }}
-                className={classNames(
-                  "text-xl font-medium text-shade-primary leading-[140%]"
-                )}
-              >
-                {name}
-              </motion.span>
-              <span className="flex leading-[160%] flex-wrap items-center gap-x-3  text-shade-tertiary">
-                {description}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="relative z-20 flex flex-col gap-y-5">
           <Link href={link!}>
             <Button
               variant="secondary"

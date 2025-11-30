@@ -5,7 +5,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "introduction-to-blockchain-and-solana",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -19,7 +19,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "anchor-for-dummies",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -36,7 +36,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "pinocchio-for-dummies",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -55,7 +55,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "introduction-to-assembly",
     language: "Assembly",
-    color: BRAND_COLOURS.Assembly,
+    color: BRAND_COLOURS.assembly,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -70,7 +70,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "program-security",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -90,7 +90,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "secp256r1-on-solana",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -103,7 +103,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "tokens-on-solana",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -117,7 +117,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "nfts-on-solana",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -130,7 +130,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "spl-token-with-web3js",
     language: "Typescript",
-    color: BRAND_COLOURS.Typescript,
+    color: BRAND_COLOURS.typescript,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -148,7 +148,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "spl-token-with-anchor",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -166,7 +166,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "token-2022-program",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -178,7 +178,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "token-2022-with-web3js",
     language: "Typescript",
-    color: BRAND_COLOURS.Typescript,
+    color: BRAND_COLOURS.typescript,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -200,7 +200,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "token-2022-with-anchor",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -222,7 +222,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "instruction-introspection",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -235,7 +235,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "testing-with-mollusk",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -247,7 +247,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "solana-pay",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -260,7 +260,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "create-your-sdk-with-codama",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -274,7 +274,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "winternitz-signatures-on-solana",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -287,7 +287,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "testing-with-litesvm",
     language: "Typescript",
-    color: BRAND_COLOURS.Typescript,
+    color: BRAND_COLOURS.typescript,
     difficulty: 1,
     isFeatured: true,
     lessons: [
@@ -300,7 +300,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
   {
     slug: "testing-with-surfpool",
     language: "General",
-    color: BRAND_COLOURS.General,
+    color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [

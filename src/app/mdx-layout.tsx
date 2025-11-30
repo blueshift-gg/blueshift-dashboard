@@ -40,7 +40,7 @@ export default function MdxLayout({ children }: { children: React.ReactNode }) {
       prose-a:font-content
       prose-li:text-shade-primary
       prose-li:mb-2
-      prose-pre:bg-card-solid prose-code:rounded-lg prose-code:px-2 prose-code:py-1"
+      prose-pre:bg-card-solid prose-code:px-2 prose-code:py-1"
     >
       {children}
     </article>

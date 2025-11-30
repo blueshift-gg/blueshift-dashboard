@@ -10,13 +10,18 @@ interface BreadcrumbItem {
 interface BreadcrumbsProps {
   items: BreadcrumbItem[];
   className?: string;
+  children?: React.ReactNode;
 }
 
-export default function Breadcrumbs({ items, className }: BreadcrumbsProps) {
+export default function Breadcrumbs({
+  items,
+  className,
+  children,
+}: BreadcrumbsProps) {
   return (
     <nav
       className={classNames(
-        "max-w-app mx-auto w-full pl-6 pr-2.5 relative py-3 flex items-center gap-2 text-sm font-medium text-shade-tertiary",
+        "max-w-app mx-auto w-full pl-5 pr-2.5 relative py-3 flex items-center gap-2 text-sm font-medium text-shade-tertiary",
         className
       )}
     >
@@ -44,6 +49,7 @@ export default function Breadcrumbs({ items, className }: BreadcrumbsProps) {
                 className="-rotate-90 text-shade-mute"
               />
             )}
+            {children}
           </div>
         );
       })}

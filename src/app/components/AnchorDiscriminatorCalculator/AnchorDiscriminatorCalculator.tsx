@@ -87,7 +87,7 @@ export const AnchorDiscriminatorCalculator = ({
   }, [seed]);
 
   return (
-    <div className="mx-auto p-6 bg-card-solid border border-border rounded-lg flex flex-col gap-y-4 group enabled:hover:cursor-pointer rounded-xl transition duration-200 enabled:hover:bg-card-solid-foreground/50">
+    <div className="mx-auto p-6 bg-card-solid border border-border flex flex-col gap-y-4 group enabled:hover:cursor-pointer transition duration-200 enabled:hover:bg-card-solid-foreground/50">
       <div className="text-2xl font-bold">Anchor Discriminator Calculator</div>
       <label
         htmlFor="seed"
@@ -95,7 +95,7 @@ export const AnchorDiscriminatorCalculator = ({
       >
         Account/Instruction Name
       </label>
-      <div className="w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid rounded-xl flex items-center gap-x-3">
+      <div className="w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid flex items-center gap-x-3">
         <input
           id="seed"
           type="text"
@@ -110,7 +110,7 @@ export const AnchorDiscriminatorCalculator = ({
           className={`grid ${displayMode === "both" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"} gap-4 w-full max-w-4xl`}
         >
           {(displayMode === "account" || displayMode === "both") && (
-            <div className="text-center border border-border rounded-2xl p-2 py-4">
+            <div className="text-center border border-border p-2 py-4">
               <div className="text-lg font-semibold">Account</div>
               <div className="text-sm text-gray-400 mb-2">
                 {" "}
@@ -123,7 +123,7 @@ export const AnchorDiscriminatorCalculator = ({
           )}
 
           {(displayMode === "instruction" || displayMode === "both") && (
-            <div className="text-center border border-border rounded-2xl p-2 py-4">
+            <div className="text-center border border-border p-2 py-4">
               <div className="text-lg font-semibold">Instruction</div>
               <div className="text-sm text-gray-400 mb-2">
                 {'sha256("global:" + snake_case(seed))[0..8]'}

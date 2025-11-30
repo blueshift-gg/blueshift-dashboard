@@ -9,22 +9,22 @@ export default function Perks() {
     <div className="relative content-wrapper border-x border-border-light">
       <div className="w-full grid grid-cols-12 divide-x divide-border-light">
         <div className="col-span-7 w-full flex flex-col">
-          <div className="p-8">
-            <span className="text-lg font-mono text-shade-primary">
+          <div className="p-5">
+            <span className="font-mono text-shade-primary">
               {t("perks.faucet_title")}
             </span>
           </div>
           <div className="w-full h-px bg-border-light"></div>
-          <div className="p-8"></div>
+          <div className="p-5"></div>
         </div>
         <div className="col-span-5">
-          <div className="p-8">
-            <span className="text-lg font-mono text-shade-primary">
+          <div className="p-5">
+            <span className="font-mono text-shade-primary">
               {t("perks.rewards_title")}
             </span>
           </div>
           <div className="w-full h-px bg-border-light"></div>
-          <div className="p-8"></div>
+          <div className="p-5"></div>
         </div>
       </div>
 

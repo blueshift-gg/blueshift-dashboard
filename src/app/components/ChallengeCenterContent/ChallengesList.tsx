@@ -142,7 +142,7 @@ function ChallengeSection({
             <ChallengeCard
               key={challenge.slug}
               challenge={challenge}
-              className="shrink-0 w-full sm:w-[calc(50%-12px)] lg:w-[calc(33.33%-12px)] snap-center"
+              className="shrink-0 w-full sm:w-[calc(50%-12px)] lg:w-[calc(25%-6px)] snap-center"
               setIsNFTViewerOpen={setIsNFTViewerOpen}
               setSelectedChallenge={setSelectedChallenge}
             />
@@ -445,7 +445,7 @@ export default function ChallengesList({
       {/* Get Started / Featured */}
       {(isLoading || featuredChallenges.length > 0) && (
         <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
-          <Banner title={t("ChallengeCenter.get_started")} variant="Brand" />
+          <Banner title={t("ChallengeCenter.get_started")} variant="brand" />
           <div className="px-1.5 py-3 sm:p-4">
             <div
               ref={carouselRef}
@@ -461,7 +461,7 @@ export default function ChallengesList({
                     <ChallengeCard
                       key={challenge.slug}
                       challenge={challenge}
-                      className="shrink-0 w-full sm:w-[calc(50%-8px)] lg:w-[calc(33.33%-8px)] snap-center max-w-none"
+                      className="shrink-0 w-full sm:w-[calc(50%-8px)] lg:w-[calc(25%-8px)] snap-center max-w-none"
                       setIsNFTViewerOpen={setIsNFTViewerOpen}
                       setSelectedChallenge={setSelectedChallenge}
                     />

@@ -120,7 +120,7 @@ export default async function RootLayout({
                 {!pathname?.includes("/nft-generator") ? (
                   <>
                     <Header />
-                    <div className="pt-[82px] min-h-[calc(100dvh-82px)]">
+                    <div className="pt-[74px] min-h-[calc(100dvh-74px)]">
                       {children}
                     </div>
                     <Footer />

@@ -28,7 +28,7 @@ export default function PageHero({
 }) {
   const t = useTranslations();
   const color = badgeColor
-    ? BRAND_COLOURS[badgeColor as keyof typeof BRAND_COLOURS]
+    ? BRAND_COLOURS[badgeColor.toLowerCase() as keyof typeof BRAND_COLOURS]
     : undefined;
 
   return (

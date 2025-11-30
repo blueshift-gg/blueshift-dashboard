@@ -1,7 +1,7 @@
 "use client";
 
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
+import { Icon, Logo } from "@blueshift-gg/ui-components";
 import { AnimatePresence, anticipate, motion } from "motion/react";
 import { useState, useRef } from "react";
 import { useOnClickOutside } from "usehooks-ts";
@@ -11,9 +11,9 @@ import { localeNames, routing } from "@/i18n/routing";
 import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
 import { usePersistentStore } from "@/stores/store";
 
-import Logo from "../Logo/Logo";
+// import Logo from "../Logo/Logo";
 import { Button, Tabs, DropdownMenu } from "@blueshift-gg/ui-components";
-import LogoGlyph from "../Logo/LogoGlyph";
+// import LogoGlyph from "../Logo/LogoGlyph";
 import MarketingBanner from "../MarketingBanner/MarketingBanner";
 
 export default function HeaderContent() {
@@ -60,13 +60,13 @@ export default function HeaderContent() {
     >
       <div className="fixed w-full flex flex-col z-40">
         <div className="bg-background/80 backdrop-blur-lg z-40 w-full border-b border-b-border-light">
-          <div className="flex w-full items-center justify-between max-w-[1440px] mx-auto py-5 px-4 lg:px-8">
-            <div className="flex gap-x-8 lg:gap-x-12 items-center">
+          <div className="flex w-full items-center justify-between max-w-app mx-auto py-4 px-4 lg:px-5">
+            <div className="flex gap-x-8 xl:gap-x-12 items-center">
               <Link href="/" className="lg:hidden flex">
-                <LogoGlyph height={18} />
+                <Logo hideText height={18} />
               </Link>
               <Link href="/" className="hidden lg:flex">
-                <Logo showText={true} height={18} />
+                <Logo height={18} />
               </Link>
 
               <Tabs
@@ -146,7 +146,7 @@ export default function HeaderContent() {
               <Button
                 variant="outline"
                 icon={{ name: "Table", size: 18 }}
-                className="p-3! flex md:hidden"
+                className="p-3! flex lg:hidden"
                 onClick={() => setIsOpen(true)}
                 crosshairProps={{
                   size: 0,

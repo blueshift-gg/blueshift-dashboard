@@ -13,11 +13,11 @@ export const languages = {
 } as const;
 
 export const languageColors = {
-  Anchor: BRAND_COLOURS.Anchor,
-  Rust: BRAND_COLOURS.Rust,
-  Typescript: BRAND_COLOURS.Typescript,
-  Assembly: BRAND_COLOURS.Assembly,
-  General: BRAND_COLOURS.General,
+  Anchor: BRAND_COLOURS.anchor,
+  Rust: BRAND_COLOURS.rust,
+  Typescript: BRAND_COLOURS.typescript,
+  Assembly: BRAND_COLOURS.assembly,
+  General: BRAND_COLOURS.general,
 } as const;
 
 export const difficulty = {
@@ -28,10 +28,10 @@ export const difficulty = {
 } as const;
 
 export const difficultyColors = {
-  1: BRAND_COLOURS.Beginner,
-  2: BRAND_COLOURS.Intermediate,
-  3: BRAND_COLOURS.Advanced,
-  4: BRAND_COLOURS.Expert,
+  1: BRAND_COLOURS.beginner,
+  2: BRAND_COLOURS.intermediate,
+  3: BRAND_COLOURS.advanced,
+  4: BRAND_COLOURS.expert,
 } as const;
 
 export type Language = keyof typeof languages;

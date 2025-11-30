@@ -23,7 +23,7 @@ import {
 import { useStore } from "@/stores/store";
 import { useWindowSize } from "usehooks-ts";
 import { useEffect, useRef, useState } from "react";
-import PathCardSkeleton from "./PathCardSkeleton";
+import PathCardSkeleton from "../PathCard/PathCardSkeleton";
 
 type PathsContentProps = {
   initialPaths?: PathMetadata[];
@@ -220,7 +220,7 @@ export default function PathList({
     >
       {/* Featured Paths */}
       <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
-        <Banner title={t("paths.get_started")} variant="Brand" />
+        <Banner title={t("paths.get_started")} variant="brand" />
         <div className="px-1.5 py-3 sm:p-4">
           <div
             ref={carouselRef}

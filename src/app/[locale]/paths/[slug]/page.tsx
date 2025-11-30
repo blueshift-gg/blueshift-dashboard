@@ -55,7 +55,7 @@ export default async function PathPage({ params }: PathPageProps) {
 
   return (
     <div className="flex flex-col w-full gap-y-0">
-      <div className="relative max-w-app mx-auto w-full xl:border-x border-border-light">
+      <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
         <Breadcrumbs
           items={[
             { label: t("header.paths"), href: "/" },
@@ -68,11 +68,7 @@ export default async function PathPage({ params }: PathPageProps) {
           showBorder={false}
         />
       </div>
-      <PathStepsList
-        path={path}
-        steps={stepsWithMetadata}
-        locale={locale}
-      />
+      <PathStepsList path={path} steps={stepsWithMetadata} locale={locale} />
     </div>
   );
 }

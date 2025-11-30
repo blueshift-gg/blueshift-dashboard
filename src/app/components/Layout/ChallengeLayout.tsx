@@ -40,7 +40,7 @@ export default async function ChallengeLayout({
           badge={challengeMetadata.language}
           title={challengePageTitle}
           badgeColor={challengeMetadata.language}
-          className="border-x-0 xl:border-x"
+          className="border-x-0 app:border-x"
           collectionSize={collectionSize}
           collectionMintAddress={collectionMintAddress}
         />
@@ -49,14 +49,14 @@ export default async function ChallengeLayout({
       <div
         className={classNames(
           "max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full",
-          !isTestPage && "xl:border-x border-border-light"
+          !isTestPage && "app:border-x border-border-light"
         )}
       >
         <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
           {pagination}
           <div
             className={classNames(
-              "py-8 order-2 lg:order-1 col-span-1 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-x border-border-light px-5 lg:px-6",
+              "py-8 order-2 lg:order-1 col-span-1 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6",
               isTestPage
                 ? "md:col-span-9 lg:col-span-10 xl:col-span-14"
                 : "md:col-span-7 xl:col-span-8"

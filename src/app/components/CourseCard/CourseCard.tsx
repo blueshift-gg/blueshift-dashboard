@@ -7,13 +7,11 @@ import classNames from "classnames";
 import { Link } from "@/i18n/navigation";
 import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
-  anticipate,
   Badge,
   breeze,
   Button,
   Difficulty,
   Divider,
-  glide,
 } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
@@ -88,7 +86,7 @@ export default function CourseCard({
       <div className="w-full bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
       <div
         className={classNames(
-          "flex flex-col gap-y-12 flex-grow justify-between px-4 py-5"
+          "flex flex-col gap-y-12 grow justify-between px-4 py-5"
         )}
       >
         <div className="flex flex-col min-h-[150px] sm:min-h-[125px]">
@@ -113,7 +111,9 @@ export default function CourseCard({
                 <span
                   style={{
                     color:
-                      BRAND_COLOURS[language as keyof typeof BRAND_COLOURS],
+                      BRAND_COLOURS[
+                        language.toLowerCase() as keyof typeof BRAND_COLOURS
+                      ],
                   }}
                   className={classNames("font-mono leading-[100%]")}
                 >
@@ -122,7 +122,7 @@ export default function CourseCard({
                 <Divider direction="vertical" className="h-[20px]" />
                 <Badge
                   size="sm"
-                  variant="Beginner"
+                  variant="beginner"
                   label="Beginner"
                   className="leading-[100%] min-h-[20px]!"
                   crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
@@ -159,7 +159,7 @@ export default function CourseCard({
                 }}
                 className="overflow-hidden"
               >
-                <span className="flex leading-[150%] flex-wrap items-center gap-x-3 text-sm text-shade-tertiary">
+                <span className="text-balance flex leading-[150%] flex-wrap items-center gap-x-3 text-sm text-shade-tertiary">
                   To understand sBPF Assembly and its role in Solana programs,
                   we first need to understand assembly.
                 </span>
@@ -176,19 +176,21 @@ export default function CourseCard({
               label={
                 completedLessonsCount === 0
                   ? t("lessons.start_course")
-                  : t("lessons.continue_learning")
+                  : completedLessonsCount === totalLessonCount
+                    ? t("lessons.review_course")
+                    : t("lessons.continue_learning")
               }
               children={
                 completedLessonsCount === 0 ? (
                   <div className="flex items-center gap-x-2 order-last">
-                    <Divider direction="vertical" className="!h-[20px]" />
+                    <Divider direction="vertical" className="h-[20px]!" />
                     <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
                       50 XP
                     </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-x-2 order-last">
-                    <Divider direction="vertical" className="!h-[20px]" />
+                    <Divider direction="vertical" className="h-[20px]!" />
                     <ProgressCircle
                       percentFilled={
                         completedLessonsCount && totalLessonCount

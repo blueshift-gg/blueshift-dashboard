@@ -5,7 +5,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "anchor-vault",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Vault",
@@ -19,7 +19,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "anchor-escrow",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 1,
     isFeatured: true,
     unitName: "Anchor Escrow",
@@ -35,7 +35,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "anchor-flash-loan",
     language: "Anchor",
-    color: BRAND_COLOURS.Anchor,
+    color: BRAND_COLOURS.anchor,
     difficulty: 2,
     isFeatured: true,
     unitName: "Anchor Flash Loan",
@@ -49,7 +49,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-vault",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Vault",
@@ -63,7 +63,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-escrow",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Escrow",
@@ -84,7 +84,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-amm",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 3,
     isFeatured: true,
     unitName: "Pinocchio AMM",
@@ -107,7 +107,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-secp256r1-vault",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Secp256r1 Vault",
@@ -121,7 +121,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-flash-loan",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Flash Loan",
@@ -135,7 +135,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "typescript-mint-an-spl-token",
     language: "Typescript",
-    color: BRAND_COLOURS.Typescript,
+    color: BRAND_COLOURS.typescript,
     difficulty: 1,
     isFeatured: true,
     unitName: "Mint an SPL Token",
@@ -151,7 +151,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "assembly-memo",
     language: "Assembly",
-    color: BRAND_COLOURS.Assembly,
+    color: BRAND_COLOURS.assembly,
     difficulty: 2,
     isFeatured: true,
     unitName: "Assembly Memo",
@@ -165,7 +165,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "assembly-slippage",
     language: "Assembly",
-    color: BRAND_COLOURS.Assembly,
+    color: BRAND_COLOURS.assembly,
     difficulty: 3,
     isFeatured: true,
     unitName: "Assembly Slippage",
@@ -181,7 +181,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "assembly-timeout",
     language: "Assembly",
-    color: BRAND_COLOURS.Assembly,
+    color: BRAND_COLOURS.assembly,
     difficulty: 2,
     isFeatured: true,
     unitName: "Assembly Timeout",
@@ -195,7 +195,7 @@ export const challenges: ChallengeMetadata[] = [
   {
     slug: "pinocchio-quantum-vault",
     language: "Rust",
-    color: BRAND_COLOURS.Rust,
+    color: BRAND_COLOURS.rust,
     difficulty: 2,
     isFeatured: true,
     unitName: "Pinocchio Quantum Vault",

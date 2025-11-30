@@ -365,8 +365,9 @@ function NFTMesh({
   // Calculate gradient color from course colors
   const gradientColor = useMemo(() => {
     const colorString =
-      courseColors[challengeLanguage as keyof typeof courseColors] ||
-      courseColors.Typescript;
+      courseColors[
+        challengeLanguage.toLowerCase() as keyof typeof courseColors
+      ] || courseColors.Typescript.toLowerCase();
     const [r, g, b] = resolveColorVar(colorString);
     return new THREE.Vector3(r / 255, g / 255, b / 255);
   }, [challengeLanguage]);

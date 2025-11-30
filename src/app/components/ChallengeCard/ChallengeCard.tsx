@@ -81,7 +81,7 @@ export default function ChallengeCard({
         } as React.CSSProperties
       }
       className={classNames(
-        "max-w-[330px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border",
+        "max-w-[360px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border",
         isHovered && `swoosh-${direction}`,
         className
       )}
@@ -94,7 +94,9 @@ export default function ChallengeCard({
       <div
         style={{
           color:
-            BRAND_COLOURS[challenge.language as keyof typeof BRAND_COLOURS],
+            BRAND_COLOURS[
+              challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
+            ],
         }}
         className={classNames(
           "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20"
@@ -128,7 +130,7 @@ export default function ChallengeCard({
               style={{
                 color:
                   BRAND_COLOURS[
-                    challenge.language as keyof typeof BRAND_COLOURS
+                    challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
                   ],
               }}
               className={classNames("font-mono leading-[100%]")}
@@ -139,20 +141,17 @@ export default function ChallengeCard({
             <Badge
               size="sm"
               variant={
-                badgeDifficulty as
-                  | "Beginner"
-                  | "Intermediate"
-                  | "Advanced"
-                  | "Expert"
+                badgeDifficulty.toLowerCase() as
+                  | "beginner"
+                  | "intermediate"
+                  | "advanced"
+                  | "expert"
               }
               label={badgeDifficulty}
               className="leading-[100%] min-h-[20px]!"
               crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
               icon={
-                <Difficulty
-                  size={12}
-                  difficulties={[challenge.difficulty]}
-                />
+                <Difficulty size={12} difficulties={[challenge.difficulty]} />
               }
             />
           </div>

@@ -132,7 +132,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
   return (
     <div className="flex flex-col w-full border-b border-b-border">
-      <div className="relative max-w-app mx-auto w-full xl:border-x border-border-light">
+      <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
         <Breadcrumbs
           items={[
             { label: t("header.courses"), href: "/courses" },
@@ -149,14 +149,14 @@ export default async function LessonPage({ params }: LessonPageProps) {
         />
       </div>
 
-      <div className="max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full xl:border-x border-border-light">
+      <div className="max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full app:border-x border-border-light">
         <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
           <ContentPagination
             type="course"
             course={courseMetadata}
             currentLesson={currentLessonIndex + 1}
           />
-          <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-x border-border-light px-5 lg:px-6">
+          <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6">
             <MdxLayout>
               <ContentFallbackNotice
                 locale={locale}

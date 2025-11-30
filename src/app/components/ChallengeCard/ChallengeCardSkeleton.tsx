@@ -4,7 +4,7 @@ export default function ChallengeCardSkeleton() {
   return (
     <div
       className={classNames(
-        "shrink-0 w-full snap-center max-w-[330px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border"
+        "shrink-0 w-full snap-center max-w-[360px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border"
       )}
     >
       <div className={classNames("flex flex-col gap-y-6 px-4 py-5")}>
