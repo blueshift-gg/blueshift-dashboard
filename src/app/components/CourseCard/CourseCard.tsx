@@ -86,10 +86,10 @@ export default function CourseCard({
       <div className="w-full bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
       <div
         className={classNames(
-          "flex flex-col gap-y-12 grow justify-between px-4 py-5"
+          "flex flex-col gap-y-8 grow justify-between px-4 py-5"
         )}
       >
-        <div className="flex flex-col min-h-[150px] sm:min-h-[125px]">
+        <div className="flex flex-col min-h-[125px] sm:min-h-[100px]">
           <AnimatePresence>
             {!isHovered && (
               <motion.div

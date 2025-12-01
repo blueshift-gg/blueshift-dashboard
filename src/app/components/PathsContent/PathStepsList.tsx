@@ -121,7 +121,7 @@ export default function PathStepsList({
           courseSlug={course.slug}
           currentLessonSlug={currentLessonSlug}
           className={classNames(
-            "w-full aspect-4/5",
+            "w-full aspect-4/5 lg:aspect-square xl:aspect-5/6",
             isComplete && "opacity-40"
           )}
         />
@@ -137,7 +137,7 @@ export default function PathStepsList({
           setIsNFTViewerOpen={setIsNFTViewerOpen}
           setSelectedChallenge={setSelectedChallenge}
           className={classNames(
-            "max-w-none! aspect-4/5 h-full",
+            "max-w-none! aspect-4/5 lg:aspect-square xl:aspect-5/6 h-full",
             isComplete && "opacity-40"
           )}
         />

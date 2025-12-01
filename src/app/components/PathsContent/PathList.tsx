@@ -2,12 +2,7 @@
 
 import { PathMetadata, getPathCompletedSteps } from "@/app/utils/path";
 import { CourseLanguages } from "@/app/utils/course";
-import {
-  languageFilterMap,
-  reverseLanguageFilterMap,
-  difficultyFilterMap,
-  reverseDifficultyFilterMap,
-} from "@/app/utils/common";
+import { languageFilterMap, difficultyFilterMap } from "@/app/utils/common";
 import { usePersistentStore } from "@/stores/store";
 import PathCard from "../PathCard/PathCard";
 import classNames from "classnames";

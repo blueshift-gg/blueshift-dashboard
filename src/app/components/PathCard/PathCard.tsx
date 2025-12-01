@@ -40,6 +40,7 @@ export default function PathCard({
   estimatedHours,
   courseCount = 0,
   challengeCount = 0,
+  pathSlug,
 }: PathCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [hasHovered, setHasHovered] = useState(false);
@@ -85,13 +86,13 @@ export default function PathCard({
       )}
       <div
         className={classNames(
-          "flex flex-col gap-y-24 flex-grow justify-between px-4 py-5 pb-6"
+          "flex flex-col gap-y-24 grow justify-between px-4 py-5 pb-6"
         )}
       >
         <div className="flex flex-col gap-y-5">
           <img
-            src="/graphics/icons/path-test.svg"
-            alt="Path Test"
+            src={`/graphics/icons/${pathSlug || "path-test"}.svg`}
+            alt={name}
             className="w-12 h-12"
           />
           <div className="flex flex-col gap-y-2">
