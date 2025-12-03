@@ -79,7 +79,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 }}
                 disabled={props.currentLesson === 1}
                 className={classNames(
-                  "text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                 )}
               >
                 <Icon name="ArrowLeft" />
@@ -101,7 +101,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 }}
                 disabled={props.currentLesson === props.course.lessons.length}
                 className={classNames(
-                  "text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                 )}
               >
                 <Icon name="ArrowRight" />
@@ -128,7 +128,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         }
                       )}
                     >
-                      <div className="flex items-center">
+                      <div className="flex items-center max-w-[90%]">
                         {isActive && (
                           <motion.div
                             layoutId="lesson-pagination"
@@ -243,7 +243,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     onClick={() => prevPage && router.push(getLink(prevPage))}
                     disabled={!prevPage}
                     className={classNames(
-                      "text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                     )}
                   >
                     <Icon name="ArrowLeft" />
@@ -253,7 +253,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     onClick={() => nextPage && router.push(getLink(nextPage))}
                     disabled={!nextPage}
                     className={classNames(
-                      "text-shade-tertiary hover:bg-background-primary transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                     )}
                   >
                     <Icon name="ArrowRight" />
@@ -282,7 +282,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                             }
                           )}
                         >
-                          <div className="flex items-center">
+                          <div className="flex items-center max-w-[90%]">
                             {isActive && (
                               <motion.div
                                 layoutId="requirement-pagination"

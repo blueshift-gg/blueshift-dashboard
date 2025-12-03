@@ -110,7 +110,7 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <body
-        className={`${MontechV2.variable} ${FiraCode.variable} ${FunnelDisplay.variable} ${Switzer.variable} antialiased`}
+        className={`${MontechV2.variable} ${FiraCode.variable} ${Switzer.variable} ${FunnelDisplay.variable} antialiased`}
       >
         <NextIntlClientProvider>
           <TanstackProvider>

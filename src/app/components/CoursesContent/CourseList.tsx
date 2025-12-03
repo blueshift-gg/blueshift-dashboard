@@ -261,7 +261,7 @@ export default function CourseList({
     >
       {/* Get Started */}
       <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
-        <Banner title={t("lessons.get_started")} variant="Brand" />
+        <Banner title={t("lessons.get_started")} variant="brand" />
         <div className="px-1.5 py-3 sm:p-4">
           <div
             ref={carouselRef}
@@ -301,7 +301,6 @@ export default function CourseList({
                         completedLessonsCount={completedLessonsCount}
                         totalLessonCount={totalLessons}
                         courseSlug={course.slug}
-                        currentLessonSlug={currentLessonSlug}
                       />
                     );
                   })}
@@ -352,7 +351,12 @@ export default function CourseList({
               multiSelectLabel={`Filters`}
               selectedItem={[
                 ...selectedLanguages.map((l) => reverseLanguageFilterMap[l]),
-                ...selectedDifficulties.map((d) => reverseDifficultyFilterMap[d as keyof typeof reverseDifficultyFilterMap]),
+                ...selectedDifficulties.map(
+                  (d) =>
+                    reverseDifficultyFilterMap[
+                      d as keyof typeof reverseDifficultyFilterMap
+                    ]
+                ),
                 ...(activeTab !== "all-courses" ? [activeTab] : []),
               ]}
               multiple={true}
@@ -415,7 +419,6 @@ export default function CourseList({
                     completedLessonsCount={completedLessonsCount}
                     totalLessonCount={totalLessons}
                     courseSlug={course.slug}
-                    currentLessonSlug={currentLessonSlug}
                   />
                 );
               })}

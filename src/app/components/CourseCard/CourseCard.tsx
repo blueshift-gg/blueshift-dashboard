@@ -7,6 +7,7 @@ import classNames from "classnames";
 import { Link } from "@/i18n/navigation";
 import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
+  Avatar,
   Badge,
   breeze,
   Button,
@@ -30,7 +31,6 @@ type CourseCardProps = {
   completedLessonsCount?: number;
   totalLessonCount?: number;
   courseSlug?: string;
-  currentLessonSlug?: string;
 };
 
 export default function CourseCard({
@@ -43,7 +43,6 @@ export default function CourseCard({
   completedLessonsCount,
   totalLessonCount,
   courseSlug,
-  currentLessonSlug,
 }: CourseCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [hasHovered, setHasHovered] = useState(false);
@@ -83,7 +82,23 @@ export default function CourseCard({
       {link && (
         <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
       )}
-      <div className="w-full bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
+      <div className="w-full p-4 flex bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide relative overflow-hidden">
+        <img
+          src={`/graphics/course-images/${courseSlug}.webp`}
+          className="absolute w-full h-full mix-blend-screen object-contain inset-0"
+        ></img>
+        <Avatar
+          icon={{ name: language }}
+          className="mt-auto"
+          thickness={1.5}
+          variant={language.toLowerCase() as keyof typeof BRAND_COLOURS}
+          crosshair={{
+            variant: "bordered",
+            animationDelay: 0,
+            animationDuration: 0,
+          }}
+        />
+      </div>
       <div
         className={classNames(
           "flex flex-col gap-y-8 grow justify-between px-4 py-5"

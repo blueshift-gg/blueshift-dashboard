@@ -53,7 +53,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
         Requirement,
         AnchorDiscriminatorCalculator,
         blockquote: ({ children }: { children: React.ReactNode }) => (
-          <blockquote className="bg-background-primary flex items-start gap-x-2 py-4 px-6">
+          <blockquote className="bg-brand-primary/5 flex items-start gap-x-2 py-4 px-6">
             <Icon
               name="Warning"
               className="text-brand-secondary flex-shrink-0 top-1.5 relative"

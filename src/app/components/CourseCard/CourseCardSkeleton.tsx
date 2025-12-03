@@ -3,7 +3,7 @@ import classNames from "classnames";
 export default function CourseCardSkeleton() {
   return (
     <div className="flex flex-col overflow-hidden p-1 relative bg-card-solid border-border-light border">
-      <div className="w-full bg-background/50 h-full max-h-[200px] group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
+      <div className="w-full bg-background/50 aspect-2/1 h-full max-h-[200px] group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
       <div
         className={classNames(
           "flex flex-col gap-y-8 flex-grow justify-between px-4 py-5"
