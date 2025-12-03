@@ -85,7 +85,7 @@ export default function CourseCard({
       <div className="w-full p-4 flex bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide relative overflow-hidden">
         <img
           src={`/graphics/course-images/${courseSlug}.webp`}
-          className="absolute w-full h-full mix-blend-screen object-contain inset-0"
+          className="absolute w-full h-full mix-blend-plus-lighter object-contain inset-0"
         ></img>
         <Avatar
           icon={{ name: language }}
