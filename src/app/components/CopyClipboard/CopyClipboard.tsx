@@ -43,7 +43,7 @@ export default function CopyClipboard({
             animate={{ opacity: 1, scale: 1, y: -36, filter: "blur(0px)" }}
             exit={{ opacity: 0, scale: 0.9, y: 0, filter: "blur(10px)" }}
             transition={{ duration: 0.4, ease: anticipate }}
-            className="absolute bg-card-solid/50 backdrop-blur border border-border rounded-xl px-3 py-2 text-sm"
+            className="absolute bg-card-solid/50 backdrop-blur border border-border px-3 py-2 text-sm"
           >
             <DecryptedText
               speed={100}

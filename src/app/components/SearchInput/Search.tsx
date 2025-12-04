@@ -23,7 +23,7 @@ export default function SearchInput({
   return (
     <div
       className={classNames(
-        "w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid rounded-xl flex items-center gap-x-3",
+        "w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid flex items-center gap-x-3",
         className
       )}
     >

@@ -164,7 +164,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   >
                     <div
                       className={classNames(
-                        "w-[18px] h-[18px] relative flex items-center justify-center rounded-full border-2 border-mute"
+                        "w-[18px] h-[18px] relative flex items-center justify-center border-2 border-mute"
                       )}
                     ></div>
                     <div className="flex items-center gap-x-2">

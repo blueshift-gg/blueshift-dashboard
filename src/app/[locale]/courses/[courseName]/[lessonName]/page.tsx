@@ -156,7 +156,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
             course={courseMetadata}
             currentLesson={currentLessonIndex + 1}
           />
-          <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6">
+          <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-t-0 lg:border-r app:border-x border-border-light px-5 lg:px-6">
             <MdxLayout>
               <ContentFallbackNotice
                 locale={locale}

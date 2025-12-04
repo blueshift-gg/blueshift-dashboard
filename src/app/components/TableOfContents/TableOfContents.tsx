@@ -131,7 +131,7 @@ export default function TableOfContents() {
       </div>
       <div className="flex space-x-5 items-stretch">
         {/* Scroll Spy Background */}
-        <div className="w-[1.5px] shrink-0 bg-card-solid rounded-full"></div>
+        <div className="w-[1.5px] shrink-0 bg-card-solid"></div>
         <div className="flex flex-col gap-y-5 w-max">
           {sections.map((section) => {
             const isSectionActive = activeSection === section.id;

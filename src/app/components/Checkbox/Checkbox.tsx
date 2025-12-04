@@ -42,7 +42,7 @@ export default function Checkbox({
         />
         <div
           className={classNames(
-            "rounded-[1px] pointer-events-none col-start-1 row-start-1 size-1.25 self-center justify-self-center opacity-0 group-has-[:checked]:opacity-100",
+            "pointer-events-none col-start-1 row-start-1 size-1.25 self-center justify-self-center opacity-0 group-has-[:checked]:opacity-100",
             {
               "bg-brand-primary": theme === "primary",
               "bg-shade-secondary": theme === "secondary",

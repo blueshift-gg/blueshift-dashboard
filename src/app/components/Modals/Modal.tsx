@@ -69,7 +69,7 @@ export default function Modal({
           <motion.div
             ref={cardRef as React.RefObject<HTMLDivElement>}
             className={classNames(
-              "relative bg-card-solid justify-center items-center flex flex-col rounded-2xl px-6 pt-8 pb-6 gradient-border before:[background:linear-gradient(180deg,rgba(173,185,210,0.1),rgba(173,185,210,0.05))]",
+              "relative bg-card-solid justify-center items-center flex flex-col px-6 pt-8 pb-6 gradient-border before:[background:linear-gradient(180deg,rgba(173,185,210,0.1),rgba(173,185,210,0.05))]",
               position !== null && "!absolute",
               cardClassName,
               "max-w-[calc(100dvw-16px)]",

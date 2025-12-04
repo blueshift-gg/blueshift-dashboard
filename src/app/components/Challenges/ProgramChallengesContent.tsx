@@ -53,7 +53,7 @@ export default function ChallengesContent({
   };
 
   return (
-    <div className="relative w-full h-full">
+    <div className="w-full h-full">
       {!isUserConnected ? (
         <div className="z-10 flex-col gap-y-8 flex items-center justify-center top-0 left-0 w-full h-full bg-background/80 backdrop-blur-sm">
           <div className="flex flex-col gap-y-4 mt-24 max-w-[90dvw]">
@@ -79,9 +79,9 @@ export default function ChallengesContent({
               transition: { duration: 0.4, ease: anticipate },
             }}
             exit={{ opacity: 0 }}
-            className="px-4 py-14 relative max-w-app md:px-8 lg:px-14 mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-2 gap-y-12 lg:gap-x-24"
+            className="max-w-app mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-5 lg:gap-x-10"
           >
-            <div className="hidden lg:block absolute top-0 right-0 w-1/2 h-full"></div>
+            <div className="hidden lg:block w-px h-full bg-border-light left-2/5 absolute top-0 -translate-x-1/2"></div>
             <ChallengeRequirements content={content} />
             <ChallengeTable
               isLoading={isLoading}

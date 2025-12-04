@@ -494,7 +494,7 @@ export default function ChallengesContent({
             transition: { duration: 0.4, ease: anticipate },
           }}
           exit={{ opacity: 0 }}
-          className="px-4 py-14 lg:pb-20 max-w-app grid grid-cols-1 md:px-8 lg:px-14 mx-auto w-full gap-y-12 lg:gap-x-24"
+          className="lg:pb-20 max-w-app grid grid-cols-1 mx-auto w-full gap-y-12 lg:gap-x-12"
         >
           <div className="flex flex-col relative w-full h-full">
             <motion.div

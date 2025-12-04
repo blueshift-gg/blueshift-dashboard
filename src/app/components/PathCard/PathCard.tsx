@@ -121,7 +121,7 @@ export default function PathCard({
               </span>
             </div>
             {challengeCount > 0 && (
-              <div className="w-1 h-1 rounded-full bg-border-light"></div>
+              <div className="w-1 h-1 bg-border-light"></div>
             )}
             {challengeCount > 0 && (
               <div className="flex items-center gap-x-1.5">
@@ -134,7 +134,7 @@ export default function PathCard({
                 </span>
               </div>
             )}
-            <div className="w-1 h-1 rounded-full bg-border-light"></div>
+            <div className="w-1 h-1 bg-border-light"></div>
             {estimatedHours && (
               <div className="flex items-center gap-x-1.5">
                 <Icon name="Clock" size={14} />

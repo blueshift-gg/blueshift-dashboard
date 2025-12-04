@@ -40,7 +40,7 @@ export default function PageHero({
       )}
     >
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-dvw h-px bg-border-light"></div>
-      <div className="flex flex-col gap-y-2 px-6 py-8 md:py-12 md:px-12">
+      <div className="flex flex-col gap-y-2 px-6 py-8 lg:py-12 lg:px-12">
         <div className="relative w-max py-0.5 px-1.5" style={{ color }}>
           <span className="font-medium text-lg leading-none font-mono">
             {badge}

@@ -55,7 +55,7 @@ export default function WalletMultiButton({
         onClick={handleClick}
       />
       {showDisconnectOverlay && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-card-solid/5 backdrop-blur-[8px] rounded-xl">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-card-solid/5 backdrop-blur-[8px]">
           <motion.span
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}

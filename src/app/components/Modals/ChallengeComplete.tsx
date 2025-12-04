@@ -73,7 +73,7 @@ export default function ChallengeCompleted({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.75 }}
-        className="rounded-2xl overflow-hidden h-full absolute top-0"
+        className="overflow-hidden h-full absolute top-0"
       >
         <img src="/graphics/nft-stage.png"></img>
       </motion.div>

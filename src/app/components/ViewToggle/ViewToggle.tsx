@@ -15,7 +15,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
   return (
     <div
       className={classNames(
-        "hidden md:flex w-max items-center gap-x-2 rounded-xl bg-card-solid p-1 relative",
+        "hidden md:flex w-max items-center gap-x-2  bg-card-solid p-1 relative",
         className
       )}
     >
@@ -31,7 +31,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "grid" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] rounded-lg bg-brand-primary/5"
+            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />
@@ -49,7 +49,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "list" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] rounded-lg bg-brand-primary/5"
+            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />

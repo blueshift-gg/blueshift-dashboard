@@ -56,7 +56,7 @@ export default async function ChallengeLayout({
           {pagination}
           <div
             className={classNames(
-              "py-8 order-2 lg:order-1 col-span-1 flex flex-col gap-y-8 lg:border-border-light border-t border-t-border-light lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6",
+              "py-5 order-2 lg:order-1 col-span-1 flex flex-col gap-y-8 lg:border-t-0 app:border-x border-border-light px-5",
               isTestPage
                 ? "md:col-span-9 lg:col-span-10 xl:col-span-14"
                 : "md:col-span-7 xl:col-span-8"
