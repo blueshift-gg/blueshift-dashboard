@@ -66,6 +66,8 @@ export default function ChallengeCard({
 
   const badgeDifficulty = difficultyMap[challenge.difficulty ?? 1];
 
+  const tags = ["#anchor", "#pyth", "#oracle", "#stablecoin"];
+
   return (
     <div
       ref={cardRef}
@@ -124,42 +126,59 @@ export default function ChallengeCard({
       </div>
 
       <div className={classNames("flex flex-col gap-y-6 px-4 py-5")}>
-        <div className="flex flex-col gap-y-2 min-h-[90px]">
-          <div className="flex items-center gap-x-3 overflow-hidden">
+        <div
+          className={classNames(
+            "flex flex-col gap-y-5 min-h-[90px]",
+            tags.length > 0 && "min-h-[100px]"
+          )}
+        >
+          <div className="flex flex-col gap-y-2">
+            <div className="flex items-center gap-x-3 overflow-hidden">
+              <span
+                style={{
+                  color:
+                    BRAND_COLOURS[
+                      challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
+                    ],
+                }}
+                className={classNames("font-mono leading-[100%]")}
+              >
+                {challenge.language}
+              </span>
+              <Divider direction="vertical" className="h-[20px]" />
+              <Badge
+                size="sm"
+                variant={
+                  badgeDifficulty.toLowerCase() as
+                    | "beginner"
+                    | "intermediate"
+                    | "advanced"
+                    | "expert"
+                }
+                label={badgeDifficulty}
+                className="leading-[100%] min-h-[20px]!"
+                crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
+                icon={
+                  <Difficulty size={12} difficulties={[challenge.difficulty]} />
+                }
+              />
+            </div>
             <span
-              style={{
-                color:
-                  BRAND_COLOURS[
-                    challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
-                  ],
-              }}
-              className={classNames("font-mono leading-[100%]")}
+              className={classNames("text-xl font-medium text-shade-primary")}
             >
-              {challenge.language}
+              {t(`challenges.${challenge.slug}.title`)}
             </span>
-            <Divider direction="vertical" className="h-[20px]" />
-            <Badge
-              size="sm"
-              variant={
-                badgeDifficulty.toLowerCase() as
-                  | "beginner"
-                  | "intermediate"
-                  | "advanced"
-                  | "expert"
-              }
-              label={badgeDifficulty}
-              className="leading-[100%] min-h-[20px]!"
-              crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
-              icon={
-                <Difficulty size={12} difficulties={[challenge.difficulty]} />
-              }
-            />
           </div>
-          <span
-            className={classNames("text-xl font-medium text-shade-primary")}
-          >
-            {t(`challenges.${challenge.slug}.title`)}
-          </span>
+          <div className="flex items-center gap-x-0.5">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="text-xs leading-none font-medium text-shade-tertiary bg-border px-2 py-1"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
         </div>
 
         {/* Footer Logic Moved Here */}

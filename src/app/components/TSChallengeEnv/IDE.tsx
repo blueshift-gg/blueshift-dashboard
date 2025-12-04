@@ -265,14 +265,14 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
           "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50"
       )}
     >
-      <div className="w-full h-full flex flex-col rounded-xl overflow-hidden border border-border">
+      <div className="w-full h-full flex flex-col overflow-hidden border border-border">
         <div className="flex flex-col relative w-full h-full">
-          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-card-solid rounded-t-xl flex items-center border-b border-border">
+          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-card-solid flex items-center border-b border-border">
             <div className="flex items-center gap-x-2">
-              <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
+              <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
               <button
                 className={classNames(
-                  "w-[12px] h-[12px] bg-card-solid-foreground rounded-full flex items-center justify-center group/minimize",
+                  "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/minimize",
                   ideView === "expanded" && "!bg-[#FFBD2D]"
                 )}
                 onClick={() => setIdeView("minified")}
@@ -288,7 +288,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
               </button>
               <button
                 className={classNames(
-                  "w-[12px] h-[12px] bg-card-solid-foreground rounded-full flex items-center justify-center group/expand",
+                  "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/expand",
                   ideView === "minified" && "!bg-[#28C840]"
                 )}
                 onClick={() => setIdeView("expanded")}

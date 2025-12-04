@@ -509,7 +509,7 @@ export default function ChallengesContent({
                 isDragging && "select-none"
               )}
             >
-              <div className="w-full h-full flex flex-col rounded-t-2xl lg:rounded-xl overflow-hidden border border-border">
+              <div className="w-full h-full flex flex-col overflow-hidden border border-border">
                 <motion.div
                   drag={isMobile ? "y" : false}
                   dragControls={dragControls}
@@ -519,14 +519,14 @@ export default function ChallengesContent({
                   dragMomentum={true}
                   dragConstraints={{ top: 0, bottom: 0 }}
                   dragElastic={0}
-                  className="z-10 w-full py-3 relative px-4 bg-card-solid rounded-t-2xl lg:rounded-t-xl flex gap-y-4 lg:gap-y-0 flex-col lg:flex-row items-center justify-center lg:justify-start border-b border-border"
+                  className="z-10 w-full py-3 relative px-4 bg-card-solid flex gap-y-4 lg:gap-y-0 flex-col lg:flex-row items-center justify-center lg:justify-start border-b border-border"
                 >
                   {/* Mobile Thumb */}
-                  <div className="h-[8px] w-[72px] rounded-full bg-card-solid-foreground mx-auto flex lg:hidden" />
+                  <div className="h-[8px] w-[72px]  bg-card-solid-foreground mx-auto flex lg:hidden" />
                   <div className="items-center gap-x-2 hidden lg:flex">
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground rounded-full"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
+                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
                   </div>
                   <div className="text-sm font-medium text-shade-secondary lg:absolute lg:left-1/2 lg:-translate-x-1/2 flex items-center gap-x-1.5">
                     <Icon name="Challenge" size={12} />
