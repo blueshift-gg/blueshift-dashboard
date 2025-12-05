@@ -12,6 +12,9 @@ import NFTViewer from "../NFTViewer/NFTViewer";
 import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
 import PathItemDivider from "./PathItemDivider";
+import { useWindowSize } from "usehooks-ts";
+import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
 
 type PathStepsListProps = {
   path: PathMetadata;
@@ -40,24 +43,22 @@ export default function PathStepsList({
   const [selectedChallenge, setSelectedChallenge] =
     useState<ChallengeMetadata | null>(null);
   const [itemsPerRow, setItemsPerRow] = useState(1);
+  const [isMounted, setIsMounted] = useState(false);
+  const { width } = useWindowSize();
 
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth >= 1280) {
-        setItemsPerRow(3); // xl
-      } else if (window.innerWidth >= 768) {
-        setItemsPerRow(2); // md - lg
-      } else {
-        setItemsPerRow(1); // mobile
-      }
-    };
-
-    // Initial check
-    handleResize();
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    setIsMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (width >= 1280) {
+      setItemsPerRow(3); // xl
+    } else if (width >= 768) {
+      setItemsPerRow(2); // md - lg
+    } else {
+      setItemsPerRow(1); // mobile
+    }
+  }, [width]);
 
   // Get current lesson slug for a course
   const getCurrentLessonSlug = (
@@ -146,6 +147,27 @@ export default function PathStepsList({
     return null;
   };
 
+  if (!isMounted || !width) {
+    return (
+      <div className="relative w-full p-6 pb-12 max-w-app mx-auto app:border-x app:border-border-light">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-y-12 gap-x-0 md:gap-x-24">
+          {steps.map((step, index) => (
+            <div
+              key={index}
+              className="w-full aspect-4/5 lg:aspect-square xl:aspect-5/6"
+            >
+              {step.type === "course" ? (
+                <CourseCardSkeleton />
+              ) : (
+                <ChallengeCardSkeleton />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   // Use state-based chunk size to recalculate layout on resize
   const chunks = chunk(steps, itemsPerRow);
   const totalSteps = steps.length;
@@ -174,10 +196,6 @@ export default function PathStepsList({
                 const isComplete = isStepComplete(step);
 
                 // Calculate dynamic width based on itemsPerRow
-                // For 3 items: (100% - 2 * 6rem) / 3
-                // For 2 items: (100% - 1 * 6rem) / 2
-                // Arrow width is 6rem (96px, but w-24 is 6rem)
-                // Formula: (100% - (itemsPerRow - 1) * 6rem) / itemsPerRow
                 const widthStyle = !isMobile
                   ? {
                       width: `calc((100% - ${(itemsPerRow - 1) * 6}rem) / ${itemsPerRow})`,

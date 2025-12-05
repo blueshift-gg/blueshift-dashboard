@@ -17,7 +17,7 @@ import {
 } from "@blueshift-gg/ui-components";
 import { useStore } from "@/stores/store";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import PathCardSkeleton from "../PathCard/PathCardSkeleton";
 
 type PathsContentProps = {
@@ -41,7 +41,36 @@ export default function PathList({
     challengeStatuses,
   } = usePersistentStore();
   const { searchValue, setSearchValue } = useStore();
+
+  // Calculate global in-progress paths to determine tab state
+  const globalInProgressPaths = initialPaths.filter((path) => {
+    const completedSteps = getPathCompletedSteps(
+      path.steps,
+      courseProgress,
+      challengeStatuses
+    );
+    const totalSteps = path.steps.length;
+    return completedSteps > 0 && completedSteps < totalSteps;
+  });
+
+  const hasInProgress = globalInProgressPaths.length > 0;
+
+  // Calculate global completed paths
+  const globalCompletedPaths = initialPaths.filter((path) => {
+    const completedSteps = getPathCompletedSteps(
+      path.steps,
+      courseProgress,
+      challengeStatuses
+    );
+    const totalSteps = path.steps.length;
+    return completedSteps === totalSteps;
+  });
+
+  const hasCompleted = globalCompletedPaths.length > 0;
+
+  // Initialize tab - will be updated by useEffect based on hasInProgress
   const [activeTab, setActiveTab] = useState("all-paths");
+
   const { width } = useWindowSize();
   const [isMobile, setIsMobile] = useState(false);
 
@@ -77,6 +106,15 @@ export default function PathList({
     setIsMobile(width < 768);
   }, [width]);
 
+  // Track if user has manually changed the tab
+  const userChangedTab = useRef(false);
+
+  // Track when user manually changes tab
+  const handleTabChange = useCallback((tab: string) => {
+    userChangedTab.current = true;
+    setActiveTab(tab);
+  }, []);
+
   const handleFilterChange = (value: string | string[] | undefined) => {
     if (Array.isArray(value)) {
       const newLanguages: CourseLanguages[] = [];
@@ -99,11 +137,11 @@ export default function PathList({
 
       if (selectedStatuses.length > 1) {
         const newStatus = selectedStatuses.find((s) => s !== activeTab);
-        setActiveTab(newStatus || "all-paths");
+        handleTabChange(newStatus || "all-paths");
       } else if (selectedStatuses.length === 1) {
-        setActiveTab(selectedStatuses[0]);
+        handleTabChange(selectedStatuses[0]);
       } else {
-        setActiveTab("all-paths");
+        handleTabChange("all-paths");
       }
     } else if (typeof value === "string") {
       if (value in difficultyFilterMap) {
@@ -111,28 +149,27 @@ export default function PathList({
       } else if (value in languageFilterMap) {
         toggleLanguage(languageFilterMap[value]);
       } else if (["in-progress", "completed"].includes(value)) {
-        setActiveTab(value === activeTab ? "all-paths" : value);
+        handleTabChange(value === activeTab ? "all-paths" : value);
       }
     }
   };
 
-  // Calculate global in-progress paths
-  const globalInProgressPaths = initialPaths.filter((path) => {
-    const completedSteps = getPathCompletedSteps(
-      path.steps,
-      courseProgress,
-      challengeStatuses
-    );
-    const totalSteps = path.steps.length;
-    return completedSteps > 0 && completedSteps < totalSteps;
-  });
-
-  const hasInProgress = globalInProgressPaths.length > 0;
-
-  // Disable In Progress tab if no paths are in progress
+  // Set initial tab based on whether user has in-progress paths
+  // This handles both initial load and when store values load asynchronously
   useEffect(() => {
-    if (!hasInProgress && activeTab === "in-progress") {
-      setActiveTab("all-paths");
+    // Only auto-switch if user hasn't manually changed the tab
+    if (!userChangedTab.current) {
+      if (hasInProgress) {
+        setActiveTab("in-progress");
+      } else if (activeTab === "in-progress") {
+        // If in-progress tab becomes disabled, switch to all-paths
+        setActiveTab("all-paths");
+      }
+    } else {
+      // If user manually changed tab, only switch away from in-progress if it becomes disabled
+      if (!hasInProgress && activeTab === "in-progress") {
+        setActiveTab("all-paths");
+      }
     }
   }, [hasInProgress, activeTab]);
 
@@ -163,7 +200,10 @@ export default function PathList({
       );
       const totalSteps = path.steps.length;
 
-      if (activeTab === "in-progress") {
+      if (activeTab === "all-paths") {
+        // Not Started tab: only show paths with no progress (completedSteps === 0)
+        matchesTab = completedSteps === 0;
+      } else if (activeTab === "in-progress") {
         matchesTab = completedSteps > 0 && completedSteps < totalSteps;
       } else if (activeTab === "completed") {
         matchesTab = completedSteps === totalSteps;
@@ -178,6 +218,79 @@ export default function PathList({
   const hasNoResults = filteredPaths.length === 0;
 
   const dropdownItems = getPathDropdownItems();
+
+  // Helper function to check if a path is completed
+  const isPathCompleted = (path: PathMetadata) => {
+    const completedSteps = getPathCompletedSteps(
+      path.steps,
+      courseProgress,
+      challengeStatuses
+    );
+    const totalSteps = path.steps.length;
+    return completedSteps === totalSteps;
+  };
+
+  // Get dynamic Get Started paths (exclude completed, show up to 3)
+  const getStartedPaths = useMemo(() => {
+    // First, get all featured paths that are not completed
+    const nonCompletedFeatured = initialPaths.filter(
+      (path) => path.isFeatured && !isPathCompleted(path)
+    );
+
+    // If we have 3 or more non-completed featured paths, return first 3
+    if (nonCompletedFeatured.length >= 3) {
+      return nonCompletedFeatured.slice(0, 3);
+    }
+
+    // Otherwise, fill remaining slots with non-completed, non-featured paths
+    // that aren't already in the list
+    const featuredSlugs = new Set(nonCompletedFeatured.map((p) => p.slug));
+    const additionalPaths = initialPaths.filter(
+      (path) =>
+        !path.isFeatured &&
+        !isPathCompleted(path) &&
+        !featuredSlugs.has(path.slug)
+    );
+
+    // Combine and return up to 3 paths
+    return [...nonCompletedFeatured, ...additionalPaths].slice(0, 3);
+  }, [initialPaths, courseProgress, challengeStatuses]);
+
+  // Create tabs array with conditional ordering
+  const tabsItems = useMemo(() => {
+    const notStartedTab = {
+      label: "Not Started",
+      value: "all-paths",
+      className: "w-full md:!w-max",
+      selected: activeTab === "all-paths",
+      onClick: () => handleTabChange("all-paths"),
+    };
+
+    const inProgressTab = {
+      label: "In Progress",
+      value: "in-progress",
+      disabled: !hasInProgress,
+      className: classNames("w-full md:!w-max", hasInProgress && "order-first"),
+      selected: activeTab === "in-progress",
+      onClick: () => handleTabChange("in-progress"),
+    };
+
+    const completedTab = {
+      label: "Completed",
+      value: "completed",
+      className: "w-full md:!w-max",
+      disabled: !hasCompleted,
+      selected: activeTab === "completed",
+      onClick: () => handleTabChange("completed"),
+    };
+
+    // Reorder tabs: if hasInProgress, put In Progress first
+    if (hasInProgress) {
+      return [inProgressTab, notStartedTab, completedTab];
+    }
+
+    return [notStartedTab, inProgressTab, completedTab];
+  }, [activeTab, hasInProgress, hasCompleted, handleTabChange]);
 
   // Get counts for path stats
   const getPathStats = (path: PathMetadata) => {
@@ -227,35 +340,32 @@ export default function PathList({
               ? Array.from({ length: 3 }).map((_, index) => (
                   <PathCardSkeleton key={`featured-skeleton-${index}`} />
                 ))
-              : initialPaths
-                  .filter((path) => path.isFeatured)
-                  .slice(0, 3)
-                  .map((path) => {
-                    const { courseCount, challengeCount } = getPathStats(path);
-                    const completedSteps = getPathCompletedSteps(
-                      path.steps,
-                      courseProgress,
-                      challengeStatuses
-                    );
-                    return (
-                      <PathCard
-                        className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
-                        key={path.slug}
-                        name={t(`paths.${path.slug}.title`)}
-                        description={t(`paths.${path.slug}.description`)}
-                        language={path.language}
-                        color={path.color}
-                        difficulty={path.difficulty}
-                        link={`/paths/${path.slug}`}
-                        completedStepsCount={completedSteps}
-                        totalStepsCount={path.steps.length}
-                        pathSlug={path.slug}
-                        estimatedHours={path.estimatedHours}
-                        courseCount={courseCount}
-                        challengeCount={challengeCount}
-                      />
-                    );
-                  })}
+              : getStartedPaths.map((path) => {
+                  const { courseCount, challengeCount } = getPathStats(path);
+                  const completedSteps = getPathCompletedSteps(
+                    path.steps,
+                    courseProgress,
+                    challengeStatuses
+                  );
+                  return (
+                    <PathCard
+                      className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
+                      key={path.slug}
+                      name={t(`paths.${path.slug}.title`)}
+                      description={t(`paths.${path.slug}.description`)}
+                      language={path.language}
+                      color={path.color}
+                      difficulty={path.difficulty}
+                      link={`/paths/${path.slug}`}
+                      completedStepsCount={completedSteps}
+                      totalStepsCount={path.steps.length}
+                      pathSlug={path.slug}
+                      estimatedHours={path.estimatedHours}
+                      courseCount={courseCount}
+                      challengeCount={challengeCount}
+                    />
+                  );
+                })}
           </div>
           <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
         </div>
@@ -297,23 +407,7 @@ export default function PathList({
             />
           </div>
           <Tabs
-            items={[
-              {
-                label: "In Progress",
-                value: "in-progress",
-                disabled: !hasInProgress,
-                className: "w-full md:!w-max",
-                selected: activeTab === "in-progress",
-                onClick: () => setActiveTab("in-progress"),
-              },
-              {
-                label: "All Paths",
-                value: "all-paths",
-                className: "w-full md:!w-max order-first",
-                selected: activeTab === "all-paths",
-                onClick: () => setActiveTab("all-paths"),
-              },
-            ]}
+            items={tabsItems}
             variant="segmented"
             className="hidden md:flex"
             theme="secondary"

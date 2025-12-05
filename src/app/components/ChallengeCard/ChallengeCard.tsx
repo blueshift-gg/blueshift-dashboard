@@ -128,8 +128,8 @@ export default function ChallengeCard({
       <div className={classNames("flex flex-col gap-y-6 px-4 py-5")}>
         <div
           className={classNames(
-            "flex flex-col gap-y-5 min-h-[90px]",
-            tags.length > 0 && "min-h-[100px]"
+            "flex flex-col gap-y-4 min-h-[90px]",
+            tags.length > 0 && "min-h-[110px]"
           )}
         >
           <div className="flex flex-col gap-y-2">

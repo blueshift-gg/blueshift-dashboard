@@ -17,13 +17,10 @@ import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
 import { getCourseDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import { Divider } from "@blueshift-gg/ui-components";
 import CoursesEmpty from "./CoursesEmpty";
-import { motion } from "motion/react";
-import { anticipate } from "motion";
 import { useStore } from "@/stores/store";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
 import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
 
@@ -55,7 +52,26 @@ export default function CourseList({
     challengeStatuses,
   } = usePersistentStore();
   const { searchValue, setSearchValue } = useStore();
+
+  // Calculate global in-progress courses to determine tab state
+  const globalInProgressCourses = initialCourses.filter((course) => {
+    const progress = courseProgress[course.slug] || 0;
+    const totalLessons = course.lessons.length;
+
+    if (progress === 0) return false;
+    if (progress < totalLessons) return true;
+    if (progress === totalLessons && course.challenge) {
+      const status = challengeStatuses[course.challenge];
+      return status !== "completed" && status !== "claimed";
+    }
+    return false;
+  });
+
+  const hasInProgress = globalInProgressCourses.length > 0;
+
+  // Initialize tab - will be updated by useEffect based on hasInProgress
   const [activeTab, setActiveTab] = useState("all-courses");
+
   const { width } = useWindowSize();
   const [isMobile, setIsMobile] = useState(false);
 
@@ -115,6 +131,15 @@ export default function CourseList({
     setIsMobile(width < 768);
   }, [width]);
 
+  // Track if user has manually changed the tab
+  const userChangedTab = useRef(false);
+
+  // Track when user manually changes tab
+  const handleTabChange = useCallback((tab: string) => {
+    userChangedTab.current = true;
+    setActiveTab(tab);
+  }, []);
+
   const handleFilterChange = (value: string | string[] | undefined) => {
     if (Array.isArray(value)) {
       const newLanguages: CourseLanguages[] = [];
@@ -137,11 +162,11 @@ export default function CourseList({
 
       if (selectedStatuses.length > 1) {
         const newStatus = selectedStatuses.find((s) => s !== activeTab);
-        setActiveTab(newStatus || "all-courses");
+        handleTabChange(newStatus || "all-courses");
       } else if (selectedStatuses.length === 1) {
-        setActiveTab(selectedStatuses[0]);
+        handleTabChange(selectedStatuses[0]);
       } else {
-        setActiveTab("all-courses");
+        handleTabChange("all-courses");
       }
     } else if (typeof value === "string") {
       if (value in difficultyFilterMap) {
@@ -149,31 +174,35 @@ export default function CourseList({
       } else if (value in languageFilterMap) {
         toggleLanguage(languageFilterMap[value]);
       } else if (["in-progress", "completed"].includes(value)) {
-        setActiveTab(value === activeTab ? "all-courses" : value);
+        handleTabChange(value === activeTab ? "all-courses" : value);
       }
     }
   };
 
-  // Calculate global in-progress courses to determine tab state
-  const globalInProgressCourses = initialCourses.filter((course) => {
+  const globalCompletedCourses = initialCourses.filter((course) => {
     const progress = courseProgress[course.slug] || 0;
     const totalLessons = course.lessons.length;
-
-    if (progress === 0) return false;
-    if (progress < totalLessons) return true;
-    if (progress === totalLessons && course.challenge) {
-      const status = challengeStatuses[course.challenge];
-      return status !== "completed" && status !== "claimed";
-    }
-    return false;
+    return progress === totalLessons;
   });
 
-  const hasInProgress = globalInProgressCourses.length > 0;
+  const hasCompleted = globalCompletedCourses.length > 0;
 
-  // Disable In Progress tab if no courses are in progress
+  // Set initial tab based on whether user has in-progress courses
+  // This handles both initial load and when store values load asynchronously
   useEffect(() => {
-    if (!hasInProgress && activeTab === "in-progress") {
-      setActiveTab("all-courses");
+    // Only auto-switch if user hasn't manually changed the tab
+    if (!userChangedTab.current) {
+      if (hasInProgress) {
+        setActiveTab("in-progress");
+      } else if (activeTab === "in-progress") {
+        // If in-progress tab becomes disabled, switch to all-courses
+        setActiveTab("all-courses");
+      }
+    } else {
+      // If user manually changed tab, only switch away from in-progress if it becomes disabled
+      if (!hasInProgress && activeTab === "in-progress") {
+        setActiveTab("all-courses");
+      }
     }
   }, [hasInProgress, activeTab]);
 
@@ -200,7 +229,10 @@ export default function CourseList({
       const progress = courseProgress[course.slug] || 0;
       const totalLessons = course.lessons.length;
 
-      if (activeTab === "in-progress") {
+      if (activeTab === "all-courses") {
+        // Not Started tab: only show courses with no progress (progress === 0)
+        matchesTab = progress === 0;
+      } else if (activeTab === "in-progress") {
         matchesTab =
           (progress > 0 && progress < totalLessons) ||
           (progress === totalLessons &&
@@ -224,11 +256,6 @@ export default function CourseList({
     .sort((a, b) => a.difficulty - b.difficulty);
 
   const hasNoResults = filteredCourses.length === 0;
-  const hasNoFilters =
-    !searchValue &&
-    selectedLanguages.length === 0 &&
-    selectedDifficulties.length === 0 &&
-    activeTab === "all-courses";
 
   // Helper function to get the current lesson slug
   const getCurrentLessonSlug = (courseSlug: string) => {
@@ -252,6 +279,78 @@ export default function CourseList({
 
   const dropdownItems = getCourseDropdownItems(isMobile);
 
+  // Helper function to check if a course is completed
+  const isCourseCompleted = (course: CourseMetadata) => {
+    const progress = courseProgress[course.slug] || 0;
+    const totalLessons = course.lessons.length;
+    if (progress !== totalLessons) return false;
+
+    // If course has a challenge, check if it's completed
+    if (course.challenge) {
+      const status = challengeStatuses[course.challenge];
+      return ["completed", "claimed"].includes(status);
+    }
+
+    return true;
+  };
+
+  // Get dynamic Get Started courses (exclude completed, show up to 3)
+  const getStartedCourses = useMemo(() => {
+    // First, get all featured courses that are not completed
+    const nonCompletedFeatured = initialCourses.filter(
+      (course) => course.isFeatured && !isCourseCompleted(course)
+    );
+
+    // If we have 3 or more non-completed featured courses, return first 3
+    if (nonCompletedFeatured.length >= 3) {
+      return nonCompletedFeatured.slice(0, 3);
+    }
+
+    // Otherwise, fill remaining slots with non-completed, non-featured courses
+    // that aren't already in the list
+    const featuredSlugs = new Set(nonCompletedFeatured.map((c) => c.slug));
+    const additionalCourses = initialCourses.filter(
+      (course) =>
+        !course.isFeatured &&
+        !isCourseCompleted(course) &&
+        !featuredSlugs.has(course.slug)
+    );
+
+    // Combine and return up to 3 courses
+    return [...nonCompletedFeatured, ...additionalCourses].slice(0, 3);
+  }, [initialCourses, courseProgress, challengeStatuses]);
+
+  // Create tabs array with conditional ordering
+  const tabsItems = useMemo(() => {
+    const notStartedTab = {
+      label: "Not Started",
+      value: "all-courses",
+      className: "w-full md:!w-max",
+      selected: activeTab === "all-courses",
+      onClick: () => handleTabChange("all-courses"),
+    };
+
+    const inProgressTab = {
+      label: "In Progress",
+      value: "in-progress",
+      disabled: !hasInProgress,
+      className: classNames("w-full md:!w-max", hasInProgress && "order-first"),
+      selected: activeTab === "in-progress",
+      onClick: () => handleTabChange("in-progress"),
+    };
+
+    const completedTab = {
+      label: "Completed",
+      value: "completed",
+      className: "w-full md:!w-max",
+      disabled: !hasCompleted,
+      selected: activeTab === "completed",
+      onClick: () => handleTabChange("completed"),
+    };
+
+    return [notStartedTab, inProgressTab, completedTab];
+  }, [activeTab, hasInProgress, hasCompleted, handleTabChange]);
+
   return (
     <div
       className={classNames(
@@ -273,37 +372,34 @@ export default function CourseList({
               ? Array.from({ length: 3 }).map((_, index) => (
                   <CourseCardSkeleton key={`featured-skeleton-${index}`} />
                 ))
-              : initialCourses
-                  .filter((course) => course.isFeatured)
-                  .slice(0, 3)
-                  .map((course) => {
-                    const totalLessons =
-                      courseLessons.find((c) => c.slug === course.slug)
-                        ?.totalLessons || 0;
-                    const currentLessonSlug = getCurrentLessonSlug(course.slug);
-                    const completedLessonsCount =
-                      courseProgress[course.slug] || 0;
-                    let link;
-                    if (currentLessonSlug && course.slug) {
-                      link = `/courses/${course.slug}/${currentLessonSlug}`;
-                    } else if (course.slug && !currentLessonSlug) {
-                      link = `/courses/${course.slug}`;
-                    }
-                    return (
-                      <CourseCard
-                        className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
-                        key={course.slug}
-                        name={t(`courses.${course.slug}.title`)}
-                        language={course.language}
-                        color={course.color}
-                        difficulty={course.difficulty}
-                        link={link}
-                        completedLessonsCount={completedLessonsCount}
-                        totalLessonCount={totalLessons}
-                        courseSlug={course.slug}
-                      />
-                    );
-                  })}
+              : getStartedCourses.map((course) => {
+                  const totalLessons =
+                    courseLessons.find((c) => c.slug === course.slug)
+                      ?.totalLessons || 0;
+                  const currentLessonSlug = getCurrentLessonSlug(course.slug);
+                  const completedLessonsCount =
+                    courseProgress[course.slug] || 0;
+                  let link;
+                  if (currentLessonSlug && course.slug) {
+                    link = `/courses/${course.slug}/${currentLessonSlug}`;
+                  } else if (course.slug && !currentLessonSlug) {
+                    link = `/courses/${course.slug}`;
+                  }
+                  return (
+                    <CourseCard
+                      className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
+                      key={course.slug}
+                      name={t(`courses.${course.slug}.title`)}
+                      language={course.language}
+                      color={course.color}
+                      difficulty={course.difficulty}
+                      link={link}
+                      completedLessonsCount={completedLessonsCount}
+                      totalLessonCount={totalLessons}
+                      courseSlug={course.slug}
+                    />
+                  );
+                })}
           </div>
           <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
         </div>
@@ -365,23 +461,7 @@ export default function CourseList({
             />
           </div>
           <Tabs
-            items={[
-              {
-                label: "In Progress",
-                value: "in-progress",
-                disabled: !hasInProgress,
-                className: "w-full md:!w-max",
-                selected: activeTab === "in-progress",
-                onClick: () => setActiveTab("in-progress"),
-              },
-              {
-                label: "All Courses",
-                value: "all-courses",
-                className: "w-full md:!w-max order-first",
-                selected: activeTab === "all-courses",
-                onClick: () => setActiveTab("all-courses"),
-              },
-            ]}
+            items={tabsItems}
             variant="segmented"
             className="hidden md:flex"
             theme="secondary"
