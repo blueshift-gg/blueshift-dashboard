@@ -281,9 +281,14 @@ export default function ChallengesList({
       initialChallenges
         .filter((challenge) => {
           // 1. Search
-          const matchesSearch = t(`challenges.${challenge.slug}.title`)
-            .toLowerCase()
-            .includes((searchValue || "").toLowerCase());
+          const searchLower = (searchValue || "").toLowerCase();
+          const matchesSearch =
+            t(`challenges.${challenge.slug}.title`)
+              .toLowerCase()
+              .includes(searchLower) ||
+            (challenge.tags || []).some((tag) =>
+              tag.toLowerCase().includes(searchLower)
+            );
 
           // 2. Language Filter (Empty = All)
           const matchesLanguage =

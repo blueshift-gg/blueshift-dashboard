@@ -33,6 +33,7 @@ export type ChallengeMetadata = {
   isFeatured: boolean;
   unitName: string;
   apiPath: string;
+  tags?: string[];
   pages?: {
     slug: string;
   }[];

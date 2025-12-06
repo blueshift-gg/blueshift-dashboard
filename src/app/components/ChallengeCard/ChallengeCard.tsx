@@ -66,7 +66,7 @@ export default function ChallengeCard({
 
   const badgeDifficulty = difficultyMap[challenge.difficulty ?? 1];
 
-  const tags = ["#anchor", "#pyth", "#oracle", "#stablecoin"];
+  const tags = challenge.tags ?? [];
 
   return (
     <div
@@ -175,7 +175,7 @@ export default function ChallengeCard({
                 key={tag}
                 className="text-xs leading-none font-medium text-shade-tertiary bg-border px-2 py-1"
               >
-                {tag}
+                {tag.startsWith("#") ? tag : `#${tag}`}
               </span>
             ))}
           </div>

@@ -10,6 +10,7 @@ export const challenges: ChallengeMetadata[] = [
     isFeatured: true,
     unitName: "Anchor Vault",
     apiPath: "/v1/verify/anchor/vault",
+    tags: ["Anchor", "Vault", "DeFi"],
     requirements: [
       { instructionKey: "deposit" },
       { instructionKey: "withdraw" },
@@ -24,6 +25,7 @@ export const challenges: ChallengeMetadata[] = [
     isFeatured: true,
     unitName: "Anchor Escrow",
     apiPath: "/v1/verify/anchor/escrow",
+    tags: ["Anchor", "Escrow", "DeFi"],
     pages: [{ slug: "make" }, { slug: "take" }, { slug: "refund" }],
     requirements: [
       { instructionKey: "make" },
@@ -89,6 +91,7 @@ export const challenges: ChallengeMetadata[] = [
     isFeatured: true,
     unitName: "Pinocchio AMM",
     apiPath: "/v1/verify/pinocchio/amm",
+    tags: ["Rust", "AMM", "DeFi", "Swap"],
     pages: [
       { slug: "initialize" },
       { slug: "deposit" },
@@ -140,6 +143,7 @@ export const challenges: ChallengeMetadata[] = [
     isFeatured: true,
     unitName: "Mint an SPL Token",
     apiPath: "/v1/verify/typescript/mint-an-spl-token",
+    tags: ["TypeScript", "SPL", "Token"],
     requirements: [
       { instructionKey: "create_mint_account" },
       { instructionKey: "initialize_mint" },
