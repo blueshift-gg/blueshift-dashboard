@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
 import { Icon } from "@blueshift-gg/ui-components";
+import AsciiAnimation from "../Ascii/Ascii";
 
 type CourseCardProps = {
   name: string;
@@ -83,10 +84,15 @@ export default function CourseCard({
         <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
       )}
       <div className="w-full p-4 flex bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide relative overflow-hidden">
-        <img
+        {/* <img
           src={`/graphics/course-images/${courseSlug}.webp`}
           className="absolute w-full h-full mix-blend-plus-lighter object-contain inset-0"
-        ></img>
+        ></img> */}
+        <AsciiAnimation
+          textPath={courseSlug || ""}
+          color={language.toLowerCase() as keyof typeof BRAND_COLOURS}
+        />
+
         <Avatar
           icon={{ name: language }}
           className="mt-auto"
