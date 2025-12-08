@@ -95,7 +95,7 @@ export default function CourseCard({
           crosshair={{
             variant: "bordered",
             animationDelay: 0,
-            animationDuration: 0,
+            animationDuration: 0.01,
           }}
         />
       </div>
@@ -140,7 +140,12 @@ export default function CourseCard({
                   variant="beginner"
                   label="Beginner"
                   className="leading-[100%] min-h-[20px]!"
-                  crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
+                  crosshair={{
+                    size: 4,
+                    corners: ["top-left", "bottom-right"],
+                    animationDelay: 0,
+                    animationDuration: 0.01,
+                  }}
                   icon={<Difficulty size={12} difficulties={[1]} />}
                 />
               </motion.div>

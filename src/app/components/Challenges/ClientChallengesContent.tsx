@@ -471,17 +471,19 @@ export default function ChallengesContent({
         challenge={currentChallenge}
       />
       {!isUserConnected ? (
-        <div className="z-10 flex-col gap-y-8 pb-12 flex items-center justify-center top-0 left-0 w-full h-full bg-background/80 backdrop-blur-sm">
-          <div className="flex flex-col mt-12 gap-y-4 lg:mt-24 max-w-[90dvw]">
+        <div className="z-10 flex-col gap-y-8 flex py-12 items-center justify-center w-full min-h-[60vh]">
+          <div className="flex flex-col gap-y-0 max-w-[90dvw]">
             <img
               src="/graphics/connect-wallet.svg"
               className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
             />
-            <div className="text-center text-lg sm:text-xl font-medium leading-none">
-              {t("ChallengePage.connect_wallet")}
-            </div>
-            <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
-              {t("ChallengePage.connect_wallet_description")}
+            <div className="flex flex-col gap-y-3">
+              <div className="text-center text-lg sm:text-xl font-medium leading-none font-mono text-shade-primary">
+                {t("ChallengePage.connect_wallet")}
+              </div>
+              <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
+                {t("ChallengePage.connect_wallet_description")}
+              </div>
             </div>
           </div>
           <WalletMultiButton disabled={isVerificationLoading} />

@@ -6,13 +6,16 @@ import DecryptedText from "../HeadingReveal/DecryptText";
 import { useAuth } from "@/hooks/useAuth";
 import { motion } from "motion/react";
 import { Icon } from "@blueshift-gg/ui-components";
+import classNames from "classnames";
 
 interface WalletButtonProps {
   disabled?: boolean;
+  className?: string;
 }
 
 export default function WalletMultiButton({
   disabled = false,
+  className,
 }: WalletButtonProps) {
   const [isHoveringLocal, setIsHoveringLocal] = useState<boolean>(false);
   const { status, publicKey, login, logout, isLoggingIn, isLoggingOut } =
@@ -44,7 +47,7 @@ export default function WalletMultiButton({
     <div
       onMouseEnter={() => setIsHoveringLocal(true)}
       onMouseLeave={() => setIsHoveringLocal(false)}
-      className="relative"
+      className={classNames("relative", className)}
     >
       <Button
         disabled={disabled || isLoggingIn || isLoggingOut}
