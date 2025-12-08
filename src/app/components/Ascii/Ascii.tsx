@@ -28,7 +28,7 @@ const AsciiAnimation = ({ textPath, color }: AsciiAnimationProps) => {
     >
       <pre
         ref={preRef}
-        className="absolute left-[25px] text-[8px] tracking-wider text-current"
+        className="absolute left-0 md:-left-1/5 xl:left-[25px] text-[8px] tracking-wider text-current"
         dangerouslySetInnerHTML={{ __html: text || "" }}
       />
 
