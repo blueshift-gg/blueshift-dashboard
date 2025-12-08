@@ -115,18 +115,18 @@ export default function PathCard({
           <div className="flex h-[28px] w-full items-center relative z-10 gap-x-4 text-xs text-shade-tertiary font-mono justify-center">
             <div className="flex items-center gap-x-1.5">
               <Icon name="Lessons" size={14} />
-              <span>
+              <span className="text-nowrap">
                 {courseCount}{" "}
                 {courseCount === 1 ? t("paths.course") : t("paths.courses")}
               </span>
             </div>
             {challengeCount > 0 && (
-              <div className="w-1 h-1 bg-border-light"></div>
+              <div className="w-1 h-1 bg-border-light shrink-0"></div>
             )}
             {challengeCount > 0 && (
               <div className="flex items-center gap-x-1.5">
                 <Icon name="Challenge" size={14} />
-                <span>
+                <span className="text-nowrap">
                   {challengeCount}{" "}
                   {challengeCount === 1
                     ? t("paths.challenge")
@@ -134,11 +134,11 @@ export default function PathCard({
                 </span>
               </div>
             )}
-            <div className="w-1 h-1 bg-border-light"></div>
+            <div className="w-1 h-1 bg-border-light shrink-0"></div>
             {estimatedHours && (
               <div className="flex items-center gap-x-1.5">
                 <Icon name="Clock" size={14} />
-                <span>{estimatedHours} hrs</span>
+                <span className="text-nowrap">{estimatedHours} hrs</span>
               </div>
             )}
           </div>
