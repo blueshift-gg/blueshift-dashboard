@@ -11,6 +11,7 @@ import { Icon } from "@blueshift-gg/ui-components";
 import { CourseMetadata } from "@/app/utils/course";
 import { ChallengeMetadata } from "@/app/utils/challenges";
 import { CrosshairCorners } from "@blueshift-gg/ui-components";
+import { usePathContent } from "@/app/hooks/usePathContent";
 
 type ContentPaginationProps = {
   className?: string;
@@ -32,6 +33,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
   const t = useTranslations();
   const { setCourseProgress, challengeStatuses } = usePersistentStore();
   const router = useRouter();
+  const { pathSlug } = usePathContent();
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_isFixed, setIsFixed] = useState(false);
@@ -50,6 +52,16 @@ export default function ContentPagination(props: ContentPaginationProps) {
       setCourseProgress(props.course.slug, props.currentLesson);
     }
   }, [props, setCourseProgress]);
+
+  const getCourseLessonHref = (lessonSlug: string, courseSlug: string) =>
+    pathSlug
+      ? `/paths/${pathSlug}/courses/${courseSlug}/${lessonSlug}`
+      : `/courses/${courseSlug}/${lessonSlug}`;
+
+  const getChallengeHref = (challengeSlug: string) =>
+    pathSlug
+      ? `/paths/${pathSlug}/challenges/${challengeSlug}`
+      : `/challenges/${challengeSlug}`;
 
   return (
     <div className="w-[calc(100dvw-2rem)] md:max-w-[350px] xl:w-full z-30 xl:p-5 col-span-3 xl:col-span-3 bottom-8 !fixed left-1/2 -translate-x-1/2 xl:bottom-0 xl:!relative">
@@ -72,9 +84,10 @@ export default function ContentPagination(props: ContentPaginationProps) {
               <button
                 onClick={() => {
                   router.push(
-                    `/courses/${props.course.slug}/${
-                      props.course.lessons[props.currentLesson - 2].slug
-                    }`
+                    getCourseLessonHref(
+                      props.course.lessons[props.currentLesson - 2].slug,
+                      props.course.slug
+                    )
                   );
                 }}
                 disabled={props.currentLesson === 1}
@@ -94,12 +107,15 @@ export default function ContentPagination(props: ContentPaginationProps) {
               <button
                 onClick={() => {
                   router.push(
-                    `/courses/${props.course.slug}/${
-                      props.course.lessons[props.currentLesson].slug
-                    }`
+                    getCourseLessonHref(
+                      props.course.lessons[props.currentLesson].slug,
+                      props.course.slug
+                    )
                   );
                 }}
-                disabled={props.currentLesson === props.course.lessons.length}
+                disabled={
+                  props.currentLesson === props.course.lessons.length
+                }
                 className={classNames(
                   "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
                 )}
@@ -116,7 +132,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   const isActive = index === props.currentLesson - 1;
                   return (
                     <Link
-                      href={`/courses/${props.course.slug}/${lesson.slug}`}
+                      href={getCourseLessonHref(lesson.slug, props.course.slug)}
                       key={lesson.slug}
                       className={classNames(
                         "flex items-center group relative pl-6 py-2",
@@ -159,7 +175,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 })}
                 {props.course.challenge && (
                   <Link
-                    href={`/challenges/${props.course.challenge}?fromCourse=${props.course.slug}`}
+                    href={`${getChallengeHref(props.course.challenge)}?fromCourse=${props.course.slug}`}
                     className="flex items-center gap-x-4 group mt-2"
                   >
                     <div
@@ -232,8 +248,8 @@ export default function ContentPagination(props: ContentPaginationProps) {
 
             const getLink = (page: { slug: string | undefined }) =>
               page.slug
-                ? `/challenges/${challenge.slug}/${page.slug}`
-                : `/challenges/${challenge.slug}`;
+                ? `${getChallengeHref(challenge.slug)}/${page.slug}`
+                : getChallengeHref(challenge.slug);
 
             return (
               <>

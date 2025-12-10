@@ -31,6 +31,7 @@ type ChallengeCardProps = {
   setIsNFTViewerOpen: (isOpen: boolean) => void;
   setSelectedChallenge: (challenge: ChallengeMetadata) => void;
   className?: string;
+  hrefOverride?: string;
 };
 
 export default function ChallengeCard({
@@ -38,6 +39,7 @@ export default function ChallengeCard({
   setIsNFTViewerOpen,
   setSelectedChallenge,
   className,
+  hrefOverride,
 }: ChallengeCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [hasHovered, setHasHovered] = useState(false);
@@ -68,6 +70,8 @@ export default function ChallengeCard({
 
   const tags = challenge.tags ?? [];
 
+  const challengeHref = hrefOverride ?? `/challenges/${challenge.slug}`;
+
   return (
     <div
       ref={cardRef}
@@ -89,7 +93,7 @@ export default function ChallengeCard({
       )}
     >
       <Link
-        href={`/challenges/${challenge.slug}`}
+        href={challengeHref}
         className="absolute inset-0 z-1 w-full h-full"
       ></Link>
 
@@ -186,7 +190,7 @@ export default function ChallengeCard({
           {status === "open" && (
             <>
               <Link
-                href={`/challenges/${challenge.slug}`}
+                href={challengeHref}
                 onClick={(e) => e.stopPropagation()}
                 className="z-20 relative"
               >

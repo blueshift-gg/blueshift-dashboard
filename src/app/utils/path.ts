@@ -25,7 +25,7 @@ export type PathStep = {
 };
 
 export type PathStepWithMetadata = PathStep & {
-  metadata: CourseMetadata | ChallengeMetadata | undefined;
+  metadata?: CourseMetadata | ChallengeMetadata;
 };
 
 export type PathMetadata = {

@@ -96,6 +96,7 @@ export default function PathStepsList({
   const renderCard = (step: (typeof steps)[0], isComplete: boolean) => {
     const metadata = step.metadata;
     if (!metadata) return null;
+    const pathBase = `/paths/${path.slug}`;
 
     if (step.type === "course") {
       const course = metadata as CourseMetadata;
@@ -105,9 +106,9 @@ export default function PathStepsList({
 
       let link;
       if (currentLessonSlug && course.slug) {
-        link = `/courses/${course.slug}/${currentLessonSlug}`;
+        link = `${pathBase}/courses/${course.slug}/${currentLessonSlug}`;
       } else if (course.slug) {
-        link = `/courses/${course.slug}`;
+        link = `${pathBase}/courses/${course.slug}`;
       }
 
       return (
@@ -140,6 +141,7 @@ export default function PathStepsList({
             "max-w-none! aspect-4/5 lg:aspect-square xl:aspect-5/6 h-full",
             isComplete && "opacity-40"
           )}
+          hrefOverride={`${pathBase}/challenges/${challenge.slug}`}
         />
       );
     }

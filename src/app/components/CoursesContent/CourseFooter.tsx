@@ -5,6 +5,7 @@ import { CourseMetadata } from "@/app/utils/course";
 import { Icon, Button } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { usePathContent } from "@/app/hooks/usePathContent";
 interface CourseFooterProps {
   nextLesson: boolean;
   courseMetadata: CourseMetadata;
@@ -19,12 +20,23 @@ export default function CourseFooter({
   challenge,
 }: CourseFooterProps) {
   const t = useTranslations();
+  const { pathSlug } = usePathContent();
+
+  const getLessonHref = (lessonSlug: string) =>
+    pathSlug
+      ? `/paths/${pathSlug}/courses/${courseMetadata.slug}/${lessonSlug}`
+      : `/courses/${courseMetadata.slug}/${lessonSlug}`;
+
+  const getChallengeHref = () =>
+    pathSlug
+      ? `/paths/${pathSlug}/challenges/${challenge.slug}`
+      : `/challenges/${challenge.slug}`;
   return (
     <div className=" w-full flex items-center flex-col gap-y-10">
       {nextLesson && (
         <>
           <Link
-            href={`/courses/${courseMetadata.slug}/${nextLessonSlug}`}
+            href={getLessonHref(nextLessonSlug)}
             className="flex justify-between items-center w-full bg-card-solid border border-border-light group py-5 px-5"
           >
             <div className="flex items-center gap-x-2">
@@ -49,7 +61,7 @@ export default function CourseFooter({
             {t("lessons.take_challenge_cta")}
           </span>
           <Link
-            href={`/challenges/${challenge.slug}?fromCourse=${courseMetadata.slug}`}
+            href={`${getChallengeHref()}?fromCourse=${courseMetadata.slug}`}
             className="w-max"
           >
             <Button

@@ -4,6 +4,7 @@ import { ChallengeMetadata } from "@/app/utils/challenges";
 import { Icon, Button } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { usePathContent } from "@/app/hooks/usePathContent";
 
 interface ChallengeFooterProps {
   challengeMetadata: ChallengeMetadata;
@@ -17,10 +18,24 @@ export default function ChallengeFooter({
   challengeSlug,
 }: ChallengeFooterProps) {
   const t = useTranslations();
+  const { pathSlug } = usePathContent();
+
+  const getChallengeHref = (pageSlug?: string) =>
+    pathSlug
+      ? `/paths/${pathSlug}/challenges/${challengeSlug}${
+          pageSlug ? `/${pageSlug}` : ""
+        }`
+      : `/challenges/${challengeSlug}${pageSlug ? `/${pageSlug}` : ""}`;
+
+  const getVerifyHref = () =>
+    pathSlug
+      ? `/paths/${pathSlug}/challenges/${challengeSlug}/verify`
+      : `/challenges/${challengeSlug}/verify`;
+
   return nextPage ? (
     <>
       <Link
-        href={`/challenges/${challengeMetadata.slug}/${nextPage.slug}`}
+        href={getChallengeHref(nextPage.slug)}
         className="flex justify-between items-center w-full bg-card-solid border border-border group py-5 px-5"
       >
         <div className="flex items-center gap-x-2">
@@ -52,7 +67,7 @@ export default function ChallengeFooter({
         <span className="text-shade-primary w-auto shrink-0 font-mono">
           {t("lessons.take_challenge_cta")}
         </span>
-        <Link href={`/challenges/${challengeSlug}/verify`} className="w-max">
+        <Link href={getVerifyHref()} className="w-max">
           <Button
             variant="primary"
             size="lg"
@@ -68,7 +83,7 @@ export default function ChallengeFooter({
       <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
         {t("lessons.take_challenge_cta")}
       </span>
-      <Link href={`/challenges/${challengeSlug}/verify`} className="w-max">
+      <Link href={getVerifyHref()} className="w-max">
         <Button
           variant="primary"
           size="lg"
