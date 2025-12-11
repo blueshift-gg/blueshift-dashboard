@@ -8,6 +8,8 @@ import {
   IconName,
   Tabs,
 } from "@blueshift-gg/ui-components";
+import { Faucet } from "@blueshift-gg/faucet-react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState } from "react";
 import PerksCard from "./PerksCard";
 import PerksSkeletonCard from "./PerksSkeletonCard";
@@ -22,6 +24,14 @@ export type Perk = {
   perkType: "airdrop" | "discount" | "free_gift";
 };
 
+const FAUCET_API_CONFIG = {
+  baseUrl: "https://faucet-api.blueshift.gg",
+  devnetRpc: "https://api.devnet.solana.com",
+  testnetRpc: "https://api.testnet.solana.com",
+};
+
+const FAUCET_CLAIM_AMOUNTS: number[] = [1, 2, 5, 10];
+
 export default function Perks() {
   const perks: Perk[] = [
     {
@@ -35,6 +45,19 @@ export default function Perks() {
 
   const auth = useAuth();
   const isUserConnected = auth.status === "signed-in";
+  const { publicKey, signMessage } = useWallet();
+
+  const faucetProgramId = process.env.NEXT_PUBLIC_FAUCET_PROGRAM_ID;
+  const faucetConfig = faucetProgramId
+    ? {
+        faucetProgramId,
+        claimAmounts: FAUCET_CLAIM_AMOUNTS,
+      }
+    : null;
+  const userAddress = publicKey?.toBase58();
+  const [faucetNetwork, setFaucetNetwork] = useState<"devnet" | "testnet">(
+    "devnet"
+  );
 
   const [activeTab, setActiveTab] = useState<"unlocked" | "claimed">(
     "unlocked"
@@ -79,7 +102,22 @@ export default function Perks() {
               </span>
             </div>
             <div className="w-full h-px bg-border-light"></div>
-            <div className="p-5"></div>
+            <div className="p-5">
+              {faucetConfig ? (
+                <Faucet
+                  config={faucetConfig}
+                  apiConfig={FAUCET_API_CONFIG}
+                  network={faucetNetwork}
+                  onNetworkChange={setFaucetNetwork}
+                  address={userAddress}
+                  signMessage={signMessage}
+                />
+              ) : (
+                <div className="text-sm text-shade-secondary">
+                  Faucet configuration missing.
+                </div>
+              )}
+            </div>
           </div>
           <div className="col-span-5">
             <div className="p-5">

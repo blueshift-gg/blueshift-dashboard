@@ -14,6 +14,7 @@ import { Fira_Code, Funnel_Display } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
+import { Toaster as SonnerToaster } from "sonner";
 import { Icon } from "@blueshift-gg/ui-components";
 import { URLS } from "@/constants/urls";
 
@@ -147,6 +148,7 @@ export default async function RootLayout({
                     },
                   }}
                 />
+                <SonnerToaster position="bottom-right" closeButton={false} />
               </AuthProvider>
             </WalletProvider>
           </TanstackProvider>
