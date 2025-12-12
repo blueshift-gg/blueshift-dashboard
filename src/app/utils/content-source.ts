@@ -5,7 +5,23 @@ import type { Root } from "mdast";
 import type { Nodes } from "hast";
 
 const CONTENT_ROOT = "src/app/content";
-const BUCKET_PREFIX = "compiled-mdx";
+const DEFAULT_BUCKET_PREFIX = "compiled-mdx";
+
+const resolveBucketPrefix = (prefixFromEnv?: string) => {
+  const normalizedPrefix = prefixFromEnv?.trim();
+
+  if (normalizedPrefix) {
+    return normalizedPrefix;
+  }
+
+  const fallbackPrefix = process.env.CONTENT_PREFIX?.trim();
+
+  if (fallbackPrefix) {
+    return fallbackPrefix;
+  }
+
+  return DEFAULT_BUCKET_PREFIX;
+};
 
 export interface CompiledMDX {
   mdast: Root | null;
@@ -45,6 +61,9 @@ export async function fetchCompiledContent(
   // In production, fetch from R2
   const { env } = getCloudflareContext();
   const bucket = env?.CONTENT;
+  const bucketPrefix = resolveBucketPrefix(
+    (env as { CONTENT_PREFIX?: string } | undefined)?.CONTENT_PREFIX
+  );
 
   if (!bucket) {
     throw new Error(
@@ -54,7 +73,7 @@ export async function fetchCompiledContent(
 
   // Convert .mdx path to .json path for compiled content
   const compiledPath = normalizedPath.replace(/\.mdx$/, ".json");
-  const key = [BUCKET_PREFIX, compiledPath].join("/");
+  const key = [bucketPrefix, compiledPath].join("/");
   const object = await bucket.get(key);
 
   if (!object) {
