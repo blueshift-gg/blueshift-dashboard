@@ -56,6 +56,7 @@ export default function WalletMultiButton({
         variant={status === "signed-in" ? "secondary" : "primary"}
         size="md"
         onClick={handleClick}
+        className="font-sans"
       />
       {showDisconnectOverlay && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-card-solid/5 backdrop-blur-[8px]">
