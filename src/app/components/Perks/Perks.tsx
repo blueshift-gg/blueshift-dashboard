@@ -34,13 +34,13 @@ const FAUCET_CLAIM_AMOUNTS: number[] = [1, 2, 5, 10];
 
 export default function Perks() {
   const perks: Perk[] = [
-    {
-      productName: "$SOL",
-      perk: "50 Devnet SOL",
-      icon: "Solana",
-      brandColor: "#9945FF",
-      perkType: "airdrop",
-    },
+    // {
+    //   productName: "$SOL",
+    //   perk: "50 Devnet SOL",
+    //   icon: "Solana",
+    //   brandColor: "#9945FF",
+    //   perkType: "airdrop",
+    // },
   ];
 
   const auth = useAuth();
@@ -145,9 +145,27 @@ export default function Perks() {
                   <PerksSkeletonCard key={`list-skeleton-${index}`} />
                 ))
               ) : activeTab === "unlocked" ? (
-                perks.map((perk) => (
-                  <PerksCard key={perk.productName} perk={perk} />
-                ))
+                perks.length > 0 ? (
+                  perks.map((perk) => (
+                    <PerksCard key={perk.productName} perk={perk} />
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] py-24">
+                    <div className="flex items-center gap-x-2">
+                      <img
+                        src="/graphics/sad-face.svg"
+                        alt="Sad Face"
+                        className="w-[30px] h-[30px]"
+                      />
+                      <span className="text-lg font-mono font-medium text-brand-primary leading-none text-center">
+                        {t("perks.empty_title")}
+                      </span>
+                    </div>
+                    <span className="text-shade-secondary leading-[140%] text-center">
+                      {t("perks.empty_description")}
+                    </span>
+                  </div>
+                )
               ) : (
                 <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] py-24">
                   <div className="flex items-center gap-x-2">
