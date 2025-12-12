@@ -8,7 +8,7 @@ import {
   IconName,
   Tabs,
 } from "@blueshift-gg/ui-components";
-import { Faucet } from "@blueshift-gg/faucet-react";
+import { Faucet, type FaucetConfig } from "@blueshift-gg/faucet-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState } from "react";
 import PerksCard from "./PerksCard";
@@ -48,12 +48,10 @@ export default function Perks() {
   const { publicKey, signMessage } = useWallet();
 
   const faucetProgramId = process.env.NEXT_PUBLIC_FAUCET_PROGRAM_ID;
-  const faucetConfig = faucetProgramId
-    ? {
-        faucetProgramId,
-        claimAmounts: FAUCET_CLAIM_AMOUNTS,
-      }
-    : null;
+  const faucetConfig: FaucetConfig = {
+    faucetProgramId: faucetProgramId ?? "",
+    claimAmounts: FAUCET_CLAIM_AMOUNTS,
+  };
   const userAddress = publicKey?.toBase58();
   const [faucetNetwork, setFaucetNetwork] = useState<"devnet" | "testnet">(
     "devnet"
@@ -103,20 +101,14 @@ export default function Perks() {
             </div>
             <div className="w-full h-px bg-border-light"></div>
             <div className="p-5">
-              {faucetConfig ? (
-                <Faucet
-                  config={faucetConfig}
-                  apiConfig={FAUCET_API_CONFIG}
-                  network={faucetNetwork}
-                  onNetworkChange={setFaucetNetwork}
-                  address={userAddress}
-                  signMessage={signMessage}
-                />
-              ) : (
-                <div className="text-sm text-shade-secondary">
-                  Faucet configuration missing.
-                </div>
-              )}
+              <Faucet
+                config={faucetConfig}
+                apiConfig={FAUCET_API_CONFIG}
+                network={faucetNetwork}
+                onNetworkChange={setFaucetNetwork}
+                address={userAddress}
+                signMessage={signMessage}
+              />
             </div>
           </div>
           <div className="col-span-5">
