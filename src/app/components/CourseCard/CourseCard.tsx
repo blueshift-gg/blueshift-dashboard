@@ -209,10 +209,10 @@ export default function CourseCard({
               children={
                 completedLessonsCount === 0 ? (
                   <div className="flex items-center gap-x-2 order-last">
-                    <Divider direction="vertical" className="h-[20px]!" />
-                    <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient">
-                      50 XP
-                    </span>
+                    {/* <Divider direction="vertical" className="h-[20px]!" /> */}
+                    {/* <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient"> */}
+                      {/* 50 XP */}
+                    {/* </span> */}
                   </div>
                 ) : (
                   <div className="flex items-center gap-x-2 order-last">

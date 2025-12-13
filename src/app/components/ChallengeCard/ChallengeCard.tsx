@@ -122,10 +122,10 @@ export default function ChallengeCard({
           <span className="text-xs font-medium font-mono bg-nft-gradient bg-clip-text text-transparent">
             1 NFT
           </span>
-          <Divider direction="vertical" className="!h-[12px] !w-[2px]" />
-          <span className="text-xs font-medium font-mono bg-xp-gradient bg-clip-text text-transparent">
-            50 XP
-          </span>
+          {/* <Divider direction="vertical" className="!h-[12px] !w-[2px]" /> */}
+          {/* <span className="text-xs font-medium font-mono bg-xp-gradient bg-clip-text text-transparent"> */}
+            {/* 50 XP */}
+          {/* </span> */}
         </div>
       </div>
 

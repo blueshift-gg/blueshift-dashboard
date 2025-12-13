@@ -219,7 +219,7 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
               process.env.NEXT_PUBLIC_CHALLENGE_SECRET,
             ),
             "process.env.RPC_ENDPOINT": JSON.stringify(
-              process.env.NEXT_PUBLIC_RPC_ENDPOINT,
+              process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT,
             ),
             window: "self",
           },
@@ -228,10 +228,10 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
         if (result.outputFiles && result.outputFiles.length > 0) {
           const bundledCode = result.outputFiles[0].text;
           const fetchPatcher = `
-const rpcEndpointForWorker = "${process.env.NEXT_PUBLIC_RPC_ENDPOINT}";
+const rpcEndpointForWorker = "${process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT}";
 
 if (!rpcEndpointForWorker) {
-  throw new Error("RPC endpoint is not defined. Please set NEXT_PUBLIC_RPC_ENDPOINT environment variable.");
+  throw new Error("RPC endpoint is not defined. Please set NEXT_PUBLIC_MAINNET_RPC_ENDPOINT environment variable.");
 }
 
 const originalFetch = self.fetch;

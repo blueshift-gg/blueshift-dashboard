@@ -26,7 +26,7 @@ export type Perk = {
 
 const FAUCET_API_CONFIG = {
   baseUrl: "https://faucet-api.blueshift.gg",
-  devnetRpc: "https://api.devnet.solana.com",
+  devnetRpc: process.env.NEXT_PUBLIC_DEVNET_RPC_ENDPOINT ?? "https://api.devnet.solana.com",
   testnetRpc: "https://api.testnet.solana.com",
 };
 

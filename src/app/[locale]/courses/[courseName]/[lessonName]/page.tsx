@@ -85,10 +85,10 @@ export default async function LessonPage({ params }: LessonPageProps) {
   const courseMetadata = await getCourse(courseName);
   const coursePageTitle = t(`courses.${courseMetadata.slug}.title`);
 
-  const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+  const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
 
   if (!rpcEndpoint) {
-    throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
+    throw new Error("NEXT_PUBLIC_MAINNET_RPC_ENDPOINT is not set");
   }
 
   let collectionSize: number | null = null;

@@ -13,9 +13,9 @@ interface StatsData {
 
 export async function GET(_request: Request) { // eslint-disable-line @typescript-eslint/no-unused-vars
   try {
-    const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+    const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
     if (!rpcEndpoint) {
-      throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
+      throw new Error("NEXT_PUBLIC_MAINNET_RPC_ENDPOINT is not set");
     }
 
     const accountAddresses = challenges.reduce((acc: Record<string, string>, challenge) => {

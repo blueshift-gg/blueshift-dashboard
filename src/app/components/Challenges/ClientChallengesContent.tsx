@@ -31,7 +31,7 @@ import ChallengeCompleted from "../Modals/ChallengeComplete";
 import { usePersistentStore } from "@/stores/store";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
-const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
 
 /**
  * Props for the ChallengesContent component

@@ -11,7 +11,7 @@ import { useMemo } from "react";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-const rpcEndpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT;
+const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
 
 export default function SolanaWalletProvider({
   children,
@@ -19,7 +19,7 @@ export default function SolanaWalletProvider({
   children: React.ReactNode;
 }) {
   if (!rpcEndpoint) {
-    throw new Error("NEXT_PUBLIC_RPC_ENDPOINT is not set");
+    throw new Error("NEXT_PUBLIC_MAINNET_RPC_ENDPOINT is not set");
   }
   
   const wallets = useMemo(
