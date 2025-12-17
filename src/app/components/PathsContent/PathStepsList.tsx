@@ -221,7 +221,7 @@ export default function PathStepsList({
                           <div className="hidden md:flex absolute -bottom-[76px] left-1/2 -translate-x-1/2 items-center justify-center z-10">
                             <PathItemDivider
                               status={isComplete ? "completed" : "incomplete"}
-                              className="rotate-90"
+                              direction="down"
                             />
                           </div>
                         )}
@@ -232,7 +232,7 @@ export default function PathStepsList({
                         <div className="md:hidden w-full flex justify-center py-5">
                           <PathItemDivider
                             status={isComplete ? "completed" : "incomplete"}
-                            className="rotate-90"
+                            direction="down"
                           />
                         </div>
                       )}
@@ -242,10 +242,8 @@ export default function PathStepsList({
                     {!isLastInChunk && !isMobile && (
                       <PathItemDivider
                         status={isComplete ? "completed" : "incomplete"}
-                        className={classNames(
-                          "hidden md:flex",
-                          isReverseRow && "rotate-180"
-                        )}
+                        className="hidden md:flex"
+                        direction={isReverseRow ? "left" : "right"}
                       />
                     )}
                   </Fragment>

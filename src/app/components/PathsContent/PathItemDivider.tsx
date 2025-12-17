@@ -4,16 +4,31 @@ import classNames from "classnames";
 interface PathItemDividerProps {
   status?: "completed" | "incomplete";
   className?: string;
+  direction?: "right" | "down" | "left";
 }
 
 export default function PathItemDivider({
   status,
   className,
+  direction = "right",
 }: PathItemDividerProps) {
+  const rotationClass = {
+    right: "",
+    down: "rotate-90",
+    left: "rotate-180",
+  }[direction];
+
+  const iconRotationClass = {
+    right: "",
+    down: "-rotate-90",
+    left: "-rotate-180",
+  }[direction];
+
   return (
     <div
       className={classNames(
         "w-24 shrink-0 flex items-center justify-center",
+        rotationClass,
         className
       )}
     >
@@ -36,7 +51,8 @@ export default function PathItemDivider({
           name={status === "completed" ? "Success" : "General"}
           size={20}
           className={classNames(
-            status === "completed" ? "text-brand-primary" : "text-shade-mute!"
+            status === "completed" ? "text-brand-primary" : "text-shade-mute!",
+            status === "completed" && iconRotationClass
           )}
         />
       </div>
