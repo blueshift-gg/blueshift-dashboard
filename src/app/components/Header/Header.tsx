@@ -93,6 +93,7 @@ export default function HeaderContent() {
                     icon: { name: "Path", size: 18 },
                     selected: isPaths,
                     onClick: () => router.push("/"),
+                    className: "cursor-pointer",
                   },
                   {
                     label: t("header.courses"),
@@ -100,6 +101,7 @@ export default function HeaderContent() {
                     icon: { name: "Lessons", size: 18 },
                     selected: isCourses,
                     onClick: () => router.push("/courses"),
+                    className: "cursor-pointer",
                   },
                   {
                     label: t("header.challenges"),
@@ -107,6 +109,7 @@ export default function HeaderContent() {
                     icon: { name: "Challenge", size: 18 },
                     selected: isChallenges,
                     onClick: () => router.push("/challenges"),
+                    className: "cursor-pointer",
                   },
                   {
                     label: t("header.perks"),
@@ -114,6 +117,7 @@ export default function HeaderContent() {
                     icon: { name: "Perks", size: 18 },
                     selected: pathname === "/perks",
                     onClick: () => router.push("/perks"),
+                    className: "cursor-pointer",
                   },
                 ]}
                 variant="tab"
@@ -189,7 +193,7 @@ export default function HeaderContent() {
                           label: t("header.paths"),
                           value: "paths",
                           icon: { name: "Path", size: 18 },
-                          className: "justify-start! py-4!",
+                          className: "justify-start! py-4! paths",
                           onClick: () => {
                             router.push("/");
                             setIsOpen(false);
@@ -200,7 +204,7 @@ export default function HeaderContent() {
                           label: t("header.courses"),
                           value: "courses",
                           icon: { name: "Lessons", size: 18 },
-                          className: "justify-start! py-4!",
+                          className: "justify-start! py-4! cursor-pointer",
                           onClick: () => {
                             router.push("/courses");
                             setIsOpen(false);
@@ -211,7 +215,7 @@ export default function HeaderContent() {
                           label: t("header.challenges"),
                           value: "challenges",
                           icon: { name: "Challenge", size: 18 },
-                          className: "justify-start! py-4!",
+                          className: "justify-start! py-4! cursor-pointer",
                           onClick: () => {
                             router.push("/challenges");
                             setIsOpen(false);
@@ -222,7 +226,7 @@ export default function HeaderContent() {
                           label: t("header.perks"),
                           value: "perks",
                           icon: { name: "Perks", size: 18 },
-                          className: "justify-start! py-4!",
+                          className: "justify-start! py-4! cursor-pointer",
                           onClick: () => {
                             router.push("/perks");
                             setIsOpen(false);
