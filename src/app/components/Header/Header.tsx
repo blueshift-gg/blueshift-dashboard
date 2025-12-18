@@ -193,7 +193,7 @@ export default function HeaderContent() {
                           label: t("header.paths"),
                           value: "paths",
                           icon: { name: "Path", size: 18 },
-                          className: "justify-start! py-4! paths",
+                          className: "justify-start! py-4! cursor-pointer",
                           onClick: () => {
                             router.push("/");
                             setIsOpen(false);
