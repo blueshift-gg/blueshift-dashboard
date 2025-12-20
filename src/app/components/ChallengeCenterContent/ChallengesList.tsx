@@ -75,7 +75,8 @@ type ChallengeSectionProps = {
   setIsNFTViewerOpen: (isOpen: boolean) => void;
   setSelectedChallenge: (challenge: ChallengeMetadata) => void;
   t: any;
-  challengeStatuses: Record<string, string>;
+  completedCount: number;
+  totalCount: number;
 };
 
 function ChallengeSection({
@@ -85,7 +86,8 @@ function ChallengeSection({
   setIsNFTViewerOpen,
   setSelectedChallenge,
   t,
-  challengeStatuses,
+  completedCount,
+  totalCount,
 }: ChallengeSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollState, setScrollState] = useState({
@@ -130,12 +132,7 @@ function ChallengeSection({
           variant={language as any}
         >
           <span className="text-current ml-auto">
-            {
-              challenges.filter(
-                (challenge) => challengeStatuses[challenge.slug] === "completed"
-              ).length
-            }
-            /{challenges.length} completed
+            {completedCount}/{totalCount} completed
           </span>
         </Banner>
         <ScrollableSection ref={scrollRef} onScroll={updateScrollState}>
@@ -328,6 +325,26 @@ export default function ChallengesList({
       t,
     ]
   );
+
+  const countsByLanguage = useMemo(() => {
+    const counts: Record<string, { total: number; completed: number }> = {};
+
+    initialChallenges.forEach((challenge) => {
+      const language = challenge.language;
+      if (!counts[language]) {
+        counts[language] = { total: 0, completed: 0 };
+      }
+
+      counts[language].total += 1;
+
+      const status = challengeStatuses[challenge.slug] || "open";
+      if (status === "completed" || status === "claimed") {
+        counts[language].completed += 1;
+      }
+    });
+
+    return counts;
+  }, [initialChallenges, challengeStatuses]);
 
   const hasNoResults = filteredChallenges.length === 0;
   const hasNoFilters =
@@ -591,7 +608,8 @@ export default function ChallengesList({
                 setIsNFTViewerOpen={setIsNFTViewerOpen}
                 setSelectedChallenge={setSelectedChallenge}
                 t={t}
-                challengeStatuses={challengeStatuses}
+                completedCount={countsByLanguage[language]?.completed || 0}
+                totalCount={countsByLanguage[language]?.total || 0}
               />
             );
           })}
