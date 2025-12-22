@@ -16,17 +16,17 @@ import { usePathContent } from "@/app/hooks/usePathContent";
 type ContentPaginationProps = {
   className?: string;
 } & (
-  | {
+    | {
       type: "course";
       course: CourseMetadata;
       currentLesson: number;
     }
-  | {
+    | {
       type: "challenge";
       challenge: ChallengeMetadata;
       currentPageSlug?: string;
     }
-);
+  );
 
 export default function ContentPagination(props: ContentPaginationProps) {
   const { className } = props;
@@ -99,8 +99,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
               </button>
               <span className="font-medium">
                 {t(
-                  `courses.${props.course.slug}.lessons.${
-                    props.course.lessons[props.currentLesson - 1].slug
+                  `courses.${props.course.slug}.lessons.${props.course.lessons[props.currentLesson - 1].slug
                   }`
                 )}
               </span>
@@ -218,6 +217,33 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     </div>
                   </Link>
                 )}
+                <Link
+                  href={`/courses/${props.course.slug}/print`}
+                  target="_blank"
+                  className="flex items-center gap-x-4 group mt-4 pl-6"
+                >
+                  <div className="flex items-center justify-center w-[18px]">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="text-shade-tertiary group-hover:text-shade-primary transition"
+                    >
+                      <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                      <rect x="6" y="14" width="12" height="8"></rect>
+                    </svg>
+                  </div>
+                  <span className="text-sm font-medium text-shade-tertiary group-hover:text-shade-primary transition font-mono">
+                    {t("courses.print_pdf") || "Print Course PDF"}
+                  </span>
+                </Link>
               </div>
             </div>
           </>

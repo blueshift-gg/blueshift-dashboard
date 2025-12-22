@@ -118,10 +118,11 @@ export default async function RootLayout({
             <WalletProvider>
               <AuthProvider>
                 <GlobalModals />
-                {!pathname?.includes("/nft-generator") ? (
+                {!pathname?.includes("/nft-generator") &&
+                !pathname?.includes("/print") ? (
                   <>
                     <Header />
-                    <div className="pt-[74px] min-h-[calc(100dvh-74px)]">
+                    <div className="pt-[69px] min-h-[calc(100dvh-69px)]">
                       {children}
                     </div>
                     <Footer />

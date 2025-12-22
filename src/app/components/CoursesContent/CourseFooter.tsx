@@ -6,6 +6,8 @@ import { Icon, Button } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { usePathContent } from "@/app/hooks/usePathContent";
+import { usePdfDownload } from "@/hooks/usePdfDownload";
+
 interface CourseFooterProps {
   nextLesson: boolean;
   courseMetadata: CourseMetadata;
@@ -21,6 +23,7 @@ export default function CourseFooter({
 }: CourseFooterProps) {
   const t = useTranslations();
   const { pathSlug } = usePathContent();
+  const { downloadPdf, isDownloading } = usePdfDownload();
 
   const getLessonHref = (lessonSlug: string) =>
     pathSlug
@@ -80,15 +83,41 @@ export default function CourseFooter({
           <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
             {t("lessons.lesson_completed")}
           </span>
-          <Link href={`/courses`} className="w-max">
+          <div className="flex gap-x-4">
             <Button
-              variant="primary"
+              variant="secondary"
               size="lg"
-              label={t("lessons.view_other_courses")}
-              icon={{ name: "Lessons" }}
-              className="disabled:opacity-40 w-full disabled:cursor-default"
-            ></Button>
-          </Link>
+              label={isDownloading ? t("lessons.downloading_pdf") : t("lessons.download_pdf")}
+              icon={{ name: "Link" }}
+              disabled={isDownloading}
+              onClick={() => downloadPdf(courseMetadata.slug)}
+              className="disabled:opacity-40 disabled:cursor-default"
+            />
+            <Link href={`/courses`} className="w-max">
+              <Button
+                variant="primary"
+                size="lg"
+                label={t("lessons.view_other_courses")}
+                icon={{ name: "Lessons" }}
+                className="disabled:opacity-40 w-full disabled:cursor-default"
+              ></Button>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Download PDF option - always available */}
+      {(nextLesson || challenge) && (
+        <div className="w-full flex justify-center">
+          <Button
+            variant="outline"
+            size="md"
+            label={isDownloading ? t("lessons.downloading_pdf") : t("lessons.download_pdf")}
+            icon={{ name: "Link" }}
+            disabled={isDownloading}
+            onClick={() => downloadPdf(courseMetadata.slug)}
+            className="disabled:opacity-40 disabled:cursor-default text-shade-tertiary hover:text-shade-primary"
+          />
         </div>
       )}
     </div>
