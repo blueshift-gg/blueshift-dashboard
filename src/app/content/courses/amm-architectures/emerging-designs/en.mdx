@@ -8,9 +8,11 @@ This lesson covers the frontier: dynamic fees, proactive market making, intent-b
 
 <ArticleSection name="Dynamic Fee AMMs" id="dynamic-fees" level="h2" />
 
-### The Static Fee Problem
-
 Traditional AMMs have fixed fees (0.3%, 0.05%, etc.). But optimal fees depend on conditions:
+
+### Volatilty-based Fees
+
+Some protocols adjust fees based on recent volatility:
 
 ```
 Low volatility:
@@ -24,33 +26,9 @@ High volatility:
 - Optimal: 0.3-1%
 ```
 
-Static fees are always wrong for current conditions.
-
-### Volatility-Based Fees
-
-Some protocols adjust fees based on recent volatility:
-
-```rust
-fn calculate_dynamic_fee(
-    base_fee_bps: u64,
-    recent_volatility: u64,  // e.g., from price variance
-    min_fee_bps: u64,
-    max_fee_bps: u64,
-) -> u64 {
-    // Higher volatility → higher fees
-    let volatility_multiplier = 1 + (recent_volatility / VOLATILITY_SCALE);
-    let dynamic_fee = base_fee_bps * volatility_multiplier;
-    
-    // Clamp to bounds
-    dynamic_fee.clamp(min_fee_bps, max_fee_bps)
-}
-```
-
-**Implementations**: Uniswap V4 hooks enable this, some Solana protocols experiment with it.
-
 ### Utilization-Based Fees
 
-Fees that change based on pool utilization:
+Some protocols adjust fees based on pool utilization:
 
 ```
 Pool heavily used (many swaps):
@@ -64,7 +42,7 @@ Pool idle:
 
 ### Time-Weighted Dynamic Fees
 
-Prevent fee manipulation by averaging over time:
+To prevent fee manipulation, dynamic fees should be implemented by averaging over time:
 
 ```rust
 struct FeeState {
@@ -88,67 +66,89 @@ fn update_fee_twap(
 }
 ```
 
-<ArticleSection name="Proactive Market Making" id="proactive-mm" level="h2" />
+<ArticleSection name="Proactive Market Making (PropAMMs)" id="proactive-mm" level="h2" />
 
-### The Reactive Problem
+Oracle AMMs solved the stale pricing problem by using external price feeds, but they're still passive: they wait for trades to come.
 
-Traditional AMMs are reactive: they sit and wait for trades. Prices update only after arbitrageurs move them. This means:
-- LPs always provide stale quotes
-- Arbitrageurs extract value
-- Information lag is profitable for others, costly for LPs
+PropAMMs take this further: they actively manage their positions like a professional market maker would.
 
-### Proactive Approaches
+### The Problem With Passive LPs
 
-What if the AMM anticipated price movements?
-
-**Oracle-informed pricing**: Adjust pool price toward oracle before trades happen
-
-```rust
-fn get_adjusted_price(
-    pool_price: u64,
-    oracle_price: u64,
-    adjustment_factor: u64, // 0-100%
-) -> u64 {
-    let diff = oracle_price.saturating_sub(pool_price);
-    pool_price + (diff * adjustment_factor / 100)
-}
-```
-
-**Volatility prediction**: Widen spreads before expected volatility (e.g., before major announcements).
-
-**Flow prediction**: Adjust quotes based on pending order flow (if visible).
-
-### The PropAMM Concept
-
-Proposed designs where AMMs actively manage their exposure:
+Even in oracle AMMs, LPs are passive:
 
 ```
-Traditional: Passive liquidity, reactive pricing
-PropAMM: Active hedging, predictive pricing
+Oracle AMM LP:
+  Deposit liquidity
+  Wait for trades
+  Collect fees
+  Hope you don't get rekt by inventory imbalance
 
-1. Monitor oracle and external markets
-2. Predict short-term price movement
-3. Adjust quotes proactively
-4. Hedge exposure on external venues
+Professional market maker:
+  Continuously adjust quotes based on:
+    - Order flow analysis
+    - Inventory position
+    - Volatility regime
+    - Cross-venue arbitrage opportunities
+  Actively hedge exposure
 ```
 
-This blurs the line between AMM and market maker bot.
+### How PropAMMs Work
+
+A PropAMM doesn't just price at oracle ± spread. It actively manages three things:
+
+**1. Predictive Pricing**: Instead of using a fixed spread around the oracle price, PropAMMs analyze recent order flow and market conditions to adjust their quotes. If buy pressure is increasing, they quote slightly higher. If volatility is spiking, they widen the spread. The goal is to anticipate where the market is heading, not just react to where it's been.
+
+**2. Inventory Management**: When a pool accumulates too much of one asset, a passive AMM just waits and hopes someone comes to rebalance it. A PropAMM actively skews its quotes to incentivize the trades it wants. If it's long SOL, it makes SOL cheaper to buy and more expensive to sell. Some PropAMMs even hedge their exposure on external venues like CEXs or perp markets.
+
+**3. Flow Toxicity Detection**: Not all trades are equal. Arbitrage bots and MEV searchers are "informed" traders who extract value. Retail swappers are "uninformed" and represent profitable flow. PropAMMs try to distinguish between them - widening spreads or rejecting toxic flow while offering tight spreads to capture uninformed volume.
+
+### The Technical Implementation
+
+PropAMMs require more infrastructure than passive AMMs:
+
+1. Price feed (Pyth, Switchboard)
+2. Order flow analysis (recent trades, pending txs)
+3. Volatility model (realized vol, implied vol)
+4. Inventory tracker (current vs target allocation)
+5. Execution layer (quote engine, hedging)
+
+But most importantly, the key PropAMM technique is to adjust mid price based on inventory:
+
+```
+Target: 50% SOL, 50% USDC
+Current: 60% SOL, 40% USDC (long SOL)
+
+Standard AMM:
+  Mid = oracle price ($100)
+  Bid = $99.90, Ask = $100.10
+
+PropAMM with inventory skew:
+  Mid = oracle price - skew
+  Skew = f(inventory imbalance) = $0.20
+  
+  Effective mid = $99.80
+  Bid = $99.70, Ask = $99.90
+  
+Result:
+  Cheaper for traders to buy SOL (helps you rebalance)
+  More expensive to sell SOL (don't want more)
+```
 
 <ArticleSection name="Intent-Based Systems" id="intents" level="h2" />
 
 ### What Are Intents?
 
-Instead of specifying exact transactions, users specify what they want:
+Instead of specifying the exact action to perform, users specify what they want:
 
 ```
 Traditional:
-"Swap 100 USDC for ETH on Uniswap V3 pool 0x..."
+"Swap 100 USDC for SOL on Raydium..."
 
 Intent:
-"I want to trade 100 USDC for ETH, best price within 1 minute"
+"I want to trade 100 USDC for SOL, best price within 1 minute"
 ```
 
-A network of "solvers" competes to fulfill the intent optimally.
+And a network of "solvers" competes to fulfill the intent optimally.
 
 ### How Intent Systems Work
 
@@ -164,20 +164,17 @@ A network of "solvers" competes to fulfill the intent optimally.
 5. User gets result
 ```
 
-### Why Intents Matter for AMMs
-
-**MEV protection**: Solvers compete, reducing sandwich attacks
-**Price improvement**: Solvers find best routes across all liquidity
-**Abstraction**: Users don't need to know AMM mechanics
-
-**Implementations**: CoW Swap (Ethereum), potentially future Solana systems
+Intents helps in AMMs because of:
+- **MEV protection**: Solvers compete, reducing sandwich attacks
+- **Price improvement**: Solvers find best routes across all liquidity
+- **Abstraction**: Users don't need to know AMM mechanics
 
 ### Request for Quote (RFQ)
 
-Related to intents: users request quotes from market makers:
+Related to intents a new method to request liquidity is RFQ that is not other than user requesting quotes from market makers:
 
 ```
-1. User: "I want to buy 100 ETH"
+1. User: "I want to buy 100 SOL"
 2. Market makers respond with quotes
 3. User accepts best quote
 4. Atomic settlement
@@ -188,216 +185,11 @@ Benefits:
 - Large trades without moving AMM price
 ```
 
-<ArticleSection name="Hybrid Order Book + AMM" id="hybrid" level="h2" />
-
-### The Best of Both Worlds?
-
-Order books: Better price discovery, capital efficiency for active makers
-AMMs: Always-on liquidity, passive LP experience
-
-Hybrid designs combine them:
-
-```
-Liquidity sources:
-1. Order book (active limit orders)
-2. AMM pool (passive liquidity)
-
-Trade execution:
-- Check order book first
-- Fill remaining from AMM
-- Or route optimally between both
-```
-
-### Solana Implementations
-
-**Phoenix**: Fully on-chain order book with AMM-like features
-- Limit orders
-- Market orders routed through book
-- Can interact with AMM liquidity
-
-**OpenBook**: Serum successor, order book infrastructure
-- Used by aggregators alongside AMMs
-- Enables hybrid routing
-
-### The Routing Problem
-
-With multiple liquidity sources, optimal routing becomes complex:
-
-```
-100 ETH sell order:
-- Order book has 30 ETH at $2,001
-- Order book has 50 ETH at $2,000
-- AMM has infinite liquidity at curve price
-
-Optimal route:
-1. Sell 50 ETH to $2,000 limit orders
-2. Sell 30 ETH to $2,001 limit orders  
-3. Sell remaining 20 ETH to AMM
-
-Aggregators like Jupiter do this automatically.
-```
-
-<ArticleSection name="Time-Weighted AMMs" id="twamm" level="h2" />
-
-### The Large Order Problem
-
-Large orders cause slippage. What if you could spread a large order over time?
-
-### TWAMM Design
-
-Time-Weighted Average Market Maker (TWAMM):
-
-```
-Instead of:
-"Swap 10,000 ETH now" (massive slippage)
-
-Do:
-"Swap 10,000 ETH over 24 hours" (minimal slippage)
-
-Virtual orders execute continuously against embedded AMM.
-```
-
-### How It Works
-
-```rust
-struct TwammOrder {
-    sell_token: Pubkey,
-    buy_token: Pubkey,
-    total_amount: u64,
-    start_time: i64,
-    end_time: i64,
-    amount_sold: u64,
-}
-
-fn get_current_virtual_order(order: &TwammOrder, current_time: i64) -> u64 {
-    let elapsed = current_time - order.start_time;
-    let total_duration = order.end_time - order.start_time;
-    
-    let should_be_sold = order.total_amount * elapsed as u64 / total_duration as u64;
-    should_be_sold - order.amount_sold
-}
-```
-
-### The Math Challenge
-
-TWAMM requires computing the result of continuous trading. This involves solving differential equations:
-
-```
-dx/dt = -R_x (rate of token X sold)
-dy/dt = R_y (rate of token Y received)
-
-Subject to: x * y = k (constant product)
-```
-
-The closed-form solution is complex but computable.
-
-### Use Cases
-
-**Large treasury sales**: Protocol selling tokens over weeks
-**DCA into positions**: Accumulate over time, not all at once
-**Rebalancing**: Gradual portfolio adjustment
-
-<ArticleSection name="Singleton Pools and Hooks" id="hooks" level="h2" />
-
-### Uniswap V4's Architecture
-
-V4 (coming soon) introduces:
-
-**Singleton contract**: All pools in one contract, not separate deployments
-- Gas savings (no cross-contract calls)
-- Flash accounting (temporary balances during multi-hop)
-
-**Hooks**: Custom logic at key points in the swap lifecycle:
-
-```solidity
-contract MyHook {
-    function beforeSwap(...) external returns (bytes4) {
-        // Dynamic fee calculation
-        // Access control
-        // Logging
-    }
-    
-    function afterSwap(...) external returns (bytes4) {
-        // Reward distribution
-        // Oracle updates
-        // Rebalancing triggers
-    }
-}
-```
-
-### What Hooks Enable
-
-**Dynamic fees**: Adjust based on any parameter
-**Oracle integration**: Update prices before/after swaps
-**Access control**: Whitelisted LPs or traders
-**Custom curves**: Modify pricing logic
-**Composability**: Trigger external actions on swaps
-
-### Solana Equivalents
-
-Solana's account model doesn't have hooks, but similar patterns exist:
-- CPIs to external programs
-- On-chain programs with swap callbacks
-- Custom pool implementations with hook-like logic
-
-<ArticleSection name="Privacy-Preserving AMMs" id="privacy" level="h2" />
-
-### The Front-Running Problem
-
-All AMM trades are public. MEV bots exploit this:
-- See pending swap
-- Sandwich it
-- Extract value
-
-### Private Mempools
-
-Some solutions hide transactions until execution:
-- Flashbots Protect (Ethereum)
-- Private RPC endpoints
-- Encrypted mempools
-
-But this doesn't solve the fundamental issue: trades are still visible on-chain after execution.
-
-### Encrypted AMMs
-
-Experimental designs using cryptography:
-
-**Threshold encryption**: Trades encrypted until enough validators decrypt
-**Commit-reveal**: Commit to trade, reveal later
-**ZK proofs**: Prove trade validity without revealing details
-
-Most are research-stage, not production-ready.
-
-<ArticleSection name="What's Next" id="whats-next" level="h2" />
-
-### Trends to Watch
-
-**1. Hooks and modularity**: Customizable AMMs with plug-in logic
-
-**2. Intent-based trading**: Users express goals, solvers optimize execution
-
-**3. Cross-chain AMMs**: Liquidity unified across chains
-
-**4. AI-driven market making**: Predictive models for pricing and hedging
-
-**5. Hybrid liquidity**: Seamless integration of AMM + order book + RFQ
-
-**6. Privacy solutions**: MEV-resistant trading mechanisms
-
-### The Meta-Trend
-
-AMMs are becoming more sophisticated, more composable, and more integrated with broader DeFi infrastructure. The simple x*y=k is now just one building block in complex liquidity systems.
-
 <ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
 
 1. **Dynamic fees** adjust to market conditions (volatility, utilization)
 2. **Proactive market making** anticipates prices instead of reacting
 3. **Intent-based systems** let solvers optimize execution for users
 4. **Hybrid designs** combine order books with AMM liquidity
-5. **TWAMM** enables large orders over time with minimal slippage
-6. **Hooks** (V4) enable customizable AMM logic
-7. **Privacy** remains an unsolved challenge for on-chain trading
 
 The AMM space continues to evolve rapidly. The designs that win will balance capital efficiency, LP returns, trader experience, and MEV resistance. No single design solves everything, every approach has tradeoffs.
-
-Next: [Conclusion](/courses/amm-architectures/conclusion) - Choosing the right AMM for your use case.

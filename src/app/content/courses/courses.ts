@@ -86,8 +86,8 @@ export const courses: CourseMetadata[] = withCourseNumber([
   },
   {
     slug: "oracles-on-solana",
-    language: "Anchor",
-    color: BRAND_COLOURS.anchor,
+    language: "General",
+    color: BRAND_COLOURS.general,
     difficulty: 2,
     isFeatured: true,
     lessons: [

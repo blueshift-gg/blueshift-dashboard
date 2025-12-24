@@ -2,98 +2,97 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Concentrated Liquidity
 
-In May 2021, Uniswap V3 launched with a radical redesign. Instead of spreading liquidity across all prices from zero to infinity, LPs could concentrate their capital in specific price ranges.
+You deposit $10,000 into a SOL/USDC pool. SOL is at $100. How much of your capital is actually working for you?
 
-The result: up to 4000x capital efficiency for tight ranges. The catch: dramatically more complexity for LPs, new MEV vectors, and math that makes StableSwap look simple.
+In a constant product AMM: about $100. The rest is sitting at prices like $1 or $10,000, waiting for a scenario that will never happen.
 
-Concentrated liquidity is now the dominant AMM design for major pairs. Understanding it is essential.
+Concentrated liquidity fixes this: instead of spreading your capital from zero to infinity, you pick a range: "I think SOL will trade between $80 and $120." Now your entire $10,000 works within that range earning the same fees but with 100x less capital required.
+
+The tradeoff is that if price leaves your range, you will earn nothing. And if it leaves permanently, you've effectively "sold: at the worst time.
 
 <ArticleSection name="The Capital Efficiency Problem" id="efficiency-problem" level="h2" />
 
-### Where Does Liquidity Sit?
+### Where Does Your Liquidity Actually Go?
 
-In constant product AMMs, liquidity is distributed across all possible prices:
+In constant product AMMs, the `x * y = k` formula spreads liquidity across all possible prices:
 
 ```
-ETH/USDC pool: $10M liquidity
-Current price: $2,000/ETH
+SOL/USDC pool: $10M liquidity
+Current price: $100/SOL
 
-Liquidity available at:
-- $1 - $100: ~$50K
-- $100 - $500: ~$150K  
-- $500 - $1,000: ~$300K
-- $1,000 - $2,000: ~$1.5M ← Current range
-- $2,000 - $3,000: ~$1.5M ← Current range
-- $3,000 - $5,000: ~$600K
-- $5,000 - $10,000: ~$400K
-- $10,000+: ~$300K
+Liquidity allocated at:
+- $1 - $10: ~$50K (will SOL ever be $5? Probably not)
+- $10 - $50: ~$200K (unlikely)
+- $50 - $80: ~$500K (possible but rare)
+- $80 - $120: ~$2M ← Where trading actually happens
+- $120 - $150: ~$500K
+- $150 - $500: ~$300K
+- $500+: ~$200K (SOL at $1000? Maybe someday)
 ```
 
-Most of that liquidity will never be used. ETH probably won't trade at $50 or $50,000 anytime soon. But the math allocates capital there anyway.
+Only ~20% of the liquidity is near the current price. The rest is waiting for extreme scenarios.
 
-### The Utilization Problem
+### The Utilization Math
 
 ```
 $10M total liquidity
-±2% price range: ~$100K active liquidity
-Utilization: 1%
+±5% of current price: ~$400K active liquidity
+Utilization: 4%
+
+96% of LP capital sits idle, earning zero fees.
 ```
 
-99% of LP capital is sitting idle, earning no fees. LPs are providing liquidity for price ranges that don't exist in reality.
+This is why constant product LPs earn low APYs. Their capital isn't being used.
 
-### What If LPs Could Choose?
-
-Concentrated liquidity lets LPs say: "I want to provide liquidity between $1,800 and $2,200."
-
-All their capital works within that range. If price stays there, they earn fees on 100% of their deposit, not 1%.
+Concentrated liquidity lets you say: "I'll provide liquidity only between $80 and $120." If price stays there, you earn fees on 100% of your deposit.
 
 <ArticleSection name="The V3 Model" id="v3-model" level="h2" />
 
 ### Positions Instead of Pool Shares
 
-In V2, all LPs share one pool. In V3, each LP has a distinct position:
+In constant product, all LPs share one pool and get fungible LP tokens. In concentrated liquidity, each LP has a distinct position with its own price range:
 
 ```
-Position 1: $50K liquidity from $1,800 - $2,200
-Position 2: $20K liquidity from $1,500 - $2,500
-Position 3: $100K liquidity from $1,900 - $2,100
+Position 1: $50K liquidity from $90 - $110
+Position 2: $20K liquidity from $75 - $125
+Position 3: $100K liquidity from $95 - $105 (very tight)
 ```
 
-Each position is represented as an NFT (not a fungible LP token). Positions can overlap, creating deeper liquidity at popular price points.
+Positions overlap. At $100, all three are active and share fees proportionally. This creates deeper liquidity at popular price points.
 
-### Active vs Inactive Liquidity
+### Active vs Inactive
 
 A position only earns fees when price is within its range:
 
 ```
-Current price: $2,000
+Current SOL price: $100
 
-Position A ($1,800 - $2,200): ACTIVE - earning fees
-Position B ($2,300 - $2,800): INACTIVE - earning nothing
-Position C ($1,500 - $1,700): INACTIVE - earning nothing
+Position A ($90 - $110): ACTIVE - earning fees
+Position B ($115 - $140): INACTIVE - waiting
+Position C ($60 - $85): INACTIVE - waiting
 ```
 
-If price moves to $2,500, Position A becomes inactive and Position B becomes active.
+If SOL pumps to $120, Position A stops earning and Position B starts. This is the fundamental tradeoff: concentration vs coverage.
 
 ### The Composition Shift
 
-When price moves within a range, the position's composition changes:
+As price moves within your range, your position's composition changes:
 
 ```
-Position: $1,800 - $2,200, $10K initial value
+Position: $90 - $110, $10K initial value
 
-At $1,800 (lower bound): 100% ETH, 0% USDC
-At $2,000 (middle): ~50% ETH, ~50% USDC  
-At $2,200 (upper bound): 0% ETH, 100% USDC
+At $90 (lower bound): 100% SOL, 0% USDC
+At $100 (middle): ~50% SOL, ~50% USDC  
+At $110 (upper bound): 0% SOL, 100% USDC
 ```
 
-If price drops below $1,800, you hold only ETH. If it rises above $2,200, you hold only USDC. This is impermanent loss amplified.
+Think about what this means. As SOL rises toward $110, you're gradually selling SOL for USDC. At $110, you hold only USDC. If SOL keeps rising to $150, you've sold all your SOL at an average price of ~$100 and are earning zero fees.
+
+This is impermanent loss amplified. You sold the thing that went up.
 
 <ArticleSection name="Ticks and Tick Spacing" id="ticks" level="h2" />
 
-### Price Space is Discretized
-
-V3 doesn't allow arbitrary price ranges. Prices are divided into discrete "ticks":
+Since the new formula doesn't allow for arbitrary price ranges, prices are divided into discrete "ticks":
 
 ```
 Each tick represents a 0.01% (1 basis point) price change.
@@ -113,11 +112,12 @@ tick(price) = log(price) / log(1.0001)
 
 ### Why Ticks?
 
-**Gas efficiency**: Storing exact liquidity at every possible price is impossible. Ticks create a finite set of price points.
+Think about what "any price" means. Between $1,000 and $1,001, there are infinite possible prices: $1,000.001, $1,000.0001, $1,000.00001... You can't store liquidity at infinite price points.
 
-**Aggregation**: Multiple positions ending at the same tick can be aggregated.
-
-**Precision**: 1 basis point spacing is fine enough for most use cases.
+Ticks solve this by discretizing price space:
+- **Storage efficiency**: Finite set of price points that can be tracked on-chain.
+- **Aggregation**: Multiple positions ending at the same tick share storage, reducing account sizes.
+- **Precision**: 1 basis point (0.01%) spacing is fine for most use cases. 
 
 ### Tick Spacing
 
@@ -130,11 +130,11 @@ Not every tick is usable. "Tick spacing" determines which ticks are valid:
 | 0.30% | 60 | 0.60% |
 | 1.00% | 200 | 2.00% |
 
-Higher fee tiers have wider tick spacing, reducing gas costs for volatile pairs where precision matters less.
+Volatile pairs don't need 0.01% precision. Using every 200th tick instead of every tick means fewer accounts to traverse during swaps.
 
 ### The Tick Bitmap
 
-V3 uses a bitmap to track which ticks have liquidity:
+To use tick efficiently, we use a bitmap to track which ticks have liquidity:
 
 ```rust
 // Bitmap: each bit represents whether a tick is initialized
@@ -149,24 +149,24 @@ fn is_tick_initialized(tick_bitmap: &[u256], tick: i32) -> bool {
 }
 ```
 
-When swapping, the contract only needs to check initialized ticks, not every possible price.
+This way, when swapping, the contract only needs to check initialized ticks, not every possible price.
 
 <ArticleSection name="The Math" id="math" level="h2" />
 
 ### Virtual Reserves
 
-Within a tick range, V3 still uses x*y=k, but with "virtual" reserves:
+Within a tick range, V3 still uses `x * y = k`, but with "virtual" reserves:
 
 ```
 Real reserves: what the position actually holds
 Virtual reserves: what reserves would be if liquidity extended to 0 and ∞
 ```
 
-The key insight: concentrated liquidity behaves like a larger x*y=k pool within its range.
+> Concentrated liquidity behaves like a larger `x * y = k` pool within its range.
 
 ### Liquidity (L)
 
-In V3, liquidity is defined as:
+Liquidity is defined as:
 
 ```
 L = sqrt(x * y)
@@ -177,11 +177,11 @@ Where:
 - y = virtual reserve of token Y
 ```
 
-L remains constant as swaps occur (within a tick range). Only the ratio of x to y changes.
+L remains constant as swaps occur (within a tick range), only the ratio of x to y changes.
 
-### Price as Square Root
+### Price
 
-V3 uses sqrt(price) internally:
+The new formula uses `sqrt(price)` internally:
 
 ```
 √P = sqrt(price of token1 in terms of token0)
@@ -189,14 +189,14 @@ V3 uses sqrt(price) internally:
 Price = (√P)²
 ```
 
-Why? It simplifies the math for liquidity calculations:
+This simplifies the math for liquidity calculations:
 
 ```
 x = L / √P  (amount of token0)
 y = L * √P  (amount of token1)
 ```
 
-### The Core Swap Formula
+### The Swap Formula
 
 For a swap within a single tick range:
 
@@ -211,7 +211,7 @@ Where:
 - L = liquidity
 ```
 
-### Position Bounds
+But this is not always the case, it might happen that we need to cross ticks, or traversing a position, during a swap.
 
 A position between price_lower and price_upper contributes:
 
@@ -222,11 +222,7 @@ token1_amount = L * (√P_current - √P_lower)
 Only when: P_lower ≤ P_current ≤ P_upper
 ```
 
-<ArticleSection name="Crossing Ticks" id="crossing-ticks" level="h2" />
-
-### What Happens at Tick Boundaries
-
-When a swap pushes price past an initialized tick, liquidity changes:
+So when a swap pushes price past an initialized tick, liquidity changes:
 
 ```
 Price moving from $2,000 to $2,100
@@ -238,7 +234,7 @@ At tick for $2,050:
 Total liquidity = Σ(all active positions)
 ```
 
-### The Tick Crossing Algorithm
+This means that we have to account for all ticks after, or before the current one during swaps
 
 ```rust
 fn swap(amount_in: u128, zero_for_one: bool) -> u128 {
@@ -282,17 +278,19 @@ fn swap(amount_in: u128, zero_for_one: bool) -> u128 {
 }
 ```
 
-### Gas Implications
+### Compute and Account Implications
 
-Each tick crossing costs gas. A swap through many tick ranges is expensive:
+Each tick crossing requires loading and updating tick state. On Solana, this means:
 
 ```
-Small swap (within one tick range): ~100K gas
-Large swap (crossing 10 ticks): ~300K gas
-Very large swap (crossing 50 ticks): ~800K gas
+Small swap (within one tick range): 1 tick array account
+Large swap (crossing tick array boundaries): 2-3 tick array accounts
+Very large swap (crossing many boundaries): 4+ accounts
+
+More accounts = more compute units = potential transaction failure
 ```
 
-This is why tick spacing exists. Wider spacing = fewer crossings = cheaper swaps.
+This is why Solana implementations like Orca Whirlpools pre-calculate the accounts needed and why Jupiter routes through multiple hops if a single swap would cross too many ticks.
 
 <ArticleSection name="Impermanent Loss Amplified" id="impermanent-loss" level="h2" />
 
@@ -327,91 +325,46 @@ Tighter range = higher multiplier = more IL if price exits range.
 When price exits your range:
 
 ```
-Position: $1,800 - $2,200
-Price drops to $1,500
+Position: $90 - $110
+SOL drops to $70
 
 Result:
-- Position holds 100% ETH (bought all the way down)
+- Position holds 100% SOL (bought all the way down)
 - Earning zero fees (out of range)
 - Waiting for price to return
 ```
 
-You've effectively placed a limit order. Price returning means you profit. Price staying low means you're holding a depreciating asset.
+You've effectively placed a limit order. Price returning means you profit but if price stay low means you're holding a depreciating asset.
 
 <ArticleSection name="JIT Liquidity and MEV" id="jit-mev" level="h2" />
 
 ### Just-In-Time Liquidity
 
-MEV searchers exploit concentrated liquidity with a new attack:
+Concentrated liquidity created a new MEV opportunity. Here's how it works:
 
 ```
-1. See large swap in mempool
-2. Add concentrated liquidity right at current price
-3. Let the swap execute (earn most of the fees)
-4. Remove liquidity in same block
+1. Searcher sees large swap pending (via RPC or Jito bundles)
+2. Adds concentrated liquidity right at current price
+3. Swap executes against their liquidity (they earn the fees)
+4. Removes liquidity in same transaction bundle
 ```
 
-The JIT provider captures fees that would have gone to long-term LPs, with zero impermanent loss risk (they're in and out instantly).
+The JIT provider captures fees that would have gone to long-term LPs. Since they're in and out instantly, they take zero impermanent loss.
 
-### Why This Works
-
-Concentrated liquidity at exactly the current price captures maximum fees:
+### A Concrete Example
 
 ```
-Long-term LP: $100K liquidity from $1,800 - $2,200
-JIT LP: $100K liquidity from $1,999 - $2,001
+SOL/USDC pool at $100
+Long-term LP: $100K liquidity from $90 - $110
+JIT LP: $100K liquidity from $99.95 - $100.05
 
-Swap at $2,000:
-- JIT position is 100x more concentrated
-- Captures ~99% of the fees
+Large swap comes in at $100:
+- JIT position is 200x more concentrated
+- Captures ~99% of the fees from that swap
+- Long-term LP gets scraps
 ```
 
-### Defenses
-
-**Time-weighted positions**: Some protocols require liquidity to be in range for minimum time.
-
-**Fee tiers**: Higher fee tiers make JIT less profitable (more capital needed for same fee capture).
-
-**Private mempools**: Reduce visibility of pending swaps (but don't eliminate the problem).
-
-<ArticleSection name="Implementations" id="implementations" level="h2" />
-
-### Uniswap V3 (Ethereum)
-
-The original. Launched May 2021. 
-- Business source license (couldn't be forked for 2 years)
-- License expired April 2023
-- Still dominant on Ethereum mainnet
-
-### Orca Whirlpools (Solana)
-
-Solana's primary concentrated liquidity implementation:
-- Adapted V3 math for Solana's account model
-- Integrated with Jupiter aggregator
-- Tick arrays stored in separate accounts (Solana-specific optimization)
-
-### Raydium CLMM (Solana)
-
-Raydium's concentrated liquidity pools:
-- Similar to Whirlpools
-- Integrated with Raydium's broader AMM ecosystem
-- Both CLMM and constant product pools
-
-### Implementation Considerations
-
-**Tick arrays**: Solana can't store unlimited ticks in one account. Implementations use multiple accounts (tick arrays) covering price ranges.
-
-```rust
-// Solana: tick array covers a range of ticks
-pub struct TickArray {
-    pub start_tick_index: i32,
-    pub ticks: [Tick; TICK_ARRAY_SIZE], // e.g., 88 ticks per array
-}
-```
-
-**Position NFTs**: Each position needs unique state. On Solana, this is typically a PDA per position.
-
-**Precision**: sqrt price calculations need high precision. Use u128 or fixed-point libraries.
+The long-term LP provided capital for weeks but the JIT LP showed up for one transaction and took most of the reward.
 
 <ArticleSection name="Active Liquidity Management" id="management" level="h2" />
 
@@ -443,34 +396,10 @@ Active management (tight range):
 
 ### Automated Vaults
 
-Protocols like Kamino (Solana) automate concentrated liquidity management:
+There are certain protocols that automate concentrated liquidity management:
 - Algorithms rebalance positions
 - Single deposit, automatic range management
 - Trade-off: vault fees + smart contract risk
-
-<ArticleSection name="When to Use Concentrated Liquidity" id="when-to-use" level="h2" />
-
-### Ideal Use Cases
-
-**High volume pairs**: ETH/USDC, SOL/USDC where fee income compensates for complexity.
-
-**Professional LPs**: Market makers with active management capabilities.
-
-**Range-bound markets**: Assets trading in predictable ranges.
-
-### When NOT to Use
-
-**Low volume pairs**: Complexity not worth it for minimal fees.
-
-**Passive LPs**: If you can't actively manage, use full-range or V2-style pools.
-
-**Highly volatile assets**: Price frequently leaving ranges → frequent rebalancing → gas costs.
-
-### The Rule of Thumb
-
-> Use concentrated liquidity when you have the sophistication to manage it and the volume justifies the complexity.
-
-For most retail LPs, automated vaults or wider ranges are more practical than trying to compete with professional market makers.
 
 <ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
 
@@ -483,5 +412,3 @@ For most retail LPs, automated vaults or wider ranges are more practical than tr
 7. **Active management** is required to maximize returns
 
 Concentrated liquidity revolutionized capital efficiency but shifted complexity to LPs. It's the dominant design for high-volume pairs, but not universally superior.
-
-Next: [Weighted Pools](/courses/amm-architectures/weighted-pools) - Balancer's approach to multi-asset pools and custom ratios.

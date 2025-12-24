@@ -251,13 +251,11 @@ StableSwap maintains low slippage for much larger trades.
 
 <ArticleSection name="The Depeg Problem" id="depeg" level="h2" />
 
-### When Stablecoins Aren't Stable
-
-High A values assume assets stay pegged. When they don't, interesting dynamics emerge.
+Using an high `A` values helps out with slippage but assume assets stay pegged. When they don't, interesting dynamics emerge.
 
 **March 2023: USDC Depeg**
 
-Silicon Valley Bank collapsed. Circle had $3.3B in deposits there. USDC traded at $0.87 on external markets.
+Silicon Valley Bank collapsed, Circle had $3.3B in deposits there. Market thought there would be some contagions so USDC traded at $0.87 on external markets.
 
 What happened in Curve pools:
 
@@ -275,34 +273,27 @@ Even as pool becomes 1.5M USDC / 0.5M USDT:
 - Arbitrage remains profitable → dumping continues
 ```
 
-The flat curve keeps offering near-1:1 rates while external markets price USDC at a discount. Arbitrageurs will drain USDT until the curve steepens enough that pool price matches external price.
+The flat curve keeps offering near-1:1 rates while external markets price USDC at a discount. Arbitrageurs continued to drain USDT until the curve step enough that pool price matches external price.
 
 ### The LP Perspective
 
-LPs are effectively buying USDC at pool prices (~$0.95-0.99) when it's worth $0.87 externally. Their pool shifts from 50/50 to mostly USDC.
+The problem was that LPs effectively bought USDC at pool prices (~$0.95-0.99) while it was worth $0.87 externally.
 
-**If the peg recovers** (like USDC did): LPs are fine. They hold USDC that's now worth $1 again. The temporary imbalance reverses.
+**If the peg recovers** (like USDC did): LPs are fine. They hold USDC that's now worth $1 again and the temporary imbalance reverses.
 
-**If the peg fails permanently** (like UST): LPs are holding a worthless asset they bought at near-par. Catastrophic loss.
+**If the peg fails permanently** (like UST): LPs are holding a worthless asset they bought at near-par creating a catastrophic loss.
 
-The USDC depeg recovered within days. LPs who didn't panic-withdraw were made whole. But the risk was real, if Circle had been insolvent, those LPs would have been devastated.
+The USDC depeg recovered within days so LPs who didn't panic-withdraw were made whole. But the risk was real, if Circle had been insolvent, those LPs would have been devastated.
 
 ### Mitigation Strategies
 
 **1. Lower A Values**
 
-More curve = faster price response. The pool reaches external market price sooner, limiting LP exposure.
-
-| Asset Type | Recommended A | Reasoning |
-|------------|---------------|-----------|
-| USDC/USDT | 200-500 | Highly stable, both regulated |
-| DAI/USDC | 100-200 | DAI has more volatility |
-| stETH/ETH | 50-100 | LST can depeg under stress |
-| Exotic stables | 10-50 | Higher risk of depeg |
+With a lower value of A, the pool would have reached the external market price sooner, limiting LP exposure.
 
 **2. Oracle Integration**
 
-Monitor external prices. If oracle shows significant depeg:
+If we had an oracle that monitored external prices, we could have caught the depeg and:
 - Pause swaps entirely
 - Dynamically lower A
 - Adjust virtual price to reflect reality
@@ -318,87 +309,36 @@ fn check_depeg(oracle_price: u64, pool_price: u64, threshold_bps: u64) -> bool {
 }
 ```
 
-**3. Dynamic A (Ramping)**
+**3. Volume Limits**
 
-Never change A instantly. Ramp over hours/days to prevent manipulation and allow markets to adjust:
+With a cap how much can be swapped per block or per time window we could have stopped and protect the LP against the arbitrage drainage.
 
-```rust
-fn get_current_a(initial_a: u64, future_a: u64, ramp_start: i64, ramp_end: i64, now: i64) -> u64 {
-    if now >= ramp_end { return future_a; }
-    if now <= ramp_start { return initial_a; }
-    
-    let elapsed = now - ramp_start;
-    let duration = ramp_end - ramp_start;
-    
-    // Linear interpolation
-    initial_a + (future_a - initial_a) * elapsed / duration
-}
-```
+But this is not a good experience for 99.9% of the time since stables usually do a lot of intraday volume
 
-**4. Volume Limits**
+**4. Circuit Breakers**
 
-Cap how much can be swapped per block or per time window. Slows down arbitrage drainage during acute depegs.
+By adding a circuit breaker that triggered if imbalance exceeds threshold (e.g., 80/20 ratio), we could have paused swaps or require governance intervention.
 
-**5. Circuit Breakers**
-
-If imbalance exceeds threshold (e.g., 80/20 ratio), pause swaps or require governance intervention.
+This is a good mitigation, but setting a parameter that meaningfully protect LPs while not disrupting normal trading is extremely complex.
 
 <ArticleSection name="Multi-Token Pools" id="multi-token" level="h2" />
 
-### Beyond Two Tokens
-
-The StableSwap invariant generalizes to n tokens:
+The StableSwap invariant can be generalized to n tokens:
 
 ```
 A * n^n * Σ(x_i) + D = A * D * n^n + D^(n+1) / (n^n * Π(x_i))
 ```
 
-Curve's 3pool (USDC/USDT/DAI) uses this formula. Benefits:
+This means that with this formula we could:
 - Trade any stablecoin for any other in one swap
-- Deeper combined liquidity
+- Create a deeper combined liquidity
 - Single LP token for multi-asset exposure
 
-### The Metapool Pattern
+For example, this is extremely useful when launching a new stablecoin. To be usble, it needs deep liquidity against USDC, USDT, and any other stablecoin that has meaningful usage across the ecosystem. 
 
-Problem: You have a new stablecoin (let's call it XUSD). You want liquidity against USDC, USDT, and DAI. Creating separate pairs fragments liquidity.
-
-Solution: Metapools. Pair XUSD against the 3pool LP token:
-
-```
-Metapool: XUSD / 3CRV (3pool LP token)
-
-To swap XUSD → USDT:
-1. XUSD → 3CRV (metapool)
-2. 3CRV → USDT (3pool)
-```
-
-This concentrates liquidity while enabling trading against all major stablecoins.
+Creating separate pairs for each, fragments liquidity. Creating a pool that serves all of this helps since it concentrates liquidity while enabling trading against all major stablecoins.
 
 <ArticleSection name="Implementations" id="implementations" level="h2" />
-
-### Curve Finance (Ethereum)
-
-The original. Launched January 2020. Key innovations:
-- StableSwap invariant
-- ve-tokenomics (vote-escrowed CRV)
-- Gauge system for directing rewards
-- Factory pools for permissionless creation
-
-TVL: Peaked at $24B (2022), currently $2-3B.
-
-### Saber (Solana)
-
-Solana's primary stableswap. Launched 2021.
-- StableSwap invariant adapted for Solana
-- Concentrated on wrapped assets (wBTC, wETH variants)
-- SBR token for governance
-
-### Mercurial/Meteora (Solana)
-
-Started as stableswap, evolved to dynamic pools:
-- Multiple pool types including StableSwap
-- Dynamic fees based on volatility
-- Merged into Meteora for broader AMM functionality
 
 ### Implementation Considerations
 
@@ -406,30 +346,7 @@ Started as stableswap, evolved to dynamic pools:
 
 **Iteration limits**: Newton's method must converge. Set reasonable iteration limits (256 is common).
 
-**A parameter changes**: Don't change A instantly. Ramp over time to prevent manipulation:
-
-```rust
-fn get_current_a(
-    initial_a: u64,
-    future_a: u64,
-    initial_time: i64,
-    future_time: i64,
-    current_time: i64,
-) -> u64 {
-    if current_time >= future_time {
-        return future_a;
-    }
-    
-    let time_elapsed = current_time - initial_time;
-    let time_total = future_time - initial_time;
-    
-    if future_a > initial_a {
-        initial_a + (future_a - initial_a) * time_elapsed / time_total
-    } else {
-        initial_a - (initial_a - future_a) * time_elapsed / time_total
-    }
-}
-```
+**A parameter changes**: Never change A instantly. Ramp over hours/days to prevent manipulation (see Dynamic A in the Depeg section above).
 
 <ArticleSection name="When to Use StableSwap" id="when-to-use" level="h2" />
 
@@ -439,12 +356,6 @@ fn get_current_a(
 **Wrapped assets**: wBTC variants, bridged tokens that should be 1:1
 **Liquid staking tokens**: stETH/ETH, mSOL/SOL, jitoSOL/SOL
 **Synthetic assets**: Synths pegged to the same underlying
-
-### When NOT to Use StableSwap
-
-**Volatile pairs**: ETH/USDC would be catastrophic. The flat curve assumes assets stay near parity.
-**Uncertain pegs**: If you're not confident assets will stay pegged, use constant product or lower A.
-**New/untested assets**: High A with unproven assets is asking for trouble.
 
 ### The Rule of Thumb
 
@@ -462,5 +373,3 @@ If there's meaningful probability of permanent depeg, the efficiency gains aren'
 6. **Multi-token pools** concentrate liquidity across many stablecoins
 
 StableSwap solved stablecoin trading. But for volatile assets, we need a different approach: concentrating liquidity where it's actually used.
-
-Next: [Concentrated Liquidity](/courses/amm-architectures/concentrated-liquidity) - Uniswap V3's capital efficiency revolution.

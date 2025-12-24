@@ -2,424 +2,165 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Oracle-Integrated AMMs
 
-Every AMM design we've covered has impermanent loss. Whether it's constant product, StableSwap, concentrated liquidity, or weighted pools, LPs lose money when prices diverge.
+Every AMM we've covered has the same problem: toxic flow. 
 
-What if you used an oracle for pricing instead of the AMM curve? No curve-based pricing means no impermanent loss. GMX pioneered this model, and it's now behind the largest perpetual DEXs.
+Since the pool is uninformed, it only knows what its reserves say, arbitrageurs, that are informed trader that know the true market price, can extracts significant value from LPs.
 
-The tradeoff: you're trusting an oracle instead of math. But for many use cases, that's a trade worth making.
+This is because the pricin model for traditional AMMs is reactive since they are based on a simple constante curve, trades move the price. This creates a window where the pool price is stale.
 
-<ArticleSection name="The Impermanent Loss Problem" id="il-problem" level="h2" />
+<ArticleSection name="How Oracle AMMs Work" id="how-it-works" level="h2" />
 
-### Why IL is Unavoidable in Traditional AMMs
+Most price discovery doesn't happen onchain but on centralized exchanges and oracles like Pyth already aggregate those prices.
 
-In constant product AMMs, LPs are always on the wrong side of trades:
+So why calculate price from reserves when you can just use the oracle?
 
-```
-Pool: 100 ETH + 100,000 USDC
-Price: 1,000 USDC/ETH
+Lifinity (Solana, 2021) pioneered this approach, but the mechanics apply to any oracle-integrated AMM.
 
-ETH price rises to 1,500 USDC (externally):
+### The Core Idea
 
-Arbitrageurs:
-1. Buy cheap ETH from pool (still priced at ~1000)
-2. Sell on external market at 1500
-3. Profit
-
-Pool after arbitrage:
-- ~81.6 ETH + ~122,474 USDC
-- Total value: $245K at new prices
-
-If LP had just held:
-- 100 ETH + 100,000 USDC
-- Total value: $250K
-
-IL: $5K (2%)
-```
-
-LPs systematically sell tokens that are rising and buy tokens that are falling. The AMM curve forces this behavior.
-
-### The Root Cause
-
-AMMs use the pool's own reserves to determine price. This creates a lag: pool price updates only after arbitrage trades move it. LPs always provide stale prices.
-
-**The question**: What if the AMM used external market prices instead?
-
-<ArticleSection name="The GMX Model" id="gmx-model" level="h2" />
-
-### Zero Slippage, Oracle Pricing
-
-GMX (launched 2021) introduced a radical design:
+An oracle AMM is still an AMM since it does real token swaps, but instead of deriving price from `x * y = k`, it uses the oracle price as its reference point.
 
 ```
 Traditional AMM:
-- Price determined by pool reserves (x*y=k)
-- Large trades → significant slippage
-- LPs suffer impermanent loss
+  Price = f(reserves)
+  SOL/USDC pool with 10,000 SOL and 1,000,000 USDC
+  Price = 1,000,000 / 10,000 = $100
+  
+  Problem: This price is stale until arbitrageurs fix it
 
-GMX Model:
-- Price from Chainlink oracle
-- All trades at oracle price (zero slippage)
-- LPs don't lose from price divergence
+Lifinity:
+  Price = oracle price ± spread
+  Pyth says SOL = $120
+  Lifinity quotes: Buy at $120.12, Sell at $119.88
+  
+  Price is always current. No stale window to exploit.
 ```
 
-### How It Works
+To do that, under the hood the Oracle AMM is a CPAMM that concentrates the liquidity around the oracle price.
 
-**No pool curve**: There's no x*y=k. The contract simply uses the oracle price.
+### The Oracle-Based Curve
 
-**GLP (Liquidity Pool)**: LPs deposit assets into a shared pool (GLP). These assets are used as counterparty for traders.
+Even if the pricing is made by the oracle, you still need a curve. This is because if you just say "everything trades at oracle price" there's no slippage, and no slippage means that large trades would just drain the pool.
 
-**Traders vs Pool**: When a trader goes long ETH, they're effectively borrowing from the pool. The pool is short. If ETH rises, trader profits, pool loses. If ETH falls, pool profits, trader loses.
-
-```
-Trader opens 10 ETH long at $2,000:
-- Position size: $20,000
-- Collateral: $1,000 (20x leverage)
-
-ETH rises to $2,200:
-- PnL: +$2,000 (10 ETH × $200)
-- Pool pays trader $2,000
-
-ETH falls to $1,800:
-- PnL: -$2,000
-- Trader pays pool $2,000 (or gets liquidated)
-```
-
-### Where's the Impermanent Loss?
-
-**There isn't any**. Traditional IL comes from arbitrage exploiting stale pool prices. GMX uses oracle prices, so there's no stale price to exploit.
+The solution to this problem is to just use a constant product curve, but **re-center it around the oracle price**.
 
 ```
-GLP composition: 50% ETH, 25% BTC, 25% stablecoins
-ETH doubles in price.
+Traditional CPAMM:
+  x * y = k
+  Price derived from reserves: P = y/x
+  
+  If reserves are 1000 SOL and 100,000 USDC:
+  Price = 100,000/1000 = $100
+  
+  Problem: This price is stale until arbs fix it.
 
-In traditional AMM: IL as arbitrageurs rebalance
-In GMX: Pool composition changes (more ETH value), but no forced selling
+Oracle-AMM's approach:
+  Still uses x * y = k for slippage calculation
+  But the "virtual" reserves are adjusted so the curve's
+  price matches the oracle price.
+  
+  Oracle says: SOL = $120
+  Lifinity adjusts virtual reserves so curve price = $120
+  Trades execute along this re-centered curve
 ```
 
-<ArticleSection name="GLP: The Liquidity Pool" id="glp" level="h2" />
+This is easily done by creating "virtual reserves" that would put the CPAMM price at 100$. 
 
-### What GLP Holds
-
-GLP is a multi-asset pool:
+The depth of this "virtual reserves" are created based on the actual spread that the pool wants to use.
 
 ```
-Target composition (varies by chain):
-- ETH: 25-35%
-- BTC: 20-30%  
-- Stablecoins (USDC, etc): 40-50%
-- Other: 5-10%
+Oracle price: $100
+
+Shallow virtual reserves:
+  100 SOL / 10,000 USDC
+  k = 1,000,000
+  
+Deep virtual reserves:
+  10,000 SOL / 1,000,000 USDC
+  k = 10,000,000,000
 ```
 
-### How LPs Earn
+Both price are the same, but if we try to buy 10SOL we would have 5% of price impact in the shallow pool against the 0.1% of the deep pool.
 
-GLP holders earn from:
+> The virtual depth is adjust based on different parameters like oracle confidence or volatilty.
 
-**1. Trading fees**: 0.1% of all trades
-**2. Funding/borrow fees**: Traders pay to hold leveraged positions
-**3. Liquidation fees**: From liquidated positions
-**4. Losing traders**: Net negative trader PnL goes to pool
+<ArticleSection name="LP Economics in Oracle AMMs" id="lp-economics" level="h2" />
 
-### The Key Insight: Traders Mostly Lose
+### How Fees Work
 
-Statistically, leveraged traders lose money:
+Every trade pays a fee. In Oracle AMMs, fees come from two sources:
 
-```
-Total trader PnL over time: Usually negative
-- Funding fees eat profits
-- Liquidations during volatility
-- Emotional trading
+**1. Base trading fee**: A percentage of each trade (e.g., 0.3%)
 
-This negative PnL goes to GLP holders.
-```
-
-GLP is effectively betting against retail leveraged traders. Historically, this has been profitable.
-
-### The Risk: Traders Can Win
-
-If traders are consistently profitable, GLP loses:
+**2. Price impact (slippage)**: The difference between oracle price and execution price
 
 ```
-Bull market, traders long with leverage:
-- Price keeps rising
-- Traders profit
-- GLP pays out
+Trade: Buy 100 SOL
 
-Coordinated winning trades:
-- If many traders profit simultaneously
-- GLP takes significant losses
+Oracle price: $100
+Virtual reserves: 10,000 SOL / 1,000,000 USDC
+
+Execution:
+  Average price paid: $100.50
+  Price impact: $0.50 per SOL = 0.5%
+  
+Total cost to trader: $10,050
+  Base fee (0.3%): $30
+  Price impact: $50
+  
+LPs receive: The $50 price impact + their share of the $30 fee
 ```
 
-GLP is not risk-free. It's a bet that the house wins on average.
+Since the slippage goes to LPs, deeper virtual reserves mean less slippage revenue but it puts the AMM at more competitive pricing.
 
-<ArticleSection name="How Perps Work Here" id="perps" level="h2" />
+### Inventory Risk
 
-### Perpetual Futures on Oracle AMMs
-
-GMX-style protocols excel at perpetual futures:
-
-**Opening a position**:
-1. Deposit collateral (USDC, ETH, etc.)
-2. Specify leverage (up to 50x typically)
-3. Contract uses oracle price
-4. Zero slippage regardless of size
-
-**Position mechanics**:
-```
-Long 100 ETH at $2,000 with 10x leverage:
-- Position size: $200,000
-- Collateral: $20,000
-- Liquidation price: ~$1,820 (depending on fees)
-
-Every second:
-- Borrow fee accrues (you're borrowing from pool)
-- Position value updates with oracle
-```
-
-### No Funding Rate (Traditional Sense)
-
-Traditional perp DEXs (like those using vAMMs) have funding rates to balance longs/shorts. GMX doesn't need this because:
-
-- Longs and shorts both borrow from pool
-- Pool is the counterparty to both sides
-- Borrow fees apply to both directions
+Unlike traditional AMMs where arbitrageurs force rebalance the LPs at bad prices, Oracle-AMM LPs face a different dynamic:
 
 ```
-Borrow fee = (Assets borrowed / Total pool) × Base rate × Time
+SOL pumps from $100 to $150:
 
-Heavy long interest:
-- More ETH borrowed for longs
-- ETH borrow rate increases
-- Discourages more longs
+Traditional AMM:
+  Arbs bought your SOL at $100-$140
+  You sold all the way up at bad prices
+  Pool rebalanced, you have less SOL
+
+Lifinity:
+  Oracle updates to $150
+  Pool prices at $150 immediately
+  Normal traders might buy SOL at $150+slippage
+  You sell at fair price, not stale price
 ```
 
-<ArticleSection name="Open Interest Caps" id="oi-caps" level="h2" />
-
-### The Risk Management Problem
-
-If the pool has $100M, can traders open $10B in positions?
-
-**No**. Open interest must be limited:
-
-```
-Max long exposure = Pool value × Long cap ratio
-Max short exposure = Pool value × Short cap ratio
-
-Example:
-Pool: $100M
-Long cap: 50%
-Short cap: 50%
-
-Max longs: $50M
-Max shorts: $50M
-```
-
-### Utilization-Based Pricing
-
-When one side fills up, prices adjust:
-
-```
-Long utilization: 90% (near cap)
-Short utilization: 30%
-
-Opening new long: Higher fees, worse execution
-Opening new short: Lower fees, encouraged
-
-This balances exposure without traditional funding rates.
-```
-
-### Why Caps Matter
-
-Without caps, pool faces unlimited liability:
-
-```
-Pool: $100M
-Open longs: $500M (if uncapped)
-ETH rises 30%
-
-Trader profit: $150M
-Pool loss: $150M
-Pool is insolvent
-```
-
-<ArticleSection name="Solana Implementations" id="solana" level="h2" />
-
-### Jupiter Perps
-
-Jupiter's perpetuals use the GMX model:
-
-**JLP Pool**: Multi-asset liquidity pool (SOL, ETH, BTC, stables)
-**Oracle pricing**: Pyth for price feeds
-**Zero slippage**: Trade any size at oracle price
-**Up to 100x leverage**: On major pairs
-
-```rust
-// Simplified position opening
-pub fn open_position(
-    ctx: Context<OpenPosition>,
-    size_usd: u64,
-    is_long: bool,
-) -> Result<()> {
-    // Get oracle price
-    let price = get_oracle_price(&ctx.accounts.price_feed)?;
-    
-    // No slippage calculation - just use oracle price
-    let position_size_tokens = size_usd * PRECISION / price;
-    
-    // Check open interest caps
-    let current_oi = get_open_interest(is_long)?;
-    let max_oi = get_pool_value()? * OI_CAP_BPS / 10_000;
-    require!(current_oi + size_usd <= max_oi, OICapExceeded);
-    
-    // Update pool utilization
-    // ...
-    
-    Ok(())
-}
-```
-
-### Drift Protocol
-
-Drift combines vAMM with oracle pricing:
-
-**Hybrid model**: Uses virtual AMM for price discovery but heavily constrained by oracle
-**Insurance fund**: Separate fund to cover extreme losses
-**Cross-margin**: Single margin account for multiple positions
-
-### Flash Trade
-
-Another GMX-style implementation on Solana with focus on simplicity and speed.
-
-<ArticleSection name="Oracle Dependency" id="oracle-dependency" level="h2" />
-
-### The Critical Weakness
-
-Oracle-integrated AMMs live or die by their oracle:
-
-**Oracle manipulation**: If oracle price is wrong, trades execute at wrong price
-**Oracle latency**: Stale prices enable exploitation
-**Oracle outage**: Protocol cannot function
-
-```
-Attack scenario:
-1. Manipulate oracle (flash loan attack on source)
-2. Oracle shows ETH at $1,000 instead of $2,000
-3. Open massive long at manipulated price
-4. Oracle corrects
-5. Close position for instant 100% profit
-```
-
-### Defenses
-
-**Multiple oracles**: Require agreement between Chainlink, Pyth, etc.
-**Price deviation checks**: Reject trades if price moved too fast
-**Confidence intervals**: Use oracle confidence data
-**Circuit breakers**: Pause trading during anomalies
-
-```rust
-fn validate_oracle_price(
-    primary: &PriceAccount,
-    secondary: &PriceAccount,
-    max_deviation_bps: u64,
-) -> Result<u64> {
-    let price_a = primary.price;
-    let price_b = secondary.price;
-    
-    let deviation = price_a.abs_diff(price_b) * 10_000 / price_a;
-    require!(deviation <= max_deviation_bps, OracleDeviation);
-    
-    // Use more conservative price
-    Ok(std::cmp::min(price_a, price_b))
-}
-```
-
-### The Trust Tradeoff
-
-Traditional AMM: Trust the math (but suffer IL)
-Oracle AMM: Trust the oracle (but no IL)
-
-Neither is strictly better. The choice depends on your threat model.
-
-<ArticleSection name="LP Economics" id="lp-economics" level="h2" />
-
-### Revenue Sources
-
-GLP/JLP holders earn from:
-
-```
-1. Trading fees: 0.05-0.1% per trade
-   - $1B daily volume = $500K-$1M fees
-
-2. Borrow fees: Hourly rate on open positions
-   - 0.01%/hour on $100M OI = $10K/hour
-
-3. Liquidations: Portion of liquidated collateral
-   - Volatile day, $10M liquidated = $100K to pool
-
-4. Net trader losses: Biggest component
-   - Traders lose $50M/month = GLP gains $50M
-```
-
-### Risk Factors
-
-```
-1. Net trader profits: They win, you lose
-   - Strong trend, traders ride it = GLP losses
-
-2. Oracle exploitation: Manipulation drains pool
-
-3. Smart contract risk: Code bugs
-
-4. Concentration risk: Heavy exposure to one asset
-```
-
-### Historical Returns
-
-GMX/GLP (Arbitrum):
-- 2022: ~30% APY during bear market (traders lost big)
-- 2023: ~15-20% APY (more balanced)
-- Varies significantly with market conditions
-
-JLP (Solana):
-- Newer, less historical data
-- Generally positive returns but volatile
-
-<ArticleSection name="Comparing Models" id="comparison" level="h2" />
-
-### Oracle AMM vs Traditional AMM
-
-| Aspect | Oracle AMM (GMX) | Traditional AMM |
-|--------|------------------|-----------------|
-| Price source | External oracle | Pool reserves |
-| Slippage | Zero | Increases with size |
-| IL for LPs | None | Yes |
-| Oracle dependency | Critical | None |
-| LP risk | Trader profits | Price divergence |
-| Capital efficiency | High | Medium-Low |
-| Suitable for | Perps, large trades | Spot, small trades |
-
-### When to Use Oracle AMMs
-
-**Best for**:
-- Perpetual futures
-- Large spot trades needing minimal slippage
-- LPs who want to avoid IL
-- Assets with reliable oracle feeds
-
-**Not ideal for**:
-- Price discovery (oracle must come from somewhere)
-- Long-tail assets without oracles
-- Decentralization purists (oracle = trust)
+You still sell SOL as price rises (that's how AMMs work), but you sell at current market price, not stale prices. The toxic flow is eliminated, but the inventory risk remains since you'll end up with less SOL after a pump.
 
 <ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
 
-1. **Oracle AMMs** use external price feeds instead of pool curves
-2. **Zero slippage**: Trades execute at oracle price regardless of size
-3. **No impermanent loss**: LPs don't suffer from arbitrage
-4. **GLP model**: LPs are counterparty to traders; earn when traders lose
-5. **Open interest caps** prevent unlimited pool liability
-6. **Oracle dependency** is the critical risk factor
-7. **Best for perpetuals** and large trades; requires reliable oracles
+Oracle AMMs like Lifinity solve a specific problem: toxic flow.
 
-Oracle-integrated AMMs solved impermanent loss by changing the question from "what does the pool say?" to "what does the market say?" The tradeoff is oracle trust, but for many use cases, that's acceptable.
+```
+The problem:
+  Traditional AMMs derive price from reserves
+  This creates a lag vs. external markets
+  Arbitrageurs exploit the lag
+  LPs get extracted in BOTH directions
 
-Next: [Emerging Designs](/courses/amm-architectures/emerging-designs) - What's next in AMM architecture.
+The solution:
+  Use oracle price instead of reserve-derived price
+  No lag = no arbitrage opportunity
+  LPs keep their fees without extraction
+```
+
+The key insights:
+
+1. **Proactive vs Reactive**: Traditional AMMs wait for trades to update price. Oracle AMMs update price proactively from external feeds.
+
+2. **Concentrated + Oracle**: Oracle-AMM combines oracle pricing with concentrated liquidity around the oracle price. Capital efficient AND no stale pricing.
+
+3. **Dynamic Spreads**: Widen spreads during uncertainty (low oracle confidence) and volatility. This is how traditional market makers work.
+
+4. **Oracle Risk**: You're trading toxic flow risk for oracle risk. Manipulation is rare but catastrophic so use multiple oracles, staleness checks, and confidence intervals.
+
+5. **Not for everything**: Oracle AMMs only work for assets with reliable oracle feeds.
+
+Lifinity proved this model works on Solana. By using Pyth for pricing and concentrating liquidity around the oracle price, they eliminated the toxic flow that plagues traditional AMMs.
