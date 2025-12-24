@@ -4,6 +4,7 @@ import toml from "@shikijs/langs-precompiled/toml";
 import shellscript from "@shikijs/langs-precompiled/shellscript";
 import json from "@shikijs/langs-precompiled/json";
 import python from "@shikijs/langs-precompiled/python";
+import solidity from "@shikijs/langs-precompiled/solidity";
 import sbpfGrammar from "./sbpf-grammar.json" with { type: "json" };
 import blueshiftTheme from "./blueshift-theme.json" with { type: "json" };
 
@@ -36,6 +37,7 @@ export const BUNDLED_LANGUAGES = [
   shellscript,
   json,
   python,
+  solidity,
   SBPF_LANG,
 ];
 
