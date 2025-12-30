@@ -1,0 +1,381 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 심화 Anchor (Advanced Anchor)
+
+때로는 Anchor가 제공하는 추상화 때문에 프로그램에 필요한 특정 로직을 구현하기가 불가능할 때가 있습니다. 이러한 이유로 이번 섹션에서는 우리 프로그램과 함께 작동할 수 있는 몇 가지 심화 개념에 대해 알아보겠습니다.
+
+<ArticleSection name="Feature Flags" id="feature-flags" level="h2" />
+
+## 기능 플래그 (Feature Flags)
+
+소프트웨어 엔지니어는 로컬 개발, 테스트, 프로덕션(실 서비스) 환경을 구분해서 사용해야 할 때가 많습니다. 기능 플래그(Feature Flags)는 별도의 코드베이스를 유지하지 않고도 조건부 컴파일과 환경별 설정을 가능하게 하는 우아한 해결책을 제공합니다.
+
+### Cargo 기능 (Cargo Features)
+
+Cargo 기능은 조건부 컴파일 및 선택적 의존성을 위한 강력한 메커니즘을 제공합니다. `Cargo.toml`의 `[features]` 테이블에 이름을 정의한 후, 필요에 따라 이를 활성화하거나 비활성화할 수 있습니다.
+
+- **명령행을 통한 활성화**: `--features feature_name`
+- **의존성 설정에서 직접 활성화**: `Cargo.toml` 내에서 설정
+
+이를 통해 최종 바이너리에 포함될 내용을 정밀하게 제어할 수 있습니다.
+
+### Anchor에서의 기능 플래그
+
+Anchor 프로그램은 타겟 환경에 따라 서로 다른 동작, 제약 조건 또는 설정을 만들기 위해 기능 플래그를 흔히 사용합니다. `cfg` 속성을 사용하여 코드를 조건부로 컴파일하세요:
+
+```rust
+#[cfg(feature = "testing")]
+fn function_for_testing() {
+   // "testing" 기능이 활성화되었을 때만 컴파일됨
+}
+
+#[cfg(not(feature = "testing"))]
+fn function_for_production() {
+   // "testing" 기능이 비활성화되었을 때만 컴파일됨
+}
+```
+
+기능 플래그는 환경 차이를 처리하는 데 탁월합니다. 모든 토큰이 메인넷(Mainnet)과 데브넷(Devnet)에 동시에 배포되는 것은 아니기 때문에, 네트워크마다 다른 주소를 사용해야 할 때 유용합니다.
+
+```rust
+#[cfg(feature = "localnet")]
+pub const TOKEN_ADDRESS: &str = "로컬_토큰_주소_입력";
+
+#[cfg(not(feature = "localnet"))]
+pub const TOKEN_ADDRESS: &str = "메인넷_토큰_주소_입력";
+```
+
+이 방식은 배포 설정 오류를 제거하고, 런타임이 아닌 컴파일 타임에 환경을 전환함으로써 개발 워크플로우를 간소화합니다.
+
+`Cargo.toml` 파일에서의 설정 방법은 다음과 같습니다:
+
+```toml
+[features]
+default = ["localnet"]
+localnet = []
+```
+
+그 후, 다음과 같이 원하는 플래그를 지정하여 프로그램을 빌드할 수 있습니다:
+
+```bash
+# 기본값(localnet) 사용
+anchor build
+
+# 메인넷용 빌드 (기본 기능 제외)
+anchor build --no-default-features
+```
+
+> 일단 프로그램을 빌드하면, 바이너리에는 활성화된 조건부 플래그만 포함됩니다. 즉, 테스트 및 배포 시 해당 조건이 엄격히 준수됩니다.
+
+<ArticleSection name="Working with Raw Accounts" id="working-with-raw-accounts" level="h2" />
+
+## 로우 계정(Raw Accounts) 다루기
+
+Anchor는 계정 컨텍스트를 통해 계정을 자동으로 역직렬화(Deserialization)하여 계정 처리를 간소화합니다.
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub account: Account<'info, MyAccount>,
+}
+
+#[account]
+pub struct MyAccount {
+    pub data: u8,
+}
+```
+
+하지만 특정 기준이 충족될 때만 계정을 역직렬화하고 수정해야 하는 '조건부 계정 처리'가 필요한 경우, 이 자동 역직렬화가 문제가 될 수 있습니다.
+
+이런 시나리오에서는 `UncheckedAccount`를 사용하여 유효성 검사 및 역직렬화를 런타임으로 미룰 수 있습니다. 이는 계정이 존재하지 않을 수 있는 상황에서 발생하는 하드 에러를 방지하고, 프로그래밍 방식으로 유효성을 검사할 수 있게 해줍니다.
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    /// CHECK: 명령 로직에서 조건부로 유효성 검사됨
+    pub account: UncheckedAccount<'info>,
+}
+
+#[account]
+pub struct MyAccount {
+    pub data: u8,
+}
+
+pub fn instruction(ctx: Context<Instruction>, should_process: bool) -> Result<()> {
+    if should_process {
+        // 계정 데이터 역직렬화
+        let mut account = MyAccount::try_deserialize(&mut &ctx.accounts.account.to_account_info().data.borrow_mut()[..])
+            .map_err(|_| error!(InstructionError::AccountNotFound))?;
+
+        // 계정 데이터 수정
+        account.data += 1;
+
+        // 데이터를 계정에 다시 직렬화(Serialize)
+        account.try_serialize(&mut &mut ctx.accounts.account.to_account_info().data.borrow_mut()[..])?;
+    }
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Zero Copy Accounts" id="zero-copy-accounts" level="h2" />
+
+## 제로 카피 계정 (Zero Copy Accounts)
+
+솔라나 런타임은 엄격한 메모리 제한을 강제합니다: 스택(Stack) 메모리는 4KB, 힙(Heap) 메모리는 32KB로 제한됩니다. 또한, 로드된 각 계정마다 스택은 10KB씩 늘어납니다. 이러한 제약 때문에 대규모 계정의 경우 전통적인 역직렬화 방식은 불가능하며, 효율적인 메모리 관리를 위해 **제로 카피(Zero-copy)** 기술이 필요합니다.
+
+계정이 이 한계를 초과하면 다음과 같은 스택 오버플로우 에러가 발생합니다: `Stack offset of -30728 exceeded max offset of -4096 by 26632 bytes`
+
+중간 크기의 계정은 `Box`를 사용하여 데이터를 스택에서 힙으로 옮길 수 있지만(서론에서 언급됨), 더 큰 계정은 `zero_copy`를 구현해야 합니다.
+
+제로 카피는 로우 메모리 액세스(Raw memory access)를 사용하여 자동 역직렬화 과정을 완전히 우회합니다. 제로 카피를 사용하는 계정 타입을 정의하려면 구조체에 `#[account(zero_copy)]` 주석을 추가합니다.
+
+
+
+```rust
+#[account(zero_copy)]
+pub struct Data {
+    // 10240 바이트 - 8 바이트 계정 디스크리미네이터
+    pub data: [u8; 10_232],
+}
+```
+
+`#[account(zero_copy)]` 속성은 제로 카피 역직렬화에 필요한 여러 트레이트(Trait)를 자동으로 구현합니다:
+- `#[derive(Copy, Clone)]`
+- `#[derive(bytemuck::Zeroable)]`
+- `#[derive(bytemuck::Pod)]`
+- `#[repr(C)]`
+
+> **참고**: 제로 카피를 사용하려면 `Cargo.toml`에 `bytemuck` 크레이트를 추가하고, 제로 카피 타입에서 모든 크기의 배열을 다룰 수 있도록 `min_const_generics` 기능을 활성화해야 합니다.
+
+명령 컨텍스트에서 제로 카피 계정을 역직렬화하려면 `AccountLoader<'info, T>`를 사용하세요. 여기서 `T`는 제로 카피 계정 타입입니다.
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub data_account: AccountLoader<'info, Data>,
+}
+```
+
+### 제로 카피 계정 초기화
+
+계정 크기에 따라 두 가지 초기화 방식이 있습니다.
+
+10,240 바이트 미만의 계정은 `init` 제약 조건을 직접 사용합니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        // init 제약 조건으로 할당할 수 있는 최대 공간은 10240 바이트입니다.
+        space = 8 + 10_232,
+        payer = payer,
+    )]
+    pub data_account: AccountLoader<'info, Data>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+> `init` 제약 조건은 CPI 제한으로 인해 10,240 바이트로 제한됩니다. 내부적으로 `init`은 시스템 프로그램에 CPI 호출을 하여 계정을 생성하기 때문입니다.
+
+10,240 바이트 이상이 필요한 계정은 시스템 프로그램을 여러 번 호출하여 트랜잭션당 10,240 바이트씩 추가하며 별도로 계정을 생성해야 합니다. 이를 통해 CPI 제한을 우회하여 솔라나 최대 계정 크기인 10MB(10,485,760 바이트)까지 생성할 수 있습니다.
+
+외부에서 계정을 생성한 후에는 `init` 대신 `zero` 제약 조건을 사용합니다. `zero` 제약 조건은 계정의 디스크리미네이터가 설정되지 않았는지 확인하여 초기화되지 않은 계정인지 검증합니다.
+
+```rust
+#[account(zero_copy)]
+pub struct Data {
+    // 10,485,780 바이트 - 8 바이트 계정 디스크리미네이터
+    pub data: [u8; 10_485_752],
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(zero)]
+    pub data_account: AccountLoader<'info, Data>,
+}
+```
+
+두 초기화 방법 모두 `load_init()`을 호출하여 계정 데이터에 대한 가변 참조(Mutable reference)를 얻고 계정 디스크리미네이터를 설정해야 합니다.
+
+```rust
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    let account = &mut ctx.accounts.data_account.load_init()?;
+
+    // 여기서 계정 데이터를 설정하세요.
+    // account.data = ...;
+
+    Ok(())
+}
+```
+
+### 제로 카피 계정 로딩
+
+초기화가 완료되면 `load()`를 사용하여 계정 데이터를 읽을 수 있습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct ReadOnly<'info> {
+    pub data_account: AccountLoader<'info, Data>,
+}
+
+pub fn read_only(ctx: Context<ReadOnly>) -> Result<()> {
+    let account = &ctx.accounts.data_account.load()?;
+
+    // 여기서 데이터를 읽으세요.
+    // let value = account.data;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Working with Raw CPIs" id="working-with-raw-cpis" level="h2" />
+
+## 로우 CPI(Raw CPIs) 다루기
+
+Anchor는 교차 프로그램 호출(CPI)의 복잡성을 추상화하지만, 솔라나 심화 개발을 위해서는 그 이면의 메커니즘을 이해하는 것이 중요합니다.
+
+모든 명령은 세 가지 핵심 요소로 구성됩니다: `program_id`, `accounts` 배열, 그리고 솔라나 런타임이 `sol_invoke` 시스템 호출을 통해 처리하는 `instruction_data` 바이트입니다.
+
+시스템 수준에서 솔라나는 이 시스템 호출을 통해 CPI를 실행합니다:
+
+```rust
+/// 서명된 명령을 호출하기 위한 솔라나 BPF 시스템 호출.
+fn sol_invoke_signed_c(
+    instruction_addr: *const u8,
+    account_infos_addr: *const u8,
+    account_infos_len: u64,
+    signers_seeds_addr: *const u8,
+    signers_seeds_len: u64,
+) -> u64;
+```
+
+런타임은 명령 데이터와 계정 정보에 대한 포인터를 전달받아, 해당 입력을 사용하여 대상 프로그램을 실행합니다.
+
+솔라나 원시 프리미티브(Primitives)를 사용하여 Anchor 프로그램을 호출하는 방법은 다음과 같습니다:
+
+```rust
+pub fn manual_cpi(ctx: Context<MyCpiContext>) -> Result<()> {
+    // 명령 디스크리미네이터 생성 (SHA256 해시의 앞 8바이트)
+    let discriminator = sha256("global:instruction_name")[0..8];
+    
+    // 전체 명령 데이터 빌드
+    let mut instruction_data = discriminator.to_vec();
+    instruction_data.extend_from_slice(&[추가_명령_데이터]); // 명령 파라미터들
+    
+    // 대상 프로그램에 대한 계정 메타데이터 정의
+    let accounts = vec![
+        AccountMeta::new(ctx.accounts.account_1.key(), true),           // 서명자 + 쓰기 가능
+        AccountMeta::new_readonly(ctx.accounts.account_2.key(), false), // 읽기 전용
+        AccountMeta::new(ctx.accounts.account_3.key(), false),          // 쓰기 가능
+    ];
+    
+    // 시스템 호출을 위한 계정 정보 수집
+    let account_infos = vec![
+        ctx.accounts.account_1.to_account_info(),
+        ctx.accounts.account_2.to_account_info(),
+        ctx.accounts.account_3.to_account_info(),
+    ];
+    
+    // 명령(Instruction) 생성
+    let instruction = solana_program::instruction::Instruction {
+        program_id: target_program::ID,
+        accounts,
+        data: instruction_data,
+    };
+    
+    // CPI 실행
+    solana_program::program::invoke(&instruction, &account_infos)?;
+    
+    Ok(())
+}
+
+// PDA로 서명된 CPI의 경우 invoke_signed를 사용합니다:
+pub fn pda_signed_cpi(ctx: Context<PdaCpiContext>) -> Result<()> {
+    // ... 명령 구성은 위와 동일 ...
+    
+    let signer_seeds = &[
+        b"seed",
+        &[bump],
+    ];
+    
+    solana_program::program::invoke_signed(
+        &instruction,
+        &account_infos,
+        &[signer_seeds],
+    )?;
+    
+    Ok(())
+}
+```
+
+### 다른 Anchor 프로그램으로의 CPI
+
+Anchor의 `declare_program!()` 매크로는 대상 프로그램을 의존성으로 추가하지 않고도 타입 안전(Type-safe)한 교차 프로그램 호출을 가능하게 합니다. 이 매크로는 프로그램의 IDL로부터 Rust 모듈을 생성하여, 원활한 프로그램 상호작용을 위한 CPI 헬퍼와 계정 타입을 제공합니다.
+
+대상 프로그램의 IDL 파일을 프로젝트 구조 내의 `/idls` 디렉토리에 배치합니다:
+
+```text
+project/
+├── idls/
+│   └── target_program.json
+├── programs/
+│   └── your_program/
+└── Cargo.toml
+```
+
+그 다음 매크로를 사용하여 필요한 모듈을 생성합니다:
+
+```rust
+use anchor_lang::prelude::*;
+
+declare_id!("YourProgramID");
+
+// IDL로부터 모듈 생성
+declare_program!(target_program);
+
+// 생성된 타입 임포트
+use target_program::{
+    accounts::Counter,             // 계정 타입
+    cpi::{self, accounts::*},      // CPI 함수 및 계정 구조체
+    program::TargetProgram,        // 유효성 검사를 위한 프로그램 타입
+};
+
+#[program]
+pub mod your_program {
+    use super::*;
+
+    pub fn call_other_program(ctx: Context<CallOtherProgram>) -> Result<()> {
+        // CPI 컨텍스트 생성
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.target_program.to_account_info(),
+            Initialize {
+                payer: ctx.accounts.payer.to_account_info(),
+                counter: ctx.accounts.counter.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            },
+        );
+
+        // 생성된 헬퍼를 사용하여 CPI 실행
+        target_program::cpi::initialize(cpi_ctx)?;
+        
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct CallOtherProgram<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub counter: Account<'info, Counter>,  // 생성된 계정 타입 사용
+    pub target_program: Program<'info, TargetProgram>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+> `Cargo.toml`의 `[dependencies]`에 `callee = { path = "../callee", features = ["cpi"] }`를 추가하여 다른 Anchor 프로그램으로 CPI를 보낼 수도 있습니다. 그 후 `anchor build -- --features cpi`로 빌드하고 `callee::cpi::<instruction>()`을 사용하면 됩니다. 하지만 이는 **순환 의존성(Circular dependency)** 에러를 발생시킬 수 있으므로 권장되지 않습니다.
+```

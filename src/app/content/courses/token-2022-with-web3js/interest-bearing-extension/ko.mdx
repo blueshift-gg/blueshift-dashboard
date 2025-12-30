@@ -1,0 +1,140 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# InterestBearing 확장
+
+`InterestBearing` 확장은 사용자가 토큰에 이자율을 적용하고, 언제든지 이자가 포함된 업데이트된 총액을 조회할 수 있게 해주는 `Mint` account 확장입니다.
+
+<ArticleSection name="Mint Account 초기화" id="initializing-the-mint-account" level="h2" />
+
+`Mint` account에서 `InterestBearing` 확장을 초기화하려면 `interestBearingMint()` 함수가 필요합니다.
+
+`Interest Bearing` 확장을 사용하여 민트를 생성하는 방법은 다음과 같습니다:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeInterestBearingMintInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Interest Bearing extension
+const mintLen = getMintLen([ExtensionType.InterestBearingConfig]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Interest Bearing extension
+const initializeMintInterestBearing = createInitializeInterestBearingMintInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    500,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintNonTransferable,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="이자 계산" id="calculating-the-interest" level="h2" />
+
+`InterestBearing` 확장은 새로운 토큰을 생성하지 않습니다. 표시되는 금액은 `amount_to_ui_amount` 함수를 통해 누적된 이자를 포함할 뿐이며, 이는 순전히 시각적인 변화입니다.
+
+따라서 이자를 계산하려는 `Token` account를 `unpacking`한 후, 이자 금액을 계산하는 데 필요한 모든 정보를 쉽게 얻을 수 있습니다.
+
+다행히 우리는 그렇게 할 필요도 없습니다. 다음과 같이 `amountToUiAmount` 함수를 사용할 수 있기 때문입니다:
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="Interest Bearing 확장 업데이트" id="updating-the-interest-bearing-extension" level="h2" />
+
+`InterestBearing` 확장을 사용하면 데이터가 다음과 같이 구조화되어 있기 때문에 token account에서 생성되는 이자를 변경할 수 있습니다:
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+이를 위해 다음과 같이 `updateRateInterestBearingMint` 함수를 사용할 수 있습니다:
+
+```ts
+const updateRateInstruction = await createUpdateRateInterestBearingMintInstruction(
+    mint.publicKey,
+    newRateAuthority.publicKey,
+    1000, // updated rate
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```
+
+그리고 원한다면, `setAuthority` 함수를 사용하고 올바른 `AuthorityType`을 다음과 같이 전달하여 이자 설정 권한을 변경할 수 있습니다:
+
+```ts
+const setAuthorityInstruction = await createSetAuthorityInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    AuthorityType.InterestRate,
+    newRateAuthority.publicKey,
+    [],
+    TOKEN_2022_PROGRAM_ID,
+);
+```

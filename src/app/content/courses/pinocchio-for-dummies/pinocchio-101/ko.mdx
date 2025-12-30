@@ -1,0 +1,197 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Pinocchio 101
+
+![Pinocchio 소개](/graphics/course-banners/introduction-to-pinocchio.png)
+
+<ArticleSection name="Pinocchio란 무엇인가" id="what-is-pinocchio" level="h2" />
+
+대부분의 Solana 개발자들이 Anchor에 의존하지만, Anchor 없이 프로그램을 작성하는 데는 여러 가지 좋은 이유가 있습니다. 어쩌면 모든 account 필드에 대한 더 세밀한 제어가 필요하거나, 최대 성능을 추구하거나, 단순히 매크로를 피하고 싶을 수도 있습니다.
+
+Anchor와 같은 프레임워크 없이 Solana 프로그램을 작성하는 것을 **네이티브 개발**이라고 합니다. 이는 더 까다롭지만, 이 코스에서는 Pinocchio를 사용하여 Solana 프로그램을 처음부터 만드는 방법을 배우게 될 것입니다. Pinocchio는 외부 프레임워크를 건너뛰고 코드의 모든 바이트를 직접 제어할 수 있게 해주는 경량 라이브러리입니다.
+
+Pinocchio는 무거운 `solana-program` crate를 가져오지 않고도 Solana 프로그램을 만들 수 있게 해주는 최소주의 Rust 라이브러리입니다. 이는 수신되는 트랜잭션 payload(accounts, instruction 데이터, 모든 것)를 단일 byte 슬라이스로 처리하고 zero-copy 기법을 통해 그 자리에서 직접 읽어옵니다.
+
+### 주요 장점
+
+이 최소주의 디자인은 세 가지 큰 이점을 제공합니다.
+- 더 적은 compute unit. 추가적인 deserialization이나 메모리 복사 없음.
+- 더 작은 바이너리. 더 간결한 코드 경로는 온체인에서 더 가벼운 `.so`를 의미합니다.
+- Zero dependency 지연. 업데이트(또는 문제 발생)할 외부 crate 없음.
+
+이 프로젝트는 [Anza](https://www.anza.xyz)의 [Febo](https://x.com/0x_febo)가 Solana 생태계와 Blueshift 팀의 핵심 기여로 시작했으며, [여기](https://github.com/anza-xyz/pinocchio)에서 찾아볼 수 있습니다.
+
+핵심 crate와 함께 `pinocchio-system`과 `pinocchio-token`을 찾을 수 있는데, 이는 Solana의 네이티브 System 및 SPL-Token 프로그램에 대한 zero-copy 헬퍼와 CPI 유틸리티를 제공합니다.
+
+### 네이티브 개발
+
+네이티브 개발이 어렵게 들릴 수 있지만, 바로 이 챕터가 존재하는 이유입니다. 이 챕터를 마치면 프로그램 경계를 넘나드는 모든 byte와 논리를 간결하고, 안전하며, 빠르게 유지하는 방법을 이해하게 될 것입니다.
+
+Anchor는 Solana 프로그램 구축의 핵심인 accounts, instruction 데이터 및 오류 처리와 관련된 반복적인 코드(boilerplate)를 단순화하기 위해 **프로시저 및 파생 매크로**를 사용합니다.
+
+네이티브로 전환한다는 것은 더 이상 그 사치를 누릴 수 없으며, 다음을 수행해야 함을 의미합니다.
+- 다양한 Instruction을 위한 자체 Discriminator와 Entrypoint를 생성해야 합니다.
+- 자체 Account, Instruction 및 deserialization 로직을 생성해야 합니다.
+- 이전에는 Anchor가 처리해주던 모든 보안 검사를 직접 구현해야 합니다.
+
+**참고**: Pinocchio 프로그램을 구축하기 위한 "프레임워크"는 아직 없습니다. 이러한 이유로 저희의 경험을 바탕으로 Pinocchio 프로그램을 작성하는 가장 좋은 방법을 제시하고자 합니다.
+
+<ArticleSection name="Entrypoint" id="entrypoint" level="h2" />
+
+Anchor에서 `#[program]` 매크로는 많은 내부 연결을 숨깁니다. 내부적으로는 모든 instruction 및 accounts struct에 대해 8-byte discriminator(버전 0.31부터 크기 사용자 지정 가능)를 구축합니다.
+
+<AnchorDiscriminatorCalculator value={"Test"} />
+
+네이티브 프로그램은 일반적으로 더 간결하게 유지합니다. 단일 byte discriminator(값 0x01…0xFF)는 최대 255개의 instruction에 충분하며, 이는 대부분의 사용 사례에 충분합니다. 더 많은 것이 필요한 경우, 2-byte 변형으로 전환하여 65,535가지 가능한 변형으로 확장할 수 있습니다.
+
+`entrypoint!` 매크로는 프로그램 실행이 시작되는 지점입니다. 세 가지 원시 슬라이스를 제공합니다.
+- **program_id**: 배포된 프로그램의 public key
+- **accounts**: instruction에 전달된 모든 account
+- **instruction_data**: discriminator와 사용자 제공 데이터를 포함하는 불투명한 byte 배열
+
+이는 entrypoint 이후에 적절한 핸들러(`process_instruction`이라고 부를 것입니다)를 통해 모든 다른 instruction을 실행하는 패턴을 만들 수 있음을 의미합니다. 일반적인 모습은 다음과 같습니다.
+
+```rust
+entrypoint!(process_instruction);
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {    
+    match instruction_data.split_first() {
+        Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
+        Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+내부적으로 이 핸들러는 다음을 수행합니다.
+1. `split_first()`를 사용하여 discriminator byte를 추출합니다.
+2. `match`를 사용하여 어떤 instruction struct를 인스턴스화할지 결정합니다.
+3. 각 instruction의 `try_from` 구현은 입력을 검증하고 deserialization합니다.
+4. `process()` 호출은 비즈니스 로직을 실행합니다.
+
+### `solana-program`과 `pinocchio`의 차이점
+
+주요 차이점과 최적화는 `entrypoint()`가 동작하는 방식에 있습니다.
+- Standard Solana entrypoint는 런타임이 입력 데이터를 미리 deserialization하여 메모리에 소유된 데이터 구조를 생성하는 전통적인 serialization 패턴을 사용합니다. 이 접근 방식은 Borsh serialization을 광범위하게 사용하고, deserialization 중에 데이터를 복사하며, 구조화된 데이터 유형을 위한 메모리를 할당합니다.
+- Pinocchio entrypoint는 입력 byte 배열에서 데이터를 직접 읽어 복사 없이 zero-copy 작업을 구현합니다. 이 프레임워크는 원본 데이터를 참조하는 zero-copy 타입을 정의하고, serialization/deserialization 오버헤드를 제거하며, 추상화 계층을 피하기 위해 직접 메모리 접근을 사용합니다.
+
+<ArticleSection name="Accounts 및 Instructions" id="accounts-and-instructions" level="h2" />
+
+매크로가 없으며, 프로그램을 간결하고 효율적으로 유지하기 위해 매크로를 피하고 싶기 때문에 instruction 데이터와 accounts의 모든 byte는 수동으로 검증되어야 합니다.
+
+이 과정을 체계적으로 유지하기 위해, 매크로 없이 Anchor 스타일의 사용 편의성을 제공하는 패턴을 사용하며, Rust의 `TryFrom` trait를 구현하여 실제 `process()` 메서드를 거의 반복적인 코드 없이 유지합니다.
+
+### TryFrom 트레이트
+
+`TryFrom`은 Rust의 표준 변환 계열의 일부입니다. 변환이 실패할 수 없다고 가정하는 `From`과는 달리, `TryFrom`은 `Result`를 반환하여 오류를 조기에 표면화할 수 있게 합니다. 이는 온체인 검증에 완벽합니다.
+
+이 트레이트는 다음과 같이 정의됩니다.
+
+```rust
+pub trait TryFrom<T>: Sized {
+    type Error;
+    fn try_from(value: T) -> Result<Self, Self::Error>;
+}
+```
+
+Solana 프로그램에서 우리는 `TryFrom`을 구현하여 원시 account 슬라이스(필요한 경우 instruction bytes)를 강력한 타입의 struct로 변환하고 모든 제약 조건을 적용합니다.
+
+<ArticleSection name="Accounts 검증" id="accounts-validation" level="h2" />
+
+우리는 일반적으로 이중 borrow가 필요 없는 모든 특정 검사(account 검증 및 잠재적으로 process에서 모두 빌리는 것)를 각 `TryFrom` 구현에서 처리합니다. 이는 모든 instruction 로직이 발생하는 `process()` 함수를 가능한 한 깔끔하게 유지합니다.
+
+우리는 Anchor의 `Context`와 유사하게, instruction에 필요한 account struct를 구현하는 것으로 시작합니다.
+
+**참고**: Anchor와 달리, 이 account struct에서는 process에서 사용하고자 하는 accounts만 포함하며, instruction에 필요하지만 사용되지 않을 나머지 accounts(예: `SystemProgram`)는 `_`로 표시합니다.
+
+`Vault`와 같은 경우, 다음과 같습니다.
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+```
+
+이제 어떤 accounts를 instruction에서 사용할지 알았으므로, `TryFrom` trait를 사용하여 deserialization하고 필요한 모든 검사를 수행할 수 있습니다.
+
+```rust
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        // 1. 슬라이스 구조 분해
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // 2. 커스텀 검사
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // 3. 검증된 struct 반환
+        Ok(Self { owner, vault })
+    }
+}
+```
+
+보시다시피, 이 instruction에서는 `SystemProgram` CPI를 사용하여 owner에서 vault로 lamports를 전송할 것이지만, instruction 자체에서 SystemProgram을 사용할 필요는 없습니다. 프로그램은 그저 instruction에 포함되기만 하면 되므로, `_`로 전달할 수 있습니다.
+
+그런 다음 Anchor의 `Signer` 및 `SystemAccount` 검사와 유사하게 accounts에 대한 커스텀 검사를 수행하고, 검증된 struct를 반환합니다.
+
+<ArticleSection name="Instruction 검증" id="instruction-validation" level="h2" />
+
+Instruction 검증은 account 검증과 유사한 패턴을 따릅니다. `TryFrom` trait를 사용하여 instruction 데이터를 강력한 타입의 struct로 검증하고 deserialization하며, `process()`에 있는 비즈니스 로직을 깔끔하고 집중적으로 유지합니다.
+
+instruction 데이터를 나타내는 struct를 정의하는 것부터 시작합시다.
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+```
+
+그런 다음 instruction 데이터를 검증하고 구조화된 타입으로 변환하기 위해 `TryFrom`을 구현합니다. 여기에는 다음이 포함됩니다.
+1. 데이터 길이가 예상 크기와 일치하는지 확인합니다.
+2. byte 슬라이스를 구체적인 타입으로 변환합니다.
+3. 필요한 모든 검증을 수행합니다.
+
+구현은 다음과 같습니다.
+
+```rust
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        // 1. 데이터 길이가 u64(8 bytes)와 일치하는지 확인
+        if data.len() != core::mem::size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        // 2. byte 슬라이스를 u64로 변환
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // 3. amount 검증 (예: 0이 아닌지 확인)
+        if amount == 0 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+
+이 패턴을 통해 다음을 수행할 수 있습니다.
+- 비즈니스 로직에 도달하기 전에 instruction 데이터를 검증합니다.
+- 검증 로직을 핵심 기능과 분리합니다.
+- 검증 실패 시 명확한 오류 메시지를 제공합니다.
+- 프로그램 전체에서 타입 안전성을 유지합니다.

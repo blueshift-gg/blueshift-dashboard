@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metaplex 토큰 메타데이터 프로그램
+
+Metaplex 토큰 메타데이터 프로그램은 대체 가능(fungible) 토큰과 대체 불가능(non-fungible) 토큰 모두에 풍부한 설명 데이터를 첨부할 수 있게 함으로써 SPL-Token 프로그램의 근본적인 한계를 해결합니다.
+
+SPL-Token 프로그램은 소유권 및 공급과 같은 핵심 토큰 메커니즘을 효율적으로 처리하지만, 메타데이터가 없는 토큰은 지갑(wallet) 및 탐색기(explorer)에서 익명의 공개 키로 표시됩니다.
+
+Metaplex는 애플리케이션과 사용자가 필요로 하는 문맥 정보를 제공하여 이러한 기본적인 블록체인 항목을 의미 있는 디지털 자산으로 변환합니다.
+
+<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+
+`Metadata` 계정은 블록체인 토큰에 문맥과 유용성을 제공하는 설명 계층으로 기능합니다. 이 계정 구조는 Solana의 Program Derived Address (PDA) 시스템을 사용하여 각 토큰과 그 관련 정보 간의 신뢰할 수 있는 관계를 생성합니다.
+
+결정론적 주소 생성은 모든 mint 계정이 정확히 하나의 해당 metadata 계정을 갖도록 보장하여, 명확한 데이터 소유권을 확립하고 충돌을 방지합니다.
+
+`Metadata` 계정은 특정 seed 값과 mint 계정의 공개 키를 결합하는 결정론적 프로세스를 사용하여 주소를 파생합니다.
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+
+let (metadata, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(),
+        &ID,
+        mint.as_ref()
+    ],
+    &ID
+);
+```
+
+`Metadata` 계정은 기본적인 토큰 식별자를 훨씬 넘어서는 포괄적인 정보를 저장합니다.
+
+창작자(creator) 검증 시스템은 토큰 창작자 목록을 유지하며, 각 창작자는 진정한 창작자 권한 부여의 암호화 증명을 제공하는 검증된 속성을 가집니다. 이 검증은 사칭을 방지하고 디지털 자산에 대한 신뢰할 수 있는 출처 추적을 확립합니다.
+
+통합된 로열티(royalty) 시스템은 각 창작자에게 할당된 지분 속성을 통해 자동화된 수익 분배를 가능하게 합니다. 마켓플레이스는 이러한 비율을 프로그램적으로 참조하여 미리 정해진 합의에 따라 2차 판매 수익을 분배할 수 있으며, 수동 계산과 신뢰 의존성을 제거합니다.
+
+이는 창작자가 초기 판매 이후에도 자신의 작업에서 계속 수익을 얻는 지속 가능한 경제 모델을 만듭니다.
+
+토큰 메타데이터 프로그램은 원시 블록체인 데이터와 사용자가 접근할 수 있는 디지털 자산 간의 격차를 성공적으로 연결합니다. mint 계정에 풍부한 문맥 정보를 추가함으로써, 프로그램은 애플리케이션이 토큰을 의미 있는 방식으로 표시하고, 분류하고, 상호 작용할 수 있도록 합니다.
+
+이 metadata 계층은 오늘날 Solana에 존재하는 다양한 디지털 자산 생태계의 기반을 제공합니다.
+
+<ArticleSection name="Master Edition Account" id="master-edition-account" level="h2" />
+
+`Metadata` 계정이 대체 가능 및 대체 불가능 토큰 모두에 효과적으로 사용되지만, 진정한 NFT 특성을 보장하기 위해서는 추가적인 제어 메커니즘이 필요합니다.
+
+`Master Edition` 계정은 토큰 권한 관리를 관장하는 특수 PDA로서 이러한 필요를 충족시킵니다. 이 계정은 Token Metadata 프로그램이 적절한 대체 불가능 토큰 속성이 확립되었음을 확인한 후에만 생성됩니다.
+
+Master Edition 시스템은 권한 관리에 대한 정교한 접근 방식을 사용합니다. mint 권한을 영구적으로 파괴하는 대신, 프로그램은 mint 및 freeze 권한을 모두 Master Edition PDA로 이전합니다. 이러한 설계는 토큰 생성 및 관리에 대한 엄격한 통제를 유지하면서, 영구적으로 무효화된 권한에 비해 향상된 보안과 기능을 제공합니다.
+
+> 이 선택의 이유를 이해하려면 [FAQ](https://developers.metaplex.com/token-metadata/faq#why-are-the-mint-and-freeze-authorities-transferred-to-the-edition-pda)를 읽어보십시오.
+
+`Master Edition` 계정의 seed는 다음과 같습니다:
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const EDITION: &str = "edition";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(),
+        &ID,
+        mint.as_ref()
+        EDITION.as_bytes(),
+    ],
+    &ID
+);
+```
+
+<ArticleSection name="Programmable NFTs" id="programmable-nfts" level="h2" />
+
+프로그래밍 가능한 NFT (pNFT)는 프로토콜 수준에서 사용자 정의 가능한 동작과 제한을 강제하는 고급 토큰 표준을 나타냅니다.
+
+이 자산 클래스는 창작자가 토큰 상호 작용 시 자동으로 실행되는 특정 수명 주기 규칙을 정의할 수 있도록 하여, 외부 강제 메커니즘에 의존하지 않고 창작자의 규정 준수를 보장함으로써 기존 NFT의 한계를 해결합니다.
+
+강제(enforcement) 아키텍처는 동결된 토큰 계정 시스템을 통해 작동합니다. NFT가 프로그래밍 가능해지면, 관련 토큰 계정은 영구적으로 동결되며, 모든 작업은 Token Metadata 프로그램을 통해 라우팅되어야 합니다.
+
+이러한 설계는 모든 작업이 진행되기 전에 규칙이 검증되는 필수 유효성 검사 체크포인트를 생성하여, 창작자가 정의한 제한을 우회하는 것을 불가능하게 만듭니다.
+
+창작자가 정의한 규칙은 `Token Record` 계정에 연결된 `RuleSet` 계정 내에 저장됩니다. `Token Record`는 프로그래밍 가능한 NFT 상태를 나타내는 mint와 연결된 새로운 계정 유형입니다.
+
+`Token Record` 계정은 mint 및 토큰 계정 모두에 연결되는 특정 seed를 사용하여 주소를 파생합니다.
+
+```rust
+const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+const PREFIX: &str = "metadata";
+const TOKEN_RECORD_SEED: &str = "token_record";
+
+
+let (master_edition, _) = Pubkey::find_program_address(
+    &[
+        PREFIX.as_bytes(),
+        &ID,
+        mint.as_ref()
+        TOKEN_RECORD_SEED.as_bytes(),
+        token.as_ref(),
+    ],
+    &ID
+);
+```
+
+이러한 `RuleSet`은 로열티 지불을 존중하는 마켓플레이스 허용 목록(allowlists), 전송을 위한 다중 서명 요구 사항, 작업에 대한 시간 기반 제한, 또는 복잡한 승인 워크플로우를 포함한 정교한 조건부 로직을 가능하게 합니다.
+
+[Token Auth Rules](https://developers.metaplex.com/token-auth-rules) 프로그램은 이러한 `RuleSet` 계정을 관리하고 유효성 검사 로직을 처리하며, 맞춤형 거버넌스 메커니즘을 구현하기 위한 유연한 프레임워크를 제공합니다.
+
+pNFT와의 개발자 상호 작용은 직접적인 SPL-Token 프로그램 대신 Token Metadata의 프로그램을 통해 이루어집니다. 이 프로그램은 `CreateMetadataAccount` 및 `UpdateMetadata`와 같은 전통적인 작업을 대체하는 `Create` 및 `Update`와 같은 간소화된 지침을 제공합니다.
+
+각 지침은 해당 `RuleSet`을 참조하는 `authorization_rules` 계정 매개변수를 필요로 하며, 이는 온체인 파생 또는 Metaplex Read API를 통해 발견할 수 있습니다.
+
+이 프로그래밍 가능한 프레임워크는 창작자가 강제 집행이 보장되는 미묘한 경제 모델 및 거버넌스 구조를 구현할 수 있도록 합니다.
+
+조건부 전송, 동적 로열티 구조, 또는 복잡한 소유권 요구 사항을 구현하든지 간에, pNFT는 마켓플레이스 협력이나 자발적인 사용자 준수에 의존하지 않고 모든 동작이 프로토콜 수준에서 자동으로 실행되도록 보장합니다.
+
+> `Token Metadata` 프로그램을 사용하는 방법에 대해 더 자세히 알아보려면 [공식 문서](https://developers.metaplex.com/token-metadata)를 참조하십시오.

@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Anchor를 사용한 Instruction Introspection
+
+`Instruction` sysvar에 대한 내장 헬퍼는 Anchor에 없지만, `solana_program` crate의 모든 타입과 함수는 Anchor에서 기본적으로 지원됩니다.
+
+Anchor에서 Instruction Introspection을 사용하려면 프로젝트에 `solana_program` crate를 추가해야 합니다.
+
+```sh
+cargo add solana-program
+```
+
+crate를 추가한 후, 다음과 같이 임포트하여 필요한 함수에 접근할 수 있습니다.
+
+```rust
+use solana_program::sysvar::instructions::{
+    self,
+    load_current_index_checked,
+    load_instruction_at_checked
+};
+```
+
+<ArticleSection name="How to use Introspection" id="how-to-use-introspection" level="h2" />
+
+서론에서 언급했듯이, Instruction Introspection은 `Instruction` sysvar account의 데이터를 역직렬화하여 transaction 내의 instruction에 대한 세부 정보를 제공합니다.
+
+`load_instruction_at_checked` 함수가 역직렬화되는 account가 올바른 것인지 확인하지만, account struct에 추가적인 검사를 포함하는 것이 좋은 관행입니다.
+
+```rust
+#[account(address = instructions::ID)]
+/// CHECK: InstructionsSysvar account
+instructions: UncheckedAccount<'info>,
+```
+
+이제 Instruction Introspection 작업을 시작할 수 있습니다.
+
+먼저, `load_current_index_checked` 함수를 사용하여 현재 instruction의 인덱스를 확인합니다.
+
+```rust
+// Check the index of the currently executing instruction. This could be in a different position than [0]).
+let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
+```
+
+다음으로, `load_instruction_at_checked`를 사용하여 상대적인 인덱스에 있는 instruction을 확인할 수 있습니다. 여기서는 현재 instruction 바로 뒤에 오는 instruction을 확인합니다.
+
+```rust
+// Load the next instruction to check its input.
+let ix = load_instruction_at_checked(index as usize + 1, &ctx.accounts.instructions.to_account_info())?;
+```
+
+다음 단계로 넘어가기 전에, 악의적인 공격을 방지하는 데 어떤 정보가 필수적인지 고려하는 것이 중요합니다.
+
+우리는 일반적으로 호출되는 프로그램이 예상했던 것인지 확인하는 것부터 시작합니다. 이 예시에서는 동일한 프로그램의 다른 instruction을 인트로스펙션하고 있습니다.
+
+```rust
+require_keys_eq!(ix.program_id, ID, EscrowError::InvalidProgram);
+```
+
+다음으로, 해당 instruction이 예상한 것인지 확인합니다. 이를 위해 instruction의 discriminator를 예상 값과 비교합니다. 이 경우, 다른 Anchor instruction이므로 다음과 같이 할 수 있습니다.
+
+```rust
+require!(ix.data[0..8].eq(instruction::TakeEnd::DISCRIMINATOR.as_slice()), EscrowError::InvalidIx);
+```
+
+> Anchor는 `Discriminator` 트레이트인 `anchor_lang::Discriminator`를 instruction에 직접 제공하여 이 작업을 더 쉽게 만듭니다.
+
+그런 다음, 확인 중인 instruction의 로직을 기반으로 더 많은 프로그램별 검사를 수행할 수 있습니다.
+
+이 예시에서는 instruction data (amount)가 올바른지 확인합니다. instruction data는 항상 discriminator 다음에 역직렬화되므로 다음과 같이 할 수 있습니다.
+
+```rust
+require!(ix.data[8..16].eq(&escrow.take_amount.to_le_bytes()), EscrowError::InvalidAmount);
+```
+
+마지막으로, 인트로스펙션된 instruction에 존재하는 account들을 확인합니다. 이 단계에서는 특정 인덱스에 있는 account의 data 또는 public key를 요청하게 되므로 `Account` struct의 정확한 구조를 알아야 합니다.
+
+```rust
+let maker_ata = get_associated_token_address(&ctx.accounts.maker.key(), &escrow.mint_b);
+require_keys_eq!(ix.accounts.get(3).unwrap().pubkey, maker_ata, EscrowError::InvalidMakerATA);
+```

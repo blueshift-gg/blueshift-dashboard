@@ -1,0 +1,119 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# PDA 공유
+
+PDA 공유 공격은 여러 사용자 또는 도메인에 걸쳐 동일한 PDA(Program Derived Address)를 사용하는 프로그램을 악용하여, 공격자가 자신에게 속하지 않은 자금, 데이터 또는 권한에 접근할 수 있도록 합니다. 프로그램 전체 작업에 전역 PDA를 사용하는 것이 간결해 보일 수 있지만, 이는 한 사용자의 행동이 다른 사용자의 자산에 영향을 미칠 수 있는 위험한 교차 오염을 야기합니다.
+
+이 취약점은 PDA를 파생할 때 시드(seed)의 특정성(specificity)이 불충분하다는 점에서 비롯됩니다. 여러 account가 동일한 PDA 권한을 공유할 때, 프로그램은 합법적인 접근 시도와 불법적인 접근 시도를 구별할 수 없게 됩니다. 공격자는 동일한 공유 PDA를 참조하는 자신의 account를 생성한 다음, 해당 PDA의 서명 권한을 사용하여 다른 사용자의 자산을 조작할 수 있습니다.
+
+이는 PDA가 토큰 vault, 사용자 잔액 또는 출금 권한을 제어하는 DeFi 프로토콜에서 특히 치명적입니다. 공유 PDA는 본질적으로 여러 사용자의 자산을 잠금 해제하는 마스터 키를 생성하여, 개별 사용자 작업을 전체 프로토콜에 대한 잠재적인 공격으로 변모시킵니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+서명을 위해 mint 기반 PDA를 사용하는 이 취약한 출금 시스템을 고려해 보십시오.
+
+```rust
+#[program]
+pub mod insecure_withdraw{
+    use super::*;
+    //..
+
+    pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+
+        //..
+        // other conditions/actions...
+        //..
+
+        let amount = ctx.accounts.vault.amount;
+        
+        let seeds = &[
+            ctx.accounts.pool.mint.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+
+        transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.withdraw_destination.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+            ),
+            &amount,
+            seeds,
+        )?;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        seeds = [b"pool", pool.mint.as_ref()],
+        bump = pool.bump,                                        
+    )]
+    pool: Account<'info, TokenPool>,
+    vault: Account<'info, TokenAccount>,
+    withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // other accounts..
+    //..
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool {
+    pub mint: Pubkey,
+    pub bump: u8,
+}
+```
+
+이 코드에는 치명적인 결함이 있습니다. PDA가 오직 mint address만을 사용하여 파생된다는 점입니다. 이는 동일한 토큰 유형의 모든 vault가 동일한 서명 권한을 공유하여, 위험한 공격 벡터를 생성한다는 것을 의미합니다.
+
+공격자는 다음을 통해 이를 악용할 수 있습니다.
+* 동일한 mint에 대해 자신의 vault를 생성합니다.
+* 자신의 address를 `withdraw_destination`으로 하여 instruction을 호출합니다.
+* 공유 PDA 권한을 사용하여 동일한 mint를 사용하는 모든 vault에서 토큰을 출금합니다.
+* 다른 사용자의 자금을 자신의 목적지로 유출시킵니다.
+
+공격이 성공하는 이유는 PDA 권한이 다른 pool 인스턴스를 구별하지 못하고, 오직 mint 유형에만 관심을 가질 뿐, 해당 자금에 접근해야 하는 특정 사용자에게는 관심을 두지 않기 때문입니다.
+
+가능한 해결책은 PDA를 개별 사용자 및 목적지에 특화시키고 Anchor의 seed 및 bump 제약 조건을 사용하여 PDA 파생을 검증하는 것입니다.
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        has_one = vault,
+        has_one = withdraw_destination,
+        seeds = [b"pool", vault.key().as_ref(), withdraw_destination.key().as_ref()],
+        bump = pool.bump,                                        
+    )]
+    pool: Account<'info, TokenPool>, // Authority for the vault
+    #[account(mut)]
+    vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // other accounts..
+    //..
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool{
+    pub vault:Pubkey,
+    pub withdraw_destination:Pubkey,
+    pub bump:u8
+}
+```
+
+instruction 핸들러에도 동일한 변경 사항이 적용됩니다. 이러한 변경이 유효할 수 있는 한 가지 가능한 상황은 레버리지 트레이딩 프로그램으로, 사용자가 특정 금액을 손실했을 때(예: 스스로 손절매를 설정했을 때) 거래를 청산할 수 있도록 허용합니다. 그러면 코드는 해당 금액 도달 조건을 확인하고, 누구든지 거래를 중단하고 남은 자금을 목적지인 출금 account로 출금할 수 있도록 허용합니다.
+
+특정 mint의 모든 자금을 제어하는 단일 PDA는 만약 여러 사용자가 동시에 조건(예: 많은 사용자가 손절매/청산에 가까워지는 경우)을 충족했을 때, 한 명의 사용자라도 해당 모든 사용자의 자금을 출금할 수 있는 상황을 만들 수 있습니다. 이는 하나 이상의 트랜잭션 내에서 여러 instruction을 통해 다른 사용자들을 위해 이러한 작업을 수행하는 방식으로 가능합니다.

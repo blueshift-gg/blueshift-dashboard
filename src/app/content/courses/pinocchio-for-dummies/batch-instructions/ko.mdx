@@ -1,0 +1,120 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 배치 명령어
+
+교차 프로그램 호출(CPI)은 호출당 1,000 compute unit의 기본 비용이 발생합니다. 동일한 명령어 내에서 빈번한 CPI를 수신하는 프로그램의 경우, 이 오버헤드는 상당한 성능 병목 현상이 됩니다.
+
+이러한 비효율성을 해결하기 위해 [Dean](https://x.com/deanmlittle)은 p-token을 위한 [이 PR](https://github.com/febo/p-token/pull/7)에서 "배치" 명령어를 생성하여 단일 CPI 호출로 여러 작업을 수행할 수 있도록 했습니다.
+
+<ArticleSection name="배치 명령어" id="the-batch-instruction" level="h2" />
+
+배치 명령어는 각 작업에 대해 별도의 호출을 요구하는 대신 단일 CPI 내에서 여러 작업을 처리할 수 있도록 합니다. 이는 여러 관련 작업을 처리하는 프로그램의 compute unit 소모량을 극적으로 줄여줍니다.
+
+### 구조
+
+배치 명령어는 다음을 포함하는 개선된 헤더 구조를 사용합니다:
+- **어카운트 수**: 내부 명령어에 필요한 어카운트 수
+- **데이터 길이**: 명령어 데이터의 크기
+
+이 헤더는 단일 배치 내에서 여러 "내부" 명령어를 효율적으로 처리할 수 있게 합니다. 시스템은 각 내부 명령어를 순차적으로 반복하여 처리합니다.
+
+> `u8::MAX` (255)를 배치 명령어의 판별자로 사용합니다.
+
+<ArticleSection name="진입점 설계" id="entrypoint-design" level="h2" />
+
+진입점은 먼저 명령어 판별자를 확인하여 배치 명령어를 처리할지 일반 명령어를 처리할지 결정합니다. 이는 다른 배치 명령어 내에 배치 명령어를 중첩시키는 것을 방지하며, 이는 불안정할 것입니다.
+
+다음과 같습니다:
+
+```rust
+#[inline(always)]
+pub fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let [discriminator, remaining @ ..] = instruction_data else {
+        return Err(TokenError::InvalidInstruction.into());
+    };
+
+    let result = if *discriminator == 255 {
+        // 255 - Batch
+        #[cfg(feature = "logging")]
+        pinocchio::msg!("Instruction: Batch");
+
+        process_batch(accounts, remaining)
+    } else {
+        inner_process_instruction(accounts, instruction_data)
+    };
+
+    result.inspect_err(log_error)
+}
+```
+
+### 배치 처리
+
+`process_batch` 함수는 핵심 배치 처리 로직을 담당합니다:
+
+```rust
+/// 배치 명령어 헤더의 크기.
+///
+/// 각 명령어의 헤더는 두 개의 `u8` 값으로 구성됩니다:
+///  * 어카운트 수
+///  * 명령어 데이터의 길이
+const IX_HEADER_SIZE: usize = 2;
+
+pub fn process_batch(mut accounts: &[AccountInfo], mut instruction_data: &[u8]) -> ProgramResult {
+    loop {
+        // 명령어 데이터와 어카운트 오프셋을 검증합니다.
+
+        if instruction_data.len() < IX_HEADER_SIZE {
+            // 명령어 데이터는 최소 두 바이트를 포함해야 합니다.
+            return Err(TokenError::InvalidInstruction.into());
+        }
+
+        // SAFETY: 명령어 데이터는 최소 두 바이트 (헤더) + 한 바이트 (판별자)를 갖는 것이 보장되며,
+        // 값은 `usize`의 범위 내에 있습니다.
+        let expected_accounts = unsafe { *instruction_data.get_unchecked(0) as usize };
+        let data_offset = IX_HEADER_SIZE + unsafe { *instruction_data.get_unchecked(1) as usize };
+
+        if instruction_data.len() < data_offset || data_offset == IX_HEADER_SIZE {
+            return Err(TokenError::InvalidInstruction.into());
+        }
+
+        if accounts.len() < expected_accounts {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        }
+
+        // 명령어를 처리합니다.
+
+        // SAFETY: 명령어 데이터 및 어카운트 길이는 이미 검증되었으므로
+        // 모든 슬라이스는 유효성이 보장됩니다.
+        let (ix_accounts, ix_data) = unsafe {
+            (
+                accounts.get_unchecked(..expected_accounts),
+                instruction_data.get_unchecked(IX_HEADER_SIZE..data_offset),
+            )
+        };
+
+        inner_process_instruction(ix_accounts, ix_data)?;
+
+        if data_offset == instruction_data.len() {
+            // 배치가 완료되었습니다.
+            break;
+        }
+
+        accounts = &accounts[expected_accounts..];
+        instruction_data = &instruction_data[data_offset..];
+    }
+
+    Ok(())
+}
+```
+
+이 함수에서 일어나는 일은 다음과 같습니다:
+- **헤더 유효성 검사**: 이 함수는 명령어 데이터가 최소한 필요한 헤더 크기(2바이트)를 포함하는지 검증하는 것으로 시작합니다.
+- **어카운트 및 데이터 추출**: 예상 어카운트 수를 추출하고 데이터 오프셋을 계산하며, 미정의 동작을 방지하기 위해 이 값들을 검증합니다.
+- **명령어 처리**: 각 내부 명령어는 특정 어카운트 및 데이터를 사용하여 표준 `inner_process_instruction` 함수로 처리됩니다.
+- **루프 제어**: 이 함수는 모든 배치된 명령어가 완료될 때까지 처리를 계속하며, 각 반복마다 어카운트 및 명령어 데이터 포인터를 진행시킵니다.
+
+> 일부 명령어는 배치로 실행될 때 명시적인 소유권 확인이 필요할 수 있습니다. 런타임은 배치 처리의 끝에서만 소유권을 강제하기 때문입니다. 어카운트를 수정하지 않거나 이미 명시적인 소유권 확인을 수행하는 명령어는 추가 검증이 필요하지 않습니다.

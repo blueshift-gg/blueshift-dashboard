@@ -1,0 +1,283 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# TypeScript를 이용한 LiteSVM
+
+`litesvm` 패키지는 경량 Solana 환경을 구축하기 위한 핵심 테스트 인프라를 제공하며, 이를 통해 account state를 직접 조작하고 프로그램에 대해 transaction을 실행할 수 있습니다.
+
+<ArticleSection name="First Steps" id="first-steps" level="h2" />
+
+프로젝트에 LiteSVM을 추가하세요:
+
+```bash
+npm i --save-dev litesvm
+```
+
+<ArticleSection name="LiteSVM Basics" id="basics" level="h2" />
+
+program ID를 선언하고 LiteSVM 인스턴스를 생성하는 것으로 시작합니다.
+
+transaction이 올바르게 실행되고 테스트 중에 `ProgramMismatch` 오류가 발생하지 않도록 프로그램에서 정의한 것과 정확히 동일한 program ID를 사용하세요:
+
+```ts
+import { LiteSVM } from "litesvm";
+import { PublicKey } from "@solana/web3.js";
+
+const programId = new PublicKey("22222222222222222222222222222222222222222222");
+
+describe("test", () => {
+    // LiteSVM의 새 인스턴스를 생성합니다.
+    const svm = new LiteSVM();
+
+    // 올바른 public key로 프로그램을 로드합니다.
+    svm.addProgramFromFile(programId, "target/deploy/program.so");
+})
+```
+
+테스트를 실행하려면 transaction 객체를 생성하고 `.sendTransaction(tx)` 함수를 사용합니다:
+
+```ts
+import { LiteSVM } from "litesvm";
+import { Transaction } from "@solana/web3.js";
+
+describe("test", () => {
+    // LiteSVM의 새 인스턴스를 생성합니다.
+    const svm = new LiteSVM();
+
+    // 새 Transaction을 생성합니다.
+    const tx = new Transaction();
+
+    // 최신 blockhash를 추가합니다.
+    tx.recentBlockhash = svm.latestBlockhash();
+
+    // instruction과 signer를 추가합니다.
+    // tx.add(...ixs);
+    // tx.sign(...signersKeypair);
+
+    // transaction을 전송합니다.
+    svm.sendTransaction(tx);
+})
+```
+
+<ArticleSection name="Accounts" id="accounts" level="h2" />
+
+LiteSVM으로 Solana 프로그램을 테스트할 때, 실제 프로그램 실행 시나리오를 반영하는 여러 유형의 account를 다루게 됩니다.
+
+이러한 account를 올바르게 구성하는 방법을 이해하는 것은 효과적인 테스트에 필수적입니다.
+
+### System Account
+
+가장 기본적인 account 유형은 system account이며, 두 가지 주요 변형이 있습니다:
+- **Payer account**: 프로그램 account 생성 또는 lamport 전송에 자금을 지원하는 lamport를 가진 account
+- **Uninitialized account**: lamport가 없는 빈 account로, 일반적으로 초기화를 기다리는 프로그램 account를 나타내는 데 사용됩니다.
+
+System account는 데이터를 포함하지 않으며 System Program에 의해 소유됩니다. payer와 uninitialized account의 주요 차이점은 lamport 잔액입니다. payer는 자금을 가지고 있고, uninitialized account는 빈 상태로 시작합니다.
+
+LiteSVM에서 `payer` account를 생성하는 방법은 다음과 같습니다:
+
+```ts
+import { LiteSVM } from "litesvm";
+import { Keypair, SystemProgram } from "@solana/web3.js";
+
+describe("test", () => {
+    // LiteSVM의 새 인스턴스를 생성합니다.
+    const svm = new LiteSVM();
+
+    // 새 Account를 생성합니다.
+    const account = Keypair.generate();
+
+    // 수정된 데이터로 Account를 추가합니다.
+    svm.setAccount(account.publicKey, {
+        lamports: 100_000_000,
+        data: Buffer.alloc(0),
+        owner: SystemProgram.programId,
+        executable: false,
+    }); 
+})
+```
+
+> uninitialized account는 `Keypair.generate()`로 생성된 일반 account이며, 추가 설정이 필요하지 않습니다.
+
+### Program Account
+
+사용자 정의 데이터 구조를 포함하는 프로그램 account의 경우 유사한 접근 방식을 사용할 수 있습니다.
+또한 account 데이터를 buffer로 직렬화해야 하는데, 이는 수동으로 하거나 `@coral-xyz/borsh`와 같은 라이브러리를 사용하여 수행할 수 있습니다 ([여기](https://solana.com/developers/courses/native-onchain-development/serialize-instruction-data-frontend)에서 예시 참조).
+
+```ts
+import { LiteSVM } from "litesvm";
+import { Keypair } from "@solana/web3.js";
+
+describe("test", () => {
+    // LiteSVM의 새 인스턴스를 생성합니다.
+    const svm = new LiteSVM();
+
+    // 새 Account를 생성합니다.
+    const account = Keypair.generate();
+
+    // Account의 데이터를 채웁니다.
+    const accountData = Buffer.alloc(SIZE_OF_THE_ACCOUNT);
+
+    // 위에서 정의된 byte buffer로 account 데이터를 직렬화합니다.
+    // ...
+
+    // rent exempt를 만들기 위한 최소 lamport 양을 가져옵니다.
+    const lamports = svm.minimumBalanceForRentExemption(SIZE_OF_THE_ACCOUNT);
+
+    // 수정된 데이터로 Account를 추가합니다.
+    svm.setAccount(account.publicKey, {
+        lamports,
+        data: accountData,
+        owner: PROGRAM_ID,
+        executable: false,
+    });
+})
+```
+
+> 테스트에서는 정확한 rent를 계산할 필요가 없습니다. 실제 자금이 아니므로 lamport를 `100_000_000_000`과 같은 큰 값으로 설정하고 rent 계산을 건너뛸 수 있습니다.
+
+### Token Account
+
+SPL Token account의 데이터를 직렬화하려면 `@solana/spl-token`의 `AccountLayout` 및 `MintLayout`을 사용할 수 있습니다.
+
+```ts
+import { LiteSVM } from "litesvm";
+import { Keypair } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, AccountLayout, MintLayout, ACCOUNT_SIZE, MINT_SIZE } from "@solana/spl-token"
+
+describe("test", () => {
+    // LiteSVM의 새 인스턴스를 생성합니다.
+    const svm = new LiteSVM();
+
+    const owner = Keypair.generate();
+
+    // 새 Mint Account를 생성합니다.
+    const mint = Keypair.generate();
+
+    // Mint Account의 데이터를 채웁니다.
+    let mintData = Buffer.alloc(MINT_SIZE);
+    MintLayout.encode(
+        {
+          mintAuthorityOption: 1,
+          mintAuthority: owner.publicKey,
+          supply: BigInt(0),
+          decimals: 0,
+          isInitialized: true,
+          freezeAuthorityOption: 0,
+          freezeAuthority: PublicKey.default,
+        },
+        mintData
+    )
+
+    // rent exempt를 만들기 위한 최소 lamport 양을 가져옵니다.
+    const lamports = svm.minimumBalanceForRentExemption(MINT_SIZE);
+
+    // 수정된 데이터로 Account를 추가합니다.
+    svm.setAccount(mint.publicKey, {
+        lamports,
+        data: mintData,
+        owner: TOKEN_PROGRAM_ID,
+        executable: false,
+    });
+
+    // 새 Token Account를 생성합니다.
+    const tokenAccount = Keypair.generate();
+
+    // Token Account의 데이터를 채웁니다.
+    const tokenAccountData = Buffer.alloc(ACCOUNT_SIZE);
+    AccountLayout.encode(
+        {
+            mint: mint.publicKey,
+            owner: owner.publicKey,
+            amount: BigInt(100),
+            delegateOption: 0,
+            delegate: PublicKey.default,
+            delegatedAmount: BigInt(0),
+            state: 1,
+            isNativeOption: 0,
+            isNative: BigInt(0),
+            closeAuthorityOption: 0,
+            closeAuthority: PublicKey.default,
+        },
+        tokenAccountData,
+    );
+
+    // rent exempt를 만들기 위한 최소 lamport 양을 가져옵니다.
+    const lamports = svm.minimumBalanceForRentExemption(ACCOUNT_SIZE);
+
+    // 수정된 데이터로 Account를 추가합니다.
+    svm.setAccount(tokenAccount.publicKey, {
+        lamports,
+        data: tokenAccountData,
+        owner: TOKEN_PROGRAM_ID,
+        executable: false,
+    });
+})
+```
+
+<ArticleSection name="Execution" id="execution" level="h2" />
+
+account가 생성되어 LiteSVM 인스턴스에 추가되었으므로 이제 transaction을 전송하고 프로그램 로직을 검증할 수 있습니다.
+
+transaction을 전송하기 전에 결과를 시뮬레이션할 수 있습니다:
+
+```ts
+// 실행 전에 시뮬레이션합니다.
+const simulatedResult = svm.simulateTransaction(tx);
+```
+
+그런 다음 transaction을 전송하고 로그를 검사합니다:
+
+```ts
+// 실행하고 로그를 검사합니다.
+const result = svm.sendTransaction(tx);
+console.log(result.logs);
+```
+
+### 고급 기능
+
+실행 전후로 LiteSVM 인스턴스에 포함된 전체 ledger는 읽기 가능하며 사용자 정의가 가능합니다.
+
+clock과 같은 sysvar 값을 조작할 수 있습니다:
+
+```ts
+// Clock을 변경합니다.
+const newClock = svm.getClock();
+newClock.unixTimestamp = 50n;
+svm.setClock(newClock);
+
+// 특정 Slot으로 이동합니다.
+svm.warpToSlot(500);
+
+// 현재 blockhash를 만료시킵니다.
+svm.expireBlockhash();
+```
+
+account 및 프로토콜 데이터를 읽을 수도 있습니다:
+
+```ts
+// account의 모든 정보(data, lamport, owner 등)를 가져옵니다.
+svm.getAccount(account.publicKey);
+
+// account의 lamport 잔액을 가져옵니다.
+svm.getBalance(account.publicKey);
+```
+
+또는 runtime이 작동하는 방식을 구성할 수 있습니다:
+
+```ts
+// compute budget을 설정합니다.
+const computeBudget = new ComputeBudget();
+computeBudget.computeUnitLimit = 2_000_000n;
+svm.withComputeBudget(computeBudget);
+
+// Sigverify를 활성으로 설정합니다.
+svm.withSigverify(true);
+
+// Blockhash 확인을 활성으로 설정합니다.
+svm.withBlockhashCheck(true);
+
+// 기본 Sysvar를 설정합니다.
+svm.withSysvars();
+
+// 사용할 FeatureSet을 설정합니다.
+svm.withFeatureSet(new FeatureSet(...))
+```

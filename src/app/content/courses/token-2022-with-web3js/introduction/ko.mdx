@@ -1,0 +1,179 @@
+---
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token2022 프로그램
+
+![Token 2022 with Web3JS](/graphics/course-banners/token-2022-with-web3js.png)
+
+Token Extensions이라고도 알려진 Token2022 프로그램은 Token 프로그램이 제공하는 기능의 상위 집합입니다.
+
+어떤 추가 기능들이 사용 가능하며 레거시(Legacy) Token 프로그램과의 차이점은 무엇인지 더 자세히 알아보려면, [이 과정](/en/courses/token-2022-program)을 수강하세요.
+
+Web3.js를 사용하여 SPL Token 프로그램과 연동하기 위한 필수 패키지를 설치하는 것으로 시작해 봅시다:
+
+```
+npm i @solana/spl-token
+```
+
+<ArticleSection name="Mint and Token Accounts" id="mint-and-token-accounts" level="h2" />
+
+TypeScript를 사용하여 `Mint` account, `Associated Token` account 또는 `Token` account를 생성하는 데 익숙하다면, Token2022도 매우 유사한 패턴을 따른다는 것을 알게 될 것입니다.
+
+주요 차이점은 account 초기화에 있습니다. extension은 추가 공간을 필요로 하며, `mint`가 최종화되기 전에 구성되어야 하기 때문입니다.
+
+### Extension이 포함된 Mint Account
+
+`Mint`에 extension을 추가할 때, 다음을 수행해야 합니다:
+- extension 데이터에 필요한 추가 공간 계산
+- 각 extension을 특정 구성으로 초기화
+- 초기화 instruction의 올바른 순서 확인
+
+다음은 Transfer Fee extension을 사용하여 `mint`를 생성하는 방법입니다:
+
+```ts
+import {
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Transfer Fee extension이 포함된 Mint account에 필요한 크기 계산
+const mintLen = getMintLen([ExtensionType.TransferFeeConfig]);
+
+// rent 면제에 필요한 최소 lamports 계산
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// 올바른 크기와 owner로 account 생성
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Transfer Fee extension 초기화
+const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    500,
+    BigInt(1e6),
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Mint 자체 초기화
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// 모든 instruction을 올바른 순서로 결합
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTransferFeeConfig, // Extension은 mint 이전에 초기화되어야 합니다.
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint가 생성되었습니다! TX를 여기서 확인하세요: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+보시다시피, 매우 간단합니다:
+- `Keypair.generate()` 함수를 사용하여 `Mint` keypair 생성.
+- `getMintLen()` 함수를 사용하여 특정 extension이 포함된 `Mint` account의 길이 계산
+- `connection.getMinimumBalanceForRentExemption(mintLen)`를 사용하여 필요한 최소 lamports 계산
+- 올바른 길이, rent 및 owner로 account 생성
+- `Mint` account에 원하는 extension을 관련 기능과 함께 초기화
+- `Mint` account 초기화
+
+> extension이 없는 기본 Mint account는 레거시 `Mint`와 동일한 크기를 가집니다. extension은 이 기본 크기 위에 특정 데이터 요구 사항을 추가하며, account를 Token2022 `Mint`로 식별하는 padding 및 discriminator와 함께 추가됩니다.
+
+### Extension이 포함된 Associated Token Account
+
+`Associated Token` account는 기본적으로 `ImmutableOwner` extension과 함께 제공됩니다. 따라서 레거시 `Token Account`와 Token2022 `Token Account` 생성의 유일한 차이점은 owner program입니다.
+
+다음은 `Associated Token` account를 생성하는 방법입니다:
+
+```ts
+const ata = await getAssociatedTokenAddress(
+    mint.publicKey,
+    keypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+);
+
+// 모든 account에 대한 ATA 생성 instruction 생성
+const createAtaInstructions = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // 지불자
+    ata, // Associated Token Account 주소
+    keypair.publicKey, // 소유자
+    mint.publicKey, // 민트
+    TOKEN_2022_PROGRAM_ID
+)
+```
+
+### Extension이 포함된 Token Account
+
+`Token` account에 extension을 추가하는 메커니즘은 `Mint` account에서 했던 것과 유사합니다:
+- extension 데이터에 필요한 추가 공간 계산
+- 각 extension을 특정 구성으로 초기화
+- 초기화 instruction의 올바른 순서 확인
+
+다음은 `CpiGuard` extension을 사용하여 `Token` account를 생성하는 방법입니다:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+// extension이 포함된 Token Account의 크기
+const accountLen = getAccountLen([ExtensionType.CpiGuard]);
+
+// Token Account에 필요한 최소 lamports
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount.publicKey,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableCpiGuardInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {commitment: "finalized"});
+
+console.log(`Token account가 생성되었습니다! TX를 여기서 확인하세요: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

@@ -1,0 +1,135 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Revival Attacks
+
+Revival attacks는 Solana의 계정 폐쇄 메커니즘을 악용하여 동일한 트랜잭션 내에서 "죽은" 계정을 다시 살려내는 공격입니다.
+
+계정의 lamports를 전송하여 계정을 폐쇄할 때, Solana는 즉시 가비지 컬렉션을 수행하지 않습니다. 해당 계정은 트랜잭션이 완료된 후에야 정리됩니다. 이 지연은 공격자가 폐쇄된 계정에 lamports를 다시 전송하여 "부활"시킬 수 있는 위험한 시간 간격을 만들며, 이로 인해 프로그램이 여전히 신뢰할 수 있는 오래된 데이터를 가진 좀비 계정을 남길 수 있습니다.
+
+이 공격은 계정 수명 주기에 대한 근본적인 오해 때문에 성공합니다. 개발자들은 계정을 폐쇄하면 즉시 사용할 수 없게 된다고 가정하지만, 실제로는 트랜잭션이 끝날 때까지 계정은 접근 가능한 상태로 유지됩니다. 공격자는 계정의 rent exemption을 환불하는 transfer와 close 인스트럭션을 끼워 넣어 가비지 컬렉션을 방지하고 계정을 악용 가능한 상태로 유지할 수 있습니다.
+
+이는 escrow 완료, 분쟁 해결 또는 자산 소각과 같이 계정 폐쇄가 최종화를 나타내는 프로토콜에서 특히 치명적입니다. 부활된 계정은 프로그램이 이러한 작업이 완료되지 않았다고 믿게 속일 수 있으며, 잠재적으로 이중 지불(double-spending), 무단 접근(unauthorized access) 또는 프로토콜 조작을 허용할 수 있습니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+프로그램 계정을 폐쇄하는 다음 취약한 인스트럭션을 고려해 보십시오:
+
+```rust
+#[program]
+pub mod insecure_close{
+    use super::*;
+
+    //..
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+        **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+            .checked_add(ctx.accounts.account_to_close.to_account_info().lamports())
+            .unwrap();
+        **ctx.accounts.account_to_close.to_account_info().lamports.borrow_mut() = 0;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+이 코드는 올바르게 보입니다: 계정에서 모든 lamports를 목적지로 전송하며, 이는 가비지 컬렉션을 유발해야 합니다. 그러나 계정의 데이터는 변경되지 않은 채 남아 있으며, 계정은 동일한 트랜잭션 내에서 여전히 접근 가능합니다.
+
+공격자는 여러 인스트럭션이 포함된 트랜잭션을 생성하여 이를 악용할 수 있습니다:
+- Instruction 1: close 함수를 호출하여 계정의 lamports를 소진합니다.
+- Instruction 2: "폐쇄된" 계정으로 lamports를 다시 전송합니다 (부활).
+- Instruction 3: 부활된 계정을 후속 작업에 사용합니다.
+
+그 결과는 프로그램 로직상 폐쇄된 것처럼 보이지만, 모든 원본 데이터가 온전히 유지된 채로 기능하는 좀비 계정입니다. 이는 다음으로 이어질 수 있습니다:
+- 이중 지불 (Double-spending): "폐쇄된" escrow 계정을 여러 번 사용하는 것
+- 권한 우회 (Authorization bypass): 비활성화되어야 할 admin 계정을 부활시키는 것
+- 상태 손상 (State corruption): 더 이상 존재하지 않아야 할 계정에서 작업을 수행하는 것
+
+가장 안전한 해결책은 안전한 폐쇄를 자동으로 처리하는 Anchor의 `close` constraint를 사용하는 것입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+   #[account(
+        mut,
+        close = owner,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+또는 다음과 같이 `signer` 계정 constraint를 추가할 수도 있습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+커스텀 폐쇄 로직의 경우, 완전한 보안 폐쇄 패턴을 구현하십시오:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    let account = ctx.accounts.account.to_account_info();
+
+    let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+    **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+        .checked_add(account.lamports())
+        .unwrap();
+    **account.lamports.borrow_mut() = 0;
+
+    let mut data = account.try_borrow_mut_data()?;
+    for byte in data.deref_mut().iter_mut() {
+        *byte = 0;
+    }
+
+    let dst: &mut [u8] = &mut data;
+    let mut cursor = std::io::Cursor::new(dst);
+    cursor
+        .write_all(&anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 폐쇄 패턴을 수동으로 구현합니다:
+
+```rust
+self.program_account.realloc(0, true)?;
+self.program_account.close()?;
+
+let mut data_ref = self.program_account.try_borrow_mut_data()?;
+data_ref[0] = 0xff;
+```

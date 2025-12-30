@@ -1,0 +1,240 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metadata 확장
+
+`Metadata` 확장은 다른 프로그램을 사용하지 않고 `mint account`에 메타데이터를 직접 내장할 수 있는 기능을 도입하는 `Mint` account 확장입니다.
+
+<ArticleSection name="Initializing the Mint Account" id="initializing-the-mint-account" level="h2" />
+
+`Metadata` 확장은 우리가 익숙한 방식과는 조금 다릅니다. 이는 `Mint` account에 적용되는 두 가지 다른 확장으로 구성되어 있기 때문입니다:
+- `name`, `symbol`, `uri` 및 추가 account와 같은 모든 메타데이터 정보를 포함하는 `Metadata` 확장.
+- `Metadata` 확장이 위치한 `Mint` account를 참조하는 `MetadataPointer` 확장.
+
+일반적으로 이 두 확장은 동일한 `Mint` account에 존재하며, 이 예시에서도 동일하게 적용할 것입니다.
+
+코드에 들어가기 전에 몇 가지 기본 사항부터 시작하겠습니다.
+
+`MetadataPointer` 확장은 `@solana/spl-token` 패키지에 있지만, `Metadata`를 초기화하려면 `@solana/spl-token-metadata` 패키지를 사용해야 합니다.
+
+필요한 패키지를 설치해 봅시다:
+
+```
+npm i @solana/spl-token-metadata
+```
+
+또한, `Metadata` 확장은 `Mint` account를 초기화한 후에 확장을 초기화해야 하는 "유일한" 확장 중 하나입니다.
+
+이는 메타데이터 초기화 instruction이 가변 길이 메타데이터 콘텐츠에 필요한 공간을 동적으로 할당하기 때문입니다.
+
+동시에 이는 `Metadata` 확장을 포함하여 `rent exempt` 상태를 유지하기에 충분한 `lamports`로 `Mint` account를 초기화해야 하지만, `token_metadata_initialize()` instruction이 실제로 공간을 올바르게 늘리기 때문에 `MetadataPointer` 확장만을 위한 충분한 공간을 할당해야 함을 의미합니다.
+
+코드에서는 다음과 같습니다:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    TYPE_SIZE,
+    LENGTH_SIZE,
+    createInitializeMetadataPointerInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+import { 
+    createInitializeInstruction, 
+    pack, 
+    TokenMetadata 
+} from "@solana/spl-token-metadata";
+
+const mint = Keypair.generate();
+
+const metadata: TokenMetadata = {
+    mint: mint.publicKey,
+    name: "Test Token",
+    symbol: "TST",
+    uri: "https://example.com/metadata.json",
+    additionalMetadata: [["customField", "customValue"]],
+};
+
+// Size of Mint Account with extensions
+const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+
+// Size of the Metadata Extension
+const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
+
+// Minimum lamports required for Mint Account
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeMetadataPointer = createInitializeMetadataPointerInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMetadataInstruction = createInitializeInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        mint: mint.publicKey,
+        metadata: mint.publicKey,
+        name: metadata.name,
+        symbol: metadata.symbol,
+        uri: metadata.uri,
+        mintAuthority: keypair.publicKey,
+        updateAuthority: keypair.publicKey,
+    }
+);
+
+const updateMetadataFieldInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: metadata.additionalMetadata[0][0],
+    value: metadata.additionalMetadata[0][1],
+    });
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMetadataPointer,
+    initializeMintInstruction,
+    initializeMetadataInstruction,
+    updateMetadataFieldInstructions,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+> `metadata-interface`의 `initialize` instruction은 `additionalMetadata`를 허용하지 않습니다. 따라서 `additionalMetadata`를 포함하는 asset을 생성하려면 다음 섹션에서 살펴볼 `token_metadata_update_field()` instruction을 사용해야 합니다.
+
+<ArticleSection name="Updating the Metadata" id="updating-the-metadata" level="h2" />
+
+`token_metadata_update_field()` instruction을 사용하여 메타데이터의 모든 필드를 업데이트할 수 있습니다.
+
+`additionalMetadata`의 경우, 동일한 `Field`에 새 값을 전달하여 기존 필드를 업데이트하거나 `Metadata`에 새 필드를 추가할 수 있기 때문에 작동 방식이 약간 다릅니다.
+
+내부적으로 프로그램은 변경하려는 내용에 따라 다른 `flag`와 함께 동일한 instruction을 사용합니다. 이는 다음과 같이 모든 필드를 변경할 수 있음을 의미합니다:
+
+```ts
+const newMetadata: TokenMetadata = {
+    mint: mint.publicKey,
+    name: "New Name",
+    symbol: "TST2",
+    uri: "https://example.com/metadata2.json",
+    additionalMetadata: [
+        ["customField1", "customValue1"],
+        ["customField2", "customValue2"],
+    ],
+};
+
+// Size of Mint Account with extensions
+const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+
+// Size of the Metadata Extension
+const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(newMetadata).length;
+
+// Minimum lamports required for Mint Account
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
+
+// Get the old balance of the keypair
+const oldBalance = await connection.getBalance(mint.publicKey)
+
+console.log(`Old balance: ${oldBalance}`);
+console.log(`Lamports: ${lamports}`);
+
+// Add lamports to the Mint if needed to cover the new metadata rent exemption
+if (oldBalance < lamports) {
+    const transferInstruction = SystemProgram.transfer({
+        fromPubkey: keypair.publicKey,
+        toPubkey: mint.publicKey,
+        lamports: lamports - oldBalance,
+    });
+
+    const transaction = new Transaction().add(transferInstruction);
+
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {commitment: "finalized"});
+
+    console.log(`Lamports added to Mint! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+}
+
+const updateMetadataNameInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Name", // Field | string
+    value: "New Name",
+});
+
+const updateMetadataSymbolInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Symbol", // Field | string
+    value: "TST2",
+});
+
+const updateMetadataUriInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "Uri", // Field | string
+    value: "https://example.com/metadata2.json",
+});
+
+const updateMetadataAdditionalMetadataInstructions = createUpdateFieldInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    field: "customField2", // Field | string
+    value: "customValue2",
+});
+
+const transaction = new Transaction().add(
+    updateMetadataNameInstructions,
+    updateMetadataSymbolInstructions,
+    updateMetadataUriInstructions,
+    updateMetadataAdditionalMetadataInstructions,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Metadata updated! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+> 보시다시피 `account`가 항상 `rent exempt` 상태인지 확인해야 합니다. 이것이 우리가 시작할 때 `rent`에 대한 모든 계산을 수행하고 필요한 경우 추가 `lamports`를 전송하는 이유입니다.
+
+`RemoveKey` instruction을 사용하여 `additionalMetadata` struct 내의 `Field`를 다음과 같이 제거할 수도 있습니다:
+
+```ts
+const removeMetadataKeyInstructions = createRemoveKeyInstruction({
+    metadata: mint.publicKey,
+    updateAuthority: keypair.publicKey,
+    programId: TOKEN_2022_PROGRAM_ID,
+    key: "customField", // Field | string
+    idempotent: true,
+});
+```

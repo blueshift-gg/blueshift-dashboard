@@ -1,0 +1,380 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Extensions
+
+기존 Token 프로그램이 토큰 발행(minting), 전송(transferring), 동결(freezing)과 같은 필수 기능을 제공했던 반면, Token Extensions는 프로그래밍 가능한 토큰의 새로운 패러다임을 열었습니다.
+
+이 개선된 프로그램은 기존 SPL Token 작업과 완벽한 호환성을 유지하면서, 커스텀 로직 실행을 위한 transfer hook, 내장된 수수료 메커니즘, 향상된 metadata 지원, 이자 발생 계산, 그리고 고급 보안 제어와 같은 정교한 기능을 추가합니다.
+
+### Extension 호환성
+
+Token Extensions는 조합 가능하도록 설계되어, 여러 extension을 결합하여 프로젝트 요구사항에 완벽하게 맞는 토큰을 생성할 수 있습니다.
+
+그러나 다음과 같이 기능 충돌 또는 논리적 모순으로 인해 특정 조합은 호환되지 않습니다:
+- Non-transferable + transfer hook / transfer fee / confidential transfer
+- Confidential transfer + transfer fee (1.18 버전까지)
+- Confidential transfer + transfer hook (이 transfer는 source/destination account만 볼 수 있으므로, 전송된 amount에 대해 작용할 수 없습니다)
+- Confidential transfer + permanent delegate
+
+<ArticleSection name="Transfer Fee Extension" id="transfer-fee-config" level="h2" />
+
+`TransferFee` extension은 `Mint` extension으로, 토큰 생성자가 스왑(swap)이 발생할 때마다 징수되는 토큰에 대한 "세금(tax)"을 설정할 수 있게 합니다.
+
+수수료 수령자가 스왑이 발생할 때마다 쓰기 잠금(write-locked)이 되지 않도록 하고, 이 extension이 포함된 `Mint`가 있는 transaction을 병렬화할 수 있도록 하기 위해, 수수료는 `Withdraw Authority`만이 인출할 수 있는 수령자의 `Token Account`에 따로 보관됩니다.
+
+이러한 이유로 `TransferFee` extension을 사용하려면 두 가지 다른 유형의 extension이 필요합니다. 하나는 스왑을 수행하는 데 필요한 모든 데이터가 포함된 `TransferFeeConfig`라고 불리는 `Mint` account에 직접 적용되는 extension이고, 다른 하나는 `Token` account에 의해 얼마나 많은 토큰이 보류되는지 "등록"하는 `TransferFeeAmount`라고 불리는 `Token` account에 적용되는 extension입니다.
+
+`TransferFee` Extension 데이터는 다음과 같습니다:
+
+```rust
+/// TransferFeeConfig Extension
+pub const transfer_fee_config_header: [u8; 4] = [1, 0, 108, 0];
+
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+몇 가지 주목할 점:
+- `config_authority`는 `Token` account에서 토큰을 실제로 인출할 수 있는 주체와 다를 수 있습니다.
+- `older`와 `newer` transfer fee struct가 모두 있습니다.
+
+마지막 사항은 새로운 `TransferFee`를 설정할 때 epoch 말에 러그 풀(rug pulls)을 방지하기 위해 2 epoch의 "쿨다운" 기간이 있기 때문입니다. 이는 새로운 `TransferFee`의 처음 2 epoch 동안은 이전 `TransferFee`가 실제로 활성화된다는 것을 의미합니다.
+
+또한 `TransferFeeConfig`에 `withheld_amount` 필드가 있는 것을 볼 수 있습니다. 토큰 수수료가 `Token Account`에 누적된다고 방금 말했으므로 이상하게 들릴 수 있지만, 실제로는 해당 수수료를 청구하는 것은 2단계 프로세스입니다:
+- `Token Account`에서 `Mint`로 수수료를 청구합니다. 이것은 무권한으로(permissionlessly) 수행될 수 있습니다.
+- `Mint`에서 destination account로 수수료를 청구합니다. 이것은 `Withdraw Authority`만이 실행할 수 있는 권한 있는(permissioned) 작업입니다.
+
+이 extension의 경우, 수수료가 여전히 남아있는 `Token Account`를 누군가 닫으려 할 때의 엣지 케이스(edge case)를 처리하기 위해 2단계 프로세스가 필요합니다. 해당 수수료의 destination이 `Withdraw Authority`와 "다를" 수 있으므로, `Token Account`를 닫기 전에 해당 수수료를 어딘가로 보내야 한다는 사실을 고려해야 합니다.
+
+그리고 `TransferFeeAmount` Extension 데이터는 다음과 같습니다
+
+```rust
+/// TransferFeeAmount Extension
+pub const transfer_amount_config_header: [u8; 4] = [2, 0, 8, 0];
+
+pub struct TransferFeeAmount {
+    pub withheld_amount: u64,
+}
+```
+
+<ArticleSection name="Mint Close Authority Extension" id="mint-close-authority-config" level="h2" />
+
+`MintCloseAuthority` extension은 `Mint` extension으로, 현재 공급량이 0인 `Mint` account에서 authority가 account를 닫고 rent를 회수할 수 있게 합니다.
+
+이 extension은 사용되지 않는 mint를 정리하고 account의 rent 면제 비용으로 사용된 SOL을 회수하는 데 유용합니다. mint는 토큰이 유통되지 않을 때만 닫을 수 있습니다.
+
+`MintCloseAuthority` extension 데이터는 다음과 같습니다:
+
+```rust
+/// MintCloseAuthority Extension
+pub const mint_close_authority_extension_header: [u8; 4] = [3, 0, 32, 0];
+
+pub struct MintCloseAuthority {
+    pub close_authority: Pubkey,
+}
+```
+
+<ArticleSection name="Default Account State Extension" id="default-account-state-extension" level="h2" />
+
+`DefaultAccountState` extension은 `Mint` extension으로, 해당 특정 mint에 대해 새로 생성된 모든 `Token Account`를 기본적으로 동결(frozen) 상태로 허용합니다. `Mint`의 `Freeze Authority`는 이러한 `Token` account를 해동(unfreeze)하여 사용할 수 있게 합니다.
+
+이 기능은 토큰 보유자를 제한함으로써 토큰 생성자에게 토큰 분배에 대한 더 큰 제어권을 부여합니다. 이는 규정 준수 시나리오, KYC/AML 요구사항, 또는 account가 토큰을 수신하거나 전송하기 전에 명시적으로 승인되어야 하는 allowlist 기반 토큰 분배를 생성하는 데 특히 유용합니다.
+
+`DefaultAccountState` extension 데이터는 다음과 같습니다:
+
+```rust
+/// DefaultAccountState Extension
+pub const default_account_state_extension_header: [u8; 4] = [6, 0, 1, 0];
+
+pub struct DefaultAccountState {
+    pub account_state: AccountState,
+}
+
+pub enum AccountState {
+    Uninitialized,
+    Initialized,
+    Frozen,
+}
+```
+
+<ArticleSection name="Immutable Owner Extension" id="immutable-owner-extension" level="h2" />
+
+`ImmutableOwner` extension은 `Token` account extension으로, `Token` account의 소유권 변경을 방지합니다. 이는 무단 접근 및 전송 시도로부터 account를 보호합니다.
+
+이 extension은 Associated Token Accounts (ATA) 및 소유권이 변경되어서는 안 되는 다른 account에 특히 유용합니다. 이는 토큰 account의 소유권을 훔치려 시도할 수 있는 악성 프로그램으로부터 보호하고, 사용자 및 애플리케이션에 추가적인 보안 보장을 제공합니다.
+
+> 모든 Token Extensions Program ATA는 기본적으로 immutable owner가 활성화되어 있습니다.
+
+`ImmutableOwner` extension 데이터는 다음과 같습니다:
+
+```rust
+/// ImmutableOwner Extension
+pub const immutable_owner_extension_header: [u8; 4] = [7, 0, 0, 0];
+```
+
+<ArticleSection name="Memo Transfer Extension" id="memo-transfer-extension" level="h2" />
+
+`MemoTranfer Extension`은 `Token` account extension으로, 토큰 account로 들어오는 모든 transfer에 memo가 포함되도록 강제하여 향상된 transaction 추적 및 사용자 식별을 용이하게 합니다.
+
+이 extension은 규정 준수, 회계 또는 고객 서비스 목적으로 들어오는 transfer의 목적이나 출처를 추적해야 하는 거래소, 규제 기관 및 애플리케이션에 특히 유용합니다. 활성화되면, 동일한 transaction에 memo instruction이 포함되지 않는 한 account로의 모든 transfer는 실패합니다.
+
+`MemoTranfer` extension 데이터는 다음과 같습니다:
+
+```rust
+/// MemoTranfer Extension
+pub const memo_transfer_extension_header: [u8; 4] = [8, 0, 1, 0];
+
+pub struct MemoTranfer {
+    pub require_incoming_transfer_memos: bool,
+}
+```
+
+<ArticleSection name="Non Transferable Extension" id="non-transferable-extension" level="h2" />
+
+`NonTransferable` extension은 `Mint` account extension으로, 토큰이 account 간에 전송되는 것을 방지하여 토큰을 현재 보유자에게 영구적으로 묶어 둡니다.
+
+이 extension은 soulbound token, 성과 배지, 인증서 또는 양도 불가능한 권리나 상태를 나타내는 모든 토큰을 생성하는 데 유용합니다. account에 발행되면, 이 토큰들은 다른 wallet으로 이동, 판매 또는 전송될 수 없으며, 원래 수령인과 영구적으로 연결되어 있도록 보장합니다.
+
+또한 `NonTransferable` extension이 있는 `Mint`와 연결된 `Token` account에는 `NonTransferableAccount` extension이 함께 제공됩니다.
+
+`NonTransferable` 및 `NonTransferableAccount` extension 데이터는 다음과 같습니다:
+
+```rust
+/// NonTransferable Extension
+pub const non_transferable_extension_header: [u8; 4] = [9, 0, 0, 0];
+
+/// NonTransferableAccount Extension
+pub const non_transferable_account_extension_header: [u8; 4] = [13, 0, 0, 0];
+```
+
+두 extension 모두 단순한 플래그(flag)입니다. 이들의 존재만으로 제한이 강제됩니다.
+
+<ArticleSection name="Interest Bearing Extension" id="interest-bearing-extension" level="h2" />
+
+`InterestBearing` extension은 `Mint` account extension으로, 사용자가 토큰에 이자율을 적용하고 언제든지 이자를 포함한 업데이트된 총액을 검색할 수 있도록 합니다.
+
+> 이 메커니즘은 새로운 토큰을 생성하지 않습니다. 표시되는 amount는 `amount_to_ui_amount` 함수를 통해 누적된 이자를 단순히 포함하므로, 변경 사항은 순전히 미적인 것입니다. 하지만 이것은 mint account 내에 저장되는 값이며, 프로그램은 이를 활용하여 순수한 미학을 넘어선 기능을 생성할 수 있습니다.
+
+`InterestBearing` extension 데이터는 다음과 같습니다:
+
+```rust
+/// InterestBearing Extension
+pub const interest_bearing_extension_header: [u8; 4] = [10, 0, 52, 0];
+
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+이자율은 업데이트될 수 있으므로, 계산이 정확하도록 업데이트된 이자율의 경우 어떻게 동작할지 계산하는 동안 사용되는 `pre_update_average_rate` 필드가 있습니다.
+
+<ArticleSection name="Cpi Guard Extension" id="cpi-guard-extension" level="h2" />
+
+`CpiGuard` extension은 `Token` account extension으로, 교차 프로그램 호출(cross-program invocations) 내에서 특정 작업을 금지하여 사용자의 명시적인 동의 없이 토큰 account를 조작하려는 악성 프로그램으로부터 사용자를 보호합니다.
+
+이 extension은 DeFi 프로토콜, DEX 또는 토큰 account 접근을 요청하는 모든 프로그램과 상호작용할 때 보안에 매우 중요합니다. 이는 교차 프로그램 호출(cross-program calls) 중에 프로그램이 소유권 변경, 원치 않는 delegate 설정 또는 의도하지 않은 수신자에게 자금을 리디렉션하는 등의 무단 작업을 수행하는 것을 방지합니다.
+
+`CpiGuard` extension이 활성화되면 다음 CPI는 설명된 대로 작동합니다:
+- Transfer: 서명 authority는 owner 또는 이전에 설정된 account delegate여야 합니다.
+- Burn: 서명 authority는 owner 또는 이전에 설정된 account delegate여야 합니다.
+- Approve: 금지됨 - CPI 내에서 delegate를 승인할 수 없습니다.
+- Close Account: 램포트(lamport) destination은 account owner여야 합니다.
+- Set Close Authority: 해제하는 경우가 아니면 금지됩니다.
+- Set Owner: CPI 외부를 포함하여 항상 금지됩니다.
+
+`CpiGuard` extension 데이터는 다음과 같습니다:
+
+```rust
+/// CpiGuard Extension
+pub const cpi_guard_extension_header: [u8; 4] = [11, 0, 1, 0];
+
+pub struct CpiGuard {
+    pub lock_cpi: bool,
+}
+```
+
+<ArticleSection name="Permanent Delegate Extension" id="permanent-delegate-extension" level="h2" />
+
+`PermanentDelegate` extension은 `Mint` account extension으로, 해당 mint의 모든 토큰에 대해 영구적인 delegate를 허용하며, 이 delegate는 모든 토큰 account에서 해당 mint의 모든 토큰을 transfer하거나 burn할 수 있습니다.
+
+이 extension은 비상 동결 기능이 필요한 stablecoin, 중앙 집중식 관리가 필요한 게임 토큰, 또는 규제 기관의 영구적인 감독이 필요한 규정 준수 토큰과 같이 내장된 관리 제어 기능이 있는 토큰을 생성하는 데 유용합니다.
+
+> 취소될 수 있는 일반 delegate와 달리, 이 delegate authority는 영구적이며 불변합니다.
+
+`PermanentDelegate` extension 데이터는 다음과 같습니다:
+
+```rust
+/// PermanentDelegate Extension
+pub const permanent_delegate_extension_header: [u8; 4] = [12, 0, 32, 0];
+
+pub struct PermanentDelegate {
+    delegate: Pubkey,
+}
+```
+
+<ArticleSection name="Transfer Hook Extension" id="transfer-hook-extension" level="h2" />
+
+`TransferHook` extension은 `Mint` account extension으로, 모든 토큰 transfer 시 커스텀 instruction 로직을 실행하는 `Mint` Account를 생성할 수 있는 기능을 도입합니다.
+
+이 extension은 자동 세금 징수, 로열티 지불, 커스텀 로직 기반의 transfer 제한, 규정 준수 검사 또는 transfer 중에 발생해야 하는 기타 프로그래밍 가능한 동작과 같은 강력한 사용 사례를 가능하게 합니다. transfer가 발생할 때마다 hook 프로그램은 extension 프로그램에 의해 자동으로 호출됩니다.
+
+이를 달성하기 위해 개발자는 [Transfer Hook Interface](https://github.com/solana-program/transfer-hook/tree/main/program)를 구현하는 프로그램을 구축하고 `Transfer Hook` extension이 활성화된 `Mint` account를 초기화해야 합니다.
+
+또한 `TransferHook` extension이 있는 `Mint`와 연결된 `Token` account에는 `TransferHookAccount` extension이 함께 제공됩니다.
+
+`TransferHook` 및 `TransferHookAccount` extension 데이터는 다음과 같습니다:
+
+```rust
+/// TransferHook Extension
+pub const transfer_hook_extension_header: [u8; 4] = [14, 0, 64, 0];
+
+pub struct TransferHook {
+    // The transfer hook update authority
+    authority: Pubkey,
+    // The transfer hook program account
+    programId: Pubkey,
+}
+
+/// TransferHookAccount Extension
+pub const transfer_hook_account_extension_header: [u8; 4] = [15, 0, 1, 0];
+
+pub struct TransferHookAccount {
+    // Whether or not this account is currently transferring tokens
+    transferring: bool,
+}
+```
+
+<ArticleSection name="Metadata Extension" id="metadata-extension" level="h2" />
+
+`Metadata` extension은 `Mint` account extension으로, 다른 프로그램을 사용할 필요 없이 metadata를 mint account에 직접 기본적으로 embed할 수 있는 기능을 도입합니다.
+
+이 extension은 이름, 심볼, 이미지 및 커스텀 attribute와 같은 on-chain metadata가 필요한 NFT, 토큰 및 기타 asset에 특히 유용합니다. metadata를 mint account에 직접 embed함으로써, 외부 metadata 프로그램의 필요성을 없애고 metadata가 토큰과 영구적으로 연결되도록 보장합니다.
+
+`Metadata` extension은 두 가지 다른 extension으로 구성되며, 둘 다 `Mint` account에 적용됩니다:
+- 이름, 심볼, URI 및 추가 account와 같은 모든 metadata 정보를 포함하는 `Metadata` extension.
+- `Metadata` extension이 위치한 `Mint` account를 참조하는 `MetadataPointer` extension.
+
+일반적으로 사용될 때, 이 두 extension은 동일한 `Mint` account에 존재합니다. 그러나 동일한 Metadata가 다른 asset에 걸쳐 사용되는 경우가 있을 수 있으며, 이러한 이유로 두 extension을 분리하고 `Metadata` extension이 있는 `Mint`를 참조하는 것이 더 저렴할 것입니다.
+
+> 다른 extension과 달리, `Metadata` extension을 생성하려면 [Token Metadata Interface](https://github.com/solana-program/token-metadata/tree/main)를 사용해야 합니다. `Metadata Pointer Extension`은 기존 Token2022 Program을 사용합니다.
+
+이번에는 `Metadata` extension에 가변 데이터가 포함되어 있어 고정된 extension header를 생성할 수 없으며, 이는 길이가 필드에 따라 달라진다는 것을 의미합니다.
+
+`Metadata` 및 `MetadataPointer` extension 데이터는 다음과 같습니다:
+
+```rust
+/// Metadata Pointer Extension
+pub const metadata_pointer_extension_header: [u8; 4] = [18, 0, 64, 0];
+
+pub struct MetadataPointer {
+    // Authority that can set the metadata address
+    authority: Pubkey;
+    // Account Address that holds the metadata
+    metadata_address: Pubkey;
+}
+
+/// Metadata Extension (Discriminator: 19)
+pub struct TokenMetadata {
+    /// The authority that can sign to update the metadata
+    pub update_authority: Pubkey,
+    /// The associated mint, used to counter spoofing to be sure that metadata
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The longer name of the token
+    pub name: String,
+    /// The shortened symbol for the token
+    pub symbol: String,
+    /// The URI pointing to richer metadata
+    pub uri: String,
+    /// Any additional metadata about the token as key-value pairs. The program
+    /// must avoid storing the same key twice.
+    pub additional_metadata: Vec<(String, String)>,
+}
+```
+
+<ArticleSection name="Group and Member Extension" id="group-and-member-extension" level="h2" />
+
+`Group` 및 `Member` extension은 `Mint` account extension으로, 여러 asset과 연결된 NFT용 컬렉션과 같은 그룹을 생성할 수 있는 기능을 도입합니다.
+
+이 extension 시스템은 NFT 컬렉션, 토큰 패밀리 또는 멤버십을 추적하고 컬렉션 제한을 적용해야 하는 관련 asset의 모든 그룹화를 생성하는 데 적합합니다. 그룹은 컬렉션을 나타내고, 멤버는 해당 컬렉션 내의 개별 항목을 나타냅니다.
+
+`Group` 및 `Member` extension 모두 `Metadata` extension과 마찬가지로 `Mint` account에 적용되는 두 가지 다른 extension으로 구성됩니다:
+- 그룹 또는 멤버에 대한 모든 정보를 포함하는 `Extension`.
+- `Group` 또는 `Member` extension이 위치한 `Mint` account를 참조하는 `Pointer Extension`.
+
+그룹과 멤버 간의 관계는 그룹이 여러 멤버를 가질 수 있지만, 그 반대는 불가능하다는 것입니다.
+
+`Metadata` extension과 마찬가지로, 여기서는 `Extension`과 `Pointer`를 일반적으로 동일한 `Mint` account에 배치하며, `Group` 및 `Member` extension을 생성하려면 [Token Group Interface](https://github.com/solana-program/token-group/tree/main)를 사용해야 합니다.
+
+> `Member` extension이 있는 `Mint` account에 `Group` extension을 가질 수 없습니다.
+
+`Group` 및 `GroupPointer` Extension 데이터는 다음과 같습니다:
+
+```rust
+/// GroupPointer Extension
+pub const group_pointer_extension_header: [u8; 4] = [20, 0, 64, 0];
+
+pub struct GroupPointer {
+    // Authority that can set the group address
+    authority: Pubkey;
+    // Account Address that holds the group
+    group_address: Pubkey;
+}
+
+/// Group Extension
+pub const group_extension_header: [u8; 4] = [21, 0, 80, 0];
+
+pub struct TokenGroup {
+    /// The authority that can sign to update the group
+    pub update_authority: Pubkey,
+    /// The associated mint, used to counter spoofing to be sure that group
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The current number of group members
+    pub size: u64,
+    /// The maximum number of group members
+    pub max_size: u64,
+}
+```
+
+`Member` 및 `MemberPointer` Extension 데이터는 다음과 같습니다:
+
+```rust
+/// MemberPointer Extension
+pub const group_pointer_extension_header: [u8; 4] = [22, 0, 64, 0];
+
+pub struct MemberPointer {
+    // Authority that can set the member address
+    authority: Pubkey;
+    // Account Address that holds the member
+    member_address: Pubkey;
+}
+
+/// Member Extension
+pub const group_extension_header: [u8; 4] = [23, 0, 72, 0];
+
+pub struct TokenGroupMember {
+    /// The associated mint, used to counter spoofing to be sure that member
+    /// belongs to a particular mint
+    pub mint: Pubkey,
+    /// The pubkey of the `TokenGroup`
+    pub group: Pubkey,
+    /// The member number
+    pub member_number: u64,
+}
+```

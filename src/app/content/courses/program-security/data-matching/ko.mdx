@@ -1,0 +1,118 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 데이터 매칭
+
+데이터 매칭은 프로그램 로직에서 account 데이터를 신뢰하기 전에 해당 데이터가 예상 값을 포함하는지 검증하는 보안 관행입니다. `owner` 검사가 누가 account를 제어하는지 확인하고 `signer` 검사가 권한 부여를 확인하는 동안, 데이터 매칭은 account의 내부 상태가 프로그램의 가정과 일치하는지 보장합니다.
+
+이는 instruction handler가 account 간의 관계에 의존하거나 특정 데이터 값이 프로그램 동작을 결정할 때 중요해집니다. 적절한 데이터 유효성 검사 없이는 공격자는 기본 ownership 및 권한 부여 검사를 통과하더라도 예상치 못한 데이터 조합으로 account를 조작하여 프로그램 flow를 조작할 수 있습니다.
+
+위험은 구조적 유효성 검사와 논리적 유효성 검사 사이의 간극에 있습니다. 프로그램은 account가 올바른 유형을 가지고 있고 올바른 프로그램이 소유하고 있음을 정확하게 확인할 수 있지만, 여전히 다른 데이터 조각들 간의 관계에 대해 잘못된 가정을 할 수 있습니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+프로그램 account의 ownership을 업데이트하는 이 취약한 instruction을 살펴보겠습니다.
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(mut)]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+이 코드는 언뜻 보기에 안전해 보입니다. `owner`는 `Signer`로 올바르게 표시되어 transaction을 승인했음을 보장합니다. `program_account`는 올바른 유형을 가지며 프로그램이 소유합니다. 모든 기본 보안 검사를 통과합니다.
+
+하지만 치명적인 결함이 있습니다. 프로그램은 transaction에 서명한 `owner`가 `program_account` 데이터에 저장된 `owner`와 실제로 동일한지 전혀 검증하지 않습니다.
+
+공격자는 다음을 통해 이를 악용할 수 있습니다.
+- 자신의 keypair를 생성합니다 (`attacker_keypair`라고 부르겠습니다).
+- 하이재킹하려는 임의의 프로그램 account를 찾습니다.
+- 다음 내용을 포함하는 transaction을 생성합니다: `owner`는 `attacker_keypair` (공격자가 제어하고 서명할 수 있음); `new_owner`는 공격자의 주요 public key이고 `program_account`는 피해자의 account입니다.
+
+`attacker_keypair`가 올바르게 서명했기 때문에 transaction은 성공하지만, 프로그램은 `attacker_keypair`가 `program_account.owner`에 저장된 실제 `owner`와 일치하는지 전혀 확인하지 않습니다. 공격자는 다른 사람의 account ownership을 자신에게 성공적으로 이전합니다.
+
+다행히 `Anchor`는 다음과 같이 `has_one` 제약 조건을 추가하여 account struct에서 이 검사를 직접 수행하는 것을 매우 쉽게 만듭니다.
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(mut, has_one = owner)]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+또는 프로그램 설계를 변경하여 `program_account`를 `owner`로부터 파생된 PDA로 만들 수도 있습니다. 다음과 같습니다.
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        seeds = [owner.key().as_ref()],
+        bump
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+또는 다음과 같이 `ctx.accounts.program_account.owner` 검사를 사용하여 instruction에서 해당 데이터를 확인할 수도 있습니다.
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.owner != ctx.accounts.owner.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+    Ok(())
+}
+```
+
+이 검사를 추가하면, account가 올바른 `owner`를 가질 경우에만 instruction handler가 진행됩니다. `owner`가 올바르지 않으면 transaction은 실패합니다.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 account struct 내부에 직접 보안 검사를 추가할 가능성이 없으므로, instruction 로직에서 이를 수행해야 합니다.
+
+account 데이터를 deserialize하고 `owner` 값을 확인하여 이를 수행할 수 있습니다.
+
+```rust
+let account_data = ctx.accounts.program_account.try_borrow_data()?;
+let mut account_data_slice: &[u8] = &account_data;
+let account_state = ProgramAccount::try_deserialize(&mut account_data_slice)?;
+
+if account_state.owner != self.accounts.owner.key() {
+    return Err(ProgramError::InvalidAccountData.into());
+}
+```
+
+> Pinocchio는 원하는 대로 deserialization 및 serialization을 처리할 수 있게 해주므로, `ProgramAccount::try_deserialize()` 함수를 직접 생성해야 합니다.

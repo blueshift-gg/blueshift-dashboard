@@ -1,0 +1,615 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 바이트별 분석: 크레이트 없는 프로그램의 해부학
+
+![Image Test](/graphics/banners/research-crateless-program.png)
+
+Solana 프로그램을 작성해 본 적이 있다면, `solana_program`, `pinocchio`와 같은 crate를 사용했거나, `anchor`, `steel`처럼 이러한 crate를 내부적으로 사용하는 framework를 분명히 사용했을 것입니다.
+
+하지만 이러한 crate가 존재하지 않는다면 무엇을 해야 할지 궁금해 본 적이 있습니까? 여기서는 완전히 수동으로 작성된, crate 없는 Solana 프로그램을 만들 Low-Level 101에 오신 것을 환영합니다.
+
+<ArticleSection name="Low-level Solana 101" id="low-level-solana-101" level="h2" />
+
+본격적으로 완전한 vault 예제를 수동으로 작성하기 전에 Solana 프로그램에 대한 몇 가지 기본 사항을 이해해야 합니다.
+
+#### `[repr(C)]` and `extern C`
+
+어떤 low-level Solana 예제를 보더라도 두 가지 패턴이 반복적으로 나타납니다.
+
+```rust
+#[repr(C)]              
+pub struct MyState { … }
+
+pub unsafe extern "C" fn entrypoint(ptr: *mut u8) -> u64 { … }
+```
+
+- `extern "C"`는 Rust compiler에게 C ABI를 따르는 symbol을 노출(또는 기대)하도록 지시합니다. 이는 eBPF register가 어떤 인자를 전달하고, stack이 어떻게 배치되며, 어떤 register가 값을 반환하는지 정의하는 호출 규약입니다.
+- `#[repr(C)]`는 Rust가 C compiler가 하는 방식과 정확히 일치하도록 struct를 정렬하도록 강제하여 field 순서와 padding을 고정함으로써 byte layout이 변경되지 않도록 합니다.
+
+C ABI가 선택된 이유는 무엇일까요? 이는 LLVM의 eBPF backend가 지원하는 모든 언어(Rust, C, Zig 또는 수동으로 작성된 assembly까지)에서 가장 낮은 공통 분모이기 때문입니다. 어떤 toolchain이 bytecode를 생성하든, Solana runtime은 프로그램의 entry function을 raw 이름으로 호출하고 세 개의 pointer를 올바른 register에 밀어 넣어야 합니다. C ABI를 고수함으로써 어떤 LLVM 기반 언어로 생성된 코드라도 작동함을 보장합니다.
+
+#### Entrypoint
+
+`entrypoint!()`는 모든 Solana 프로그램이 노출해야 하는 단일 symbol입니다. 이는 Solana runtime이 loader에서 여러분의 코드로 점프하는 인계 지점입니다.
+
+점프하기 전에 loader는 instruction이 필요로 하는 모든 것을 BPF VM의 input page에 저장된 하나의 flat한 C-스타일 record로 압축합니다. 그런 다음 macro는 해당 record를 unpack하여 Rust에 세 가지 safe한 slice와 reference를 전달합니다.
+- **program_id**: 현재 실행 중인 프로그램의 pubkey.
+- **accounts**: AccountInfo record의 연속된 array에 대한 pointer와 길이를 포함합니다.
+- **instruction_data**: transaction에 의해 제공되는 raw bytes의 pointer-plus-length slice.
+
+macro는 다음을 수행합니다.
+- raw pointer를 safe한 Rust slice로 변환합니다.
+- panic을 포착하여 VM을 crash시키는 대신 깔끔한 `ProgramError::Custom` 코드가 되도록 합니다.
+- 모든 것을 `ProgramResult`를 반환하는 사용자 정의 함수(종종 `process_instruction`이라고 불림)로 전달합니다.
+
+다음은 Solana loader가 entrypoint로 점프하기 전에 BPF VM의 input page에 배치하는 단일하고 flat한 record에 대한 설명입니다.
+
+```rust
+pub struct Entrypoint {
+    account_len: u64,
+    account_info: [AccountRaw; account_len]
+    instruction_len: u64,
+    instruction_data: [u8; instruction_len]
+    program_id: [u8; 32],
+}
+```
+- `account_len`: 전송된 account의 수.
+- `account_info`: instruction에 포함된 raw account record들로, 하나씩 이어집니다.
+- `instruction_len`: 뒤따라오는 instruction data의 바이트 수.
+- `instruction_data`: instruction 자체.
+- `program_id`: 실행 중인 프로그램의 32-byte `Pubkey` 입니다.
+
+`account_info` array의 모든 요소는 다음의 동일한 packed layout을 따릅니다.
+
+```rust
+pub struct AccountRaw {
+    is_duplicate: u8,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
+    alignment: u32,
+    key: [u8; 32],
+    owner: [u8; 32],
+    lamports: u64,
+    data_len: usize,
+    data: [u8; data_len],
+    padding: [u8; 10_240],
+    alignment_padding: [u8; ?],
+    rent_epoch: i64,
+}
+```
+- `is_duplicate`: 동일한 account가 목록에 두 번 이상 나타나면 해당 데이터를 건너뛰어 "redeserialize"하지 않도록 합니다. `0xFF`는 "unique"를 의미하며, 다른 값은 복사할 index입니다.
+- `is_signer` / `is_writable` / `executable`: runtime이 사용하는 단일 바이트 flag로, 프로그램이 추가 syscall 없이 logic 및 CPI를 제어할 수 있도록 합니다.
+- `alignment`: 전체 struct가 8-byte 정렬을 유지하도록 하는 placeholder 4-byte slot입니다. Pinocchio는 이를 재할당(reallocs) 중에 원래 data length를 추적하는 데 재사용합니다.
+- `key` / `owner` / `lamports`: 각 account가 가져야 하는 최소한의 유효한 데이터입니다.
+- `data_len` + `data`: account가 가질 수 있는 가변 길이 데이터입니다.
+- `padding`: loader는 account의 최대 크기인 10_240 바이트를 미리 할당하여 account data가 메모리 이동 없이 제자리에서 변경 및 증가할 수 있도록 합니다.
+- `align_padding`: 필요한 경우 추가 filler로, 다음 `AccountRaw`가 여전히 8-byte 경계에서 시작하도록 합니다(일부 eBPF host에서 중요).
+- `rent_epoch`: account가 다음에 rent를 지불해야 하는 Epoch입니다. rent collection이 일시 중지되었음에도 불구하고 호환성을 위해 유지됩니다.
+
+#### Syscalls
+
+**system call** 또는 syscall은 비특권(unprivileged) 코드가 host로부터 특권(privileged) 서비스를 요청하는 통로입니다. syscall이 이루어지면 CPU는 user mode에서 신뢰할 수 있는 특권 mode로 전환됩니다. 그런 다음 runtime은 요청된 작업을 수행하고 status code와 함께 제어권을 반환합니다. 이러한 간접 방식은 샌드박스화된(sandboxed) 코드가 host 메모리나 I/O를 직접 건드리지 못하게 하여 안전성과 결정성을 유지합니다.
+
+Solana에서 BPF bytecode는 자체적으로 hash를 계산하거나, log를 남기거나, cross-program invocation (CPI)을 수행할 수 없습니다. 대신, `sol_log`, `sol_sha256`, `sol_invoke_signed`와 같은 명명된 syscall을 호출합니다.
+
+각 syscall 번호는 loader의 dispatch table에 있는 단순한 index입니다. loader는 요청된 작업을 실행하고 `u64` status word (성공 시 0, 실패 시 0이 아님)를 반환합니다.
+
+예를 들어, `sol_invoke_signed`는 instruction, 해당 account list, 그리고 모든 PDA signer seeds를 묶어 loader에게 전달하고, loader는 다음과 같이 적절한 권한 하에 CPI를 수행합니다.
+
+```rust
+/// Solana BPF syscall for invoking a signed instruction.
+fn sol_invoke_signed_c(
+    instruction_addr: *const u8,
+    account_infos_addr: *const u8,
+    account_infos_len: u64,
+    signers_seeds_addr: *const u8,
+    signers_seeds_len: u64,
+) -> u64;
+```
+
+<ArticleSection name="The Vault Code" id="the-vault-code" level="h2" />
+
+이제 "crate 없는" Solana 프로그램의 모든 구성 요소를 살펴보았으니, vault 자체를 설명할 수 있습니다. vault는 정확히 두 가지를 수행합니다.
+- **Deposit**: owner의 public key에서 파생된 PDA에 lamport를 예치합니다.
+- **Withdraw**: 나중에 동일한 lamport를 인출합니다; 오직 owner만 가능합니다.
+
+따라서 각 instruction은 세 개의 account를 포함합니다.
+- **Owner** (signer, writable): 자금을 예치하거나 인출하는 사용자.
+- **Vault** (writable): 모든 lamport가 포함된 PDA.
+- **System Program**: lamport 전송을 수행하는 데 필요한 account.
+
+시작하기 전에 새 프로젝트를 생성해야 합니다. 터미널에서 다음 명령을 실행하십시오.
+
+```
+# create workspace
+cargo new blueshift_vault --lib --edition 2021
+cd blueshift_vault
+```
+
+`Cargo.toml`에 다음을 추가하십시오.
+
+```
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+#### Template
+
+모든 것은 `lib.rs` 파일에 존재합니다. 파일을 살펴보면 Syscall Shim (필요한 raw syscall layout을 미러링하는 작은 `#[repr(C)]` struct)과 상수로 정의된 data offset (raw 데이터 작업을 더 쉽게 하기 위함)이 포함되어 있습니다.
+
+```rust
+#![no_std]
+
+const ACCOUNT_RAW_LEN: usize = 10_336;
+const INSTRUCTION_LEN_LEN: usize = 8;
+
+const ACCOUNT_OFFSET: usize = 8;
+const IS_DUPLICATE_OFFSET: usize = 0;
+const IS_SIGNER_OFFSET: usize = 1;
+const IS_WRITABLE_OFFSET: usize = 2;
+const EXECUTABLE_OFFSET: usize = 3;
+const ALIGNMENT_OFFSET: usize = 4;
+const KEY_OFFSET: usize = 8;
+const OWNER_OFFSET: usize = 40;
+const LAMPORTS_OFFSET: usize = 72;
+const DATA_LEN_OFFSET: usize = 80;
+const DATA_OFFSET: usize = 88;
+const PADDING_OFFSET: usize = 10_248;
+const RENT_EPOCH_OFFSET: usize = 10_248;
+
+// Base58로 인코딩된 11111111111111111111111111111111
+const SYSTEM_PROGRAM_ID: [u8; 32] = [0u8; 32];
+
+#[allow(unused)]
+extern "C" { 
+    fn sol_sha256(
+        vals: *const u8, 
+        val_len: u64, 
+        hash_result: *mut [u8;32]
+    ) -> u64;
+
+    fn sol_log_(
+        input: *const u8, 
+        len: u64
+    ) -> u64;
+
+    fn sol_log_64_(
+        arg1: u64, 
+        arg2: u64, 
+        arg3: u64, 
+        arg4: u64, 
+        arg5: u64
+    ) -> u64;
+
+    fn sol_invoke_signed_c(
+        instruction_addr: *const u8,
+        account_infos_addr: *const u8,
+        account_infos_len: u64,
+        signers_seeds_addr: *const u8,
+        signers_seeds_len: u64,
+    ) -> u64;
+}
+
+#[repr(C)]
+struct SolInstruction {
+    program_id_addr: u64,
+    accounts_addr: u64,
+    accounts_len: usize,
+    data_addr: u64,
+    data_len: usize,
+}
+
+#[repr(C)]
+struct SolAccountMeta {
+    pubkey_addr: u64,
+    is_writable: bool,
+    is_signer: bool,
+}
+
+#[repr(C)]
+struct SolAccountInfo {
+    key_addr: u64,
+    lamports_addr: u64,
+    data_len: u64,
+    data_addr: u64,
+    owner_addr: u64,
+    rent_epoch: u64,
+    is_signer: bool,
+    is_writable: bool,
+    executable: bool,
+}
+
+#[repr(C)]
+struct SolSignerSeed {
+    seed: *const u8,
+    seed_len: u64,
+}
+
+#[repr(C)]
+struct SolSignerSeedC {
+    addr: u64,
+    len: u64,
+}
+
+#[repr(C)]
+struct SolSignerSeedsC {
+    addr: u64,
+    len: u64,
+}
+
+// 22222222222222222222222222222222222222222222
+pub const ID: [u8; 32] = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee, 
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7, 
+];
+
+#[no_mangle]
+pub unsafe extern "C" fn entrypoint(input: *mut u8) -> u64 {
+
+}
+```
+
+#### Account Checks
+
+`deposit` 또는 `withdraw`를 실행하기 전에 entrypoint는 transaction이 정확히 올바른 account를 제공했으며 각 account에 예상되는 flag가 있는지 확인해야 합니다.
+
+raw pointer 수준에서 작업하기 때문에 모든 검사는 간단한 pointer 연산과 직접 로드(direct loads)를 통해 이루어집니다.
+
+input record의 처음 8 바이트는 account_len을 저장합니다. 이 vault의 경우 owner, vault PDA, 그리고 System Program의 세 가지 account를 예상합니다.
+
+```rust
+// Check that we have 3 accounts: Signer, Vault, Program
+if *(input as *const u64) != 3 {
+    sol_log_("유효하지 않은 account 수".as_ptr(), 26);
+    return 1010; // NotEnoughAccountKeys Error
+}
+```
+
+각 account를 계속해서 확인합니다. 이전에 정의한 layout offset을 통해 전체 struct를 역직렬화(deserializing)하지 않고도 모든 flag를 sanity-check할 수 있습니다.
+
+첫 번째 account인 signer에 대해 수행하는 검사는 다음과 같습니다.
+- 고유해야 합니다 (is_duplicate == 0xff)
+- Writable (lamports를 변경할 것입니다)
+- Signer
+- 실행 불가능(Not executable)
+- 데이터가 없어야 합니다.
+
+```rust
+if *(input.add(ACCOUNT_OFFSET) as *const u32) != 0x0101ff {
+    sol_log_("유효하지 않은 Account 1 데이터: 비중복, 쓰기 가능, 서명자, 실행 불가능 검사 실패".as_ptr(), 58);
+    return 1003; // InvalidAccountData Error
+}
+if *(input.add(ACCOUNT_OFFSET + DATA_LEN_OFFSET) as *const usize) != 0 {
+    sol_log_("유효하지 않은 Account 1 데이터: 데이터 길이가 0이 아님".as_ptr(), 38);
+    return 1003; // InvalidAccountData Error
+}
+```
+
+또한 나중에 PDA 검사를 위해 owner의 public key를 저장합니다.
+
+```rust
+let signer_key = *(input.add(ACCOUNT_OFFSET + KEY_OFFSET) as *const [u8; 32]);
+```
+
+두 번째 account인 vault에 대해 수행하는 검사는 다음과 같습니다.
+- Writable (lamports를 변경할 것입니다)
+- System Program이 소유합니다.
+- 데이터 길이가 0이어야 합니다 (여기에는 상태를 저장하지 않습니다)
+
+```rust
+const ACCOUNT_2_OFFSET: usize = ACCOUNT_OFFSET + ACCOUNT_RAW_LEN;
+
+if *(input.add(ACCOUNT_2_OFFSET + IS_WRITABLE_OFFSET) as *const u8) != 1 {
+    sol_log_("유효하지 않은 Account 2 데이터: 쓰기 가능 검사 실패".as_ptr(), 38);
+    return 1003; // InvalidAccountData Error
+}
+
+if *(input.add(ACCOUNT_2_OFFSET + OWNER_OFFSET) as *const [u8; 32]) != pinocchio_system::ID {
+    sol_log_("유효하지 않은 Account 2 데이터: Owner가 System Program이 아님".as_ptr(), 48);
+    return 1022; // InvalidAccountOwner Error
+}
+
+if *(input.add(ACCOUNT_2_OFFSET + DATA_LEN_OFFSET) as *const usize) != 0 {
+    sol_log_("유효하지 않은 Account 2 데이터: 데이터 길이가 0이 아님".as_ptr(), 38);
+    return 1003; // InvalidAccountData Error
+}
+```
+
+또한 나중에 PDA 검사를 위해 vault의 public key를 가져옵니다.
+
+```rust
+let vault_key = *(input.add(ACCOUNT_2_OFFSET + KEY_OFFSET) as *const [u8; 32]);
+```
+
+마지막 account인 system program에 대해 수행하는 검사는 다음과 같습니다.
+- 실행 가능해야 합니다.
+- 해당 key는 SYSTEM_PROGRAM_ID와 같아야 합니다.
+
+```rust
+const ACCOUNT_3_OFFSET: usize = ACCOUNT_2_OFFSET + ACCOUNT_RAW_LEN;
+const SYSTEM_PROGRAM_DATA_LENGTH: usize = 14 + 2;
+
+if *(input.add(ACCOUNT_3_OFFSET + EXECUTABLE_OFFSET) as *const u8) != 1 {
+    sol_log_("유효하지 않은 Account 3 데이터: 실행 가능 검사 실패".as_ptr(), 38);
+    return 1003; // InvalidAccountData Error
+}
+
+if *(input.add(ACCOUNT_2_OFFSET + OWNER_OFFSET) as *const [u8; 32]) != SYSTEM_PROGRAM_ID {
+    sol_log_("유효하지 않은 Account 3 데이터: Owner가 System Program이 아님".as_ptr(), 48);
+    return 1003; // InvalidAccountData Error
+}
+```
+
+#### Instruction checks
+
+account 유효성 검사 후, 마침내 instruction payload를 파싱할 수 있습니다. native program과 동일한 접근 방식을 사용하여 첫 번째 바이트를 discriminator로 사용합니다.
+
+```rust
+const INSTRUCTION_OFFSET: usize = ACCOUNT_3_OFFSET + ACCOUNT_RAW_LEN + SYSTEM_PROGRAM_DATA_LENGTH + INSTRUCTION_LEN_LEN;
+
+let discriminator = *(input.add(INSTRUCTION_OFFSET) as *const u8);
+match discriminator {
+    0 => {
+        sol_log_("예치".as_ptr(), 7);
+
+        // deposit logic …
+
+        return 0; // Success
+    }
+    1 => {
+        sol_log_("인출".as_ptr(), 8);
+
+        // withdraw logic …
+
+        return 0; // Success
+    }
+    _ => {
+        sol_log_("유효하지 않은 Instruction".as_ptr(), 20);
+        return 1002; // InvalidInstructionData Error
+    }
+}
+```
+
+여기서부터 deposit 또는 withdraw handler로 분기하며, 모든 account와 flag가 vault가 예상하는 것과 정확히 일치한다고 확신합니다.
+
+#### Deposit Logic
+
+deposit instruction에 대한 더 자세한 설명을 시작합니다. 모든 검사는 처음에 수행되며, 통과하면 System-Program 전송을 생성하고 호출합니다.
+
+이 instruction의 instruction data는 다음과 같습니다.
+- 바이트 0은 discriminator입니다 (deposit의 경우 `0x00`).
+- 바이트 1은 PDA 검사에 재사용할 bump입니다.
+- 바이트 2-9는 little-endian으로 lamport amount를 저장하며, 0이면 확인 및 거부됩니다.
+
+```rust
+let amount = *(input.add(INSTRUCTION_OFFSET + 2) as *const u64);
+if amount == 0 {
+    return 1002; // InvalidInstructionData Error
+}
+```
+
+그 후 `sol_sha256` syscall을 사용하여 owner key를 hash합니다. 이때 bump, program ID 및 고유한 문자열 "ProgramDerivedAddress"를 함께 사용합니다.
+
+결과는 account 검사 중에 저장한 vault key와 비교합니다. 만약 다르면 `InvalidSeeds`를 반환합니다.
+
+만약 다르면 `InvalidSeeds`를 반환합니다.
+
+```rust
+let bump: u8 = *(input.add(INSTRUCTION_OFFSET + 1) as *const u8);
+let data = [
+    signer_key.as_ref(),
+    &[bump],
+    ID.as_ref(),
+    b"ProgramDerivedAddress",
+];
+
+let mut pda = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+sol_sha256(
+    &data as *const _ as *const u8,
+    4,
+    pda.as_mut_ptr(),
+);
+
+if vault_key != *pda.as_ptr() {
+    sol_log_("유효하지 않은 PDA 주소".as_ptr(), 19);
+    return 1013; // InvalidSeeds Error
+};
+```
+
+마지막으로 System-Program 전송을 생성할 수 있습니다.
+
+System Program은 4-byte discriminator (전송의 경우 값은 2)를 사용하며, `from_account`에서 `to_account`로 전송하려는 amount를 나타내는 추가 8 바이트를 필요로 합니다.
+
+그런 다음 두 개의 SolAccountMeta 값으로 이루어진 작은 array를 만들어야 합니다. from = owner (signer, writable), to = vault (writable)입니다. 이를 `instruction_data`와 결합하여 `SolInstruction` struct를 생성합니다.
+
+```rust
+let mut instruction_data = [0; 12];
+instruction_data[0] = 2; // discriminator
+instruction_data[4..12].copy_from_slice(&amount.to_le_bytes()); // amount
+
+let accounts_addr: [SolAccountMeta; 2] = [
+    // from_account
+    SolAccountMeta { 
+        pubkey_addr: input.add(ACCOUNT_OFFSET + KEY_OFFSET) as u64,
+        is_writable: true,
+        is_signer: true,
+    },
+    // to_account
+    SolAccountMeta { 
+        pubkey_addr: input.add(ACCOUNT_2_OFFSET + KEY_OFFSET) as u64,
+        is_writable: true,
+        is_signer: false,
+    },
+];
+
+// Create the instruction
+let instruction = SolInstruction {
+    program_id_addr: input.add(ACCOUNT_3_OFFSET + KEY_OFFSET) as u64,
+    accounts_addr: accounts_addr.as_ptr() as u64,
+    accounts_len: 2,
+    data_addr: instruction_data.as_ptr() as u64,
+    data_len: 12,
+};
+```
+
+하지만 `sol_invoke_signed_c` syscall을 호출하기 전에, owner와 vault를 위한 두 개의 `SolAccountInfo` struct를 만들어야 합니다. 이 struct들은 loader가 메모리에 남겨둔 위치에 정확히 lamport 잔액 및 데이터 slice에 대한 pointer를 제공합니다.
+
+그 후 instruction pointer, 두 요소로 구성된 `SolAccountInfo` array에 대한 pointer, 그리고 account 개수(2)를 전달하여 syscall을 호출할 수 있습니다. 외부 transaction은 이미 owner에 의해 서명되었으므로, 여기서는 PDA seeds가 필요하지 않으며, 따라서 `signers_seeds_addr` 인수는 NULL입니다.
+
+```rust
+let account_infos_addr: [SolAccountInfo; 2] = [
+    SolAccountInfo {
+        is_signer: true,
+        is_writable: true,
+        executable: false,
+        key_addr: input.add(ACCOUNT_OFFSET + KEY_OFFSET) as u64,
+        lamports_addr: input.add(ACCOUNT_OFFSET + LAMPORTS_OFFSET) as u64,
+        data_len: 0,
+        data_addr: input.add(ACCOUNT_OFFSET + DATA_OFFSET) as u64,
+        owner_addr: input.add(ACCOUNT_OFFSET + OWNER_OFFSET) as u64,
+        rent_epoch: 0,
+    },
+    SolAccountInfo {
+        is_signer: false,
+        is_writable: true,
+        executable: false,
+        key_addr: input.add(ACCOUNT_2_OFFSET + KEY_OFFSET) as u64,
+        lamports_addr: input.add(ACCOUNT_2_OFFSET + LAMPORTS_OFFSET) as u64,
+        data_len: 0,
+        data_addr: input.add(ACCOUNT_2_OFFSET + DATA_OFFSET) as u64,
+        owner_addr: input.add(ACCOUNT_2_OFFSET + OWNER_OFFSET) as u64,
+        rent_epoch: 0,
+    },
+];
+
+// Invoke the instruction with the signer seeds
+sol_invoke_signed_c(
+    &instruction as *const SolInstruction as *const u8,
+    account_infos_addr.as_ptr() as *const u8,
+    2, // Number of accounts
+    core::ptr::null(),
+    0,
+);
+```
+
+#### Withdraw Logic
+
+withdraw instruction은 deposit과 유사하지만 몇 가지 주요 차이점이 있습니다. instruction data는 더 간단합니다.
+- 바이트 0은 discriminator입니다 (withdraw의 경우 `0x01`).
+- 바이트 1은 PDA 검사에 재사용할 bump입니다.
+
+```rust
+let bump: u8 = *(input.add(INSTRUCTION_OFFSET + 1) as *const u8);
+```
+
+deposit과 동일한 PDA 검사를 수행하며, owner의 public key, bump, program ID 및 고유한 문자열 "ProgramDerivedAddress"를 사용합니다.
+
+```rust
+let data = [
+    signer_key.as_ref(),
+    &[bump],
+    ID.as_ref(),
+    b"ProgramDerivedAddress",
+];
+
+let mut pda = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+sol_sha256(
+    &data as *const _ as *const u8,
+    4,
+    pda.as_mut_ptr(),
+);
+
+if vault_key != *pda.as_ptr() {
+    sol_log_("유효하지 않은 PDA 주소".as_ptr(), 19);
+    return 1013; // InvalidSeeds Error
+};
+```
+
+withdraw의 주요 차이점은 PDA 자체로 transaction에 서명해야 한다는 것입니다. 이를 위해 PDA를 파생하는 데 사용된 seeds를 제공해야 합니다. 두 가지 요소를 가진 `SolSignerSeedsC` array를 생성합니다.
+- owner의 public key (32 바이트)
+- bump (1 바이트)
+
+```rust
+let seeds: [SolSignerSeedsC; 2] = [
+    SolSignerSeedsC {
+        addr: input.add(ACCOUNT_OFFSET + KEY_OFFSET) as u64,
+        len: 32,
+    },
+    SolSignerSeedsC {
+        addr: input.add(INSTRUCTION_OFFSET + 1) as u64,
+        len: 1,
+    },
+];
+
+let signer_seeds_addr: [SolSignerSeedsC; 1] = [
+    SolSignerSeedsC {
+        addr: seeds.as_ptr() as u64,
+        len: 2,
+    },
+];
+```
+
+그런 다음 System Program 전송 instruction을 생성하지만, 이번에는 vault에서 owner로 전송합니다. instruction data는 deposit과 동일합니다.
+- 4-byte discriminator (전송의 경우 값 2)
+- amount에 대한 8 바이트 (vault의 lamports에서 가져옵니다)
+
+```rust
+let amount = *(input.add(ACCOUNT_2_OFFSET + LAMPORTS_OFFSET) as *const u64);
+
+let mut instruction_data = [0; 12];
+instruction_data[0] = 2;
+instruction_data[4..12].copy_from_slice(&amount.to_le_bytes());
+```
+
+account metas는 deposit과 비교하여 역순입니다.
+- 첫 번째 account는 vault입니다 (writable, signer)
+- 두 번째 account는 owner입니다 (writable)
+
+```rust
+let account_addr: [SolAccountMeta; 2] = [
+    SolAccountMeta {
+        pubkey_addr: input.add(ACCOUNT_2_OFFSET + KEY_OFFSET) as u64,
+        is_writable: true,
+        is_signer: true,
+    },
+    SolAccountMeta {
+        pubkey_addr: input.add(ACCOUNT_OFFSET + KEY_OFFSET) as u64,
+        is_writable: true,
+        is_signer: false,
+    },
+];
+```
+
+마지막으로, instruction, account infos, 그리고 이전에 생성한 signer seeds를 사용하여 `sol_invoke_signed_c`를 호출합니다.
+
+```rust
+sol_invoke_signed_c(
+    &instruction as *const SolInstruction as *const u8,
+    account_infos_addr.as_ptr() as *const u8,
+    2, // Number of accounts
+    signer_seeds_addr.as_ptr() as *const u8,
+    1,
+);
+```
+
+<ArticleSection name="Closing Remarks" id="closing-remarks" level="h2" />
+
+Solana 프로그램을 작성하는 이러한 low-level 접근 방식이 극단적으로 보일 수 있지만, 이는 중요한 교육적 목적을 가지고 있습니다. 저희는 여러분이 이러한 방식으로 프로그램을 작성하도록 권장하지 않으며, 사실 이러한 복잡성을 추상화하는 확립된 framework와 crate를 사용하는 것을 강력히 추천합니다. 그러나 기본 메커니즘을 이해하는 것은 매우 중요합니다.
+
+`solana_program`, `anchor` 또는 다른 framework 등 Solana 개발에서 사용하는 모든 추상화는 이러한 근본적인 구성 요소 위에 구축됩니다. 층을 벗겨내고 raw 메커니즘을 검토함으로써 우리는 다음 사항에 대해 더 깊이 이해하게 됩니다.
+
+- Solana runtime이 우리 프로그램과 어떻게 상호 작용하는지
+- 상위 수준 framework에서 특정 설계 결정이 내려진 이유
+- 잠재적인 최적화가 어디에 존재할 수 있는지
+- 문제가 발생했을 때 어떻게 더 잘 디버그할 수 있는지
+
+이러한 지식은 단지 학문적인 것이 아니라 실용적입니다. 기초를 이해하면 다음을 수행할 수 있습니다.
+- 데이터 구조 및 메모리 사용에 대해 정보에 입각한 결정을 내림으로써 더 효율적인 프로그램을 작성할 수 있습니다.
+- 문제가 발생했을 때 더 잘 진단하고 해결할 수 있습니다.
+- 우리가 사용하는 도구를 개선하여 ecosystem에 기여할 수 있습니다.
+- 특정 추상화를 언제 사용하고 언제 low-level에서 작업할지에 대해 정보에 입각한 결정을 내릴 수 있습니다.
+
+기억하십시오. 이 연습의 목표는 crate 없이 프로그램을 작성하는 방법을 가르치는 것이 아니라, 이러한 crate가 내부적으로 무엇을 하는지 이해하도록 돕는 것입니다. 이러한 이해는 어떤 도구를 사용하든 더 좋고 효율적인 Solana 프로그램을 작성하기 위한 첫걸음입니다.

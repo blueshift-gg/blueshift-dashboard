@@ -1,0 +1,310 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# 인스트럭션 & CPIs
+
+인스트럭션은 Solana 프로그램의 구성 요소로, 수행할 수 있는 동작을 정의합니다. Anchor에서 인스트럭션은 특정 속성과 제약 조건을 가진 함수로 구현됩니다. 효과적으로 인스트럭션을 사용하는 방법을 살펴보겠습니다.
+
+<ArticleSection name="인스트럭션 구조" id="instruction-structure" level="h2" />
+
+Anchor에서 인스트럭션은 `#[program]` 모듈과 개별 인스트럭션 함수를 사용하여 정의됩니다. 기본 구조는 다음과 같습니다.
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>, data: u64) -> Result<()> {
+        // 여기에 인스트럭션 로직
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="인스트럭션 Context" id="instruction-context" level="h3" />
+
+모든 인스트럭션 함수는 `Context` struct를 첫 번째 매개변수로 받습니다. 이 context에는 다음이 포함됩니다.
+- `accounts`: 인스트럭션에 전달된 account들
+- `program_id`: 프로그램의 public key
+- `remaining_accounts`: context struct에 명시적으로 정의되지 않은 추가 account들
+- `bumps`: `bumps` 필드는 PDA와 작업할 때 특히 유용합니다. 이 필드는 PDA 주소를 파생하는 데 사용된 bump seed를 제공하기 때문입니다(account struct에서 PDA를 파생하는 경우에만 해당됩니다).
+
+다음과 같이 접근할 수 있습니다.
+
+```rust
+// account 접근
+ctx.accounts.account_1
+ctx.accounts.account_2
+
+// program ID 접근
+ctx.program_id
+
+// remaining account 접근
+for remaining_account in ctx.remaining_accounts {
+    // remaining account 처리
+}
+
+// PDA의 bump 접근
+let bump = ctx.bumps.pda_account;
+```
+
+<ArticleSection name="인스트럭션 Discriminator" id="instruction-discriminator" level="h3" />
+
+account와 마찬가지로, Anchor의 인스트럭션은 discriminator를 사용하여 다른 인스트럭션 유형을 식별합니다. 기본 discriminator는 `sha256("global:<instruction_name>")[0..8]`을 사용하여 생성되는 8바이트 접두사입니다. 인스트럭션 이름은 snake_case여야 합니다.
+
+<AnchorDiscriminatorCalculator value={"initialize_account"} displayMode="instruction" />
+
+<ArticleSection name="사용자 정의 인스트럭션 Discriminator" id="custom-instruction-discriminator" level="h3" />
+
+인스트럭션에 대한 사용자 정의 discriminator를 지정할 수도 있습니다.
+
+```rust
+#[instruction(discriminator = 1)]
+pub fn custom_discriminator(ctx: Context<Custom>) -> Result<()> {
+    // 인스트럭션 로직
+    Ok(())
+}
+```
+
+<ArticleSection name="인스트럭션 Scaffold" id="instruction-scaffold" level="h2" />
+
+인스트럭션을 다양한 방식으로 작성할 수 있으며, 이 섹션에서는 인스트럭션을 설정할 수 있는 몇 가지 스타일과 방법을 소개합니다.
+
+<ArticleSection name="인스트럭션 로직" id="instruction-logic" level="h3" />
+
+인스트럭션 로직은 프로그램의 복잡성과 선호하는 코딩 스타일에 따라 다양한 방식으로 구성될 수 있습니다. 주요 접근 방식은 다음과 같습니다.
+
+1. **인라인 인스트럭션 로직**
+
+간단한 인스트럭션의 경우, 인스트럭션 함수에 로직을 직접 작성할 수 있습니다.
+
+```rust
+pub fn initialize(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // 토큰 전송 로직
+
+    // 토큰 account 닫기 로직
+    
+    Ok(())
+}
+```
+2. **별도 모듈 구현**
+
+매우 복잡한 프로그램의 경우, 로직을 별도의 모듈로 구성할 수 있습니다.
+
+```rust
+// 별도 파일: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // 토큰 전송 로직
+
+    // 토큰 account 닫기 로직
+ 
+    Ok(())
+}
+
+// lib.rs 파일에서
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+3. **별도 Context 구현**
+
+더 복잡한 인스트럭션의 경우, 로직을 context struct의 구현으로 옮길 수 있습니다.
+
+```rust
+// 별도 파일: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    ctx.accounts.transfer_tokens(amount)?;
+    ctx.accounts.close_token_account()?;
+ 
+    Ok(())
+}
+
+impl<'info> Transfer<'info> {
+    /// source에서 destination account로 토큰을 전송합니다.
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // 토큰 전송 로직
+
+        Ok(())
+    }
+
+    /// 전송 후 source 토큰 account를 닫습니다.
+    pub fn close_token_account(&mut self) -> Result<()> {
+        // 토큰 account 닫기 로직
+
+    }
+}
+
+// lib.rs 파일에서
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+<ArticleSection name="인스트럭션 매개변수" id="instruction-parameters" level="h3" />
+
+인스트럭션은 context 외의 매개변수를 받을 수 있습니다. 이러한 매개변수는 Anchor에 의해 자동으로 직렬화되고 역직렬화됩니다. 인스트럭션 매개변수에 대한 주요 내용은 다음과 같습니다.
+
+1. **기본 타입**
+
+Anchor는 모든 Rust primitive 타입과 일반적인 Solana 타입을 지원합니다.
+
+```rust
+pub fn complex_instruction(
+    ctx: Context<Complex>,
+    amount: u64,
+    pubkey: Pubkey,
+    vec_data: Vec<u8>,
+) -> Result<()> {
+    // 인스트럭션 로직
+    Ok(())
+}
+```
+
+2. **사용자 정의 타입**
+
+사용자 정의 타입을 매개변수로 사용할 수 있지만, `AnchorSerialize` 및 `AnchorDeserialize`를 구현해야 합니다.
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct InstructionData {
+    pub field1: u64,
+    pub field2: String,
+}
+
+pub fn custom_type_instruction(
+    ctx: Context<Custom>,
+    data: InstructionData,
+) -> Result<()> {
+    // 인스트럭션 로직
+    Ok(())
+}
+```
+
+<ArticleSection name="권장 사항" id="best-practices" level="h3" />
+
+1. **인스트럭션 집중**: 각 인스트럭션은 하나의 작업을 잘 수행해야 합니다. 하나의 인스트럭션이 너무 많은 작업을 수행한다면, 이를 여러 인스트럭션으로 분할하는 것을 고려하세요.
+
+2. **Context 구현 사용**: 복잡한 인스트럭션의 경우, context 구현 접근 방식을 사용하여 다음을 수행합니다.
+   - 코드를 체계적으로 유지합니다.
+   - 테스트를 더 쉽게 만듭니다.
+   - 재사용성을 향상시킵니다.
+   - 적절한 문서를 추가합니다.
+
+3. **에러 처리**: 항상 적절한 에러 처리를 사용하고 의미 있는 에러 메시지를 반환하세요.
+```rust
+#[error_code]
+pub enum TransferError {
+    #[msg("잔액 부족")]
+    InsufficientBalance,
+    #[msg("유효하지 않은 금액")]
+    InvalidAmount,
+}
+
+impl<'info> Transfer<'info> {
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        require!(amount > 0, TransferError::InvalidAmount);
+        require!(
+            self.source.amount >= amount,
+            TransferError::InsufficientBalance
+        );
+
+        // 전송 로직
+        Ok(())
+    }
+}
+```
+
+4. **문서화**: 항상 인스트럭션 로직을 문서화해야 하며, 특히 context 구현을 사용할 때 더욱 중요합니다.
+```rust
+impl<'info> Transfer<'info> {
+    /// # 토큰 전송
+    /// 
+    /// source에서 destination account로 토큰을 전송합니다.
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // 구현
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="크로스-프로그램 호출 (CPIs)" id="cross-program-invocations" level="h2" />
+
+크로스-프로그램 호출(CPI)은 하나의 프로그램이 다른 프로그램의 인스트럭션을 호출하는 과정을 의미하며, 이는 Solana 프로그램의 composability를 가능하게 합니다. Anchor는 `CpiContext` 및 프로그램별 builder를 통해 CPI를 수행하는 편리한 방법을 제공합니다.
+
+**참고**: 메인 Anchor crate를 사용하고 `use anchor_lang::system_program::*`를 수행하여 모든 System Program CPI를 찾을 수 있습니다. SPL token program과 관련된 CPI의 경우, `anchor_spl` crate를 import하고 `use anchor_spl::token::*`를 수행해야 합니다.
+
+<ArticleSection name="기본 CPI 구조" id="basic-cpi-structure" level="h3" />
+
+기본적인 CPI를 만드는 방법은 다음과 같습니다.
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport(ctx: Context<TransferLamport>, amount: u64) -> Result<()> {
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.from.to_account_info(),
+        to: ctx.accounts.to.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="PDA Signer를 사용한 CPI" id="cpi-with-pda-signers" level="h3" />
+
+PDA 서명을 요구하는 CPI를 수행할 때, `CpiContext::new_with_signer`를 사용합니다.
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport_with_pda(ctx: Context<TransferLamportWithPda>, amount: u64) -> Result<()> {
+    let seeds = &[
+        b"vault".as_ref(),
+        &[ctx.bumps.vault],
+    ];
+    let signer = &[&seeds[..]];
+    
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault.to_account_info(),
+        to: ctx.accounts.recipient.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="에러 처리" id="error-handling" level="h2" />
+
+Anchor는 인스트럭션을 위한 강력한 에러 처리 시스템을 제공합니다. 사용자 정의 에러를 구현하고 인스트럭션에서 처리하는 방법은 다음과 같습니다.
+
+```rust
+#[error_code]
+pub enum MyError {
+    #[msg("사용자 정의 에러 메시지")]
+    CustomError,
+    #[msg("값 {0}을 포함하는 다른 에러")]
+    ValueError(u64),
+}
+
+pub fn handle_errors(ctx: Context<HandleErrors>, value: u64) -> Result<()> {
+    require!(value > 0, MyError::CustomError);
+    require!(value < 100, MyError::ValueError(value));
+    
+    Ok(())
+}
+```

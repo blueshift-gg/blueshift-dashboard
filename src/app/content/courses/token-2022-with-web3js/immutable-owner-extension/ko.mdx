@@ -1,0 +1,72 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Immutable Owner 확장
+
+`ImmutableOwner` extension은 `Token` account의 ownership 변경을 방지하는 `Token` account 확장입니다. 이는 무단 접근 및 전송 시도로부터 account를 보호합니다.
+
+> 모든 `Token` Extensions Program ATA는 기본적으로 immutable owner가 활성화되어 있습니다.
+
+<ArticleSection name="Initializing the Token Account" id="initializing-the-token-account" level="h2" />
+
+`Token` account에 `ImmutableOwner` extension을 초기화하려면 `initializeImmutableOwner()` 함수가 필요합니다.
+
+Immutable Owner extension을 사용하여 토큰을 생성하는 방법은 다음과 같습니다:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createInitializeImmutableOwnerInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calculate the size needed for a Token account with Immutable Owner extension
+const accountLen = getAccountLen([ExtensionType.ImmutableOwner]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Immutable Owner extension
+const initializeImmutableOwnerInstruction = createInitializeImmutableOwnerInstruction(
+    tokenAccount.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the Token account itself
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeImmutableOwnerInstruction,
+    initializeAccountInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+언급했듯이, 이 extension을 `Associated Token` account에 추가하려면 Token2022 program으로 초기화하면 됩니다.

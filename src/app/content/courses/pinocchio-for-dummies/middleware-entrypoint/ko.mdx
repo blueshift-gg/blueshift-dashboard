@@ -1,0 +1,182 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 미들웨어 엔트리포인트
+
+모든 Instruction이 동일하게 생성되는 것은 아닙니다. 일부 Instruction은 다른 Instruction보다 더 자주 호출되어 성능 병목 현상을 일으킵니다.
+
+효율성과 최적화를 우선시하려면 이러한 고빈도 Instruction을 처리하는 다른 접근 방식이 필요합니다.
+
+여기에서 "핫(Hot)" 및 "콜드(Cold)" 경로 전략이 중요하게 작용합니다.
+
+핫(Hot) 경로는 자주 호출되는 Instruction을 위한 최적화된 엔트리포인트를 생성하며, 가능한 한 빨리 "실패" 상태에 도달하도록 설계되어 필요한 경우 표준 Pinocchio 엔트리포인트로 폴백(fall back)할 수 있습니다.
+
+<ArticleSection name="The Hot Path" id="the-hot-path" level="h2" />
+
+핫(Hot) 경로는 처리 전에 모든 account 데이터를 역직렬화하는 표준 엔트리포인트 로직을 우회합니다. 대신, 최대 성능을 위해 원시(raw) 데이터로 직접 작업합니다.
+
+### 표준 경로와 핫(Hot) 경로 처리 비교
+
+표준 엔트리포인트(Entrypoint)에서는 로더(loader)가 Instruction에 필요한 모든 것을 BPF VM의 입력 페이지에 저장된 플랫한 C 스타일 레코드에 압축합니다. 엔트리포인트 매크로는 이 레코드를 언팩(unpack)하여 세 가지 안전한 슬라이스: `program_id`, accounts, `instruction_data`를 제공합니다.
+
+핫(Hot) 경로에서는 예상하는 바를 정확히 알고 있으므로, 원시(raw) 엔트리포인트 데이터에서 account를 직접 확인하고 조작하여 불필요한 역직렬화 오버헤드를 제거할 수 있습니다.
+
+원시(raw) 입력 구조는 다음과 같습니다.
+
+```rust
+pub struct Entrypoint {
+    account_len: u64,
+    account_info: [AccountRaw; account_len]
+    instruction_len: u64,
+    instruction_data: [u8; instruction_len]
+    program_id: [u8; 32],
+}
+
+pub struct AccountRaw {
+    is_duplicate: u8,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
+    alignment: u32,
+    key: [u8; 32],
+    owner: [u8; 32],
+    lamports: u64,
+    data_len: usize,
+    data: [u8; data_len],
+    padding: [u8; 10_240],
+    alignment_padding: [u8; ?],
+    rent_epoch: i64,
+}
+```
+
+### 핫(Hot) 경로 Discriminator
+
+핫(Hot) 경로를 설계할 때, 현재 Instruction이 핫(Hot) 경로로 처리되어야 하는지 아니면 가능한 한 빨리 콜드(cold) 경로로 라우팅되어야 하는지를 안정적으로 결정할 방법이 필요합니다.
+
+전통적인 discriminator는 account 수와 그 안의 데이터에 따라 매번 다른 오프셋(offset)에 나타나기 때문에 여기서는 작동하지 않습니다.
+
+우리는 항상 동일한 오프셋(offset)에 있는 무언가를 확인해야 합니다. 현재, 이러한 Instruction을 구별하는 두 가지 접근 방식이 있습니다.
+- Account Count: account 수는 원시(raw) 엔트리포인트의 첫 번째 입력값이므로, 전달된 account 수에 따라 구별할 수 있습니다: `if *input == 4u64`.
+    이는 account 수가 입력 데이터의 맨 처음에 고정된 위치를 가지기 때문에 가능합니다.
+
+- 첫 번째 Account의 Publickey: 첫 번째 account의 Public Key는 고정된 오프셋(offset)에 나타나므로, 우리는 항상 상수 키페어(예: authority 또는 프로그램)를 첫 번째 위치에 배치하고 해당 키를 기반으로 구별하도록 프로그램을 설계할 수 있습니다.
+
+> 현재 레지스트리 `r2`에 instruction 데이터를 포함하는 SIMD가 열려 있습니다. 즉, 이것이 구현되면 핫(Hot) 경로에 대한 discriminator를 사용할 수 있게 될 것입니다.
+
+<ArticleSection name="Entrypoint Design" id="entrypoint-design" level="h2" />
+
+[이 PR](https://github.com/anza-xyz/pinocchio/pull/241)을 통해 [Dean](https://x.com/deanmlittle)은 Pinocchio에 `middleware_entrypoint`라는 새로운 엔트리포인트를 도입하여, 프로그램에서 핫(Hot) 경로를 쉽게 생성할 수 있도록 했습니다.
+
+구현 방법은 다음과 같습니다.
+
+```rust
+/// A "dummy" function with a hint to the compiler that it is unlikely to be
+/// called.
+///
+/// This function is used as a hint to the compiler to optimize other code paths
+/// instead of the one where the function is used.
+#[cold]
+pub const fn cold_path() {}
+
+/// Return the given `bool` value with a hint to the compiler that `true` is the
+/// likely case.
+#[inline(always)]
+pub const fn likely(b: bool) -> bool {
+    if b {
+        true
+    } else {
+        cold_path();
+        false
+    }
+}
+
+middleware_entrypoint!(hot, process_instruction);
+
+#[inline(always)]
+pub fn hot(input: *mut u8) -> u64 {
+    unsafe { *input as u64 }
+}
+
+#[inline(always)]
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {    
+    match instruction_data.split_first() {
+        Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
+        Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+### 작동 방식
+
+엔트리포인트는 먼저 "hot" 함수를 호출하고, 오류를 반환하는지 확인한 후, 오류가 발생하면 기본 Pinocchio 엔트리포인트로 폴백(fall back)합니다. 이를 통해 호환성을 유지하면서 일반적인 작업에 대한 빠른 경로를 생성합니다.
+
+`#[cold]` 속성은 이 함수가 거의 호출되지 않는다는 것을 컴파일러에게 알려줍니다. 최적화 과정에서 컴파일러는 콜드(cold) 코드 경로의 우선순위를 낮추고 핫(Hot) 경로 최적화에 리소스를 집중합니다.
+
+### 핫(Hot) 경로 설계 원칙
+
+핫(Hot) 경로를 설계할 때는 원시(raw) 입력값으로 작업하므로 엄격한 유효성 검사가 필수적입니다. 정의되지 않은 동작은 전체 프로그램을 손상시킬 수 있습니다.
+
+항상 account 오프셋(offset)과 길이가 예상과 일치하는지 확인하십시오. [sbpf.xyz](https://sbpf.xyz/)를 사용하여 올바른 오프셋을 결정한 다음, 다음과 같이 유효성을 검사하십시오.
+
+```rust
+if *input == 4
+    && (*input.add(ACCOUNT1_DATA_LEN).cast::<u64>() == 165)
+    && (*input.add(ACCOUNT2_DATA_LEN).cast::<u64>() == 82)
+    && (*input.add(IX12_ACCOUNT3_DATA_LEN).cast::<u64>() == 165)
+{
+    //...
+}
+```
+
+account에 가변 데이터 길이가 있는 경우, 다음과 같이 동적 오프셋(offset)을 생성하여 instruction 데이터를 찾습니다.
+
+```rust
+/// Align an address to the next multiple of 8.
+#[inline(always)]
+fn align(input: u64) -> u64 {
+    (input + 7) & (!7)
+}
+
+//...
+
+// The `authority` account can have variable data length.
+    let account_4_data_len_aligned =
+        align(*input.add(IX12_ACCOUNT4_DATA_LEN).cast::<u64>()) as usize;
+    let offset = IX12_EXPECTED_INSTRUCTION_DATA_LEN_OFFSET + account_4_data_len_aligned;
+```
+
+유효성 검사가 통과되면 instruction 데이터를 추출하고, account를 transmute한 후 정상적으로 처리합니다.
+
+```rust
+// Check that we have enough instruction data.
+if input.add(offset).cast::<usize>().read() >= INSTRUCTION_DATA_SIZE {
+    let discriminator = input.add(offset + size_of::<u64>()).cast::<u8>().read();
+
+    // Check for instruction discriminator.
+    if likely(discriminator == 12) {
+        // instruction data length (u64) + discriminator (u8)
+        let instruction_data = unsafe { from_raw_parts(input.add(offset + size_of::<u64>() + size_of::<u8>()), INSTRUCTION_DATA_SIZE - size_of::<u8>()) };
+
+        let accounts = unsafe {
+            [
+                transmute::<*mut u8, AccountInfo>(input.add(ACCOUNT1_HEADER_OFFSET)),
+                transmute::<*mut u8, AccountInfo>(input.add(ACCOUNT2_HEADER_OFFSET)),
+                transmute::<*mut u8, AccountInfo>(input.add(IX12_ACCOUNT3_HEADER_OFFSET)),
+                transmute::<*mut u8, AccountInfo>(input.add(IX12_ACCOUNT4_HEADER_OFFSET)),
+            ]
+        };
+
+        return match Instruction1::try_from((instruction_data, accounts))?.process() {
+            Ok(()) => SUCCESS,
+            Err(error) => {
+                log_error(&error);
+                error.into()
+            }
+        };
+    }
+}
+```

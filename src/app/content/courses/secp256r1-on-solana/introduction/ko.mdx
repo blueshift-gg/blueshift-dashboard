@@ -1,0 +1,116 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Solana의 Secp256r1
+
+![Solana의 Secp256r1](/graphics/course-banners/secp256r1-on-solana.png)
+
+Secp256r1은 현대 암호학에서 가장 널리 채택된 타원 곡선 중 하나이며, TLS 연결부터 하드웨어 보안 키에 이르기까지 모든 것을 지원합니다. 이 곡선은 수많은 애플리케이션에서 디지털 보안의 중추를 형성합니다.
+
+[Orion](https://x.com/BasedOrion_)이 [SIMD 75](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0075-precompile-for-secp256r1-sigverify.md)에서 제안한 secp256r1 precompile 기능 게이트는 블록 800에서 Solana에 활성화되었습니다.
+
+<ArticleSection name="Secp256r1이란 무엇인가" id="what-is-secp256r1" level="h2" />
+
+secp256r1로 알려진 이 곡선은 2000년대 초 Standards for Efficient Cryptography Group (SECG)에 의해 표준화되었습니다. 이 명명 규칙은 우리가 알아야 할 모든 것을 알려줍니다:
+- `sec`: Standards for Efficient Cryptography (효율적인 암호화를 위한 표준)
+- `p`: The curve is defined over a prime field (이 곡선은 소수 필드 위에서 정의됨)
+- `256`: The prime modulus is approximately 2^256 (소수 모듈러스는 약 2^256)
+- `r`: Random curve (as opposed to Koblitz curves) (랜덤 곡선 (Koblitz 곡선과 대조적))
+- `1`: The first curve in this category (이 범주에서 첫 번째 곡선)
+
+Secp256r1은 이후 NIST에 의해 P-256으로 채택되었고 FIPS 186-2의 일부가 되었습니다. SECG와 NIST에 의한 이 이중 표준화는 이 곡선에 광범위한 정당성을 부여했으며 수많은 프로토콜 및 애플리케이션에 채택되도록 이끌었습니다. 이는 전 세계 프로덕션 시스템에서 가장 철저히 검증된 곡선 중 하나가 되었습니다.
+
+<ArticleSection name="수학적 기초" id="mathematical-foundations" level="h2" />
+
+### 소수 필드와 유한 산술
+
+secp256r1을 이해하려면 먼저 유한 필드(finite fields)에서 작업하는 개념을 파악해야 합니다. 숫자가 무한히 커질 수 있는 일반적인 산술과 달리, 타원 곡선 암호화는 제한된 수학적 공간에서 작동합니다.
+
+이 곡선은 소수 필드 𝔽p 위에서 작동하며, 여기서: `p = 2^256 - 2^224 + 2^192 + 2^96 - 1` 입니다.
+
+이것은 단순한 256비트 소수가 아닙니다. 이는 의사-메르센 소수(pseudo-Mersenne prime)로 알려져 있습니다. 메르센 소수(Mersenne primes)는 `2^n - 1` 형태를 가지며, 이는 값비싼 나눗셈 연산 대신 비트 시프트 및 뺄셈을 사용하여 매우 빠른 모듈러 리덕션(modular reduction)을 가능하게 합니다. 의사-메르센 소수는 이 개념을 2의 거듭제곱에 "가까운" 숫자로 확장하여, 많은 계산 이점을 유지하면서 추가 보안 속성을 더합니다.
+
+secp256r1의 소수에 대해, 다음과 같이 다시 쓸 수 있습니다: `p = 2^256 - c`, 여기서 `c = 2^224 - 2^192 - 2^96 + 1` 입니다.
+
+이러한 구조는 숫자를 `mod p`로 축소해야 할 때 (이는 타원 곡선 연산에서 끊임없이 발생합니다), 느린 범용 나눗셈 대신 빠른 리덕션 알고리즘을 사용할 수 있음을 의미합니다.
+
+> 이는 secp256r1 연산을 임의의 소수를 사용하는 곡선보다 훨씬 빠르게 만듭니다: TLS 핸드셰이크 및 하드웨어 보안 모듈과 같은 성능에 중요한 애플리케이션에 결정적인 이점입니다.
+
+### 타원 곡선 방정식
+
+Secp256r1은 타원 곡선의 짧은 Weierstrass 형태를 따릅니다: `y² = x³ + ax + b (mod p)` 입니다.
+
+secp256r1의 매개변수는 다음과 같습니다:
+- `a = -3` (또는 동등하게 p-3)
+- `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
+
+> `a = -3`은 임의의 숫자가 아니지만, 점 덧셈 및 두 배 연산에서 상당한 최적화를 가능하게 하여 필요한 필드 곱셈 수를 줄입니다.
+
+모든 타원 곡선 암호 시스템은 알려진 차수(order)를 가진 생성 점 G를 필요로 합니다. secp256r1의 경우:
+
+```
+G = (Gx, Gy) where:
+Gx = 0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+Gy = 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+```
+
+> 이 값들은 숨겨진 백도어가 없음을 보장하기 위해 "검증 가능한 무작위(verifiably random)" 프로세스를 통해 생성되었습니다. 만약 곡선 설계자들이 단순히 임의의 값을 선택할 수 있다면, 그들은 자신들만이 아는 비밀스러운 수학적 관계를 포함하는 매개변수를 선택하여, 곡선을 사용하는 모든 시스템을 손상시킬 백도어를 만들 수 있을 것입니다.
+
+### 곡선 차수와 보안 수준
+
+**곡선 차수 (n)**는 무한점(point at infinity)을 포함하여 타원 곡선 상의 총 점의 수를 나타냅니다: `n = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` 입니다.
+
+곡선 차수는 private key 공간의 크기를 결정하고 보안에 직접적인 영향을 미칩니다. "256비트"라고 불리지만, secp256r1은 실제로는 256비트가 아닌 약 128비트의 보안을 제공합니다. 이는 타원 곡선 이산 로그 문제에 대한 가장 잘 알려진 공격의 복잡도가 대략 `√n`이기 때문입니다. 즉, `~2^256`의 차수를 가진 곡선은 `~2^128`의 보안을 제공합니다.
+
+**cofactor (h)**는 1이며, 이는 secp256r1이 prime-order curve임을 의미합니다. 이것이 중요한 이유는 다음과 같습니다:
+- 모든 non-identity point는 동일한 차수 n을 가집니다.
+- Small subgroup attack이 불가능합니다.
+- Low-order point에 대해 걱정할 필요가 없으므로 구현이 단순화됩니다.
+
+### 스칼라 필드
+
+곡선 자체는 좌표 필드 𝔽p 위에서 정의되지만, private key는 다른 수학적 공간인 스칼라 필드 𝔽n에 존재하며, 여기서 n은 곡선 차수입니다.
+
+```
+Private key ∈ [1, n-1]
+Public key = private_key × G (scalar multiplication)
+```
+
+이러한 구별은 다음 때문에 중요합니다:
+- Private key는 스칼라(정수 `mod n`)입니다.
+- 곡선 좌표는 필드 요소(정수 `mod p`)입니다.
+- 이들은 다른 모듈러스입니다: `n ≠ p`
+
+private key를 생성할 때, 우리는 `[1, n-1]`에서 균일하게 샘플링하며, `[1, p-1]`에서는 샘플링하지 않습니다. 이는 모든 private key가 유효한 스칼라 곱셈 연산에 해당하도록 보장하고 특정 수학적 공격을 방지합니다.
+
+<ArticleSection name="Secp256r1이 지배적인 이유" id="why-secp256r1-dominates" level="h2" />
+
+Curve25519와 같이 잠재적으로 더 우수한 곡선이 존재함에도 불구하고, secp256r1은 조기 표준화, 규제 승인, 광범위한 하드웨어 최적화의 조합을 통해 보편적인 채택을 달성했습니다.
+
+수학적으로 더 우수할 수 있는 최신 곡선과 달리, secp256r1은 실제 시스템이 요구하는 암호화 강도, 구현 효율성 및 생태계 호환성 사이의 최적의 균형을 나타냅니다.
+
+일단 하드웨어 제조업체, 운영 체제 및 보안 표준이 모두 secp256r1로 수렴되자, 전환 비용은 엄청나게 커졌습니다.
+
+우리가 탐구한 특정 수학적 특성(의사-메르센 소수, `a = -3` 최적화 및 검증 가능한 매개변수 생성)은 스마트폰 보안 요소부터 고성능 서버에 이르기까지 모든 곳에서 고도로 최적화된 구현을 가능하게 했습니다.
+
+이러한 하드웨어 생태계 효과는 자가 강화적인 채택 주기를 만들었습니다.
+
+<ArticleSection name="Solana의 Secp256r1" id="secp256r1-on-solana" level="h2" />
+
+Solana는 [Orion](https://x.com/BasedOrion_)의 [SIMD-0075](https://github.com/solana-foundation/solana-improvement-documents/pull/75)로 도입된 내장 precompile을 통해 secp256r1 서명 검증에 대한 네이티브 지원을 제공합니다.
+
+이 precompile은 Solana에서 passkeys와 같은 현대적인 인증 방법을 가능하게 합니다. secp256r1은 WebAuthn 및 passkey 구현에서 사용되는 동일한 타원 곡선이기 때문입니다.
+
+우리가 자세히 설명한 수학적 특성, 특히 최적화된 필드 산술 및 표준화된 매개변수는 secp256r1이 이러한 인증 시스템을 구동하는 하드웨어 보안 모듈 및 보안 엔클레이브의 보편적인 선택이 되도록 합니다.
+
+### Web2 및 Web3 인증 연결
+
+기존 wallet 온보딩은 seed phrases가 불완전한 인간에게 완벽한 보안을 요구하기 때문에 60-80%의 사용자 이탈률을 보입니다. 사용자는 12-24개의 무작위 단어를 외우고, 영원히 안전하게 보관하며, 피싱에 절대 당하지 않아야 합니다. 이는 주류 채택에는 불가능한 기준입니다.
+
+passkeys와 같은 현대적인 인증 방법은 private key를 전용 보안 하드웨어로 이동시켜 인적 오류를 제거합니다.
+
+그러나 이러한 시스템은 우리가 탐구한 특정 수학적 및 구현상의 이점 때문에 secp256r1을 표준화했습니다:
+- **하드웨어 호환성:** 의사-메르센 소수는 제한된 보안 요소 환경에서 효율적인 구현을 가능하게 합니다.
+- **규제 준수:** NIST 표준화는 정부 및 기업 보안 요구 사항에서의 사용을 허용합니다.
+- **교차 플랫폼 일관성:** 검증 가능한 무작위 매개변수는 모든 하드웨어 제조업체에서 동일한 곡선이 동일하게 작동하도록 보장합니다.
+
+네이티브 secp256r1 지원을 통해 Solana 개발자들은 이제 기존 하드웨어 보안 인프라를 활용하는 애플리케이션을 구축할 수 있습니다. 이는 익숙한 인증 방법을 통해 원활한 온보딩을 가능하게 하며, 이 곡선의 특정 수학적 특성을 중요하게 만드는 보안 보장을 유지합니다.

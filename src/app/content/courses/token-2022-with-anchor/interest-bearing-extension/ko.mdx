@@ -1,0 +1,166 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Interest Bearing 확장
+
+`InterestBearing` 확장은 `Mint` account 확장으로, 사용자가 토큰에 이자율을 적용하고 언제든지 이자를 포함한 업데이트된 총액을 조회할 수 있도록 합니다.
+
+<ArticleSection name="Initializing the Mint Account" id="initializing-the-mint-account" level="h2" />
+
+`Anchor`는 `interest_bearing` 확장을 위한 매크로를 제공하지 않으므로, 우리는 raw CPI를 사용하여 `Mint` account를 생성할 것입니다.
+
+다음은 Transfer Fee 확장으로 mint를 생성하는 방법입니다:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint},
+        InitializeMint2,
+    },
+    token_interface::{
+        interest_bearing_mint_initialize, InterestBearingMintInitialize, Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_interest_bearing_config(
+    ctx: Context<Initialize>,
+    rate: i16
+) -> Result<()> {
+    // Calculate space required for mint and extension data
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::InterestBearingConfig])?;
+
+    // Calculate minimum lamports required for size of mint account with extensions
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoke System Program to create new account with space for mint and extension data
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Space
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Initialize the InterestBearingConfig extension
+    // This instruction must come before the instruction to initialize the mint data
+    interest_bearing_mint_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InterestBearingMintInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(ctx.accounts.payer.key()),
+        rate,
+    )?;
+
+    // Initialize the standard mint account data
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimals
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Calculating the Interest" id="calculating-the-interest" level="h2" />
+
+`InterestBearing` 확장은 새로운 토큰을 생성하지 않습니다. 표시되는 금액은 `amount_to_ui_amount` 함수를 통해 누적된 이자를 단순히 포함하며, 이는 순전히 시각적인 변화입니다.
+
+따라서 이자를 계산하고자 하는 `Token` account를 `unpacking`한 후에는 이자 금액을 얻기 위한 계산을 수행하는 데 필요한 모든 정보를 쉽게 얻을 수 있습니다.
+
+다행히도 우리는 `amountToUiAmount` 함수를 다음과 같이 사용할 수 있으므로 직접 계산할 필요도 없습니다:
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="Updating the Interest Bearing Extension" id="updating-the-interest-bearing-extension" level="h2" />
+
+`InterestBearing` 확장을 사용하면 토큰 account가 생성하는 이자를 변경할 수 있습니다. 이는 데이터 구조 방식 덕분입니다:
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+이를 위해 `interest_bearing_mint_update_rate()` 명령어를 다음과 같이 사용할 수 있습니다:
+
+```ts
+interest_bearing_mint_update_rate(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InterestBearingMintUpdateRate {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            rate_authority: ctx.accounts.authority.to_account_info(),
+        },
+    ),
+    rate,
+)?;
+```
+
+그리고 원한다면, `set_authority()` 함수를 사용하여 이자 설정에 대한 권한을 변경하고 올바른 `AuthorityType`을 다음과 같이 전달할 수 있습니다:
+
+```ts
+set_authority(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        SetAuthority {
+            current_authority: ctx.accounts.authority.to_account_info,
+            account_or_mint: ctx.accounts.mint.to_account_info,
+        }
+    ),
+    spl_token_2022::instruction::AuthorityType::InterestRate,
+    new_authority,
+)?;
+```

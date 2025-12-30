@@ -1,0 +1,112 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Approve 및 Revoke Instructions
+
+Approve는 delegate에게 account 소유자를 대신하여 특정량의 token을 전송할 수 있는 권한을 부여합니다. 이를 통해 account의 완전한 제어권을 넘기지 않고도 프로그램적으로 token을 전송할 수 있습니다.
+
+> "승인된" 금액을 설정하며, delegate는 해당 금액까지만 전송할 수 있습니다.
+
+Revoke는 현재 delegate의 account에 대한 권한을 제거하여, account 소유자에게 완전한 제어권을 돌려줍니다.
+
+> 기존의 모든 위임(delegation)을 즉시 취소하며, account 소유자만이 위임을 해지할 수 있습니다 (delegate 자체는 해지할 수 없음).
+
+어떤 token account든 위임(delegate)하거나 해지(revoke)하기 전에 다음 사항들이 미리 준비되어 있어야 합니다:
+- `Mint` account가 초기화되어 있어야 합니다.
+- 우리가 제어할 `Token` account 또는 `Associated Token` account가 초기화되어 있어야 합니다.
+
+> 우리가 승인하는 token의 양은 소수점(decimals)에 대해 "정규화"됩니다. 이는 6자리의 소수점을 가진 1개의 token을 승인하려면, 실제 `1e6`을 amount로 설정해야 함을 의미합니다.
+
+<ArticleSection name="Raw Instruction" id="raw-instruction" level="h2" />
+
+어떠한 추상화 없이 "raw" instruction만을 사용하여 token을 Approve하는 방법은 다음과 같습니다:
+
+```ts
+const keypair = Keypair.generate();
+
+const tokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    keypair.publicKey,
+);
+
+// Create ATA creation instruction
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    tokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// Delegate an ATA 
+const approveInstruction = createApproveInstruction(
+    tokenAccount // account
+    delegate.publicKey, // delegate
+    keypair.publickey // owner
+    1e6, // amount of tokens
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    approveInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token account가 생성되고 위임되었습니다! 트랜잭션은 여기서 확인하세요: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+어떠한 추상화 없이 "raw" instruction만을 사용하여 token을 Revoke하는 방법은 다음과 같습니다:
+
+```ts
+// Revoke the delegate of an ATA 
+const revokeInstruction = createRevokeInstruction(
+    tokenAccount // account
+    keypair.publickey // owner
+);
+
+const transaction = new Transaction().add(revokeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token account delegate가 해지되었습니다! 트랜잭션은 여기서 확인하세요: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Abstracted Instruction" id="abstracted-instruction" level="h2" />
+
+동일한 instruction들이 `approve()` instruction으로 추상화된 모습은 다음과 같습니다:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    tokenAccount.publicKey
+);
+
+console.log(`이것이 당신의 ATA입니다: ${ata.address}!`)
+  
+let tx = await approve(
+    connection,
+    keypair,
+    ata.address, // token Account
+    delegate-publicKey, // delegate
+    keypair.publicKey, // owner
+    1e6, // amount
+);
+
+console.log(`성공적으로 위임되었습니다! 트랜잭션은 여기서 확인하세요: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+동일한 instruction들이 `revoke()` instruction으로 추상화된 모습은 다음과 같습니다:
+
+```ts
+let tx = await revoke(
+    connection,
+    keypair,
+    ata.address, // token Account
+    keypair.publicKey, // owner
+);
+
+console.log(`성공적으로 Delegate가 해지되었습니다! 트랜잭션은 여기서 확인하세요: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```

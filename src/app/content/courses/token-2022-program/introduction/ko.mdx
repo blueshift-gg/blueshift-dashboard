@@ -1,0 +1,123 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The Token2022 Program
+
+![Token 2022 Program](/graphics/course-banners/token-2022-program.png)
+
+Token Extensions라고도 알려진 Token2022 Program은 Token Program이 제공하는 기능의 상위 집합입니다.
+
+기존 Token Program은 간단한 비종속적 인터페이스와 구조를 통해 대체 가능(fungible) 및 대체 불가능(non-fungible) token의 대부분의 요구사항을 충족합니다. 하지만, 개발자들이 공통 인터페이스로 맞춤형 동작을 생성하는 데 도움이 되는 특정 기능을 지향하는(opinionated) 기능과 구현이 부족하여, 개발을 더 빠르고 안전하게 만드는 데 한계가 있습니다.
+
+바로 이러한 이유로, Token Extensions라고 불리는 새로운 기능 집합을 가진 Token2022라는 새로운 Token Program이 생성되었습니다. 이 extension들은 Token Account 또는 Mint Account에 첨부될 수 있는 특정하고 맞춤 설정 가능한 동작을 제공합니다.
+
+> SPL-Token Program(program address인 TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA 때문에 개발자들이 일반적으로 Tokenkeg라고 부르는)과 Token2022 Program은 같은 "시작점"을 공유하지만, 완전히 다른 두 프로그램입니다. 이는 Tokenkeg token이 Token2022로 역직렬화될 수 있음을 의미하지만, 예를 들어 해당 프로그램 내에서 extension을 추가하는 데 사용될 수는 없습니다.
+
+<ArticleSection name="Mint and Token Accounts" id="mint-and-token-accounts" level="h2" />
+
+이전 섹션에서 우리는 Tokenkeg와 Token2022 프로그램의 주요 차이점이 **Token Extensions**라는 사실에 대해 이야기했습니다.
+
+강제성을 가지려면, 이 extension들은 Mint 및 Token account 내부에 직접 존재해야 합니다. 이는 token program에서 직접 작업하는 동안 규칙 집합이 강제되도록 보장하는 유일한 방법이기 때문입니다.
+
+이러한 이유로, 이 account들에서 기존 및 새로운 token program 간의 주요 차이점을 살펴보겠습니다.
+
+**기존 Token Accounts**
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Optional authority used to mint new tokens. The mint authority may only
+    /// be provided during mint creation. If no mint authority is present
+    /// then the mint has a fixed supply and no further tokens may be
+    /// minted.
+    pub mint_authority: COption<Pubkey>,
+    /// Total supply of tokens.
+    pub supply: u64,
+    /// Number of base 10 digits to the right of the decimal place.
+    pub decimals: u8,
+    /// Is `true` if this structure has been initialized
+    pub is_initialized: bool,
+    /// Optional authority to freeze token accounts.
+    pub freeze_authority: COption<Pubkey>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// The mint associated with this account
+    pub mint: Pubkey,
+    /// The owner of this account.
+    pub owner: Pubkey,
+    /// The amount of tokens this account holds.
+    pub amount: u64,
+    /// If `delegate` is `Some` then `delegated_amount` represents
+    /// the amount authorized by the delegate
+    pub delegate: COption<Pubkey>,
+    /// The account's state
+    pub state: AccountState,
+    /// If `is_native.is_some`, this is a native token, and the value logs the
+    /// rent-exempt reserve. An Account is required to be rent-exempt, so
+    /// the value is used by the Processor to ensure that wrapped SOL
+    /// accounts do not drop below this threshold.
+    pub is_native: COption<u64>,
+    /// The amount delegated
+    pub delegated_amount: u64,
+    /// Optional authority to close the account.
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+보시다시피, 이 account들에는 작성된 discriminator가 없습니다. 이는 필드들이 모두 고정 길이를 가지며, 길이 비교만으로 이 서로 다른 유형의 account들을 구별하기에 공간 차이가 충분히 크기 때문입니다.
+
+Token Extension Program의 문제는 extension에 필요한 모든 추가 데이터가 우리가 익숙한 Mint 및 Token account 끝에 태그된다는 점입니다.
+
+이는 길이로 구별하는 방식이 한계가 있다는 것을 의미합니다. 왜냐하면 3-4개의 extension이 첨부된 Mint가 Token Account의 길이를 초과할 수 있기 때문입니다. 이러한 이유로, Mint 및 Token account에 extension이 있을 때, 다음과 같이 discriminator가 추가됩니다:
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mint {
+    /// Legacy Token Program data
+    /// ...
+    /// Padding (83 empty bytes)
+    pub padding: [u8; 83]
+    /// Discriminator (1)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Account {
+    /// Legacy Token Program data
+    /// ...
+    /// Discriminator (2)
+    pub discriminator: u8
+    /// Extensions data
+    /// ...
+}
+```
+
+기존 struct를 유지하기 위해, discriminator는 일반적으로 첫 번째 바이트에 있지 않고, 166번째 바이트에 있습니다.
+
+이는 Token account의 길이가 165바이트이기 때문이며, 이는 discriminator가 기본 길이 뒤에 추가됨을 의미합니다. Mint account의 경우, 이는 두 account가 동일한 기본 길이를 가지도록 83바이트의 padding을 추가해야 했다는 것을 의미합니다.
+
+따라서 두 account를 구별하려면, 우리는 166번째 바이트(0부터 세면 data[165])를 확인하고 그에 따라 처리하면 됩니다.
+
+<ArticleSection name="Token Extensions" id="token-extensions" level="h2" />
+
+다음 섹션에서는 Solana에 현재 존재하는 Token Extensions의 장점과 다양한 종류에 대해 이야기할 예정이지만, 이 서론에서는 이전에 이야기했던 두 state account에 extension이 어떻게 직렬화되고 추가되는지에 대해서만 이야기하겠습니다.
+
+각 extension은 해당 extension의 크기와 함께 account에 직접 저장되는 discriminator를 가집니다. 우리는 이것을 extension의 "header"라고 부를 것이며, 그 모습은 다음과 같습니다:
+
+```rust
+pub struct ExtensionHeader {
+    /// Extension Discriminator
+    pub discriminator: u16
+    /// Length of the Disriminator
+    pub length: u16
+}
+```
+
+이는 token에 어떤 extension이 있는지 파악하는 것을 매우 쉽게 만들고, 필요한 extension의 데이터만 역직렬화할 수 있게 합니다. 왜냐하면 우리는 discriminator를 가져온 다음 다음 extension으로 건너뛰어 무엇이 있는지 없는지 확인할 수 있기 때문입니다.

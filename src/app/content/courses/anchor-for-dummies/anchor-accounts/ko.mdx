@@ -1,0 +1,569 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# Accounts
+
+`#[account]` 매크로를 살펴보았지만, Solana에는 당연히 다양한 종류의 account가 존재합니다. 따라서 Solana에서 account가 일반적으로 어떻게 작동하는지 잠시 살펴보는 것이 좋으며, 더 깊이 들어가 Anchor와 함께 어떻게 작동하는지 알아보겠습니다.
+
+<ArticleSection name="General Overview" id="general-overview" level="h2" />
+
+Solana에서는 모든 상태 조각이 account에 존재합니다. [ledger](https://solana.com/docs/references/terminology#ledger)를 각 행이 동일한 기본 스키마를 공유하는 거대한 하나의 테이블로 상상해 보세요:
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
+    pub data: Vec<u8>,
+    /// the program that owns this account and can mutate its lamports or data.
+    pub owner: Pubkey,
+    /// `true` if the account is a program; `false` if it merely belongs to one
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent (currently deprecated and is set to `0`)
+    pub rent_epoch: Epoch,
+}
+```
+
+Solana의 모든 account는 동일한 기본 레이아웃을 공유합니다. 이들을 구별하는 요소는 다음과 같습니다:
+
+1.  owner: account의 data 및 lamports를 수정할 독점적인 권한을 가진 program.
+2.  data: owner program이 다른 account 유형을 구별하는 데 사용됩니다.
+
+`Token Program Accounts`에 대해 이야기할 때, `owner`가 Token Program인 account를 의미합니다. data 필드가 비어 있는 `System Account`와 달리, `Token Program Account`는 **Mint** 또는 **Token** account가 될 수 있습니다. 우리는 `discriminator`를 사용하여 이들을 구별합니다.
+
+Token Program이 account를 소유할 수 있듯이, 다른 어떤 program도 심지어 우리의 program도 account를 소유할 수 있습니다.
+
+<ArticleSection name="Program Accounts" id="program-accounts" level="h2" />
+
+`Program accounts`는 Anchor program에서 상태 관리의 기반입니다. 이를 통해 program이 소유하는 사용자 지정 data 구조를 생성할 수 있습니다. 효과적으로 사용하는 방법을 살펴보겠습니다.
+
+### Account 구조 및 Discriminator
+
+Anchor의 모든 program account는 해당 유형을 식별하는 방법이 필요합니다. 이는 다음 중 하나가 될 수 있는 `discriminator`를 통해 처리됩니다:
+
+1.  **Default Discriminators**: account의 경우 `sha256("account:<StructName>")[0..8]`를 사용하여 생성된 8바이트 prefix 또는 instruction의 경우 `sha256("global:<instruction_name>")[0..8]`를 사용합니다. `seeds`는 account의 경우 PascalCase를 사용하고 instruction의 경우 snake_case를 사용합니다.
+
+<AnchorDiscriminatorCalculator value={"TestAccount"} displayMode="account" />
+
+2.  **Custom Discriminators**: Anchor `v0.31.0`부터 자신만의 `discriminator`를 지정할 수 있습니다:
+
+```rust
+#[account(discriminator = 1)]              // single-byte
+pub struct Escrow { … }
+```
+
+**Discriminator에 대한 중요 사항**:
+- program 전체에서 고유해야 합니다.
+- `[1]`을 사용하면 `[1, 2, …]`와 같이 `1`로 시작하는 다른 값들을 사용할 수 없습니다.
+- `[0]`은 초기화되지 않은 account와 충돌하므로 사용할 수 없습니다.
+
+### Program Account 생성
+
+program account를 생성하려면 먼저 data 구조를 정의합니다:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[derive(InitSpace)]
+#[account(discriminator = 1)]
+pub struct CustomAccountType {
+    data: u64,
+}
+```
+
+program account의 주요 특징:
+- 최대 크기는 10,240바이트 (10 KiB)입니다.
+- 더 큰 account의 경우 `zero_copy`와 청크 쓰기(chunked writes)가 필요합니다.
+- `InitSpace` derive macro는 필요한 `space`를 자동으로 계산합니다.
+- 총 `space` = `INIT_SPACE` + `DISCRIMINATOR.len()`
+
+account에 필요한 총 `space`는 `INIT_SPACE`(모든 필드의 결합된 크기)와 `discriminator` 크기(`DISCRIMINATOR.len()`)의 합입니다.
+
+Solana account는 account 크기에 따라 `lamports`로 `rent`를 예치해야 합니다. 크기를 알면 account를 개설하기 위해 얼마나 많은 `lamports`를 예치해야 하는지 계산하는 데 도움이 됩니다.
+
+다음은 `Account` struct에서 account를 초기화하는 방법입니다:
+
+```rust
+#[account(
+    init,
+    payer = <target_account>,
+    space = <num_bytes>                 // CustomAccountType::INIT_SPACE + CustomAccountType::DISCRIMINATOR.len(),
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+다음은 이미 다룬 `seeds` 및 `bump` 필드 외에 `#[account]` 매크로에 사용되는 몇 가지 필드와 그 기능입니다:
+- `init`: Anchor에게 account를 생성하도록 지시합니다.
+- `payer`: `rent`를 지불하는 `signer` (여기서는 maker).
+- `space`: 할당할 바이트 수입니다. `rent` 계산도 여기서 이루어집니다.
+
+생성 후 account의 `data`를 수정할 수 있습니다. 크기를 변경해야 하는 경우 `reallocation`을 사용하세요:
+
+```rust
+#[account(
+    mut,                       // Mark as mutable
+    realloc = <space>,         // New size
+    realloc::payer = <target>, // Who pays for the change
+    realloc::zero = <bool>     // Whether to zero new space
+)]
+```
+
+**참고**: account 크기를 줄일 때는 `realloc::zero = true`로 설정하여 이전 `data`가 올바르게 지워지도록 하십시오.
+
+마지막으로, account가 더 이상 필요하지 않을 때 `rent`를 회수하기 위해 `close`할 수 있습니다:
+
+```rust
+#[account(
+    mut,                       // Mark as mutable
+    close = <target_account>,  // Where to send remaining lamports
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+그 다음, `seeds`와 program ID에서 파생된 결정론적 주소이며 예측 가능한 account 주소를 생성하는 데 특히 유용한 `PDA`를 다음과 같이 이러한 `constraint`에 추가할 수 있습니다:
+
+```rust
+#[account(
+    seeds = <seeds>,            // Seeds for derivation
+    bump                        // Standard bump seed
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+**참고**: `PDA`는 결정론적입니다. 동일한 `seeds` + `program` + `bump`는 항상 동일한 주소를 생성하며, `bump`는 주소가 `ed25519 curve` 밖에 있도록 보장합니다.
+
+`bump`를 계산하는 것이 많은 `CU`를 "소모"할 수 있으므로, 다음과 같이 계산할 필요 없이 account에 저장하거나 instruction으로 전달하여 `validate`하는 것이 항상 좋습니다:
+
+```rust
+#[account(
+    seeds = <seeds>,
+    bump = <expr>
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+그리고 `PDA`가 파생된 program의 주소를 다음과 같이 전달하여 다른 program으로부터 `PDA`를 파생할 수 있습니다:
+
+```rust
+#[account(
+    seeds = <seeds>,
+    bump = <expr>,
+    seeds::program = <expr>
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Lazy Account
+
+Anchor 0.31.0부터 `LazyAccount`는 account `data`를 읽는 더 효율적인 방법을 제공합니다. 전체 account를 스택에 `deserialize`하는 표준 `Account` 유형과 달리, `LazyAccount`는 읽기 전용의 힙 할당(heap allocated) account이며, 24바이트의 스택 메모리만을 사용하고 특정 필드를 선택적으로 로드할 수 있게 합니다.
+
+`Cargo.toml`에서 다음 기능을 활성화하여 시작하십시오:
+
+```
+anchor-lang = { version = "0.31.1", features = ["lazy-account"] }
+```
+
+이제 다음과 같이 사용할 수 있습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct MyInstruction<'info> {
+    pub account: LazyAccount<'info, CustomAccountType>,
+}
+
+#[account(discriminator = 1)]
+pub struct CustomAccountType {
+    pub balance: u64,
+    pub metadata: String,
+}
+
+pub fn handler(ctx: Context<MyInstruction>) -> Result<()> {
+    // Load specific field
+    let balance = ctx.accounts.account.get_balance()?;
+    let metadata = ctx.accounts.account.get_metadata()?;
+    
+    Ok(())
+}
+```
+
+> `LazyAccount`는 읽기 전용입니다. 참조(references)로 작업하고 스택 할당된 `data`가 아니기 때문에 필드를 변경하려고 하면 패닉(panic)이 발생합니다.
+
+`CPI`가 account를 수정할 때, 캐시된 값은 오래된(stale) 값이 됩니다. 이 때문에 `unload()` 함수를 사용하여 새로 고쳐야 합니다:
+
+```rust
+// Load the initial value
+let initial_value = ctx.accounts.my_account.load_field()?;
+
+// Do CPI...
+
+// We still have a reference to the account from `initial_value`, drop it before `unload`
+drop(initial_value);
+
+// Load the updated value
+let updated_value = ctx.accounts.my_account.unload()?.load_field()?;
+```
+
+<ArticleSection name="Token Accounts" id="token-program" level="h2" />
+
+`Solana Program Library (SPL)`의 일부인 `Token Program`은 네이티브 `SOL`이 아닌 모든 자산을 발행하고 이동하기 위한 내장 툴킷입니다. `token` 생성, 새 공급 발행, 잔액 `transfer`, `burn`, `freeze` 등 다양한 instruction을 가지고 있습니다.
+
+이 `program`은 두 가지 주요 account 유형을 소유합니다:
+- **Mint Account**: 특정 `token`에 대한 `metadata`를 저장합니다. `supply`, `decimals`, `mint authority`, `freeze authority` 등.
+- **Token Account**: 특정 `owner`에 대한 해당 `mint`의 잔액을 보유합니다. `owner`만이 잔액을 줄일 수 있지만 (`transfer`, `burn` 등), 누구나 `token`을 account로 보내 잔액을 늘릴 수 있습니다.
+
+### Anchor의 Token Account
+
+기본적으로 핵심 Anchor crate는 `System Program`을 위한 `CPI` 및 `Accounts` 헬퍼만 번들로 제공합니다. `SPL token`에 대해서도 동일한 지원을 원한다면 `anchor_spl` crate를 가져와야 합니다.
+
+`anchor_spl`은 다음을 추가합니다:
+- `SPL Token` 및 `Token-2022` `program`의 모든 instruction에 대한 헬퍼 빌더(Helper builders).
+- `Mint` 및 `Token account`를 쉽게 확인하고 `deserialize`할 수 있도록 하는 유형 래퍼(Type wrappers).
+
+`Mint` 및 `Token account`가 어떻게 구성되어 있는지 살펴보겠습니다:
+
+```rust
+#[account(
+    mint::decimals     = <expr>,
+    mint::authority    = <target_account>,
+    mint::freeze_authority = <target_account>
+    mint::token_program = <target_account>
+)]
+pub mint: Account<'info, Mint>,
+
+#[account(
+    mut,
+    associated_token::mint       = <target_account>,
+    associated_token::authority  = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: Account<'info, TokenAccount>,
+```
+
+`Account<'info, Mint>` 및 `Account<'info, TokenAccount>`는 Anchor에게 다음을 지시합니다:
+- account가 실제로 `Mint` 또는 `Token account`인지 확인합니다.
+- 해당 `data`를 `deserialize`하여 필드를 직접 읽을 수 있게 합니다.
+- 지정한 추가 `constraint` (`authority`, `decimals`, `mint`, `token_program` 등)를 적용합니다.
+
+이러한 `token` 관련 account는 이전에 사용된 동일한 `init` 패턴을 따릅니다. Anchor는 고정된 바이트 크기를 알고 있으므로, `space` 값을 지정할 필요 없이 account에 자금을 조달하는 `payer`만 지정하면 됩니다.
+
+Anchor는 또한 `init_if_needed` 매크로를 제공합니다. 이 매크로는 `token account`가 이미 존재하는지 확인하고, 존재하지 않는 경우 생성합니다. 이 단축키는 모든 account 유형에 안전하지는 않지만, `token account`에는 완벽하게 적합하므로 여기서는 이를 사용할 것입니다.
+
+앞서 언급했듯이 `anchor_spl`은 **Token** 및 **Token2022** `program` 모두를 위한 헬퍼를 생성하며, 후자는 `Token Extensions`를 도입합니다. 주요 과제는 이러한 account들이 유사한 목표를 달성하고 비슷한 구조를 가지고 있더라도, 두 개의 다른 `program`에 의해 소유되기 때문에 동일한 방식으로 `deserialize`하고 확인할 수 없다는 것입니다.
+
+이러한 다른 account 유형을 처리하기 위해 더 "고급" `logic`을 만들 수도 있지만, 다행히 Anchor는 **InterfaceAccounts**를 통해 이 시나리오를 지원합니다:
+
+```rust
+use anchor_spl::token_interface::{Mint, TokenAccount};
+
+#[account(
+    mint::decimals     = <expr>,
+    mint::authority    = <target_account>,
+    mint::freeze_authority = <target_account>
+)]
+pub mint: InterfaceAccounts<'info, Mint>,
+
+#[account(
+    mut,
+    associated_token::mint = <target_account>,
+    associated_token::authority = <target_account>,
+    associated_token::token_program = <target_account>
+)]
+pub maker_ata_a: InterfaceAccounts<'info, TokenAccount>,
+```
+
+여기서 핵심적인 차이점은 `Account` 대신 `InterfaceAccounts`를 사용한다는 것입니다. 이를 통해 `program`은 `Token` 및 `Token2022` account의 `deserialize` `logic` 차이를 처리할 필요 없이 모두와 함께 작동할 수 있습니다. `interface`는 `type safety`와 적절한 `validation`을 유지하면서 두 가지 유형의 account와 상호 작용하는 공통적인 방법을 제공합니다.
+
+이 접근 방식은 `program`이 두 `token` 표준 모두와 호환되기를 원할 때 특히 유용하며, 각 `program`에 대해 별도의 `logic`을 작성할 필요가 없습니다. `interface`는 다른 account 구조를 다루는 모든 복잡성을 내부적으로 처리합니다.
+
+`anchor-spl` 사용법에 대해 더 자세히 알아보려면 [SPL-Token Program with Anchor](/en/courses/spl-token-with-anchor) 또는 [Token2022 Program with Anchor](/en/courses/token-2022-with-anchor) 과정을 따를 수 있습니다.
+
+<ArticleSection name="Additional Accounts Type" id="additional-accounts-type" level="h2" />
+
+당연히 `System Account`, `Program Account` 및 `Token Account`는 Anchor에서 사용할 수 있는 유일한 account 유형이 아닙니다. 따라서 여기서는 사용할 수 있는 다른 `Account` 유형을 살펴보겠습니다:
+
+### Signer
+
+`Signer` 유형은 account가 `transaction`에 서명했는지 확인해야 할 때 사용됩니다. 이는 승인된 account만이 특정 작업을 수행할 수 있도록 보장하므로 보안에 매우 중요합니다. 자금 `transfer` 또는 명시적인 권한이 필요한 account `data` 수정과 같이 특정 account가 `transaction`을 승인했음을 보장해야 할 때마다 이 유형을 사용하게 됩니다. 다음은 사용 방법입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+```
+
+`Signer` 유형은 account가 `transaction`에 서명했는지 자동으로 확인합니다. 서명하지 않았다면 `transaction`은 실패합니다. 이는 특정 account만이 특정 작업을 수행할 수 있도록 보장해야 할 때 특히 유용합니다.
+
+### AccountInfo & UncheckedAccount
+
+`AccountInfo` 및 `UncheckedAccount`는 자동 `validation` 없이 account `data`에 직접 접근할 수 있도록 하는 저수준 account 유형입니다. 기능은 동일하지만, `UncheckedAccount`는 그 목적을 더 잘 반영하므로 선호되는 선택입니다.
+
+이러한 유형은 세 가지 주요 시나리오에서 유용합니다:
+1.  정의된 구조가 없는 account와 작업할 때.
+2.  사용자 지정 `validation logic`을 구현할 때.
+3.  Anchor 유형 정의가 없는 다른 `program`의 account와 상호 작용할 때.
+
+이러한 유형은 Anchor의 안전 검사를 우회하므로 본질적으로 안전하지 않으며 `/// CHECK` 주석을 사용하여 명시적인 승인이 필요합니다. 이 주석은 위험을 이해하고 적절한 `validation`을 구현했음을 문서화하는 역할을 합니다.
+
+다음은 사용 방법의 예시입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    /// CHECK: This is an unchecked account
+    pub account: UncheckedAccount<'info>,
+
+    /// CHECK: This is an unchecked account
+    pub account_info: AccountInfo<'info>,
+}
+```
+
+### Option
+
+Anchor의 `Option` 유형을 사용하면 instruction에서 account를 선택 사항으로 만들 수 있습니다. account가 `Option`으로 래핑되면 `transaction`에서 제공되거나 생략될 수 있습니다. 이는 다음 상황에서 특히 유용합니다:
+- 특정 account가 있거나 없이 작동할 수 있는 유연한 instruction을 구축할 때.
+- 항상 필요하지 않을 수 있는 선택적 `parameter`를 구현할 때.
+- 새롭거나 오래된 account 구조와 호환되는 이전 버전 호환 instruction을 생성할 때.
+
+`Option` account가 `None`으로 설정되면 Anchor는 `Program ID`를 account 주소로 사용합니다. 이 동작은 선택적 account와 작업할 때 이해하는 것이 중요합니다.
+
+다음은 구현 방법입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub optional_account: Option<Account<'info, CustomAccountType>>,
+}
+```
+
+### Box
+
+`Box` 유형은 account를 스택 대신 힙(heap)에 저장하는 데 사용됩니다. 이는 여러 시나리오에서 필요합니다:
+- 스택에 저장하기에 비효율적인 대규모 account 구조를 다룰 때.
+- 재귀적 `data` 구조와 작업할 때.
+- 컴파일 시점에 크기를 결정할 수 없는 account와 작업해야 할 때.
+
+`Box`를 사용하면 이 경우 힙에 account `data`를 할당하여 메모리를 더 효율적으로 관리할 수 있습니다. 다음은 예시입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub boxed_account: Box<Account<'info, LargeAccountType>>,
+}
+```
+
+### Program
+
+`Program` 유형은 다른 Solana `program`을 `validate`하고 상호 작용하는 데 사용됩니다. Anchor는 `program account`의 `executable flag`가 `true`로 설정되어 있기 때문에 쉽게 식별할 수 있습니다. 이 유형은 다음 상황에서 특히 유용합니다:
+
+- Cross-Program Invocations (`CPI`)를 수행해야 할 때.
+- 올바른 `program`과 상호 작용하고 있는지 확인하고 싶을 때.
+- account의 `program owner`를 확인해야 할 때.
+
+`Program` 유형을 사용하는 두 가지 주요 방법이 있습니다:
+
+1.  내장 `program` 유형 사용 (가능한 경우 권장):
+```rust
+use anchor_spl::token::Token;
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+2.  `program` 유형을 사용할 수 없을 때 사용자 지정 `program address` 사용:
+```rust
+// Address of the Program
+const PROGRAM_ADDRESS: Pubkey = pubkey!("22222222222222222222222222222222222222222222")
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    #[account(address = PROGRAM_ADDRESS)]
+    /// CHECK: this is fine since we're checking the address
+    pub program: UncheckedAccount<'info>,
+}
+```
+
+**참고**: `token program`과 작업할 때, `Legacy Token Program`과 `Token-2022 Program`을 모두 지원해야 할 수도 있습니다. 그러한 경우, `Program` 유형 대신 `Interface` 유형을 사용하십시오:
+
+```rust
+use anchor_spl::token_interface::TokenInterface;
+
+#[derive(Accounts)]
+pub struct InstructionAccounts<'info> {
+    pub program: Interface<'info, TokenInterface>,
+}
+```
+
+<ArticleSection name="Custom Account Validation" id="custom-account-validation" level="h2" />
+
+Anchor는 `#[account]` 속성에서 직접 적용할 수 있는 강력한 `constraint` 세트를 제공합니다. 이러한 `constraint`는 instruction `logic`이 실행되기 전에 account 수준에서 account 유효성을 보장하고 `program rule`을 적용하는 데 도움이 됩니다. 다음은 사용 가능한 `constraint`입니다:
+
+### Address Constraint
+
+`address` `constraint`는 account의 `public key`가 특정 값과 일치하는지 확인합니다. 이는 특정 `PDA` 또는 `program account`와 같이 알려진 account와 상호 작용하고 있는지 확인해야 할 때 필수적입니다:
+
+```rust
+#[account(
+    address = <expr>,                    // Basic usage
+    address = <expr> @ CustomError       // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Owner Constraint
+
+`owner` `constraint`는 account가 특정 `program`에 의해 `owned`되었는지 확인합니다. 이는 `program owned account`와 작업할 때 중요한 보안 검사이며, 특정 `program`이 관리해야 하는 account에 대한 무단 접근을 방지합니다:
+
+```rust
+#[account(
+    owner = <expr>,                      // Basic usage
+    owner = <expr> @ CustomError         // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Executable Constraint
+
+`executable` `constraint`는 account가 `program account`인지 (즉, `executable flag`가 `true`로 설정되어 있는지) 확인합니다. 이는 Cross-Program Invocations (`CPI`)를 수행할 때 `data account`가 아닌 `program`과 상호 작용하는지 확인하는 데 특히 유용합니다:
+
+```rust
+#[account(executable)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Mutable Constraint
+
+`mut` `constraint`는 account를 `mutable`로 표시하여 instruction 동안 `data`를 수정할 수 있도록 합니다. Anchor는 안전을 위해 기본적으로 `immutability`를 강제하므로 업데이트될 모든 account에 대해 필요합니다:
+
+```rust
+#[account(
+    mut,                                 // Basic usage
+    mut @ CustomError                    // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Signer Constraint
+
+`signer` `constraint`는 account가 `transaction`에 서명했는지 확인합니다. 이는 account가 자금 `transfer` 또는 `data` 수정과 같은 작업을 승인해야 할 때 보안에 매우 중요합니다. 이는 `Signer` 유형을 사용하는 것보다 서명을 요구하는 더 명시적인 방법입니다:
+
+```rust
+#[account(
+    signer,                              // Basic usage
+    signer @ CustomError                 // With custom error
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Has One Constraint
+
+`has_one` `constraint`는 account `struct`의 특정 필드가 다른 account의 `public key`와 일치하는지 확인합니다. 이는 `token account`가 올바른 `owner`에게 속하는지 확인하는 것과 같이 account 간의 관계를 유지하는 데 유용합니다:
+
+```rust
+#[account(
+    has_one = data @ Error::InvalidField
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+### Custom Constraint
+
+내장 `constraint`가 요구 사항을 충족하지 못하는 경우, 사용자 지정 `validation expression`을 작성할 수 있습니다. 이를 통해 account `data` 길이 확인 또는 여러 필드 간의 관계 `validation`과 같이 다른 `constraint`로 표현할 수 없는 복잡한 `validation logic`이 가능해집니다:
+
+```rust
+#[account(
+    constraint = data == account.data @ Error::InvalidField
+)]
+pub account: Account<'info, CustomAccountType>,
+```
+
+이러한 `constraint`는 결합하여 account에 대한 강력한 `validation rule`을 생성할 수 있습니다. `validation`을 account 수준에 배치함으로써 보안 검사를 account 정의에 가깝게 유지하고 instruction `logic` 전체에 `require!()` 호출이 분산되는 것을 방지합니다.
+
+<ArticleSection name="Remaining Accounts" id="remaining-accounts" level="h2" />
+
+program을 작성할 때, instruction account의 고정된 구조가 `program`에 필요한 유연성을 제공하지 못할 때가 있습니다.
+
+`Remaining accounts`는 정의된 instruction 구조 외에 추가 account를 전달할 수 있도록 하여 이 문제를 해결하며, 런타임 조건에 기반한 동적 동작을 가능하게 합니다.
+
+### 구현 가이드라인
+
+전통적인 instruction 정의는 어떤 account가 사용될지 정확히 지정해야 합니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    pub from: Account<'info, TokenAccount>,
+    pub to: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+```
+
+이는 단일 작업에는 훌륭하지만, 하나의 instruction에서 여러 `token transfer`를 수행하고 싶다면 어떻게 될까요? instruction을 여러 번 호출해야 하므로 `transaction` 비용과 복잡성이 증가합니다.
+
+`Remaining accounts`를 사용하면 고정된 instruction 구조의 일부가 아닌 추가 account를 전달할 수 있습니다. 이는 `program`이 이러한 account들을 반복하여 동적으로 반복되는 `logic`을 적용할 수 있음을 의미합니다.
+
+각 `transfer`에 대해 별도의 instruction이 필요한 대신, "N"개의 `transfer`를 처리하는 하나의 instruction을 설계할 수 있습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct BatchTransfer<'info> {
+    pub from: Account<'info, TokenAccount>,
+    pub to: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+
+pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<()> {
+    // Handle the first transfer using fixed accounts
+    transfer_tokens(&ctx.accounts.from, &ctx.accounts.to, amounts[0])?;
+    
+    let remaining_accounts = &ctx.remaining_accounts;
+
+    // CRITICAL: Validate remaining accounts schema
+    // For batch transfers, we expect pairs of accounts
+    require!(
+        remaining_accounts.len() % 2 == 0,
+        TransferError::InvalidRemainingAccountsSchema
+    );
+
+    // Process remaining accounts in groups of 2 (from_account, to_account)
+    for (i, chunk) in remaining_accounts.chunks(2).enumerate() {
+        let from_account = &chunk[0];
+        let to_account = &chunk[1];
+        let amount = amounts[i + 1];
+        
+        // Apply the same transfer logic to remaining accounts
+        transfer_tokens(from_account, to_account, amount)?;
+    }
+    
+    Ok(())
+}
+```
+
+instruction을 일괄 처리하는 것은 다음을 의미합니다:
+- 더 작은 instruction 크기: 반복되는 account 및 `data`를 포함할 필요가 없습니다.
+- 효율성: 각 `CPI`는 1000 `CU`가 소요됩니다. 즉, `batch instruction`을 수행해야 하는 경우 `program` 사용자는 3번이 아닌 1번만 `invoke`할 수 있습니다.
+
+> `Remaining accounts`는 `UncheckedAccount`로 전달됩니다. 이는 Anchor가 이들에 대해 어떤 `validation`도 수행하지 않음을 의미합니다. 항상 `RemainingAccountSchema`와 기본 account를 `validate`하십시오.
+
+### 클라이언트 측 구현
+
+`anchor build`를 수행하면 생성되는 `Anchor SDK`를 사용하여 `remaining accounts`를 쉽게 전달할 수 있습니다. 이러한 account는 "raw" account이므로 `signer` 및/또는 `mutable`로 전달해야 하는지 다음과 같이 지정해야 합니다:
+
+```ts
+await program.methods.someMethod().accounts({
+  // some accounts
+})
+.remainingAccounts([
+  {
+    isSigner: false,
+    isWritable: true,
+    pubkey: new Pubkey().default
+  }
+])
+.rpc();
+```

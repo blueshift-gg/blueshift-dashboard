@@ -1,0 +1,70 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Non Transferable 확장 기능
+
+`NonTransferable` 확장 기능은 `Mint` account 확장 기능으로, 토큰이 account 간에 전송되는 것을 방지하여 현재 보유자에게 영구적으로 귀속되도록 합니다.
+
+<ArticleSection name="Mint Account 초기화" id="initializing-the-mint-account" level="h2" />
+
+`Mint` account에 `MintCloseAuthority` 확장 기능을 초기화하려면 `initializeNonTransferableMint()` 함수가 필요합니다.
+
+Non Transferable 확장 기능을 사용하여 mint를 생성하는 방법은 다음과 같습니다.
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeNonTransferableMintInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Non Transferable extension
+const mintLen = getMintLen([ExtensionType.NonTransferable]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Non Transferable extension
+const initializeMintNonTransferable = createInitializeNonTransferableMintInstruction(
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintNonTransferable,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

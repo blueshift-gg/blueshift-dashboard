@@ -1,0 +1,197 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 토큰 프로그램
+
+![SPL Token with Web3JS](/graphics/course-banners/spl-token-with-web3js.png)
+
+Solana에서는 토큰 관련 모든 것이 [SPL Token Program](https://github.com/solana-program/token)과 [Token2022 Program](/en/courses/token-2022-program)에 의해 처리됩니다. 이들은 모든 토큰이 생성, 관리 및 전송되는 방식을 정의하는 Solana의 기본 토큰 프레임워크입니다.
+
+이는 네트워크 전반의 모든 토큰 작업을 처리하여 일관성과 상호 운용성을 보장하는 단일의 통합된 프로그램입니다.
+
+> Solana의 모든 토큰에 대해 단일의 통합된 인터페이스를 갖도록 결정함으로써 모든 dApp(탈중앙화 애플리케이션) 및 통합(예: wallet 등)에서 복제할 수 있는 쉬운 구현이 가능해집니다.
+
+Web3.js를 사용하여 SPL Token 프로그램으로 작업하는 데 필요한 패키지를 설치하는 것부터 시작하겠습니다.
+
+```bash
+npm i @solana/spl-token
+```
+
+<ArticleSection name="Mint and Token Accounts" id="mint-and-token-accounts" level="h2" />
+
+내부적으로 `Mint` 및 `Token` account를 생성하는 것은 상당히 "복잡"합니다. 다양한 input과 account를 요구하는 여러 instruction이 있으며, account를 실제로 초기화하기 전에 rent exempt 상태로 만들어야 합니다.
+
+### Mint Account
+
+어떤 abstraction 없이 `Mint` account를 생성하면 다음과 같습니다.
+
+```ts
+import {
+    Keypair,
+    sendAndConfirmTransaction,
+    SystemProgram,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    createInitializeMint2Instruction,
+    MINT_SIZE,
+    getMinimumBalanceForRentExemptMint,
+    TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+
+const mint = Keypair.generate();
+
+const mintRent = await getMinimumBalanceForRentExemptMint(connection);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: feePayer.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: MINT_SIZE,
+    lamports: mintRent,
+    programId: TOKEN_PROGRAM_ID
+});
+
+const initializeMintInstruction = createInitializeMint2Instruction(
+    mint.publicKey, // mint pubkey
+    6, // decimals
+    feePayer.publicKey, // mint authority
+    null, // freeze authority
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+다행히도 `@solana/spl-token` 패키지에는 일부 abstraction이 포함되어 있습니다. 따라서 다음과 같이 단일 `createMint()` 함수를 사용하여 `Mint` account를 생성할 수 있습니다.
+
+```ts
+const mint = await createMint(
+    connection, // connection
+    keypair, // payer
+    keypair.publicKey, // mint authority
+    null, // freeze authority
+    6 // decimals
+);
+```
+
+### Token Account
+
+`Token` account도 마찬가지입니다. 어떤 abstraction 없이 생성한다면 다음과 같을 것입니다.
+
+```ts
+import {
+    Keypair,
+    sendAndConfirmTransaction,
+    SystemProgram,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    createInitializeAccount3Instruction,
+    ACCOUNT_SIZE,
+    getMinimumBalanceForRentExemptAccount,
+    TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+
+const token = Keypair.generate();
+
+const tokenRent = await getMinimumBalanceForRentExemptAccount(connection);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: feePayer.publicKey,
+    newAccountPubkey: token.publicKey,
+    space: ACCOUNT_SIZE,
+    lamports: tokenRent,
+    programId: TOKEN_PROGRAM_ID
+});
+
+const initializeTokenInstruction = createInitializeAccount3Instruction(
+    token.publicKey, // token pubkey
+    mint.publicKey, // mint pubkey
+    feePayer.publicKey, // owner pubkey
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTokenInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, token]);
+
+console.log(`Token created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+그러나 `Mint` account와 마찬가지로, `@solana/spl-token` 패키지에는 `Token` account를 생성하기 위한 일부 abstraction이 있습니다. 다음과 같이 `createAccount()` 함수를 사용할 수 있습니다.
+
+```ts
+const token = await createAccount(
+    connection, // connection
+    keypair, // payer
+    mint.publicKey, // mint pubkey
+    keypair.publicKey, // owner pubkey
+);
+```
+
+### Associated Token Account
+
+`Associated Token` account도 마찬가지이지만, abstraction은 `Mint` 및 `Token` account와 같은 account 생성과 관련이 있는 것이 아니라 주로 address derivation과 관련이 있습니다.
+
+따라서 어떤 abstraction 없이 `Associated Token` account를 생성하는 방법은 다음과 같습니다.
+
+```ts
+import {
+    sendAndConfirmTransaction,
+    Transaction,
+} from "@solana/web3.js";
+
+import {
+    TOKEN_PROGRAM_ID,
+    createAssociatedTokenAccountIdempotentInstruction,
+    getAssociatedTokenAddress,
+} from "@solana/spl-token";
+
+const associatedTokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey, // mint pubkey
+    keypair.publicKey, // owner pubkey
+    false, // allow owner off-curve
+    TOKEN_PROGRAM_ID
+);
+
+// Create ATA creation instructions for all accounts
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    associatedTokenAccount, // associated token account address
+    keypair.publicKey, // owner
+    mint.publicKey, // mint
+    TOKEN_PROGRAM_ID
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Associated Token created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+그리고 abstraction을 사용하면 다음과 같습니다.
+
+```ts
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection, // connection
+    keypair, // payer
+    mint, // mint pubkey
+    keypair.publicKey // owner pubkey
+);
+```
+
+> 보시다시피, 이 함수는 `getOrCreateAssociatedTokenAccount()`라고 불립니다. 이는 `Associated Token` account가 이전에 이미 생성되었을 수 있으며, 이로 인해 transaction이 실패하는 것을 원치 않기 때문입니다. 따라서 이 함수는 ATA의 address를 생성하거나 단순히 반환합니다.

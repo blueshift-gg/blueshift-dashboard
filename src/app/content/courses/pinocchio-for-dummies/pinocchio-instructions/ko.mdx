@@ -1,0 +1,193 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instructions
+
+앞서 살펴보았듯이, `TryFrom` trait를 사용하면 validation과 business logic을 깔끔하게 분리하여 유지보수성과 보안을 모두 향상시킬 수 있습니다.
+
+<ArticleSection name="Instruction Structure" id="instruction-structure" level="h2" />
+
+logic을 처리할 때, 다음과 같은 structure를 생성할 수 있습니다:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_datas: DepositInstructionData,
+}
+```
+
+이 structure는 logic 처리 중에 접근할 수 있는 data를 정의합니다. 그런 다음 `lib.rs` 파일에서 찾을 수 있는 `try_from` 함수를 사용하여 이를 deserialize합니다:
+
+```rust
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_datas = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_datas,
+        })
+    }
+}
+```
+
+이 wrapper는 세 가지 주요 이점을 제공합니다:
+1. raw input(bytes 및 accounts)을 모두 허용합니다.
+2. 개별 `TryFrom` 구현에 validation을 위임합니다.
+3. 완전히 타입이 지정되고 validation된 Deposit struct를 반환합니다.
+
+그런 다음 다음과 같이 처리 logic을 구현할 수 있습니다:
+
+```rust
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&self) -> ProgramResult {
+        // deposit logic
+        Ok(())
+    }
+}
+```
+
+- `DISCRIMINATOR`는 entrypoint에서 pattern matching에 사용하는 byte입니다.
+- `process()` method는 모든 validation 검사가 이미 완료되었으므로 business logic만 포함합니다.
+
+그 결과? 완전히 native의 모든 이점(명시적, 예측 가능, 빠름)을 갖춘 Anchor 스타일의 ergonomics를 얻습니다.
+
+<ArticleSection name="Cross Program Invocation" id="cross-program-invocation" level="h2" />
+
+앞서 언급했듯이, Pinocchio는 native program에 대한 Cross-Program Invocations (CPIs)를 단순화하는 `pinocchio-system` 및 `pinocchio-token`과 같은 helper crate를 제공합니다.
+
+이러한 helper struct와 method는 이전에 사용했던 Anchor의 `CpiContext` 방식을 대체합니다:
+
+```rust
+Transfer {
+    from: self.accounts.owner,
+    to: self.accounts.vault,
+    lamports: self.instruction_datas.amount,
+}
+.invoke()?;
+```
+
+`Transfer` struct(`pinocchio-system`에서 가져옴)는 System Program에 필요한 모든 field를 캡슐화하며, `.invoke()`는 CPI를 실행합니다. context builder나 추가적인 boilerplate가 필요하지 않습니다.
+
+caller가 Program-Derived Address (PDA)여야 할 때, Pinocchio는 동일하게 간결한 API를 유지합니다:
+
+```rust
+let seeds = [
+    Seed::from(b"vault"),
+    Seed::from(self.accounts.owner.key().as_ref()),
+    Seed::from(&[bump]),
+];
+let signers = [Signer::from(&seeds)];
+
+Transfer {
+    from: self.accounts.vault,
+    to: self.accounts.owner,
+    lamports: self.accounts.vault.lamports(),
+}
+.invoke_signed(&signers)?;
+```
+
+**작동 방식은 다음과 같습니다:**
+1. `Seeds`는 PDA derivation과 일치하는 Seed object array를 생성합니다.
+2. `Signer`는 이 seed들을 Signer helper로 감쌉니다.
+3. `invoke_signed`는 CPI를 실행하며, signer array를 전달하여 transfer를 승인합니다.
+
+그 결과? 일반 CPI와 signed CPI 모두를 위한 깔끔하고 일급(first-class) interface를 제공합니다: macro가 필요 없으며, 숨겨진 마법도 없습니다.
+
+<ArticleSection name="Multiple Instruction Structure" id="multiple-instruction-structure" level="h2" />
+
+종종 여러 instruction에 걸쳐 동일한 account structure와 validation logic을 재사용하고 싶을 때가 있습니다. 예를 들어, 서로 다른 configuration field를 업데이트할 때 그렇습니다.
+
+각 instruction마다 별도의 discriminator를 생성하는 대신, data payload의 크기로 instruction을 구별하는 패턴을 사용할 수 있습니다.
+
+작동 방식은 다음과 같습니다:
+
+모든 관련 config update에 대해 단일 instruction discriminator를 사용합니다. 특정 instruction은 들어오는 data의 길이로 결정됩니다.
+
+그 후에 processor에서 `self.data.len()`을 match합니다. 각 instruction type은 고유한 data 크기를 가지므로, 이에 따라 올바른 handler로 dispatch할 수 있습니다.
+
+다음과 같이 보일 것입니다:
+
+```rust
+pub struct UpdateConfig<'a> {
+    pub accounts: UpdateConfigAccounts<'a>,
+    pub data: &'a [u8],
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for UpdateConfig<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = UpdateConfigAccounts::try_from(accounts)?;
+
+        // Return the initialized struct
+        Ok(Self { accounts, data })
+    }
+}
+
+impl<'a> UpdateConfig<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &4;
+
+    pub fn process(&mut self) -> ProgramResult {
+        match self.data.len() {
+            len if len == size_of::<UpdateConfigStatusInstructionData>() => {
+                self.process_update_status()
+            }
+            len if len == size_of::<UpdateConfigFeeInstructionData>() => self.process_update_fee(),
+            len if len == size_of::<UpdateConfigAuthorityInstructionData>() => {
+                self.process_update_authority()
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+
+    //..
+}
+```
+
+어떤 handler를 호출할지 알 때까지 instruction data의 deserialization을 미루는 것을 확인하세요. 이는 불필요한 parsing을 방지하고 entrypoint logic을 깔끔하게 유지합니다.
+
+각 handler는 이제 특정 data type을 deserialize하고 update를 수행할 수 있습니다:
+
+```rust
+pub fn process_update_authority(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigAuthorityInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_authority_unchecked(instruction_data.authority) }?;
+
+    Ok(())
+}
+
+pub fn process_update_fee(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigFeeInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_fee_unchecked(instruction_data.fee) }?;
+
+    Ok(())
+}
+
+pub fn process_update_status(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigStatusInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_state_unchecked(instruction_data.status) }?;
+
+    Ok(())
+}
+```
+
+이 접근 방식을 통해 account validation을 공유하고 여러 관련 instruction에 대해 단일 entrypoint를 사용하여 boilerplate를 줄이고 codebase를 유지 관리하기 쉽게 만들 수 있습니다.
+
+data 크기를 pattern matching함으로써, 추가적인 discriminator나 복잡한 parsing 없이 올바른 logic으로 효율적으로 라우팅할 수 있습니다.

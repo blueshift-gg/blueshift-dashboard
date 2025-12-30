@@ -1,0 +1,124 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 서명자 검증 (Signer Checks)
+
+서명자 검증은 수기 서명을 요구하는 것과 동일한 디지털 방식으로, account 소유자가 다른 사람이 아닌 본인이 transaction을 승인했음을 증명합니다. Solana의 트러스트리스(trustless) 환경에서 이 암호화 증명은 진정한 승인을 검증하는 유일한 방법입니다.
+
+이는 프로그램 파생 계정(PDA)과 권한으로 제한된 작업(authority-gated operations)을 다룰 때 매우 중요해집니다. 대부분의 프로그램 account는 이를 수정할 수 있는 권한을 결정하는 `authority` 필드를 저장하며, 많은 PDA는 특정 user account에서 파생됩니다. 서명자 검증이 없으면, 프로그램은 합법적인 소유자와 악의적인 사칭자를 구분할 수 없습니다.
+
+서명자 검증 누락의 결과는 치명적입니다. 모든 account가 특정 authority에게만 제한되어야 하는 작업을 수행할 수 있어, 무단 접근, account 자산 소진, 프로그램 상태에 대한 완전한 통제권 상실로 이어집니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+프로그램 account의 소유권을 이전하는 다음 취약한 instruction을 고려해 보십시오.
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+언뜻 보기에 안전해 보입니다. `has_one = owner` 제약 조건은 instruction에 전달된 `owner` account가 `program_account`에 저장된 `owner` 필드와 일치하는지 확인합니다. 데이터 검증은 완벽하지만 치명적인 결함이 있습니다.
+
+`owner`가 `Signer`가 아닌 `UncheckedAccount`라는 점에 주목하십시오. 이는 Anchor가 제공된 account가 저장된 `owner`와 일치하는지 검증하지만, 해당 account가 실제로 transaction에 서명했는지는 확인하지 않는다는 의미입니다.
+
+공격자는 다음과 같은 방법으로 이를 악용할 수 있습니다.
+-   하이재킹(hijack)하려는 프로그램 account를 찾습니다.
+-   account 데이터에서 현재 소유자의 public key를 읽습니다.
+-   실제 소유자의 public key를 `owner` 파라미터로 전달하는 transaction을 생성합니다.
+-   자신을 `new_owner`로 설정합니다.
+-   실제 소유자의 서명 없이 transaction을 제출합니다.
+
+public key가 일치하므로 `has_one` 제약 조건은 통과하지만, 서명자 검증이 없으므로 공격자는 합법적인 소유자의 동의 없이 소유권을 자신에게 성공적으로 이전합니다. account를 통제하게 되면, 새로운 authority로서 모든 작업을 수행할 수 있습니다.
+
+다행히 Anchor는 `UncheckedAccount`를 다음과 같이 `Signer`로 변경하는 것만으로 account struct 내에서 이 검증을 매우 쉽게 수행할 수 있도록 합니다.
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+또는 다음과 같이 `signer` account 제약 조건을 추가할 수 있습니다.
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    #[account(signer)]
+    /// CHECK: This account will not be checked by Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: This account will not be checked by Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+또는 다음과 같이 `ctx.accounts.owner.is_signer` 검사를 사용하여 instruction에 서명자 검증을 추가할 수도 있습니다.
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if !ctx.accounts.owner.is_signer {
+        return Err(ProgramError::MissingRequiredSignature.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+
+    Ok(())
+}
+```
+
+이 검증을 추가함으로써, instruction handler는 `authority` account가 transaction에 서명한 경우에만 진행됩니다. account가 서명되지 않았다면, transaction은 실패할 것입니다.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 account struct 내부에 직접 보안 검증을 추가할 수 없으므로, instruction 로직 내에서 이를 수행해야 합니다.
+
+다음과 같이 `is_signer()` 함수를 사용하여 Anchor와 매우 유사하게 수행할 수 있습니다.
+
+```rust
+if !self.accounts.owner.is_signer() {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```

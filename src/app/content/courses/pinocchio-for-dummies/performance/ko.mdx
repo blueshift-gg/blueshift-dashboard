@@ -1,0 +1,243 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 성능
+
+많은 개발자들이 Pinocchio의 account 필드에 대한 세밀한 제어 기능 때문에 이를 사용하지만, Pinocchio의 진정한 강점은 최대 성능을 구현하는 데 있습니다.
+
+이 섹션에서는 Solana 프로그램에서 최적의 효율성을 달성하기 위한 실용적인 전략을 살펴보겠습니다.
+
+<ArticleSection name="Superfluous Checks" id="superfluous-checks" level="h2" />
+
+개발자들은 종종 안전을 위해 추가적인 account 제약 조건을 추가하지만, 이는 불필요한 오버헤드를 유발할 수 있습니다. 필수적인 검사와 중복되는 검사를 구별하는 것이 중요합니다.
+
+예를 들어, `Token Account` 또는 `Mint`에서 단순히 읽을 때 역직렬화(deserialization) 및 유효성 검사(validation)가 필요합니다. 하지만 이 동일한 account들이 나중에 CPI (Cross-Program Invocation)에서 사용되면, 불일치 또는 오류가 해당 지점에서 instruction을 실패하게 할 것입니다. 따라서 선제적인 검사는 중복될 수 있습니다.
+
+마찬가지로, Token Account의 "owner"를 확인하는 것은 종종 불필요합니다. 특히 account가 PDA (Program Derived Address)에 의해 제어되는 경우 더욱 그렇습니다. owner가 올바르지 않으면, 잘못된 seed로 인해 CPI가 실패할 것입니다. PDA에 의해 전송이 실행되지 않는 경우에는 수신자를 검증하는 데 집중해야 합니다. 특히 sender의 이해관계가 프로그램의 이해관계와 일치하므로 PDA가 제어하는 account에 예치할 때 더욱 그렇습니다.
+
+`Escrow`의 예를 들어보겠습니다:
+
+...
+
+### Associated Token Program
+
+`Associated Token Accounts` (ATA)는 편리하지만 성능 비용이 따릅니다. 절대적으로 필요한 경우가 아니라면 사용을 강제하지 마십시오. 또한 instruction 로직 내에서 ATA 생성을 요구하지 마십시오. 대부분의 시나리오에서 `init-if-needed` 패턴은 불필요한 복잡성과 리소스 사용을 추가합니다 (예: Jupiter와 같은 라우터로 구성된 Amm instruction에서).
+
+프로그램이 ATA에 의존하는 경우, 외부에서 생성되도록 하십시오. 프로그램 내에서는 다음과 같이 예상되는 주소를 직접 파생하여 정확성을 확인하십시오:
+
+```rust
+let (associated_token_account, _) = find_program_address(
+    &[
+        self.accounts.owner.key(),
+        self.accounts.token_program.key(),
+        self.accounts.mint.key(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+```
+
+불필요한 검사와 account 요구 사항을 최소화함으로써 compute 비용을 줄이고 프로그램 실행을 간소화할 수 있습니다. 이는 네이티브 Solana 개발의 완전한 성능 잠재력을 발휘하게 합니다.
+
+> instruction이 일찍 실패하도록 검사를 추가하는 것은 장점이 있습니다. 소비되는 compute unit이 확실히 더 낮을 것이기 때문입니다. 따라서 instruction이 주로 `{ skipPreflight: true }`와 같은 플래그와 함께 사용될지 여부를 고려하십시오.
+
+<ArticleSection name="Perf Flag" id="perf-flag" level="h2" />
+
+Rust의 feature flag는 코드를 조건부로 컴파일하는 강력한 방법을 제공하여, 개발, 테스트 또는 프로덕션 환경에서의 최대 성능과 같은 다양한 빌드 프로파일에 대해 기능을 전환할 수 있도록 합니다.
+
+이는 모든 compute unit이 중요한 Solana 프로그램에서 특히 유용합니다.
+
+### Setting Up Feature Flags
+
+Feature flag는 `Cargo.toml` 파일의 `[features]` 섹션에 정의됩니다. 예를 들어, 로깅 및 추가 검사를 비활성화하여 성능 최적화를 가능하게 하는 `perf` 플래그를 원할 수 있습니다.
+
+```
+[features]
+default = ["perf"]
+perf = []
+```
+
+여기서 `perf` 기능은 기본적으로 활성화되어 있지만, 빌드 또는 테스트 시 재정의할 수 있습니다.
+
+### Using Feature Flags in Code
+
+Rust의 조건부 컴파일 속성을 사용하여 활성 기능에 따라 코드를 포함하거나 제외할 수 있습니다. 예를 들어:
+
+```rust
+pub fn process(ctx: Context<'info>) -> ProgramResult {
+    #[cfg(not(feature = "perf"))]
+    sol_log("Create Class");
+    Self::try_from(ctx)?.execute()
+}
+```
+
+대부분의 프로그램은 디버깅을 쉽게 하고 올바른 instruction이 호출되었는지 확인하기 위해 instruction의 이름을 로그로 반환합니다.
+
+그러나 이는 비용이 많이 들고, explorer를 더 읽기 쉽게 만들고 디버깅을 향상시키는 목적 외에는 실제로 필요하지 않습니다.
+
+```rust
+#[cfg(not(feature = "perf"))]
+if name.len() > MAX_NAME_LEN {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+
+또 다른 예는 앞서 논의된 불필요한 검사입니다.
+
+이러한 검사 없이도 instruction이 안전하다는 것을 안다면, 이를 기본값으로 설정하지 말고 플래그 뒤에 숨겨야 합니다.
+
+> 이 예제에서는 `perf` 플래그를 만들었는데, 이는 프로그램이 가능한 한 최고 성능을 발휘하도록 하려면 컴파일할 때 이 `perf` 플래그를 사용해야 함을 나타냅니다.
+
+### Building with Different Flags
+
+`perf` 기능을 사용하거나 사용하지 않고 프로그램을 빌드하려면 다음을 사용하십시오:
+
+- 성능 최적화 (기본값):
+
+```
+cargo build-bpf
+```
+
+- 추가 검사 및 로깅:
+
+```
+cargo build-bpf --no-default-features
+```
+
+이 접근 방식을 통해 feature flag를 토글하는 것만으로 개발 안전 또는 프로덕션 속도에 맞게 조정할 수 있는 단일 코드베이스를 유지할 수 있습니다.
+
+<ArticleSection name="Bitwise Operations" id="bitwise-operations" level="h2" />
+
+효율적인 연산을 논할 때, boolean은 가장 비효율적인 것 중 하나입니다. 생각해 보십시오: boolean은 두 가지 가능한 값, 즉 0 또는 1을 나타내기 위해 1바이트를 차지합니다.
+
+코드에 여러 boolean이 있는 경우, 비트 조작(bit manipulation)을 사용하여 훨씬 더 효율적으로 저장할 수 있습니다. 비트 연산(bitwise operations)을 사용하면 단일 바이트에 최대 8개의 다른 boolean 값을 저장할 수 있습니다.
+
+### Flag Definition
+
+왼쪽 시프트 연산을 사용하여 플래그를 비트 위치로 정의합니다:
+
+```rust
+const FLAG_ACTIVE: u8 = 1 << 0;     // 0000_0001
+const FLAG_VERIFIED: u8 = 1 << 1;   // 0000_0010
+const FLAG_PREMIUM: u8 = 1 << 2;    // 0000_0100
+const FLAG_LOCKED: u8 = 1 << 3;     // 0000_1000
+```
+
+플래그를 설정하려면 단순히 다음을 수행할 수 있습니다:
+
+```rust
+let mut flags = 0u8;           // flags = 0000_0000
+
+flags |= FLAG_ACTIVE;          // flags = 0000_0001
+flags |= FLAG_VERIFIED;        // flags = 0000_0011
+flags |= FLAG_PREMIUM | FLAG_LOCKED;  // flags = 0000_1111
+```
+
+`|` (OR 연산자)는 다른 비트에 영향을 주지 않고 특정 비트를 "켜는" 데 완벽합니다. 왜냐하면 0과 OR 연산을 하면 원래 비트가 유지되고, 1과 OR 연산을 하면 결과는 항상 1이 되기 때문입니다 (플래그가 설정됨).
+
+플래그가 활성 상태인지 확인하려면 다음과 같이 할 수 있습니다:
+
+```rust
+let flags = 0b0000_0101u8;  // Has ACTIVE and PREMIUM flags set
+
+// Check if a single flag is set
+if flags & FLAG_ACTIVE != 0 {
+    println!("Account is active");
+}
+
+// Check if multiple flags are set
+if (flags & (FLAG_ACTIVE | FLAG_PREMIUM)) == (FLAG_ACTIVE | FLAG_PREMIUM) {
+    println!("Account is both active and premium");
+}
+
+// Check if any of multiple flags are set
+if flags & (FLAG_VERIFIED | FLAG_PREMIUM) != 0 {
+    println!("Account is either verified or premium (or both)");
+}
+```
+
+`&` (AND 연산자)는 특정 비트를 "마스킹"하여 그 값을 확인하는 데 완벽합니다. 왜냐하면 0과 AND 연산을 하면 결과는 항상 0이 되고, 1과 AND 연산을 하면 원래 비트가 유지되기 때문입니다.
+
+대신 플래그를 지우거나 토글하려면 다음과 같이 할 수 있습니다:
+
+```rust
+let mut flags = 0b0000_1111u8;      // All flags set
+
+// Clear a single flag
+flags &= !FLAG_ACTIVE;              // flags = 0000_1110
+
+// Clear multiple flags at once
+flags &= !(FLAG_VERIFIED | FLAG_PREMIUM);   // flags = 0000_1000
+
+// Toggle a single flag
+flags ^= FLAG_ACTIVE;               // flags = 0000_1001 (now has VERIFIED)
+flags ^= FLAG_LOCKED;               // flags = 0000_0001 (LOCKED now cleared)
+
+// Toggle multiple flags at once
+flags ^= FLAG_PREMIUM | FLAG_LOCKED;        // flags = 0000_1011
+```
+
+<ArticleSection name="Memory on Solana" id="memory-on-solana" level="h2" />
+
+Solana Virtual Machine (SVM)은 스택 메모리 (지역 변수), 힙 메모리 (동적 구조) 및 account 공간 (영구 저장소)을 엄격하게 분리하는 3계층 메모리 아키텍처를 사용합니다.
+
+이 아키텍처를 이해하는 것은 고성능 Solana 프로그램을 작성하는 데 중요합니다.
+
+프로그램은 예측 가능한 메모리 매핑을 통해 고정된 가상 주소 공간 내에서 작동합니다:
+- **Program Code**: `0x100000000` - 컴파일된 프로그램 바이트코드가 존재하는 곳
+- **Stack Data**: `0x200000000` - 지역 변수 및 함수 호출 프레임
+- **Heap Data**: `0x300000000` - 동적 할당 (비용이 많이 듦!)
+
+이 결정론적 레이아웃은 강력한 최적화를 가능하게 하지만, 엄격한 성능 제약도 발생시킵니다.
+
+> Solana는 엄격한 메모리 제한을 부과합니다: 함수 호출당 4KB 스택 프레임, 프로그램 실행당 총 32KB 힙 공간.
+
+### The Zero-Allocation Advantage
+
+Pinocchio의 주요 성능 혁신은 모든 것에 힙 할당(heap allocations) 대신 참조(references)를 사용하는 데서 비롯됩니다.
+
+이 접근 방식은 핵심 통찰력을 활용합니다: **SVM은 이미 모든 프로그램 입력을 메모리로 로드하므로**, 해당 데이터를 새 힙 할당으로 복사하는 것은 순수한 낭비입니다.
+
+힙 할당이 본질적으로 나쁜 것은 아니지만, Solana에서는 모든 할당이 귀중한 compute unit을 소비하기 때문에 비용이 많이 들고 복잡합니다. 각 할당은 제한된 힙 공간을 조각내고, 정리(cleanup) 작업은 추가적인 compute unit을 소비합니다.
+
+### Zero-Allocation Techniques
+
+1. 참조 기반 데이터 구조 - 소유된 데이터를 빌려온 참조로 변환:
+    ```rust
+    // HEAP ALLOCATION:
+    struct AccountInfo {
+        key: Pubkey,        // Owned data - copied to heap
+        data: Vec<u8>,      // Vector - definitely heap allocated
+    }
+
+    // ZERO ALLOCATION:
+    struct AccountInfo<'a> {
+        key: &'a Pubkey,    // Reference - no allocation
+        data: &'a [u8],     // Slice reference - no allocation
+    }
+    ```
+
+2. 제로-복사 데이터 접근 - 역직렬화 없이 데이터를 제자리에서 접근:
+    ```rust
+    // Instead of deserializing, access data in-place:
+    pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
+        // Parse accounts directly from byte slice - NO HEAP ALLOCATION
+        let source_account = &accounts[0..36];  // Just slice references
+        let dest_account = &accounts[36..72];
+
+        // Access fields through pointer arithmetic - NO ALLOCATION
+        let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
+    }
+    ```
+
+3. No-Std 제약 조건 - 컴파일 시 의도치 않은 힙 사용 방지:
+    ```rust
+    // Enforces no-std to prevents accidental heap usage:
+    #![no_std]
+    ```
+
+### Pinocchio Memory Allocator
+
+힙을 전혀 할당하지 않으려면, Pinocchio는 이를 보장하기 위한 특수 매크로 `no_allocator!()`를 제공합니다.
+
+> 설정되지 않은 경우, Pinocchio는 전통적인 힙 연산이 필요한 프로그램에 `default_allocator!()`를 사용할 것입니다.
+
+이 외에도, 스스로 정리하는 방법을 아는 더 나은 힙 할당자를 항상 작성할 수 있습니다. 이 접근 방식에 관심이 있다면, [여기 예제가 있습니다](https://github.com/solana-labs/solana-program-library/blob/master/examples/rust/custom-heap/src/entrypoint.rs).

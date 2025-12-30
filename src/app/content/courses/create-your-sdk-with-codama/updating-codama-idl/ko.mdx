@@ -1,0 +1,186 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Codama IDL 업데이트
+
+Codama의 visitor 시스템을 사용하면 IDL 생성 후 프로그래밍 방식으로 IDL을 변환하고 개선할 수 있습니다.
+
+Anchor IDL에서 시작했든 처음부터 구축했든, visitors를 사용하면 client를 생성하기 전에 Codama IDL을 더욱 개선하고 사용자 정의하여, 예를 들어 developer experience를 최적화할 수 있습니다.
+
+<ArticleSection name="Essential Visitors" id="essential-visitors" level="h2" />
+
+Visitors는 visitor pattern을 따르며, IDL node들을 탐색하고 변환을 적용합니다.
+
+프로덕션 ready SDK를 생성하는 데 가장 영향력 있는 visitors를 살펴보겠습니다:
+
+### PDAs Visitors 추가
+
+program에 PDA 정의를 추가하려면 `addPdasVisitor`를 사용합니다. 이 visitor는 Anchor IDL에 PDA 정보가 포함되어 있지 않지만, program 로직이 특정 Program Derived Address에 의존하는 경우 필수적입니다.
+
+이것은 key가 program 이름이고 value가 추가할 PDA 정의의 배열인 객체를 받습니다.
+
+```ts
+codama.update(
+    addPdasVisitor({
+        // Add a PDA to the 'token' program.
+        token: [
+            {
+                name: 'associatedToken',
+                seeds: [
+                    variablePdaSeedNode('mint', publicKeyTypeNode()),
+                    constantPdaSeedNode(
+                        publicKeyTypeNode(),
+                        publicKeyValueNode('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+                    ),
+                    variablePdaSeedNode('owner', publicKeyTypeNode()),
+                ],
+            },
+        ],
+        // Add two PDAs to the 'counter' program.
+        counter: [
+            {
+                name: 'counter',
+                seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+            },
+            {
+                name: 'counterConfig',
+                seeds: [variablePdaSeedNode('counter', publicKeyTypeNode())],
+            },
+        ],
+    }),
+);
+```
+
+### Accounts Visitor 업데이트
+
+기존 account 정의를 수정하거나 원치 않는 정의를 제거하려면 `updateAccountsVisitor`를 사용합니다. 이 visitor는 선호하는 naming conventions에 맞춰 account 이름을 변경하거나 누락된 PDA association을 추가하는 데 중요합니다.
+
+Anchor가 생성한 account 이름이 client naming preferences와 일치하지 않거나, 더 나은 code generation을 위해 PDAs를 특정 account와 연결해야 할 때 이를 사용해야 합니다.
+
+```ts
+codama.update(
+    updateAccountsVisitor({
+        vault: {
+            // Rename the 'vault' account to 'safe'.
+            name: 'safe',
+            // Rename the 'owner' field to 'authority'.
+            data: { owner: 'authority' },
+            // Create a new PDA node and link it to this account.
+            seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+        },
+        counter: {
+            // Delete the 'counter' account.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Instructions Visitor 업데이트
+
+더 나은 기본값, 이름 지정 또는 account 구성으로 instruction 정의를 개선하려면 `updateInstructionsVisitor`를 사용합니다. 이는 생성된 client의 developer experience를 개선하는 데 가장 강력한 visitor 중 하나입니다.
+
+instruction arguments에 합리적인 기본값을 제공하거나, 명확성을 위해 instruction이나 account의 이름을 변경하거나, client 사용을 단순화하기 위해 account를 optional로 표시하려는 경우 이를 사용해야 합니다.
+
+```ts
+codama.update(
+    updateInstructionsVisitor({
+        send: {
+            // Rename the 'send' instruction to 'transfer'.
+            name: 'transfer',
+            accounts: {
+                // Rename the 'owner' instruction account to 'authority'.
+                owner: { name: 'authority' },
+                // Set a default value for the 'associatedToken' instruction account.
+                associatedToken: { defaultValue: pdaValueNode('associatedToken') },
+                // Update the signer status of the 'payer' instruction account to `true`.
+                payer: { isSigner: true },
+                // Mark the 'mint' instruction account as optional.
+                mint: { isOptional: true },
+            },
+            arguments: {
+                // Set a default value for the 'amount' instruction argument to 1.
+                amount: { defaultValue: numberValueNode(1) },
+                // Rename the 'decimals' instruction argument to 'mintDecimals'.
+                decimals: { name: 'mintDecimals' },
+            },
+        },
+        burn: {
+            // Delete the 'burn' instruction.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Defined Types Visitor 업데이트
+
+custom type 정의를 수정하거나 사용하지 않는 type을 정리하려면 `updateDefinedTypesVisitor`를 사용합니다. 이 visitor는 생성된 client에서 깔끔하고 이름이 잘 지정된 type을 유지하는 데 도움이 됩니다.
+
+Anchor가 선호하는 conventions과 일치하지 않는 type 이름을 생성하거나, IDL에서 deprecated type을 제거해야 할 때 이를 사용해야 합니다.
+
+```ts
+codama.update(
+    updateDefinedTypesVisitor({
+        options: {
+            // Rename the 'options' type to 'configs'.
+            name: 'configs',
+            // Rename the 'sol' field to 'lamports'.
+            data: { sol: 'lamports' },
+        },
+        player: {
+            // Delete the 'player' type.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Errors Visitor 업데이트
+
+더 명확한 이름, 메시지 또는 code로 error 정의를 개선하려면 `updateErrorsVisitor`를 사용합니다. 이 visitor는 error handling이 설명을 잘 포함하고 일관된 pattern을 따르도록 보장합니다.
+
+Anchor가 생성하는 것보다 더 설명적인 error 이름이나 메시지를 원하거나, program suite 전반에 걸쳐 error code를 표준화해야 할 때 이를 사용해야 합니다.
+
+```ts
+codama.update(
+    updateErrorsVisitor({
+        invalidPda: {
+            // Rename the 'invalidPda' error to 'invalidProgramDerivedAddress'.
+            name: 'invalidProgramDerivedAddress',
+            // Change the error message.
+            message: 'The program-derived address is invalid.',
+            // Change the error code.
+            code: 123,
+        },
+        accountMismatch: {
+            // Delete the 'accountMismatch' error.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Programs Visitor 업데이트
+
+이름, version 또는 public key와 같은 program-level 정보를 수정하려면 `updateProgramsVisitor`를 사용합니다. 이 visitor는 정확한 program metadata를 유지하는 데 필수적입니다.
+
+program version을 업데이트하거나, 환경 전반에 걸쳐 program 이름을 표준화하거나, IDL에서 deprecated program을 제거해야 할 때 이를 사용해야 합니다.
+
+```ts
+codama.update(
+    updateProgramsVisitor({
+        splToken: {
+            // Rename the 'splToken' program to 'token'.
+            name: 'token',
+            // Change the program version.
+            version: '3.0.0',
+            // Change the program's public key.
+            publicKey: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        },
+        splAssociatedToken: {
+            // Delete the 'splAssociatedToken' program.
+            delete: true,
+        },
+    }),
+);
+```

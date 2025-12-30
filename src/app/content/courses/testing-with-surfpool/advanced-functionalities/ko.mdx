@@ -1,0 +1,168 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 고급 기능
+
+Surfnet은 localnet에서 mainnet을 복제하는 것을 넘어, account, 시스템 변수 및 블록체인 state를 변경하여 Solana의 핵심 기능을 향상하고 수정할 수 있게 해줍니다.
+
+이러한 수정은 Surfnet에 대한 RPC 호출을 통해 이루어지며, programmatically(자동화된 테스트 환경용) 및 terminal 명령(일회성 작업용)을 통해 변경이 가능합니다.
+
+코드에서 RPC 호출을 실행하려면 다음을 사용합니다:
+
+```ts
+const surfnetCall = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "<surfnet-method>",
+    "params": [<surfnet-method-params]
+}
+
+await fetch(connection.rpcEndpoint, {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(surfnetCall)
+});
+```
+
+터미널에서 RPC 호출을 실행하려면 다음을 사용합니다:
+
+```bash
+curl -X POST \
+    -H "Content-Type: application/json" \
+    -d '{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "<surfnet-method>",
+        "params": [<surfnet-method-params]
+    }' \
+    http://localhost:8899
+```
+
+<ArticleSection name="Customize System Variables" id="customize-system-variables" level="h2" />
+
+### Time Travel
+
+`surfnet_timeTravel` 메서드를 사용하여 블록체인 기록의 어느 시점으로든 이동할 수 있습니다. 이는 다양한 네트워크 state에서 프로그램이 어떻게 동작하는지 테스트하거나 특정 시간에 발생한 버그를 재현하는 데 매우 유용합니다.
+
+다음과 같이 `absoluteEpoch`, `absoluteSlot`, 또는 `absoluteTimestamp` 중 하나를 지정합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_timeTravel",
+  "params": [
+    {
+      "absoluteEpoch": 0
+    }
+  ]
+}
+```
+
+### Pause and Resume Block Production
+
+transaction을 단계별로 debug하거나 시간에 민감한 로직을 테스트하기 위해 block progression을 제어합니다. `surfnet_pauseClock`을 사용하여 block production을 중단하고 `surfnet_resumeClock`을 사용하여 계속합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_pauseClock", // or "surfnet_resumeClock"
+  "params": []
+}
+```
+
+<ArticleSection name="Modify Account Data" id="modify-account-data" level="h2" />
+
+### Set SOL Parameters
+
+경제적 시나리오나 엣지 케이스를 테스트하기 위해 SOL supply parameter를 구성합니다.
+
+`surfnet_setSupply` 메서드는 `circulating`, `nonCirculating`, `nonCirculatingAccounts` 및 `total` parameter를 허용합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_setSupply",
+  "params": [
+    {
+      "circulating": 1000000000,
+      "nonCirculating": 1000000000,
+      "nonCirculatingAccounts": [],
+      "total": 1000000000
+    }
+  ]
+}
+```
+
+### Transfer Accounts Between Programs
+
+`surfnet_cloneProgramAccount`를 사용하여 한 program의 account를 다른 program으로 clone합니다. 이는 program upgrade를 테스트하거나 다른 program 버전 간에 state를 migration하는 데 유용합니다.
+
+`destinationProgramId`와 `sourceProgramId` 둘 다 필요합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_cloneProgramAccount",
+  "params": [
+    {
+      "destinationProgramId": "string",
+      "sourceProgramId": "string"
+    }
+  ]
+}
+```
+
+### Update Account Data
+
+> 다음 메서드를 사용하여 이미 존재하는 account를 업데이트하면 account state가 덮어씌워집니다.
+
+`surfnet_setAccount`를 사용하여 lamports, data, owner 및 executable status를 포함한 모든 account의 속성을 수정합니다.
+
+이 메서드는 `pubkey`를 필요로 하며, `data`, `executable`, `lamports`, `owner` 및 `rentEpoch`에 대한 선택적 필드를 허용합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_setAccount",
+  "params": [
+    "1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM",
+    {
+      "data": "0x123456",
+      "executable": false,
+      "lamports": 1000000000,
+      "owner": "11111111111111111111111111111111",
+      "rentEpoch": 0
+    }
+  ]
+}
+```
+
+또한, token account 수정을 위해서는 Token Account의 data 변경을 간소화하는 특수 `surfnet_setTokenAccount` 메서드를 사용합니다.
+
+`owner` 및 `mint` parameter를 필요로 하며, `amount`, `closeAuthority`, `delegate`, `delegateAmount`, `state` 및 `tokenProgram`에 대한 선택적 필드를 포함합니다:
+
+```ts
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "surfnet_setTokenAccount",
+  "params": [
+    "1111111ogCyDbaRMvkdsHB3qfdyFYaG1WtRUAfdh",
+    "11111112D1oxKts8YPdTJRG5FzxTNpMtWmq8hkVx3",
+    {
+      "amount": 1000000000,
+      "closeAuthority": "111111131h1vYVSYuKP6AhS86fbRdMw9XHiZAvAaj",
+      "delegate": "11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP",
+      "delegatedAmount": 1000000000,
+      "state": "initialized"
+    },
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+  ]
+}
+```

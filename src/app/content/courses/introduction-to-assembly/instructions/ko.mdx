@@ -1,0 +1,274 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 명령어
+
+이제 sBPF의 register와 memory regions에 대해 이해했으니, 이를 조작하는 instruction들을 살펴보겠습니다.
+
+instruction은 프로그램이 수행하는 기본적인 연산입니다. 숫자를 더하거나, memory에서 로드하거나, 다른 위치로 점프하는 등의 작업들을 포함합니다.
+
+<ArticleSection name="What are Instructions?" id="what-are-instructions" level="h2" />
+
+instruction은 프로그램의 기본 구성 요소입니다. 프로세서에 정확히 무엇을 해야 하는지 알려주는 명령이라고 생각하십시오:
+- `add64 r1, r2`: "`r1`과 `r2` register의 값을 더하고, 결과를 `r1`에 저장합니다."
+- `ldxdw r0, [r10 - 8]`: "stack memory에서 8 byte를 `r0` register로 로드합니다."
+- `jeq r1, 42, +3`: "`r1`이 42와 같으면, 3개의 instruction만큼 앞으로 점프합니다."
+
+각 instruction은 정확히 하나의 연산을 수행하며, 즉각적인 VM decoding을 위해 정확히 8 byte의 데이터로 인코딩됩니다.
+
+sBPF instruction은 다양한 데이터 크기로 작동합니다:
+- byte = 8 bit (1 byte)
+- halfword = 16 bit (2 byte)
+- word = 32 bit (4 byte)
+- doubleword = 64 bit (8 byte)
+
+대부분의 sBPF 연산은 register가 64 bit이므로 64 bit 값(doubleword)을 사용하지만, 효율성을 위해 필요할 경우 더 작은 크기를 load하고 store할 수 있습니다.
+
+<ArticleSection name="Instruction Categories and Format" id="instruction-categories-and-format" level="h2" />
+
+Rust, C 또는 assembly 코드를 compile하면, toolchain은 고정 너비의 8-byte instruction 스트림을 ELF의 `.text` section에 package합니다.
+
+각 instruction은 VM이 한 번에 decoding할 수 있는 일관된 구조를 따릅니다:
+
+```
+   1 byte    4 bits   4 bits     2 bytes         4 bytes
+┌──────────┬────────┬────────┬──────────────┬──────────────────┐
+│  opcode  │  dst   │  src   │   offset     │      imm         │
+└──────────┴────────┴────────┴──────────────┴──────────────────┘
+```
+
+- `opcode`: 연산 유형을 정의합니다. 상위 3 bit는 instruction class (arithmetic, memory, jump, call, exit)를 선택하고, 하위 5 bit는 정확한 variant (add, multiply, load, jump-if-equal)를 지정합니다.
+- `dst`: 결과가 저장되는 대상 register 번호(`r0–r10`)입니다. arithmetic 결과, load된 값 또는 helper function return 값이 포함됩니다.
+- `src`: 입력을 제공하는 소스 register입니다. 두 operand arithmetic (`add r1, r2`)의 경우 두 번째 값을 제공합니다. memory 연산의 경우 기본 주소를 제공할 수 있습니다. immediate variant (`add r1, 10`)의 경우 이 4 bit는 opcode에 포함됩니다.
+- `offset`: instruction의 동작을 수정하는 작은 정수입니다. load/store의 경우 소스 주소에 더해져 `[src + offset]`에 도달합니다. jump의 경우 instruction 단위로 측정되는 상대적인 branch target입니다.
+- `imm`: immediate value field입니다. arithmetic 연산은 상수(`add r1, 42`)에 사용하고, `CALL`은 syscall number (`sol_log = 16`)에 사용하며, memory 연산은 absolute pointer로 처리할 수 있습니다.
+
+### 명령어 카테고리
+
+다양한 instruction 유형은 이러한 field들을 특정 방식으로 사용합니다:
+
+- **데이터 이동**: register와 memory 간에 값을 이동시킵니다:
+
+```sbpf
+mov64 r1, 42           // immediate value 42를 r1에 넣습니다
+                       // opcode=move_imm, dst=1, src=unused, imm=42
+
+ldxdw r0, [r10 - 8]    // stack에서 8 byte를 r0로 로드합니다
+                       // opcode=load64, dst=0, src=10, offset=-8, imm=unused
+
+stxdw [r1 + 16], r0    // r0를 [r1 + 16] 주소의 memory에 저장합니다
+                       // opcode=store64, dst=1, src=0, offset=16, imm=unused
+```
+- **산술 연산**: 수학적 연산을 수행합니다:
+
+```sbpf
+add64 r1, r2           // r1 = r1 + r2
+                       // opcode=add_reg, dst=1, src=2, offset=unused, imm=unused
+
+add64 r1, 100          // r1 = r1 + 100
+                       // opcode=add_imm, dst=1, src=unused, offset=unused, imm=100
+```
+
+- **제어 흐름**: 실행 순서를 변경합니다:
+
+```sbpf
+ja +5                  // 무조건 5개의 instruction만큼 앞으로 점프합니다
+                       // opcode=jump, dst=unused, src=unused, offset=5, imm=unused
+
+jeq r1, r2, +3         // r1 == r2이면, 3개의 instruction만큼 앞으로 점프합니다
+                       // opcode=jump_eq_reg, dst=1, src=2, offset=3, imm=unused
+
+jeq r1, 42, +3         // r1 == 42이면, 3개의 instruction만큼 앞으로 점프합니다
+                       // opcode=jump_eq_imm, dst=1, src=unused, offset=3, imm=42
+```
+
+### Opcode 인코딩
+
+opcode 인코딩은 연산 유형 외에도 여러 정보를 담고 있습니다:
+- Instruction class: Arithmetic, memory, jump, call 등
+- 연산 크기: 32 bit 대 64 bit 연산
+- 소스 유형: Register 대 immediate value
+- 특정 연산: Add 대 subtract, load 대 store 등
+
+이는 instruction variant에 대해 distinct opcode를 생성합니다. 예를 들어, `add64 r1, r2` (register source)는 `add64 r1, 42` (immediate source)와 다른 opcode를 사용합니다. 마찬가지로, `add64`와 `add32`는 다른 연산 크기에 대해 다른 opcode를 가집니다.
+
+Arithmetic 연산은 signed 및 unsigned variant를 추가로 구분합니다. `udiv64`는 값을 unsigned (0에서 1800경까지)로 처리하는 반면, `sdiv64`는 signed 값 (-900경에서 +900경까지)을 처리합니다.
+
+<ArticleSection name="Instruction Execution" id="instruction-execution" level="h2" />
+
+opcode는 VM이 나머지 field를 해석하는 방식을 결정합니다.
+
+VM이 `add64 r1, r2`를 만나면, opcode를 읽고 이를 두 개의 register를 사용하는 64-bit arithmetic 연산으로 인식합니다:
+
+`dst` field는 결과가 `r1`로 이동함을 나타내고, `src` field는 `r2`를 두 번째 operand로 지정하며, `offset` 및 `immediate` field는 무시됩니다.
+
+`add64 r1, 42`의 경우, opcode는 immediate 연산을 나타내도록 변경됩니다. 이제 `dst`는 여전히 `r1`을 가리키지만, `src`는 무의미해지고 `immediate` field가 두 번째 operand (42)를 제공합니다.
+
+memory 연산은 여러 field를 의미 있게 결합합니다:
+
+`ldxdw r1, [r2+8]`의 경우, opcode는 64-bit memory load를 나타내며, `dst`는 load된 값을 받고, `src`는 base address를 제공하며, `offset` (8)은 최종 주소 `r2 + 8`을 생성하기 위해 더해집니다.
+
+제어 흐름 instruction도 동일한 패턴을 따릅니다:
+
+`jeq r1, r2, +5`를 작성하면, opcode는 두 register를 비교하는 조건부 jump를 인코딩합니다. `r1`이 `r2`와 같으면, VM은 `offset` (5)을 program counter에 더하여 5개의 instruction만큼 앞으로 점프합니다.
+
+> opcode는 어떤 field가 의미 있는지 결정합니다. instruction format은 일정하게 유지되며: opcode는 각 field를 해석하는 방법을 알려주어 복잡한 addressing mode나 특수 사례를 제거합니다.
+
+### 함수 호출 및 Syscall
+
+sBPF의 call 메커니즘은 더 나은 명확성과 보안을 위해 버전별로 발전했습니다. sBPF v3까지 `call imm`은 두 가지 목적을 수행했습니다: immediate value는 내부 함수를 호출하는지 또는 syscall을 호출하는지 결정했습니다.
+
+runtime은 immediate value 범위에 따라 이들을 구분했으며, syscall number는 일반적으로 `sol_log`의 16과 같은 작은 양의 정수였습니다.
+
+sBPF v3부터는 명시적인 동작을 위해 instruction이 분리되었습니다. 이제 `call`은 상대적인 `offset`을 사용하여 내부 함수 호출을 처리하고, `syscall imm`은 runtime 함수를 명시적으로 호출합니다. 이러한 분리는 bytecode의 의도를 명확히 하고 더 나은 검증을 가능하게 합니다.
+
+`callx`를 통한 간접 호출도 발전했습니다. 이전 버전에서는 immediate field에 대상 register를 인코딩했지만, v2부터는 일반 instruction format과의 일관성을 위해 source register field에 인코딩됩니다.
+
+<ArticleSection name="Opcodes Reference Table" id="opcodes-reference-table" level="h2" />
+
+### Memory Load 연산
+
+| opcode | Mnemonic                 | Description                         |
+|--------|--------------------------|-------------------------------------|
+| lddw   | `lddw dst, imm`          | 64 bit immediate 로드 (첫 번째 slot)  |
+| lddw   | `lddw dst, imm`          | 64 bit immediate 로드 (두 번째 slot) |
+| ldxw   | `ldxw dst, [src + off]`  | memory에서 word 로드               |
+| ldxh   | `ldxh dst, [src + off]`  | memory에서 halfword 로드           |
+| ldxb   | `ldxb dst, [src + off]`  | memory에서 byte 로드               |
+| ldxdw  | `ldxdw dst, [src + off]` | memory에서 doubleword 로드         |
+
+### Memory Store 연산
+
+| opcode | Mnemonic                 | Description                    |
+|--------|--------------------------|--------------------------------|
+| stw    | `stw [dst + off], imm`   | word immediate 저장            |
+| sth    | `sth [dst + off], imm`   | halfword immediate 저장        |
+| stb    | `stb [dst + off], imm`   | byte immediate 저장            |
+| stdw   | `stdw [dst + off], imm`  | doubleword immediate 저장      |
+| stxw   | `stxw [dst + off], src`  | register에서 word 저장         |
+| stxh   | `stxh [dst + off], src`  | register에서 halfword 저장     |
+| stxb   | `stxb [dst + off], src`  | register에서 byte 저장         |
+| stxdw  | `stxdw [dst + off], src` | register에서 doubleword 저장   |
+
+### 산술 연산 (64-bit)
+
+| opcode | Mnemonic          | Description                    |
+|--------|-------------------|--------------------------------|
+| add64  | `add64 dst, imm`  | immediate 더하기               |
+| add64  | `add64 dst, src`  | register 더하기                |
+| sub64  | `sub64 dst, imm`  | immediate 빼기                 |
+| sub64  | `sub64 dst, src`  | register 빼기                  |
+| mul64  | `mul64 dst, imm`  | immediate 곱하기               |
+| mul64  | `mul64 dst, src`  | register 곱하기                |
+| div64  | `div64 dst, imm`  | immediate 나누기 (unsigned)    |
+| div64  | `div64 dst, src`  | register 나누기 (unsigned)     |
+| sdiv64 | `sdiv64 dst, imm` | immediate 나누기 (signed)      |
+| sdiv64 | `sdiv64 dst, src` | register 나누기 (signed)       |
+| mod64  | `mod64 dst, imm`  | immediate 나머지 연산 (unsigned) |
+| mod64  | `mod64 dst, src`  | register 나머지 연산 (unsigned)  |
+| smod64 | `smod64 dst, imm` | immediate 나머지 연산 (signed)   |
+| smod64 | `smod64 dst, src` | register 나머지 연산 (signed)    |
+| neg64  | `neg64 dst`       | 부정 (Negate)                  |
+
+### 산술 연산 (32-bit)
+
+| opcode | Mnemonic          | Description                    |
+|--------|-------------------|--------------------------------|
+| add32  | `add32 dst, imm`  | immediate 더하기 (32-bit)      |
+| add32  | `add32 dst, src`  | register 더하기 (32-bit)       |
+| sub32  | `sub32 dst, imm`  | immediate 빼기 (32-bit)        |
+| sub32  | `sub32 dst, src`  | register 빼기 (32-bit)         |
+| mul32  | `mul32 dst, imm`  | immediate 곱하기 (32-bit)      |
+| mul32  | `mul32 dst, src`  | register 곱하기 (32-bit)       |
+| div32  | `div32 dst, imm`  | immediate 나누기 (32-bit)      |
+| div32  | `div32 dst, src`  | register 나누기 (32-bit)       |
+| sdiv32 | `sdiv32 dst, imm` | immediate 나누기 (signed 32-bit) |
+| sdiv32 | `sdiv32 dst, src` | register 나누기 (signed 32-bit)  |
+| mod32  | `mod32 dst, imm`  | immediate 나머지 연산 (32-bit) |
+| mod32  | `mod32 dst, src`  | register 나머지 연산 (32-bit)  |
+| smod32 | `smod32 dst, imm` | immediate 나머지 연산 (signed 32-bit) |
+| smod32 | `smod32 dst, src` | register 나머지 연산 (signed 32-bit)  |
+
+### 논리 연산 (64-bit)
+
+| opcode | Mnemonic          | Description                    |
+|--------|-------------------|--------------------------------|
+| or64   | `or64 dst, imm`   | 비트wise OR immediate          |
+| or64   | `or64 dst, src`   | 비트wise OR register           |
+| and64  | `and64 dst, imm`  | 비트wise AND immediate         |
+| and64  | `and64 dst, src`  | 비트wise AND register          |
+| lsh64  | `lsh64 dst, imm`  | 왼쪽 shift immediate           |
+| lsh64  | `lsh64 dst, src`  | 왼쪽 shift register            |
+| rsh64  | `rsh64 dst, imm`  | 오른쪽 shift immediate         |
+| rsh64  | `rsh64 dst, src`  | 오른쪽 shift register          |
+| xor64  | `xor64 dst, imm`  | 비트wise XOR immediate         |
+| xor64  | `xor64 dst, src`  | 비트wise XOR register          |
+| mov64  | `mov64 dst, imm`  | immediate 이동                 |
+| mov64  | `mov64 dst, src`  | register 이동                  |
+| arsh64 | `arsh64 dst, imm` | 산술 오른쪽 shift immediate    |
+| arsh64 | `arsh64 dst, src` | 산술 오른쪽 shift register     |
+
+### 논리 연산 (32-bit)
+
+| opcode | Mnemonic          | Description                    |
+|--------|-------------------|--------------------------------|
+| or32   | `or32 dst, imm`   | 비트wise OR immediate (32-bit) |
+| or32   | `or32 dst, src`   | 비트wise OR register (32-bit)  |
+| and32  | `and32 dst, imm`  | 비트wise AND immediate (32-bit) |
+| and32  | `and32 dst, src`  | 비트wise AND register (32-bit) |
+| lsh32  | `lsh32 dst, imm`  | 왼쪽 shift immediate (32-bit)  |
+| lsh32  | `lsh32 dst, src`  | 왼쪽 shift register (32-bit)   |
+| rsh32  | `rsh32 dst, imm`  | 오른쪽 shift immediate (32-bit) |
+| rsh32  | `rsh32 dst, src`  | 오른쪽 shift register (32-bit) |
+| xor32  | `xor32 dst, imm`  | 비트wise XOR immediate (32-bit) |
+| xor32  | `xor32 dst, src`  | 비트wise XOR register (32-bit) |
+| mov32  | `mov32 dst, imm`  | immediate 이동 (32-bit)        |
+| mov32  | `mov32 dst, src`  | register 이동 (32-bit)         |
+| arsh32 | `arsh32 dst, imm` | 산술 오른쪽 shift immediate (32-bit) |
+| arsh32 | `arsh32 dst, src` | 산술 오른쪽 shift register (32-bit) |
+
+### 제어 흐름 연산
+
+| opcode | Mnemonic             | Description                                   |
+|--------|----------------------|-----------------------------------------------|
+| ja     | `ja off`             | 무조건 점프 (점프 0 = 다음으로 점프)          |
+| jeq    | `jeq dst, imm, off`  | immediate와 같으면 점프                     |
+| jeq    | `jeq dst, src, off`  | register와 같으면 점프                      |
+| jgt    | `jgt dst, imm, off`  | immediate보다 크면 점프 (unsigned)          |
+| jgt    | `jgt dst, src, off`  | register보다 크면 점프 (unsigned)           |
+| jge    | `jge dst, imm, off`  | immediate보다 크거나 같으면 점프 (unsigned) |
+| jge    | `jge dst, src, off`  | register보다 크거나 같으면 점프 (unsigned)  |
+| jset   | `jset dst, imm, off` | bit가 설정되면 점프 (immediate mask)        |
+| jset   | `jset dst, src, off` | bit가 설정되면 점프 (register mask)         |
+| jne    | `jne dst, imm, off`  | immediate와 같지 않으면 점프                |
+| jne    | `jne dst, src, off`  | register와 같지 않으면 점프                 |
+| jsgt   | `jsgt dst, imm, off` | immediate보다 크면 점프 (signed)            |
+| jsgt   | `jsgt dst, src, off` | register보다 크면 점프 (signed)             |
+| jsge   | `jsge dst, imm, off` | immediate보다 크거나 같으면 점프 (signed)   |
+| jsge   | `jsge dst, src, off` | register보다 크거나 같으면 점프 (signed)    |
+| jlt    | `jlt dst, imm, off`  | immediate보다 작으면 점프 (unsigned)        |
+| jlt    | `jlt dst, src, off`  | register보다 작으면 점프 (unsigned)         |
+| jle    | `jle dst, imm, off`  | immediate보다 작거나 같으면 점프 (unsigned) |
+| jle    | `jle dst, src, off`  | register보다 작거나 같으면 점프 (unsigned)  |
+| jslt   | `jslt dst, imm, off` | immediate보다 작으면 점프 (signed)          |
+| jslt   | `jslt dst, src, off` | register보다 작으면 점프 (signed)           |
+| jsle   | `jsle dst, imm, off` | immediate보다 작거나 같으면 점프 (signed)   |
+| jsle   | `jsle dst, src, off` | register보다 작거나 같으면 점프 (signed)    |
+
+### 함수 호출 연산
+
+| opcode | Mnemonic                    | Description                           |
+|--------|-----------------------------|---------------------------------------|
+| call   | `call imm` or `syscall imm` | 함수 또는 syscall 호출                |
+| callx  | `callx imm`                 | 간접 호출 (imm field의 register)      |
+| exit   | `exit` or `return`          | 함수에서 return                       |
+
+### Byte Swap 연산
+
+| opcode   | Mnemonic      | Description                        |
+|----------|---------------|------------------------------------|
+| be16     | `be16 dst`    | Byte swap (16-bit)                 |
+| be32     | `be32 dst`    | Byte swap (32-bit)                 |
+| be64     | `be64 dst`    | Byte swap (64-bit)                 |
+| le16     | `le16 dst`    | Bit mask (16-bit)                  |
+| le32     | `le32 dst`    | Bit mask (32-bit)                  |
+| le64     | `le64 dst`    | No op (64-bit)                     |

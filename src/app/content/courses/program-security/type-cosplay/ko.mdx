@@ -1,0 +1,135 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 타입 코스프레
+
+타입 코스프레 공격은 account 타입을 검증하지 않는 프로그램을 악용하여, 공격자가 동일한 데이터 구조를 가졌지만 의도된 용도가 다른 account를 대체할 수 있게 합니다. Solana는 모든 account 데이터를 raw bytes로 저장하므로, account 타입을 확인하지 않는 프로그램은 `VaultConfig`를 `AdminSettings`로 오인하여 잠재적으로 치명적인 결과를 초래할 수 있습니다.
+
+이 취약점은 구조적 모호성에서 비롯됩니다. 여러 account 타입이 동일한 데이터 레이아웃을 공유할 때(예: 둘 다 `owner: Pubkey` 필드를 가질 때), owner 확인 및 데이터 유효성 검사만으로는 이들을 구분하기에 충분하지 않습니다. 한 가지 타입의 account를 제어하는 공격자는 완전히 다른 account 타입의 owner로 위장하여, 특정 account 목적을 중심으로 설계된 인가 로직을 우회할 수 있습니다.
+
+discriminator(account 타입을 구별하는 고유 식별자)가 없으면 프로그램은 정교한 가장 공격에 취약해지며, 이러한 공격에서 악의적인 행위자는 구조적 유사성과 논리적 의도 사이의 간극을 악용할 수 있습니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+`account` owner십을 기반으로 관리자 작업을 수행하는 다음 취약한 instruction을 고려해 보십시오:
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let program_account_one = ctx.accounts.program_account_one.to_account_info();
+        if program_account_one.owner != ctx.program_id {
+            return Err(ProgramError::IllegalOwner.into());
+        }
+        if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        //..do something
+    
+        Ok(())
+
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: UncheckedAccount<'info>,
+
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+이 코드는 program owner십을 확인하고 관리자 권한을 검증하므로 안전해 보입니다. 하지만 치명적인 결함이 있습니다. 바로 `program_account_one`이 실제로 `ProgramAccountOne`인지, 아니면 동일한 데이터 구조를 가진 다른 account 타입인지 전혀 확인하지 않는다는 것입니다.
+
+공격자는 다음을 통해 이를 악용할 수 있습니다:
+- `ProgramAccountTwo` account를 생성하거나 제어
+- 해당 account의 데이터에서 자신을 owner로 설정
+- 자신의 `ProgramAccountTwo`를 `program_account_one` 매개변수로 전달
+- 두 account 타입 모두 동일한 `owner: Pubkey` 구조를 가지므로, deserialization이 성공
+- 공격자는 `ProgramAccountOne` owner에게만 의도된 작업에 대한 "admin"이 됩니다.
+
+Solana는 이 문제를 해결하기 위해 discriminator를 사용합니다:
+- Anchor의 8-byte discriminator (기본값): account 이름에서 파생되며, #[account]로 표시된 account에 자동으로 추가됩니다. (Anchor `0.31.0`부터는 "custom" discriminator 구현이 가능합니다)
+- 길이 기반 discrimination: Token Program에서 Token account와 Mint account를 구별하는 데 사용됩니다(Token2022는 이제 명시적 discriminator를 사용하지만).
+
+가장 간단한 해결책은 Anchor의 내장 타입 유효성 검사를 사용하는 것입니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_one: Account<'info, ProgramAccountOne>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account_two: Account<'info, ProgramAccountTwo>,
+
+}
+
+#[account]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[account]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+또는 사용자 정의 유효성 검사를 위해 명시적인 discriminator 검사를 추가할 수 있습니다:
+
+```rust
+pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+    let program_account_one = ctx.accounts.program_account_one.to_account_info();
+    if program_account_one.owner != ctx.program_id {
+        return Err(ProgramError::IllegalOwner.into());
+    }
+    if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+    let data = program_account_one.data.borrow();
+    // Assume ProgramAccountOne has a discriminator of 8 bytes
+    let discriminator = &data[..8];
+    if discriminator != ProgramAccountOne::DISCRIMINATOR {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    //..do something
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 discriminator 검사를 수동으로 구현합니다:
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] != DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```

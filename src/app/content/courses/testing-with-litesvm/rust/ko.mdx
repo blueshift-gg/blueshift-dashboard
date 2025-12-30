@@ -1,0 +1,300 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Rust와 LiteSVM
+
+`litesvm` 패키지는 가벼운 Solana 환경을 생성하기 위한 핵심 테스트 인프라를 제공하며, 이 환경에서 account state를 직접 조작하고 프로그램에 대해 transaction을 실행할 수 있습니다.
+
+<ArticleSection name="First Steps" id="first-steps" level="h2" />
+
+프로젝트에 LiteSVM 추가하기:
+
+```bash
+cargo add --dev litesvm
+```
+
+<ArticleSection name="LiteSVM Basics" id="basics" level="h2" />
+
+program ID를 선언하고 LiteSVM 인스턴스를 생성하는 것부터 시작합니다.
+
+transaction이 올바르게 실행되고 테스트 중에 `ProgramMismatch` 오류를 발생시키지 않도록 프로그램에서 정의한 것과 정확히 동일한 program ID를 사용하세요:
+
+```rust
+use litesvm::LiteSVM;
+use solana_pubkey::{pubkey, Pubkey};
+
+const program_id: Pubkey = pubkey!("22222222222222222222222222222222222222222222");
+
+#[test]
+fn test() {
+    // LiteSVM의 새 인스턴스 생성
+    let mut svm = LiteSVM::new();
+
+    // 올바른 publickey로 프로그램 로드
+    svm.add_program_from_file(program_id, "target/deploy/program.so");
+}
+```
+
+테스트를 실행하려면 transaction 객체를 생성하고 `.send_transaction(tx)` 함수를 사용합니다:
+
+```rust
+use litesvm::LiteSVM;
+use solana_transaction::Transaction;
+
+#[test]
+fn test() {
+    // LiteSVM의 새 인스턴스 생성
+    let mut svm = LiteSVM::new();
+
+    // 새 Transaction 생성
+    let mut tx = Transaction::new_signed_with_payer(
+        &[...ixs],
+        Some(&payer.pubkey()),
+        &[...signersKeypair],
+        svm.latest_blockhash(),
+    );
+
+    // Transaction 전송
+    let result = svm.send_transaction(tx).unwrap();
+}
+```
+
+<ArticleSection name="Accounts" id="accounts" level="h2" />
+
+LiteSVM으로 Solana 프로그램을 테스트할 때, 실제 프로그램 실행 시나리오를 반영하는 여러 유형의 account와 함께 작업하게 됩니다.
+
+이러한 account를 올바르게 구성하는 방법을 이해하는 것은 효과적인 테스트에 필수적입니다.
+
+### System Account
+
+가장 기본적인 account 유형은 system account이며, 두 가지 주요 변형이 있습니다:
+- **Payer accounts**: 프로그램 account 생성 또는 lamport 전송에 자금을 지원하는 lamport가 있는 account
+- **Uninitialized accounts**: lamport가 없는 빈 account로, 일반적으로 초기화를 기다리는 프로그램 account를 나타내는 데 사용됩니다.
+
+System account에는 데이터가 없으며 System Program이 소유합니다. payer와 uninitialized account의 주요 차이점은 lamport balance입니다. payer는 자금을 가지고 있지만, uninitialized account는 비어있는 상태로 시작합니다.
+
+LiteSVM에서 `payer` account를 생성하는 방법은 다음과 같습니다:
+
+```rust
+use litesvm::LiteSVM;
+use solana_account::Account;
+use solana_keypair::Keypair;
+use solana_pubkey::{pubkey, Pubkey};
+
+#[test]
+fn test() {
+    // LiteSVM의 새 인스턴스 생성
+    let mut svm = LiteSVM::new();
+
+    // 새 Account 생성
+    let account = Keypair::new();
+
+    // 수정된 데이터로 Account 추가
+    svm.set_account(
+        account.pubkey(),
+        Account {
+            lamports: 100_000_000,
+            data: [],
+            owner: ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+}
+```
+
+> uninitialized account는 `Keypair.generate()`로 생성된 일반 account이며, 추가 설정이 필요하지 않습니다.
+
+### Program Account
+
+사용자 지정 데이터 구조를 포함하는 program account의 경우 유사한 접근 방식을 사용할 수 있습니다.
+또한 account 데이터를 바이트 배열로 직렬화해야 하는데, 이는 수동으로 수행하거나 `borsh`, `bincode` 또는 `solana_program_pack`과 같은 라이브러리를 사용하여 수행할 수 있습니다.
+
+```rust
+use litesvm::LiteSVM;
+use solana_account::Account;
+use solana_keypair::Keypair;
+use solana_pubkey::{pubkey, Pubkey};
+
+#[test]
+fn test() {
+    // LiteSVM의 새 인스턴스 생성
+    let mut svm = LiteSVM::new();
+
+    // 새 Account 생성
+    let account = Keypair::new();
+
+    let mut account_data = [0; SIZE_OF_THE_ACCOUNT];
+
+    // 위에 정의된 바이트 배열로 account 데이터를 직렬화
+    // ...
+
+    let lamports = svm.minimum_balance_for_rent_exemption(SIZE_OF_THE_ACCOUNT);
+
+    // 수정된 데이터로 Account 추가
+    svm.set_account(
+        account.pubkey(),
+        Account {
+            lamports,
+            data: account_data,
+            owner: ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+}
+```
+
+> 테스트 시 정확한 rent를 계산할 필요는 없습니다. `100_000_000_000`과 같은 큰 값으로 lamport를 설정하고 rent 계산을 건너뛸 수 있습니다. 이는 실제 자금이 아니기 때문입니다.
+
+### Token Account
+
+SPL Token account의 데이터를 직렬화하려면 `solana_program_pack::Pack`을 구현하는 `spl_token::Mint` 및 `spl_token::Account`를 사용할 수 있습니다.
+
+```rust
+use litesvm::LiteSVM;
+use solana_keypair::Keypair;
+use solana_pubkey::{pubkey, Pubkey};
+use solana_account::Account;
+use spl_token::{ID as TOKEN_PROGRAM_ID, state::{Mint, Account as TokenAccount}};
+use solana_program_pack::Pack;
+
+#[test]
+fn test() {
+    // LiteSVM의 새 인스턴스 생성
+    let mut svm = LiteSVM::new();
+
+    // 새 Mint Account 생성
+    let mint = Keypair::new();
+
+    // Mint Account의 데이터 채우기
+    let mint_data = Mint {
+        mint_authority: None.into(),
+        supply: 0,
+        decimals: 6,
+        is_initialized: true,
+        freeze_authority: None.into(),
+    };
+
+    let mut mint_account_data = vec![0; Mint::LEN];
+    Mint::pack(mint_data, &mut mint_account_data).unwrap();
+
+    // rent 면제에 필요한 최소 lamport 양 가져오기
+    let lamports = svm.minimum_balance_for_rent_exemption(Mint::LEN);
+
+    // Mint Account 추가
+    svm.set_account(
+        mint.pubkey(),
+        Account {
+            lamports,
+            data: mint_account_data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    // 새 Token Account 생성
+    let token_account = Keypair::new();
+    let owner = Keypair::new();
+
+    // Token Account의 데이터 채우기
+    let token_account_data = TokenAccount {
+        mint: mint.pubkey(),
+        owner: owner.pubkey(),
+        amount: 0,
+        delegate: None.into(),
+        state: spl_token::state::AccountState::Initialized,
+        is_native: None.into(),
+        delegated_amount: 0,
+        close_authority: None.into(),
+    };
+
+    let mut token_account_data_bytes = vec![0; TokenAccount::LEN];
+    TokenAccount::pack(token_account_data, &mut token_account_data_bytes).unwrap();
+
+    // rent 면제에 필요한 최소 lamport 양 가져오기
+    let lamports = svm.minimum_balance_for_rent_exemption(TokenAccount::LEN);
+
+    // Token Account 추가
+    svm.set_account(
+        token_account.pubkey(),
+        Account {
+            lamports,
+            data: token_account_data_bytes,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+}
+```
+
+<ArticleSection name="Execution" id="execution" level="h2" />
+
+account가 생성되어 LiteSVM 인스턴스에 추가되면, 이제 transaction을 보내고 프로그램 로직을 검증할 수 있습니다.
+
+transaction을 보내기 전에 결과를 시뮬레이션할 수 있습니다:
+
+```rust
+let simulated_result = svm.simulate_transaction(tx);
+```
+
+그 다음 transaction을 보내고 log를 확인합니다:
+
+```rust
+let result = svm.send_transaction(tx);
+let logs = result.logs;
+```
+
+### 고급 기능
+
+실행 전후로 LiteSVM 인스턴스에 포함된 전체 ledger를 읽고 사용자 지정할 수 있습니다.
+
+clock과 같은 sysvar 값을 조작할 수 있습니다:
+
+```rust
+// Clock 변경
+let mut new_clock = svm.get_sysvar::<Clock>();
+new_clock.unix_timestamp = 1735689600;
+svm.set_sysvar::<Clock>(&new_clock);
+
+// 특정 Slot으로 이동
+svm.warp_to_slot(500);
+
+// 현재 blockhash 만료
+svm.expire_blockhash();
+```
+
+account 및 프로토콜 데이터를 읽을 수도 있습니다:
+
+```rust
+// account에 대한 모든 정보 가져오기 (data, lamports, owner 등)
+svm.get_account(&account.publickey);
+
+// account의 lamport balance 가져오기
+svm.get_balance(&account.publickey);
+
+// 현재까지 사용된 Compute Unit 수 가져오기
+svm.get_compute_budget();
+```
+
+또는 런타임 동작을 구성할 수 있습니다:
+
+```rust
+// compute budget 설정
+let compute_budget = ComputeBudget::default();
+compute_budget.compute_unit_limit = 2_000_000;
+svm.with_compute_budget(compute_budget);
+
+// Sigverify 활성화
+svm.with_sigverify(true);
+
+// Blockhash 확인 활성화
+svm.with_blockhash_check(true);
+
+// 기본 Sysvar 설정
+svm.with_sysvars();
+
+// 사용할 FeatureSet 설정
+svm.with_feature_set(FeatureSet::default())
+```

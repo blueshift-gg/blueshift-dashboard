@@ -1,0 +1,111 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 재초기화 공격
+
+재초기화 공격은 account가 이미 초기화되었는지 확인하지 못하는 프로그램을 악용하여 공격자가 기존 데이터를 덮어쓰고 중요한 account의 제어를 탈취할 수 있도록 합니다.
+
+초기화는 새로운 account를 처음 사용할 수 있도록 합법적으로 설정하는 반면, 재초기화는 기존 account를 악의적으로 공격자가 제어하는 상태로 재설정합니다.
+
+적절한 초기화 유효성 검사 없이는 공격자가 이미 사용 중인 account에 대해 초기화 함수를 호출하여 확립된 프로그램 상태를 효과적으로 적대적으로 인수할 수 있습니다. 이는 escrows, vaults 또는 account 소유권이 귀중한 자산에 대한 제어를 결정하는 모든 시스템과 같은 프로토콜에서 특히 치명적입니다.
+
+초기화는 새 account의 데이터를 처음 설정합니다. 기존 데이터가 덮어씌워지는 것을 방지하려면 account가 이미 초기화되었는지 확인하는 것이 중요합니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+program account를 초기화하는 다음 취약한 instruction을 살펴보십시오:
+
+```rust
+#[program]
+pub mod unsafe_initialize_account{
+    use super::*;
+
+    //..
+
+    pub fn unsafe_initialize_account(ctx: Context<InitializeAccount>) -> Result<()> {
+        let mut writer: Vec<u8> = vec![];
+
+        ProgramAccount {
+            owner: ctx.accounts.owner.key()
+        }.try_serialize(&mut writer)?;
+
+        let mut data = ctx.accounts.program_account.try_borrow_mut_data()?;
+        sol_memcpy(&mut data, &writer, writer.len());
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+이 코드에는 치명적인 결함이 있습니다. account가 이미 초기화되었는지 전혀 확인하지 않습니다. 이 instruction이 호출될 때마다 account의 이전 상태와 관계없이 account 데이터를 무조건 덮어쓰고 호출자를 새 owner로 설정합니다.
+
+공격자는 다음을 통해 이를 악용할 수 있습니다:
+- 귀중한 초기화된 account (예: token accounts를 제어하는 escrow PDA) 식별
+- 해당 기존 account로 `unsafe_initialize_account` 호출
+- 이전 owner 데이터를 덮어써서 새 "owner" 되기
+- 새로 얻은 소유권을 사용하여 해당 account가 제어하는 모든 자산 소진
+
+이 공격은 escrow 시나리오에서 특히 파괴적입니다. 수천 달러 상당의 자산을 포함하는 token accounts를 소유하는 escrow PDA를 상상해 보십시오. 원래 escrow 초기화는 합법적인 참가자들과 함께 account를 적절하게 설정했습니다. 그러나 공격자가 재초기화 함수를 호출할 수 있다면 escrow 데이터를 덮어쓰고 자신을 owner로 설정하여 escrow된 모든 token에 대한 제어를 얻을 수 있습니다.
+
+다행히 `Anchor`는 account를 초기화할 때 `init` constraint를 사용하여 account struct에서 직접 이 검사를 수행하는 것을 매우 쉽게 만듭니다. 다음과 같습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct InitializeAccount<'info> {
+    pub owner: Signer<'info>,
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + ProgramAccount::INIT_SPACE
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+또는 `ctx.accounts.program_account.is_initialized` 검사를 사용하여 instruction에서 account가 이미 초기화되었는지 확인할 수 있습니다. 다음과 같습니다:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.is_initialized {
+        return Err(ProgramError::AccountAlreadyInitialized.into());
+    }
+
+    Ok(())
+}
+```
+
+> Anchor의 `init_if_needed` constraint는 기능 플래그로 보호되며 극도의 주의를 기울여 사용해야 합니다. account가 아직 초기화되지 않은 경우에만 편리하게 account를 초기화하지만, 위험한 함정을 만듭니다. account가 이미 초기화된 경우 instruction 핸들러는 정상적으로 실행을 계속합니다. 이는 프로그램이 기존 account에 대해 알 수 없는 상태로 작동하여 중요한 데이터를 덮어쓰거나 무단 접근을 허용할 수 있음을 의미합니다.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 account struct 내부에 직접 보안 검사를 추가할 수 없으므로 instruction 로직에서 이를 수행해야 합니다.
+
+account가 올바른 discriminator를 가지고 있는지 확인하여 그렇게 할 수 있습니다:
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] == DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```

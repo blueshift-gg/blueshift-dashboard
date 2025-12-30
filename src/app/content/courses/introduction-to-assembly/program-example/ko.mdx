@@ -1,0 +1,107 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 프로그램 예시
+
+이제 실제 프로그램에서 레지스터(r0-r10), 메모리 영역, 그리고 명령어가 어떻게 함께 작동하는지 살펴보겠습니다. 기본적인 실행 흐름을 이해하기 위해 가장 간단한 sBPF 프로그램부터 시작하겠습니다.
+
+<ArticleSection name="NoOp-program" id="noop-program" level="h2" />
+
+“NoOp”(No Operation) 프로그램은 복잡함 없이 필수적인 프로그램 구조를 보여주기 때문에 학습에 완벽합니다:
+- 프로그램이 입력을 받는 방법 (레지스터 r1)
+- 프로그램이 결과를 반환하는 방법 (레지스터 r0)
+- 모든 sBPF 프로그램이 따르는 기본적인 진입/종료 흐름
+- Rust가 sBPF 어셈블리로 컴파일되는 방법
+
+비록 "아무것도 하지 않지만", 모든 Solana 프로그램이 기반으로 하는 토대를 보여줍니다.
+
+이제 기본적인 sBPF 연산을 알았으니, 실제 (비록 아주 작은) 프로그램에서는 어떤 모습일지 살펴보겠습니다.
+
+<ArticleSection name="Pinocchio NoOp" id="pinocchio-noop" level="h2" />
+
+아래는 Pinocchio로 작성된 고성능 "noop"입니다. 이 프로그램은 성공을 반환할 뿐입니다:
+
+```rust
+#![no_std]
+use pinocchio::{entrypoint::InstructionContext, lazy_program_entrypoint, no_allocator, nostd_panic_handler, ProgramResult};
+
+lazy_program_entrypoint!(process_instruction);
+
+nostd_panic_handler!();
+no_allocator!();
+
+fn process_instruction(
+    _context: InstructionContext, // wrapper around the input buffer
+ ) -> ProgramResult {
+    Ok(())
+}
+```
+
+이 코드를 `cargo build-sbf --dump`로 빌드하면, `/target/deploy/` 디렉터리에 바이너리에 대한 정보를 제공하는 ELF 덤프를 얻게 됩니다.
+
+그 다음 `.text` 섹션을 찾아야 합니다. 이 섹션은 실행 가능한 코드가 저장되는 바이너리의 부분입니다.
+
+```
+Disassembly of section .text
+0000000000000120 <entrypoint>
+     120 b7 00 00 00 00 00 00 00      	mov64 r0, 0x0
+     128 95 00 00 00 00 00 00 00      	exit
+```
+
+학습한 명령어 형식을 사용하여 이 16진수 바이트들이 실제로 무엇을 의미하는지 분석해 봅시다:
+
+이것이 첫 번째 명령어입니다: `120 b7 00 00 00 00 00 00 00`
+- 주소: `0x120` (0x100000000에서 시작하는 텍스트 영역 내)
+- Opcode: `0xb7` = 즉시 값(`immediate value`)을 사용한 `mov64`
+- dst: `0x00` = 레지스터 `r0`
+- src: `0x00` = 사용되지 않음 (즉시 연산)
+- offset: `0x0000` = 사용되지 않음
+- imm: `0x00000000` = 즉시 값 0
+
+그리고 이것이 두 번째 명령어입니다: `128 95 00 00 00 00 00 00 00`
+- 주소: `0x128` (첫 번째 명령어로부터 8바이트 뒤)
+- Opcode: `0x95` = 종료/반환
+- 다른 모든 필드: `0x00` = 종료에 사용되지 않음
+
+> `0x120` 오프셋은 링커가 ELF 파일의 `.text` 섹션 내에 `entrypoint` 함수를 배치하기로 결정한 위치입니다. ELF 파일은 헤더, 섹션 테이블 및 기타 메타데이터로 시작하며, 이들이 첫 ~`0x120` 바이트(288 바이트)를 차지합니다. 실제 실행 가능한 코드는 이 모든 관리 정보 다음에 옵니다.
+
+<ArticleSection name="Assembly NoOp" id="assembly-noop" level="h2" />
+
+만약 바이너리를 역어셈블하여 컴파일 가능한 sBPF 어셈블리로 되돌린다면, 코드는 다음과 같을 것입니다:
+
+```sbpf
+.globl entrypoint
+entrypoint:
+    mov64 r0, 0x00   // r0 <- success
+    exit             // finish, return r0
+```
+
+코드를 분석해 봅시다:
+- `.globl entrypoint`: 이것은 `entrypoint` 심볼을 전역적으로 가시화하도록 링커에게 지시하는 어셈블러 지시어입니다. Solana 런타임은 프로그램 실행을 시작할 위치를 알기 위해 이 심볼을 찾습니다.
+- `entrypoint`: 이것은 프로그램 실행이 시작되는 메모리 주소를 표시하는 레이블입니다. 런타임이 프로그램을 로드할 때, 이 주소로 점프합니다.
+- `mov64 r0, 0x00`: 즉시 값 0을 레지스터 `r0`로 이동시킵니다. `r0`이 반환 레지스터이므로, 이것은 성공 반환 코드를 설정합니다.
+- `exit`: 프로그램 실행을 종료하고 `r0`에 있는 값을 런타임으로 반환합니다.
+
+> 0을 반환하는 것은 프로그램이 성공을 반환한다는 의미입니다.
+
+이것은 단 2개의 명령어로 구성된 매우 작은 프로그램이며, 실행하는 데 2개의 컴퓨트 유닛(CUs)만 소비하며, Rust 코드와 완벽하게 매핑됩니다:
+- `entrypoint` 함수를 정의했습니다.
+- `Ok(())`를 반환하는데, 이는 0으로 평가됩니다.
+- 컴파일러는 적절한 `mov64` 및 `exit` 명령어를 생성했습니다.
+
+<ArticleSection name="Optimized Assembly NoOp" id="optimized-assembly-noop" level="h2" />
+
+하지만, 이를 더 최적화할 수 있습니다. Solana 런타임은 기본적으로 `r0`을 0으로 초기화하므로, 중복되는 `mov64` 명령어를 제거할 수 있습니다:
+
+```sbpf
+.globl entrypoint
+entrypoint:
+    exit
+```
+
+이 최적화된 버전은 다음과 같습니다:
+- 1개의 컴퓨트 유닛만 소모합니다 (50% 절감!)
+- 동일한 결과물을 생성합니다 (`r0`은 여전히 0을 포함합니다)
+
+> 이것이 어셈블리를 이해하는 것이 최적화에 도움이 되는 이유입니다!
+
+이 최적화는 초기 레지스터 상태를 알고 있기 때문에 가능합니다. 이는 Rust 컴파일러가 항상 활용하지는 않는 정보입니다. sBPF 어셈블리를 이해하면 성능에 중요한 코드에서 이러한 비효율성을 식별하고 제거할 수 있습니다.

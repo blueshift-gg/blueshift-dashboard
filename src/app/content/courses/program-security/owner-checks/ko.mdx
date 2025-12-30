@@ -1,0 +1,115 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 소유자 검사
+
+소유자 검사는 Solana 프로그램 보안의 최전선 방어입니다. 이는 instruction handler로 전달된 account가 실제로 예상 프로그램에 의해 소유되고 있는지 확인하여, 공격자가 악의적인 유사 account를 대체하는 것을 방지합니다.
+
+Solana의 `AccountInfo` struct에 있는 모든 account는 해당 account를 제어하는 프로그램을 식별하는 `owner` 필드를 포함합니다. 소유자 검사는 프로그램이 account의 데이터를 신뢰하기 전에 이 `owner` 필드가 예상되는 `program_id`와 일치하는지 확인합니다.
+
+`AccountInfo` struct는 account를 소유하는 프로그램을 나타내는 `owner`를 포함하여 여러 필드를 포함합니다. 소유자 검사는 `AccountInfo`의 이 `owner` 필드가 예상되는 `program_id`와 일치하는지 확인합니다.
+
+소유자 검사가 없으면, 공격자는 올바른 discriminator와 모든 필드를 갖춘 account 데이터 구조의 완벽한 '복제본'을 만들고, 이를 사용하여 데이터 유효성 검사에 의존하는 instruction을 조작할 수 있습니다. 이는 실제 신분증과 동일하게 보이지만, 잘못된 권한에 의해 통제되는 가짜 신분증을 만드는 것과 같습니다.
+
+> 중요한 예외는 account의 내부 데이터를 수정할 때입니다. 이러한 경우, Solana의 runtime은 다른 프로그램이 소유하지 않은 account에 쓰는 것을 자동으로 방지합니다. 그러나 읽기 작업과 유효성 검사 로직의 경우, 직접 처리해야 합니다.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+`program_account`의 `owner`에 따라 로직을 실행하는 이 취약한 instruction을 고려해 보십시오:
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let account_data = ctx.accounts.program_account.try_borrow_data()?;
+        let mut account_data_slice: &[u8] = &account_data;
+        let account_state = ProgramAccount::try_deserialize(&mut account_data_slice)?;
+
+        if account_state.owner != ctx.accounts.owner.key() {
+            return Err(ProgramError::InvalidArgument.into());
+        }
+
+        //..do something
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+`UncheckedAccount` 타입은 Anchor가 "아무것도 확인하지 않으니, 극도로 주의하여 다루십시오"라고 말하는 방식입니다. account 데이터가 완벽하게 deserialize되어 합법적으로 보일 수 있지만, 누락된 `owner` 검사는 치명적인 취약점을 생성합니다.
+
+공격자는 동일한 데이터 구조를 가진 자신의 account를 생성하여 당신의 instruction에 전달할 수 있습니다. 당신의 프로그램은 소유권 필드를 기꺼이 확인하겠지만, 공격자가 account를 제어하기 때문에 instruction 내에서 원하는 무엇이든 할 수 있습니다.
+
+해결책은 간단하지만 필수적입니다: account 내용을 신뢰하기 전에 항상 account가 당신의 프로그램에 의해 소유되는지 확인하십시오.
+
+이것은 Anchor에서 매우 쉽습니다. `UncheckedAccount`를 `ProgramAccount`로 변경하는 것만으로 account struct에서 직접 이 검사를 수행할 수 있기 때문입니다. 예시는 다음과 같습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+또는 다음과 같이 `owner` account 제약 조건을 추가할 수 있습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub owner: Signer<'info>,
+   #[account(mut, owner = ID)]
+    /// CHECK: This account will not be checked by Anchor
+    pub program_account: UncheckedAccount<'info>,
+
+}
+```
+
+또는 다음과 같이 `ctx.accounts.program_account.owner` 검사를 사용하여 instruction 내에 `owner` 검사를 추가할 수도 있습니다:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if ctx.accounts.program_account.owner != ID {
+        return Err(ProgramError::IncorrectProgramId.into());
+    }
+    
+    //..do something
+
+    Ok(())
+}
+```
+
+이 검사를 추가함으로써, instruction handler는 account가 올바른 `program_id`를 가질 경우에만 진행됩니다. 만약 account가 우리 프로그램에 의해 소유되지 않았다면, transaction은 실패할 것입니다.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+Pinocchio에서는 account struct 내부에 직접 보안 검사를 추가할 가능성이 없기 때문에, instruction 로직 내에서 이를 수행할 수밖에 없습니다.
+
+다음과 같이 `is_owned_by()` 함수를 사용하여 Anchor와 매우 유사하게 수행할 수 있습니다:
+
+```rust
+if !self.accounts.owner.is_owned_by(ID) {
+    return Err(ProgramError::IncorrectProgramId.into());
+}
+```

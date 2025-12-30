@@ -1,0 +1,144 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Codama 101
+
+![Create your SDK with Codama](/graphics/course-banners/create-your-sdk-with-codama.png)
+
+Codama는 여러 언어와 프레임워크에 걸쳐 Solana 프로그램용 타입-세이프(type-safe) 클라이언트를 생성하고, CLI 도구를 만들고, 탐색기(explorers)에 풍부한 프로그램 정보를 제공하는 가장 빠른 방법입니다.
+
+모든 것은 Codama IDL에서 시작됩니다. Codama IDL은 모든 Solana 프로그램을 설명하는 표준화된 형식이며, 모든 프로그램 관련 툴링(tooling)을 생성하는 기반이 됩니다.
+
+단일 Codama IDL에서 다음을 생성할 수 있습니다:
+- JavaScript, Rust, Python 등을 위한 타입-세이프 클라이언트
+- 프로그램과 상호작용하기 위한 CLI 도구
+- 코드와 동기화된 문서
+- 프로그램의 구조를 이해하는 익스플로러 통합
+- 프로그램의 인터페이스를 아는 테스트 유틸리티
+
+Codama는 여러 언어와 프레임워크에 걸쳐 클라이언트를 유지 관리하는 번거로운 작업을 없애줍니다.
+
+프로그램이 변경될 때마다 클라이언트 코드를 수동으로 작성하고 업데이트하는 대신, Codama IDL 형식으로 프로그램을 한 번만 설명하고, 방문자(visitors)를 사용하여 필요한 변환을 적용하면, 나머지 모든 것이 자동으로 생성됩니다.
+
+<ArticleSection name="Core Concepts" id="core-concept" level="h2" />
+
+Codama의 아키텍처는 세 가지 근본적인 개념인 Nodes, Visitors, Renderers를 중심으로 전개됩니다.
+
+### Nodes
+
+Codama의 모든 것은 노드(node) 트리로 표현됩니다. 노드는 Solana 프로그램의 특정 측면을 설명하는 구조화된 데이터 객체입니다.
+
+전체 프로그램은 최상단에 `RootNode`를 가진 계층적 트리(hierarchical tree)가 됩니다.
+
+다양한 유형의 노드가 있습니다:
+- **구조 노드** (`RootNode`, `ProgramNode`, `AccountNode`, `InstructionNode`, ...): 프로그램의 골격 정의
+- **타입 노드** (`NumberTypeNode`, `StringTypeNode`, `StructTypeNode`, `ArrayTypeNode`): 데이터 구조 및 필드 타입 설명
+- **값 노드** (`NumberValueNode`, `StringValueNode`): 기본값 및 상수 표현
+
+> 각 노드 유형은 특정 목적을 가지며, 데이터를 표현하기 위한 일관된 인터페이스를 제공합니다. 언어별 방문자(Language-specific visitors)는 이러한 노드를 순회하고(`traverse`) 다양한 대상 언어에 적합한 표현으로 변환하여(`transform`) 간단한 노드들을 결합함으로써 복잡한 프로그램 설명을 구축할 수 있도록 합니다.
+
+### Visitors
+
+방문자(Visitors)는 노드 트리를 순회하여 분석하거나 변환하는 함수입니다.
+
+이들은 트리 내의 각 노드를 "방문"하고 해당 노드에 작업을 수행하여 방문자 패턴(visitor pattern)을 구현합니다.
+
+방문자는 두 가지 유형이 있습니다:
+- 분석 방문자(Analysis Visitors) (읽기 전용): `codama.accept()`를 사용하여 노드를 순회하고 정보를 반환합니다.
+- 변환 방문자(Transformation Visitors): `codama.update()`를 사용하여 노드를 순회하고 수정된 트리를 반환합니다.
+
+> 방문자는 프로그램의 내용(노드)과 프로그램으로 수행하려는 작업(연산)을 분리합니다. 이는 Codama IDL이 어떻게 생성되었는지에 관계없이 동일한 변환을 어떤 Codama IDL에도 적용할 수 있음을 의미합니다.
+
+### Renderers
+
+렌더러(Renderers)는 Codama IDL을 특정 프로그래밍 언어용 클라이언트 코드로 변환하는 방문자 함수입니다.
+
+각 렌더러는 IDL 노드를 순회하며 대상 언어에 적합한 코드 파일, 타입 및 인터페이스를 생성합니다.
+
+렌더러를 사용하려면, 생성된 파일이 저장될 기본 디렉토리를 제공하고, 출력을 사용자 정의하기 위한 선택적 구성(configuration)도 함께 제공하십시오:
+
+```ts
+import { createFromRoot, programNode, rootNode } from 'codama';
+import { renderJavaScriptVisitor, renderRustVisitor } from '@codama/renderers';
+
+// Create or import your Codama IDL.
+const codama = createFromRoot(rootNode(programNode({ ... })));
+
+// Render SDKs from your IDL.
+codama.accept(renderJavaScriptVisitor('clients/js/src/generated', { ... }));
+codama.accept(renderRustVisitor('clients/rust/src/generated', { ... }));
+```
+
+> 현재 다음 렌더러만 사용할 수 있습니다: `renderJavaScriptVisitor` (`@solana/kit`와 호환), `renderJavaScriptUmiVisitor` (`@metaplex-foundation/umi` 및 `@solana/web3.js`와 호환), 그리고 `renderRustVisitor`.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+선호하는 패키지 관리자를 사용하여 코어 Codama 패키지를 설치하십시오:
+
+```
+pnpm install codama
+```
+
+여기에는 `@codama/visitors` 및 `@codama/nodes` 패키지가 모두 포함되어 있으며, IDL을 생성하고 조작하는 데 필요한 모든 것을 제공합니다.
+
+> `@codama/visitors` 및 `@codama/nodes`와 같은 개별 패키지는 의존성에 대한 세부적인 제어를 선호하는 경우 별도로 설치할 수 있습니다.
+
+클라이언트 코드를 생성하려면 렌더러 패키지도 필요합니다:
+
+```
+pnpm install codama @codama/renderers
+```
+
+렌더러 패키지는 파일 시스템 접근이 필요하고 Node.js 환경에서만 작동하기 때문에 별도로 배포됩니다. 반면 코어 Codama 라이브러리는 모든 환경(Node.js, 브라우저 등)에서 실행됩니다.
+
+<ArticleSection name="Set up" id="set-up" level="h2" />
+
+Codama는 IDL 작업 및 클라이언트 코드 생성을 간소화하는 명령줄 인터페이스(CLI)를 제공합니다. CLI는 구성 관리 및 스크립트 실행을 처리하여 자동화된 워크플로우를 쉽게 설정할 수 있도록 합니다.
+
+CLI 패키지를 설치하고 프로젝트를 초기화하십시오:
+
+```
+pnpm install @codama/cli
+pnpm codama init
+```
+
+init 명령어는 다음을 요청합니다:
+- IDL 파일 경로 (Codama 및 Anchor IDL 모두 지원)
+- 사용할 스크립트 프리셋(preset) (JavaScript, Rust 등)
+
+이것은 IDL 소스 및 생성 스크립트를 정의하는 구성 파일(configuration file)을 생성하며, 다음처럼 생겼습니다:
+
+```json
+{
+    "idl": "path/to/your/idl",
+    "before": [
+        "./custom-transforms.js",
+        { "from": "@codama/visitors#removeTypes", "args": [["internal"]] }
+    ],
+    "scripts": {
+        "js": [
+            { "from": "@codama/renderers-js", "args": ["clients/js/src"] }
+        ],
+        "rust": [
+            { "from": "@codama/renderers-rust", "args": ["clients/rust/src"] }
+        ]
+    }
+}
+```
+
+> `before`는 모든 스크립트 이전에 실행되는 `Visitors`를 포함하며 (변환, 정리 등을 위해), `scripts`는 클라이언트를 생성하는 데 사용되는 `Renderers`를 포함합니다.
+
+run 명령어를 사용하여 구성된 스크립트를 실행할 수 있습니다:
+
+```
+pnpm codama run              # Run preparation steps only
+pnpm codama run js rust      # Run specific language generators
+pnpm codama run --all        # Run all configured scripts
+```
+
+### Without CLI
+
+CLI를 사용하고 싶지 않다면, 저장소에 `codama.ts` 파일을 생성하고 Codama IDL 로직(imports, visitors, renderers)을 지정한 다음 실행할 수 있습니다:
+
+```
+pnpx tsx codama.ts
+```

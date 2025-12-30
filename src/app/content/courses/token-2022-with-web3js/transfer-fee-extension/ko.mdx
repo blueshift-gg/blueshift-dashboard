@@ -1,0 +1,210 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Transfer Fee 확장
+
+`TransferFee` 확장은 생성자가 토큰에 "세금"을 설정하여 누군가 swap을 수행할 때마다 징수하도록 하는 `Mint` 확장입니다.
+
+수수료 수령인이 누군가 swap을 수행할 때마다 write-lock되지 않도록 하고, 이 확장 기능이 적용된 `Mint`를 포함하는 `transaction`을 병렬화할 수 있도록 하기 위해, 수수료는 수령인의 Token Account에 별도로 보관되며, 이는 `Withdraw Authority`만 인출할 수 있습니다.
+
+<ArticleSection name="Mint Account 초기화" id="initializing-the-mint-account" level="h2" />
+
+`Mint` account에서 `TransferFee` 확장을 초기화하려면 `createInitializeTransferFeeConfigInstruction()` 함수가 필요합니다.
+
+Transfer Fee 확장 기능을 사용하여 mint를 생성하는 방법은 다음과 같습니다.
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeTransferFeeConfigInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calculate the size needed for a Mint account with Transfer Fee extension
+const mintLen = getMintLen([ExtensionType.TransferFeeConfig]);
+
+// Calculate minimum lamports required for rent exemption
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Create the account with the correct size and owner
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Initialize the Transfer Fee extension
+const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    500,
+    BigInt(1e6),
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Initialize the mint itself
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combine all instructions in the correct order
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTransferFeeConfig,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="수수료를 포함한 토큰 전송" id="transferring-tokens-with-the-fee" level="h2" />
+
+`TransferFee` 확장이 적용된 `Mint`의 토큰을 전송하는 방법은 두 가지입니다.
+- 일반적인 `transferChecked()` instruction을 사용할 수 있으며, 이 경우 수수료 계산이 자동으로 처리됩니다.
+- `transferCheckedWithFee()` instruction을 사용하여 해당 전송에서 지불할 `fee`를 수동으로 제공할 수 있습니다. 이는 권한자가 수수료를 변경하여 비정상적으로 높은 수수료를 생성할 경우 "rugged"되지 않도록 하는 데 매우 유용합니다. 마치 전송에 대한 slippage를 설정하는 것과 같습니다.
+
+> 권한자가 수수료를 변경하더라도, 새로운 수수료는 설정 후 2 epoch가 지나야 활성화됩니다.
+
+`transferCheckedWithFee()` instruction을 사용하여 전송을 생성하는 방법은 다음과 같습니다.
+
+```ts
+createTransferCheckedWithFeeInstruction(
+    sourceTokenAccount,
+    mint.publicKey, 
+    destinationTokenAccount, 
+    keypair.publicKey, 
+    BigInt(100e6), // transfer amount
+    6, // decimals
+    BigInt(1e6), // fee paid for the transfer
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(transferInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="수수료 회수" id="harvesting-the-fee" level="h2" />
+
+서론에서 언급했듯이, `Mint` account 또는 `sourceTokenAccount`의 write-locking을 피하기 위해 전송 수수료는 토큰을 받는 `Token` account에 남아있습니다. 이러한 이유로, 수수료를 인출하기 전에 클레임할 수수료가 있는 모든 `Token` account를 검색할 수 있어야 합니다.
+
+필터를 설정하고 해당 mint에 속하는 모든 account를 가져옴으로써 이를 수행할 수 있습니다. 방법은 다음과 같습니다.
+
+```ts
+// Retrieve all Token Accounts for the Mint Account
+const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+        {
+            memcmp: {
+                offset: 0,
+                bytes: mint.publicKey.toString(), // Mint Account address
+            },
+        },
+    ],
+});
+```
+
+그리고 `Token` account를 unpack하고 `getTransferAmoun()` 함수를 사용하여 내부에 수수료가 있는 모든 `Token` account 목록을 다음과 같이 가져올 수 있습니다.
+
+```ts
+// List of Token Accounts to withdraw fees from
+const accountsToWithdrawFrom: PublicKey[] = [];
+
+for (const accountInfo of allAccounts) {
+    const account = unpackAccount(
+        accountInfo.pubkey,
+        accountInfo.account,
+        TOKEN_2022_PROGRAM_ID,
+    );
+
+    // Extract transfer fee data from each account
+    const transferFeeAmount = getTransferFeeAmount(account);
+
+    // Check if fees are available to be withdrawn
+    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+        accountsToWithdrawFrom.push(accountInfo.pubkey);
+    }
+}
+```
+
+그 후 `Withdraw Authority`와 함께 `withdrawWithheldTokensFromAccounts` instruction을 사용하여 `accountsToWithdrawFrom` 목록을 다음과 같이 전달할 수 있습니다.
+
+```ts
+const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
+    mint.publicKey,
+    sourceTokenAccount,
+    keypair.publicKey,
+    [],
+    accountsToWithdrawFrom,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(harvestInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="수수료 업데이트" id="updating-the-fee" level="h2" />
+
+`TranferFee` 확장을 사용하여 `Mint`를 초기화한 후, 미래에 해당 수수료를 업데이트해야 할 수도 있습니다. 전송이 실행될 때마다 수수료를 매우 높게 설정하여 생성자가 "bait and switch" 방식으로 토큰 보유자를 "rug"하지 않도록 하기 위해, 새로운 `TranferFee`는 2 epoch 후에 활성화됩니다.
+
+이를 수용하기 위해 `TransferFee` 확장 데이터는 다음과 같이 구성됩니다.
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+ 
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+따라서 수수료를 변경하려면 `setTransferFee` instruction을 다음과 같이 사용할 수 있습니다.
+
+```ts
+const setTransferFeeInstruction = createSetTransferFeeInstruction(
+    mint.publicKey
+    keypaird.publicKey
+    [],
+    BigInt(1000), // new transfer fee
+    BigInt(100e6), // new maximum fee amount
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(setTransferFeeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

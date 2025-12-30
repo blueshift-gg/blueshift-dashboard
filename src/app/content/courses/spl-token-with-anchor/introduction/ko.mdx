@@ -1,0 +1,88 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 토큰 프로그램
+
+![Anchor와 함께하는 SPL Token](/graphics/course-banners/spl-token-with-anchor.png)
+
+솔라나에서 토큰과 관련된 모든 것은 `[SPL Token Program](https://github.com/solana-program/token)`과 `[Token2022 Program](/en/courses/token-2022-program)`에 의해 처리됩니다. 이들은 모든 토큰이 생성, 관리 및 전송되는 방식을 정의하는 솔라나의 기본 토큰 프레임워크입니다.
+
+이는 네트워크 전반의 모든 토큰 작업을 처리하여 일관성과 상호 운용성을 보장하는 단일의 통합된 프로그램입니다.
+
+> 솔라나에서 모든 토큰에 대해 단일의 통합된 인터페이스를 갖도록 결정한 것은 모든 dApp (탈중앙화 애플리케이션) 및 통합 (예: wallet 등) 전반에 걸쳐 복제될 수 있는 쉬운 구현을 가능하게 합니다.
+
+Anchor의 경우, 토큰과 관련된 모든 것은 `anchor-spl` crate에서 찾을 수 있습니다. 이러한 이유로, Anchor workspace를 초기화한 후에는 다음과 같이 할 수 있습니다:
+
+```bash
+cargo add anchor-spl
+```
+
+> Anchor에 익숙하지 않다면, 계속 진행하기 전에 저희 `[Anchor for Dummies](/en/courses/anchor-for-dummies)` 과정을 살펴보시는 것을 권장합니다.
+
+<ArticleSection name="민트 및 토큰 account" id="mint-and-token-accounts" level="h2" />
+
+Anchor에 익숙하다면, account 초기화와 관련된 많은 복잡성을 사용자가 추상화할 수 있도록 돕는 macro 세트가 있다는 것을 알 것입니다.
+
+Mint, Token, 그리고 Associated Token account에도 동일하게 적용됩니다.
+
+### Mint account
+
+Anchor가 제공하는 macro 덕분에, Mint account를 쉽게 생성하는 방법은 다음과 같습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = signer.key(),
+    )]
+    pub mint: Account<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Token account
+
+Token account도 마찬가지입니다. macro를 통해 Token account를 생성하는 방법은 다음과 같습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Associated Token account
+
+Associated Token account도 마찬가지입니다. macro를 통해 Associated Token account를 생성하는 것은 Token account를 생성하는 것과 비슷해 보이지만, 유일한 차이점은 constraint이며, 그 모습은 다음과 같습니다:
+```rust
+#[derive(Accounts)]
+pub struct CreateToken<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = signer,
+    )]
+    pub token: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```

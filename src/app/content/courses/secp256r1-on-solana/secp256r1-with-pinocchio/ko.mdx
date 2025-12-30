@@ -1,0 +1,126 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Secp256r1과 Pinocchio
+
+Blueshift 팀의 [Dean](https://x.com/deanmlittle)은 `Secp256r1` precompile을 실행하는 instruction을 검증하기 위한 Pinocchio 호환성을 가능하게 하는 첫 번째 crate를 출시했습니다.
+
+이는 Pinocchio 프로그램에서 passkey와 같은 최신 인증 방식을 구현하는 데 특히 유용합니다.
+
+<ArticleSection name="Introduction" id="introduction" level="h2" />
+
+SDK는 핵심 데이터 구조를 통해 깔끔한 추상화를 제공합니다:
+
+```rust
+// 33바이트 압축 public key (1바이트 패리티 + 32바이트 x-coordinate)
+pub type Secp256r1Pubkey = [u8; 33];
+// 64바이트 signature (r,s 값)
+pub type Secp256r1Signature = [u8; 64];
+
+// 메인 instruction 파서
+pub struct Secp256r1Instruction<'a> {
+    header: Secp256r1InstructionHeader,    // signature 수
+    offsets: &'a [Secp256r1SignatureOffsets], // 데이터 위치 포인터
+    data: &'a [u8],                        // 원본 instruction 데이터
+}
+```
+
+`Secp256r1SignatureOffsets` 구조체는 instruction payload 내 각 구성 요소의 위치를 가리키는 바이트 offset을 포함하는 메모리 맵 역할을 합니다:
+
+```rust
+pub struct Secp256r1SignatureOffsets {
+    pub signature_offset: u16,
+    pub signature_instruction_index: u16,
+    pub public_key_offset: u16,
+    pub public_key_instruction_index: u16,
+    pub message_data_offset: u16,
+    pub message_data_size: u16,
+    pub message_instruction_index: u16,
+}
+```
+
+데이터에서 우리는 offset 구조체에 의해 참조되는 세 가지 핵심 구성 요소를 찾을 수 있습니다:
+- Publickey: 33바이트 압축 `Secp256r1` public key입니다. passkey와 같은 최신 인증 방식과 함께 사용될 때, 이는 인증 장치/사용자의 암호화 신원을 나타냅니다.
+- Signature: private key에 의해 생성된 64바이트 `ECDSA` signature (r,s 값)입니다. 이는 해당 private key의 소유자가 특정 메시지를 승인했음을 증명합니다.
+- Message Data: 암호화 방식으로 서명된 임의의 바이트입니다. 실제로, 이는 replay attack을 방지하고 signature가 문맥적으로 바인딩되도록 하는 transaction 세부 정보, timestamp, 또는 사용자 식별자와 같은 애플리케이션별 데이터를 포함합니다.
+
+보시다시피, public key는 압축된 점 표현(elliptic curve 점의 공간 효율적인 인코딩)을 사용하므로 33바이트 길이입니다.
+
+Secp256r1에서 public key는 수학적으로 (x,y) 점이며, 여기서 두 좌표는 각각 32바이트(총 64바이트)입니다.
+
+그러나 어떤 x-coordinate가 주어지면, 곡선 방정식을 만족하는 y-coordinate는 두 가지 가능성만 있습니다.
+
+압축된 형식은 32바이트 x-coordinate와 단일 패리티 바이트(y가 짝수일 경우 0x02, 홀수일 경우 0x03)를 저장하여, 48% 더 적은 저장 공간으로 완전한 점 재구성을 가능하게 합니다.
+
+<ArticleSection name="Implementation" id="implementation" level="h2" />
+
+`Secp256r1` signature를 검증하려면 두 가지 주요 구성 요소가 필요합니다:
+1. instruction sysvar: 이는 `Secp256r1` signature를 introspect할 수 있게 해줍니다.
+2. `pinocchio-secp256r1-instruction` crate: 이는 instruction을 deserialize하는 도구를 제공합니다.
+
+instruction sysvar는 Pinocchio crate에 이미 포함되어 있으므로 추가 설치가 필요하지 않습니다.
+
+하지만 `pinocchio-secp256r1-instruction` crate를 Pinocchio 프로그램에 추가해야 합니다:
+
+```
+cargo add pinocchio-secp256r1-instruction
+```
+
+검증을 구현하려면 다음을 수행해야 합니다:
+1. Instruction Sysvar 프로그램(`Sysvar1nstructions1111111111111111111111111`, 이를 `instructions`로 지칭함)을 포함합니다.
+2. 현재 instruction 뒤에 `Secp256r1` instruction을 배치합니다.
+
+instruction에 접근하고 deserialize하는 방법은 다음과 같습니다:
+
+```rust
+// instructions sysvar를 deserialize합니다.
+let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+// 현재 instruction 뒤에 오는 instruction을 가져옵니다.
+let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+```
+
+다음으로, `Secp256r1` instruction을 deserialize합니다:
+
+```rust
+// Secp256r1 instruction을 deserialize합니다.
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+```
+
+그다음, 몇 가지 보안 검사를 수행합니다.
+
+몇 가지 보안 검사를 구현하는 것이 중요합니다:
+1. **권한 확인 (Authority Check)**: Secp256r1 public key를 감싸는 PDA로부터 오직 권한 있는 수신자만이 자금을 받을 수 있도록 보장합니다. 이는 누군가가 transaction을 가로채서 유효한 signature를 획득하고 의도된 수신자를 대체할 수 있는 MEV attack을 방지합니다.
+2. **만료 확인 (Expiry Check)**: signature 유효성에 시간 제한을 강제합니다. 검증된 signature는 무기한으로 유효한 상태로 남아있기 때문에, 만료 timestamp를 구현하는 것은 replay attack을 방지합니다.
+
+이 데이터를 signature의 메시지에 넣어 이러한 검사를 수행합니다.
+
+다음은 이러한 보안 검사를 구현하는 방법입니다:
+
+```rust
+// fee payer가 승인되었는지 확인합니다.
+let (receiver, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32).ok_or(ProgramError::InvalidInstructionData)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+
+// signature 만료를 확인합니다.
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+마지막으로, Secp256r1 public key로부터 Program Derived Addresses (PDA)를 직접 도출하여, 사용자가 최신 인증 방식을 통해 제어할 수 있는 결정론적 account address를 생성할 수 있습니다:
+
+```rust
+// 첫 번째 signature가 우리 PDA owner와 일치하는지 확인합니다.
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+// CPI를 위한 signer seed를 생성합니다.
+let seeds = [
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+];
+let signers = [Signer::from(&seeds)];
+```
+
+> seed는 최대 32바이트 길이만 허용하므로 pubkey를 2개의 다른 부분으로 분할해야 합니다.

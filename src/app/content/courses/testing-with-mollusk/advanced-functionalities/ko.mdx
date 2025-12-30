@@ -1,0 +1,463 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 고급 기능 (Advanced Functionalities)
+
+Mollusk는 다양한 테스트 시나리오를 수용하기 위한 유연한 초기화 옵션을 제공합니다. 프로그램을 미리 로드한 인스턴스를 생성하거나, 최소한의 환경에서 시작하여 필요에 따라 컴포넌트를 추가할 수 있습니다.
+
+특정 프로그램을 테스트할 때는 Mollusk를 프로그램이 미리 로드된 상태로 초기화합니다:
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::pubkey::Pubkey;
+
+const ID: Pubkey = solana_sdk::pubkey!("22222222222222222222222222222222222222222222");
+
+#[test]
+fn test() {
+    let mollusk = Mollusk::new(&ID, "target/deploy/program");
+}
+```
+
+이 접근 방식은 컴파일된 프로그램을 자동으로 로드하고 테스트에 사용할 수 있도록 하여, 프로그램별 테스트 스위트의 설정 프로세스를 간소화합니다.
+
+더 넓은 테스트 시나리오나 프로그램을 동적으로 추가해야 할 경우, 기본 인스턴스로 시작합니다:
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    // System Program, ...
+    let mollusk = Mollusk::default();
+}
+```
+
+기본 인스턴스에는 System Program과 같은 필수 내장 프로그램이 포함되어 있어, 필요 없는 프로그램의 오버헤드 없이 대부분의 Solana 작업에 대한 기반을 제공합니다.
+
+테스트에 System Program이 필요할 때, Mollusk는 필요한 account references를 생성하는 편리한 헬퍼를 제공합니다:
+
+```rust
+let (system_program, system_program_account) = keyed_account_for_system_program();
+```
+
+프로그램 로딩 기능을 재현하거나 기본적으로 존재하지 않는 사용자 정의 프로그램을 로드하려면 다음 헬퍼를 사용할 수 있습니다:
+
+```rust
+use mollusk_svm::Mollusk;
+use mollusk_svm::program::create_program_account_loader_v3;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Get the account that you need
+    let program = &ID; // ID of the program we're trying to load into mollusk
+    let program_account = create_program_account_loader_v3(&ID);
+
+    // Load the program into your mollusk instance
+    mollusk.add_program(
+        &ID, 
+        "target/deploy/program",
+        &mollusk_svm::program::loader_keys::LOADER_V3
+    );
+}
+```
+
+<ArticleSection name="Token Program" id="token-program" level="h2" />
+
+Mollusk의 토큰 프로그램 헬퍼는 SPL token 관련 테스트 시나리오를 크게 단순화합니다. `mollusk-svm-programs-token` 크레이트는 `Token`, `Token2022`, 그리고 `Associated Token` 프로그램에 대한 사전 구성된 지원을 제공합니다.
+
+### Program Accounts
+
+토큰 헬퍼 크레이트를 포함한 후, 테스트에 필요한 특정 토큰 프로그램을 추가합니다:
+
+```rust
+use mollusk_svm::Mollusk;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::default();
+
+    // Add the SPL Token Program
+    mollusk_svm_programs_token::token::add_program(&mut mollusk);
+
+    // Add the Token2022 Program
+    mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
+
+    // Add the Associated Token Program
+    mollusk_svm_programs_token::associated_token::add_program(&mut mollusk);
+}
+```
+
+그리고 테스트 시나리오에 필요한 account references를 생성합니다:
+
+```rust
+// SPL Token Program
+let (token_program, token_program_account) = 
+    mollusk_svm_programs_token::token::keyed_account();
+
+// Token2022 Program
+let (token2022_program, token2022_program_account) = 
+    mollusk_svm_programs_token::token2022::keyed_account();
+
+// Associated Token Program
+let (associated_token_program, associated_token_program_account) =
+    mollusk_svm_programs_token::associated_token::keyed_account();
+```
+
+이러한 헬퍼는 토큰 관련 테스트가 올바른 구성으로 정확한 프로그램 account에 접근할 수 있도록 보장하여, 수동 프로그램 설정 없이 토큰 작업에 대한 포괄적인 테스트를 가능하게 합니다.
+
+### State Accounts
+
+테스트 중에 이미 초기화된 `Mint`, `Token` 또는 `Associated Token` account가 필요할 수 있습니다. 다행히 Mollusk는 유용한 헬퍼를 제공합니다.
+
+`Mint` account를 생성하려면 다음과 같이 `create_account_for_mint()` 함수를 사용할 수 있습니다:
+
+```rust
+use spl_token::state::Mint;
+use mollusk_svm_programs_token::token::create_account_for_mint;
+
+let mint_data = Mint {
+    mint_authority: Pubkey::new_unique(),
+    supply: 10_000_000_000,
+    decimals: 6,
+    is_initialized: true,
+    freeze_authority: None,
+};
+
+let mint_account = create_account_for_mint(mint_data)
+```
+
+`Token` account를 생성하려면 다음과 같이 `create_account_for_token_account()` 함수를 사용할 수 있습니다:
+
+```rust
+use spl_token::state::{TokenAccount, AccountState};
+use mollusk_svm_programs_token::token::create_account_for_token_account;
+
+let token_data = TokenAccount {
+    mint: Pubkey::new_unique(),
+    owner: Pubkey::new_unique(),
+    amount: 1_000_000,
+    delegate: None,
+    state: AccountState::Initialized,
+    is_native: None,
+    delegated_amount: 0,
+    close_authority: None,
+};
+
+let token_account = create_account_for_token_account(token_data)
+```
+
+> 참고: 이 예제는 SPL-Token 프로그램에 대한 것입니다. Token2022 프로그램이 소유하는 `Mint` 및 `Token` account를 생성하려면 `mollusk_svm_programs_token::token2022::...`를 사용하십시오.
+
+`Associated Token` account를 생성하려면 다음과 같이 `create_account_for_associated_token_account()` 함수를 사용할 수 있습니다:
+
+```rust
+use spl_token::state::{TokenAccount, AccountState};
+use mollusk_svm_programs_token::associated_token::create_account_for_associated_token_account;
+
+let token_data = TokenAccount {
+    mint: Pubkey::new_unique(),
+    owner: Pubkey::new_unique(),
+    amount: 1_000_000,
+    delegate: None,
+    state: AccountState::Initialized,
+    is_native: None,
+    delegated_amount: 0,
+    close_authority: None,
+};
+
+let associated_token_account = create_account_for_associated_token_account(token_data)
+```
+
+> 참고: 이 예제는 SPL-Token 프로그램에 대한 것입니다. Token2022 프로그램이 소유하는 `Associated Token` account를 생성하려면 `create_account_for_associated_token_2022_account` 함수를 사용하십시오.
+
+<ArticleSection name="Benchmarking Compute Units" id="benchmarking-compute-units" level="h2" />
+
+Mollusk에는 프로그램의 계산 효율성을 정밀하게 측정하고 추적할 수 있는 전용 Compute Unit 벤치마킹 시스템이 포함되어 있습니다. `MolluskComputeUnitBencher`는 다양한 instruction 시나리오에서 Compute Unit 소비를 모니터링하는 포괄적인 벤치마크를 생성하기 위한 간소화된 API를 제공합니다.
+
+이 벤치마킹 시스템은 현재 Compute Unit 사용량과 이전 실행과의 `Delta`를 모두 보여주는 상세 보고서를 생성하여 성능 최적화에 특히 유용합니다.
+
+이를 통해 코드 변경이 프로그램 효율성에 미치는 영향을 즉시 확인할 수 있으며, 중요한 성능 병목 현상을 최적화하는 데 도움이 됩니다.
+
+벤처는 기존 Mollusk 테스트 설정과 원활하게 통합됩니다:
+
+```rust
+use {
+    mollusk_svm_bencher::MolluskComputeUnitBencher,
+    mollusk_svm::Mollusk,
+    /* ... */
+};
+
+// Optionally disable logging.
+solana_logger::setup_with("");
+
+/* Instruction & accounts setup ... */
+
+let mollusk = Mollusk::new(&program_id, "my_program");
+
+MolluskComputeUnitBencher::new(mollusk)
+    .bench(("bench0", &instruction0, &accounts0))
+    .bench(("bench1", &instruction1, &accounts1))
+    .bench(("bench2", &instruction2, &accounts2))
+    .bench(("bench3", &instruction3, &accounts3))
+    .must_pass(true)
+    .out_dir("../target/benches")
+    .execute();
+```
+
+### 구성 옵션 (Configuration Options)
+
+벤처는 여러 구성 옵션을 제공합니다:
+- `must_pass(true)`: 벤치마크 실행에 실패하면 panic을 발생시켜, 코드 변경에도 벤치마크의 유효성을 유지합니다.
+- `out_dir("../target/benches")`: markdown 보고서가 생성될 위치를 지정하여, CI/CD 시스템 및 문서화 워크플로우와의 통합을 가능하게 합니다.
+
+### Cargo와의 통합 (Integration with Cargo)
+
+`cargo bench`를 사용하여 벤치마크를 실행하려면 `Cargo.toml`에 벤치마크 구성을 추가하십시오:
+
+```
+[[bench]]
+name = "compute_units"
+harness = false
+```
+
+### 벤치마크 보고서 (Benchmark Reports)
+
+벤처는 현재 성능 지표와 과거 비교를 모두 제공하는 markdown 보고서를 생성합니다:
+
+```
+| Name   | CUs   | Delta  |
+|--------|-------|--------|
+| bench0 | 450   | --     |
+| bench1 | 579   | -129   |
+| bench2 | 1,204 | +754   |
+| bench3 | 2,811 | +2,361 |
+```
+
+보고서 형식은 다음을 포함합니다:
+- Name: 지정한 벤치마크 식별자
+- CUs: 이 시나리오에 대한 현재 Compute Unit 소비량
+- Delta: 이전 벤치마크 실행과의 변경량 (양수는 사용량 증가, 음수는 최적화를 나타냄)
+
+<ArticleSection name="Custom Syscalls" id="custom-syscalls" level="h2" />
+
+Mollusk는 사용자 정의 Syscall의 생성 및 테스트를 지원하여, 테스트 시나리오를 위한 특수 기능으로 Solana Virtual Machine을 확장할 수 있습니다.
+
+이 기능은 특정 런타임 동작을 시뮬레이션하거나 테스트를 위한 제어된 환경을 생성함으로써 SIMD를 통해 추가될 수 있는 새로운 Syscall의 생성을 테스트하는 데 특히 유용합니다.
+
+> 사용자 정의 Syscall은 VM 수준에서 작동하며, invoke context 및 실행 환경에 직접 접근할 수 있습니다.
+
+### 사용자 정의 Syscall 정의 (Defining Custom Syscalls)
+
+사용자 정의 Syscall은 `declare_builtin_function!` 매크로를 사용하여 정의되며, 이 매크로는 Mollusk의 런타임 환경에 등록할 수 있는 Syscall을 생성합니다:
+
+```rust
+use {
+    mollusk_svm::{result::Check, Mollusk},
+    solana_instruction::Instruction,
+    solana_program_runtime::{
+        invoke_context::InvokeContext,
+        solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
+    },
+    solana_pubkey::Pubkey,
+};
+
+declare_builtin_function!(
+    /// A custom syscall to burn compute units for testing
+    SyscallBurnCus,
+    fn rust(
+        invoke_context: &mut InvokeContext,
+        to_burn: u64,
+        _arg2: u64,
+        _arg3: u64,
+        _arg4: u64,
+        _arg5: u64,
+        _memory_mapping: &mut MemoryMapping,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        // Consume the specified number of compute units
+        invoke_context.consume_checked(to_burn)?;
+        Ok(0)
+    }
+);
+```
+
+> 이것은 단순히 CU를 "소각(burn)"하는 사용자 정의 Syscall의 예입니다.
+
+Syscall 함수 시그니처는 특정 패턴을 따릅니다:
+- `invoke_context`: 실행 컨텍스트 및 런타임 상태에 대한 접근을 제공합니다.
+- Arguments 1-5: 프로그램에서 최대 5개의 64비트 argument를 전달할 수 있습니다.
+- memory_mapping: 프로그램의 메모리 공간에 대한 접근을 제공합니다.
+- Return value: 성공 또는 실패를 나타내는 `Result<u64, Box<dyn std::error::Error>>`
+
+> 이것이 모든 Syscall이 내부적으로 생성되는 방식입니다.
+
+### 사용자 정의 Syscall 등록 (Registering Custom Syscalls)
+
+정의된 사용자 정의 Syscall은 사용하기 전에 Mollusk의 프로그램 런타임 환경에 등록되어야 합니다:
+
+```rust
+#[test]
+fn test_custom_syscall() {
+    std::env::set_var("SBF_OUT_DIR", "../target/deploy");
+    let program_id = Pubkey::new_unique();
+    
+    let mollusk = {
+        let mut mollusk = Mollusk::default();
+        
+        // Register the custom syscall with a specific name
+        mollusk
+            .program_cache
+            .program_runtime_environment
+            .register_function("sol_burn_cus", SyscallBurnCus::vm)
+            .unwrap();
+            
+        // Add your program that uses the custom syscall
+        mollusk.add_program(
+            &program_id,
+            "test_program_custom_syscall",
+            &mollusk_svm::program::loader_keys::LOADER_V3,
+        );
+        
+        mollusk
+    };
+}
+```
+
+Syscall은 프로그램이 Syscall을 호출할 때 참조할 수 있는 이름("sol_burn_cus" 이 예제에서)으로 등록됩니다.
+
+### 사용자 정의 Syscall 동작 테스트 (Testing Custom Syscall Behavior)
+
+사용자 정의 Syscall은 다른 프로그램 기능과 마찬가지로 테스트할 수 있으며, 동작에 대한 정밀한 제어라는 추가 이점이 있습니다:
+
+```rust
+fn instruction_burn_cus(program_id: &Pubkey, to_burn: u64) -> Instruction {
+    Instruction::new_with_bytes(*program_id, &to_burn.to_le_bytes(), vec![])
+}
+
+#[test]
+fn test_custom_syscall() {
+    // ... mollusk setup ...
+    
+    // Establish baseline compute unit usage
+    let base_cus = mollusk
+        .process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, 0),
+            &[],
+            &[Check::success()],
+        )
+        .compute_units_consumed;
+    
+    // Test different compute unit consumption levels
+    for to_burn in [100, 1_000, 10_000] {
+        mollusk.process_and_validate_instruction(
+            &instruction_burn_cus(&program_id, to_burn),
+            &[],
+            &[
+                Check::success(),
+                Check::compute_units(base_cus + to_burn), // Verify exact CU consumption
+            ],
+        );
+    }
+}
+```
+
+> 이 예제는 Compute Unit을 소각하는 Syscall을 테스트하고, 요청된 정확한 수의 유닛이 소비되는지 검증하는 것을 보여줍니다. 정밀한 데이터를 검증하는 기능은 Mollusk를 구현 전에 사용자 정의 Syscall을 테스트하는 가장 좋은 방법으로 만듭니다.
+
+<ArticleSection name="Configuration Methods" id="configuration-methods" level="h2" />
+
+Mollusk는 Mollusk `Context`에서 볼 수 있듯이 특정 테스트 요구 사항에 맞게 실행 환경을 사용자 정의할 수 있는 포괄적인 구성 옵션을 제공합니다:
+
+```rust
+/// Instruction context fixture.
+pub struct Context {
+    /// The compute budget to use for the simulation.
+    pub compute_budget: ComputeBudget,
+    /// The feature set to use for the simulation.
+    pub feature_set: FeatureSet,
+    /// The runtime sysvars to use for the simulation.
+    pub sysvars: Sysvars,
+    /// The program ID of the program being invoked.
+    pub program_id: Pubkey,
+    /// Accounts to pass to the instruction.
+    pub instruction_accounts: Vec<AccountMeta>,
+    /// The instruction data.
+    pub instruction_data: Vec<u8>,
+    /// Input accounts with state.
+    pub accounts: Vec<(Pubkey, Account)>,
+}
+```
+
+이러한 구성 방법은 Compute Budget, 기능 가용성 및 시스템 변수에 대한 정밀한 제어를 가능하게 하여, 다양한 런타임 조건에서 프로그램을 테스트할 수 있도록 합니다.
+
+### 기본 구성 설정 (Basic Configuration Setup)
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::feature_set::FeatureSet;
+
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+    
+    // Configure compute budget for performance testing
+    mollusk.set_compute_budget(200_000);
+    
+    // Configure feature set to enable/disable specific Solana features
+    mollusk.set_feature_set(FeatureSet::all_enabled());
+    
+    // Sysvars are handled automatically but can be customized if needed
+}
+```
+
+Compute Budget은 프로그램 실행에 사용할 수 있는 Compute Unit 수를 결정합니다. 이는 Compute Limit에 근접하거나 초과하는 프로그램을 테스트하는 데 중요합니다:
+
+```rust
+// Test with standard compute budget
+mollusk.set_compute_budget(200_000);
+```
+
+Solana의 Feature Set은 프로그램 실행 중 활성화되는 블록체인 기능을 제어합니다. Mollusk를 사용하면 이러한 기능을 구성하여 다양한 네트워크 상태에서의 호환성을 테스트할 수 있습니다:
+
+```rust
+use solana_sdk::feature_set::FeatureSet;
+
+// Enable all features (latest functionality)
+mollusk.set_feature_set(FeatureSet::all_enabled());
+
+// All features disabled
+mollusk.set_feature_set(FeatureSet::default());
+```
+
+사용 가능한 기능에 대한 포괄적인 목록은 모든 구성 가능한 블록체인 기능과 그 함의를 자세히 설명하는 `agave-feature-set` 크레이트 [문서](https://docs.rs/agave-feature-set/2.3.6/agave_feature_set/)를 참조하십시오.
+
+Mollusk는 프로그램이 실행 중에 쿼리할 수 있는 모든 시스템 변수(sysvars)에 대한 접근을 제공합니다. 이러한 변수들은 합리적인 기본값으로 자동 구성되지만, 특정 테스트 시나리오에 맞게 사용자 정의할 수 있습니다:
+
+```rust
+/// Mollusk sysvars wrapper for easy manipulation
+pub struct Sysvars {
+    pub clock: Clock,                     // Current slot, epoch, and timestamp
+    pub epoch_rewards: EpochRewards,      // Epoch reward distribution info  
+    pub epoch_schedule: EpochSchedule,    // Epoch timing and slot configuration
+    pub last_restart_slot: LastRestartSlot, // Last validator restart information
+    pub rent: Rent,                       // Rent calculation parameters
+    pub slot_hashes: SlotHashes,          // Recent slot hash history
+    pub stake_history: StakeHistory,      // Historical stake activation data
+}
+```
+
+시간 종속적인 로직, rent 계산 또는 기타 시스템 종속적인 동작을 테스트하기 위해 특정 sysvar를 사용자 정의하거나 일부 헬퍼를 사용할 수 있습니다:
+
+```rust
+#[test]
+fn test() {
+    let mut mollusk = Mollusk::new(&program_id, "path/to/program.so");
+    
+    // Customize clock for time-based testing
+    mollusk.sysvars.clock.epoch = 10;
+    mollusk.sysvars.clock.unix_timestamp = 1234567890;
+
+    // Jump to Slot 1000
+    mollusk.warp_to_slot(1000);
+}
+```

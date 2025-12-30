@@ -1,0 +1,110 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 토큰 동결 및 해동 명령
+
+동결은 계정이 해동될 때까지 해당 계정의 모든 토큰 작업을 막습니다. 민트의 동결 권한(freeze authority)만 이 작업을 수행할 수 있습니다.
+
+> 전송, 승인, 소각을 완전히 비활성화하며, 특정 동결된 account에만 영향을 미칩니다.
+
+해동은 이전에 동결된 account에서 토큰 작업을 다시 활성화합니다. 민트의 동결 권한(freeze authority)만 account를 해동할 수 있습니다.
+
+> 동결된 account에 모든 기능을 복원하며, 민트의 동결 권한(freeze authority)에 의해서만 수행될 수 있습니다.
+
+토큰을 동결하거나 해동하기 전에 이미 다음을 가지고 있어야 합니다:
+- `freezeAuthority`를 보유하고 있는 `Mint` account를 초기화해야 합니다.
+- 동결하거나 해동하려는 `Token` account 또는 `Associated Token` account를 초기화해야 합니다.
+
+<ArticleSection name="Raw Instruction" id="raw-instruction" level="h2" />
+
+어떠한 추상화도 없이 "raw" 명령만을 사용하여 토큰을 동결하는 방법은 다음과 같습니다:
+
+```ts
+const keypair = Keypair.generate();
+
+const tokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    keypair.publicKey,
+);
+
+// ATA 생성 명령 생성
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // payer
+    tokenAccount, // associated token account address
+    destination.publicKey, // owner
+    mint.publicKey, // mint
+);
+
+// ATA 동결
+const freezeInstruction = createFreezeAccountInstruction(
+    tokenAccount // account
+    mint // mint
+    keypair.publickey // authority
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    freezeInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Token accounts created and frozen! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+어떠한 추상화도 없이 "raw" 명령만을 사용하여 토큰을 해동하는 방법은 다음과 같습니다:
+
+```ts
+// ATA 해동
+const thawInstruction = createThawAccountInstruction(
+    tokenAccount // account
+    mint // mint
+    keypair.publickey // authority
+);
+
+const transaction = new Transaction().add(thawInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`토큰 account가 해동되었습니다! TX를 여기서 확인하세요: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Abstracted Instruction" id="abstracted-instruction" level="h2" />
+
+동일한 명령이 `freezeAccount()` 명령으로 추상화된 경우 다음과 같이 보일 것입니다:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    tokenAccount.publicKey
+);
+
+console.log(`당신의 ATA입니다: ${ata.address}!`)
+  
+let tx = await freezeAccount(
+    connection,
+    keypair,
+    tokenAccount // account
+    mint // mint
+    keypair.publickey // authority
+);
+
+console.log(`토큰 Account가 성공적으로 동결되었습니다! Transaction은 여기: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+동일한 명령이 `thawAccount()` 명령으로 추상화된 경우 다음과 같이 보일 것입니다:
+
+```ts
+let tx = await thawAccount(
+    connection,
+    keypair,
+    tokenAccount // account
+    mint // mint
+    keypair.publickey // authority
+);
+
+console.log(`토큰 Account가 성공적으로 해동되었습니다! Transaction은 여기: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```

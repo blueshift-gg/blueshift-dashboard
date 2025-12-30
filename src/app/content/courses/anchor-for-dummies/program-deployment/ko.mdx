@@ -1,0 +1,172 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 프로그램 배포
+
+프로그램이 완성되면, 사용자 상호작용을 가능하게 하기 위해 devnet 또는 mainnet에 배포합니다.
+
+<ArticleSection name="Program Deployment" id="program-deployment" level="h2" />
+
+필요한 배포 파일을 생성하기 위해 프로그램을 빌드합니다:
+
+```
+anchor build
+```
+
+이 명령은 다음을 포함하는 `target/deploy` 폴더를 생성합니다:
+- `<project-name>.so`: 프로그램의 바이트코드
+- `<project-name>-keypair.json`: 배포를 위해 생성된 keypair
+
+> 이 keypair를 `<project-name>-keypair.json` 파일의 keypair를 대체하여 vanity address로 바꿀 수 있습니다.
+
+프로그램 address를 검색합니다:
+
+```
+solana address -k target/deploy/<project-name>-keypair.json
+```
+
+이 address로 `lib.rs`의 `declare_id!()` 함수를 업데이트한 다음, 올바른 target cluster와 program ID로 `Anchor.toml`을 구성합니다:
+
+```
+[provider]
+cluster = "devnet"
+
+[programs.devnet]
+<project-name> = "<PROGRAM_ID>"
+```
+
+프로그램을 배포합니다:
+
+```
+anchor deploy
+```
+
+이 명령은 `Anchor.toml`에 지정된 address, cluster, 그리고 wallet을 fee payer로 사용하여 배포합니다.
+
+### 배포 실패
+
+배포에 실패하면 lamports를 보유하는 임시 buffer account가 생성됩니다. 다음과 같은 복구 지침이 표시됩니다:
+
+```
+==================================================================================
+Recover the intermediate account's ephemeral keypair file with
+`solana-keygen recover` and the following 12-word seed phrase:
+==================================================================================
+valley flat great hockey share token excess clever benefit traffic avocado athlete
+==================================================================================
+To resume a deploy, pass the recovered keypair as
+the [BUFFER_SIGNER] to `solana program deploy` or `solana program write-buffer'.
+Or to recover the account's lamports, pass it as the
+[BUFFER_ACCOUNT_ADDRESS] argument to `solana program drain`.
+==================================================================================
+```
+
+잔액을 복구하려면:
+
+- **배포 재개**: keypair를 복구하여
+    ```
+    solana-keygen recover -o <KEYPAIR_PATH>
+    ```
+    프롬프트가 표시되면 12단어 seed phrase를 입력한 다음, buffer와 함께 배포합니다:
+    ```
+    solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json --buffer ./target/deploy/<buffer>-keypair.json
+    ```
+
+- **buffer 닫기**: lamports를 회수하기 위해
+    ```
+    solana program close <ADDRESS>
+    ```
+
+### Solana CLI를 통한 배포
+
+Anchor 대신 Solana CLI를 사용하여 프로그램을 직접 배포할 수 있습니다:
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+네트워크 정체 중에는 배포 성공률을 높이기 위해 다음 flag를 사용합니다:
+- `--with-compute-unit-price`: micro-lamports 단위로 compute unit price 설정
+- `--use-rpc`: validator TPU 대신 RPC로 transaction 전송
+- `--max-sign-attempts`: blockhash 만료 후 최대 재시도 횟수
+
+<ArticleSection name="Program Upgrade" id="program-upgrade" level="h2" />
+
+기본적으로 `anchor deploy`는 새 program ID를 생성합니다. 기존 프로그램을 address와 연결된 account를 보존하면서 업그레이드하려면:
+
+```
+anchor upgrade target/deploy/<project-name>.so --program-id <PROGRAM_ID>
+```
+
+새 executable이 배포된 버전보다 크다면, 먼저 프로그램 account를 확장해야 합니다:
+
+```
+solana program extend ./target/deploy/<project-name>.so <ADDITIONAL_BYTES>
+```
+
+### Solana CLI를 통한 업그레이드
+
+절차는 동일합니다: 필요한 경우 확장한 다음, 배포합니다:
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+### 프로그램 불변성 설정
+
+업그레이드 authority를 제거하여 프로그램을 불변하게 만들 수 있습니다:
+
+```
+solana program set-upgrade-authority <PROGRAM_ID> --final
+```
+
+> 이 작업은 되돌릴 수 없습니다. 한 번 설정되면 프로그램은 업데이트될 수 없습니다.
+
+### 프로그램 마이그레이션
+
+마이그레이션은 프로그램을 한 address에서 다른 address로 전송합니다. CLI는 이전 프로그램을 닫고 새 위치에 재배포합니다:
+
+```
+solana program migrate ./target/deploy/<project-name>.json
+```
+
+> 마이그레이션은 기존 Program ID에서 파생되므로 모든 기존 PDAs를 손상시킵니다. 사용자는 새 address를 사용하도록 애플리케이션을 업데이트하고, authority가 PDA인 모든 token account의 authority를 변경해야 합니다.
+
+<ArticleSection name="Uploading an IDL" id="uploading-an-idl" level="h2" />
+
+IDL(Interface Description Language) 파일은 프로그램의 instruction과 account에 대한 표준화된 JSON 설명을 제공하여 클라이언트 통합을 용이하게 합니다.
+
+개발자들이 프로그램을 통합하는 데 도움이 되도록 IDL을 onchain에 업로드합니다:
+
+```
+anchor idl init --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+### IDL 업그레이드
+
+프로그램을 재배포한 후, onchain IDL을 업데이트합니다:
+
+```
+anchor idl upgrade --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+<ArticleSection name="Verified Builds" id="verified-builds" level="h2" />
+
+검증된 빌드는 Solana에 배포된 executable 프로그램이 repository의 source code와 일치하는지 확인합니다. 이 검증을 통해 개발자와 사용자는 onchain 프로그램이 공개 코드베이스와 정확히 일치하는지 확인할 수 있습니다.
+
+검증 프로세스는 onchain 프로그램의 hash를 source code로부터 로컬에서 빌드된 프로그램과 비교하여 버전 간의 불일치를 감지합니다.
+
+Solana CLI로 프로그램을 빌드하면 machine-specific 코드가 binaries에 포함될 수 있습니다. 다른 머신에서 동일한 프로그램을 컴파일하면 다른 executable이 생성될 수 있습니다. 이를 해결하려면, 재현 가능한 결과를 위해 pinned dependencies가 있는 Docker container 내부에서 빌드해야 합니다.
+
+Anchor는 빌드 및 Docker 구성을 처리하는 CLI 명령을 제공합니다:
+
+```
+anchor build --verifiable
+```
+
+mainnet에 배포된 프로그램에 대해 빌드를 검증합니다:
+
+```
+anchor verify -p <lib-name> <program-id>
+```
+
+> `<lib-name>`은 프로그램의 `Cargo.toml` 파일에 정의된 이름에 해당합니다.

@@ -1,0 +1,264 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mollusk 101
+
+![Testing with Mollusk](/graphics/course-banners/testing-with-mollusk.png)
+
+
+Solana program을 효율적으로 테스트하려면 속도, 정밀도, 통찰력의 균형을 맞춘 framework가 필요합니다. 복잡한 program 로직을 개발할 때는 엣지 케이스를 테스트하거나 성능을 정확하게 측정하는 능력을 희생하지 않고도 빠른 반복을 가능하게 하는 환경이 필요합니다.
+
+이상적인 Solana testing framework는 세 가지 필수 기능을 제공해야 합니다:
+- 빠른 개발 주기를 위한 신속한 실행,
+- 포괄적인 엣지 케이스 테스트를 위한 유연한 account state 조작,
+- 최적화 통찰력을 위한 상세한 성능 지표.
+
+Mollusk는 Solana program 개발을 위해 특별히 설계된 간소화된 testing environment를 제공하여 이러한 요구 사항을 충족합니다.
+
+<ArticleSection name="What is Mollusk" id="what-is-mollusk" level="h2" />
+
+[Mollusk](https://github.com/anza-xyz/mollusk)는 [Anza](https://x.com/anza_xyz) 팀의 [Joe Caulfield](https://x.com/realbuffalojoe)가 만들고 유지 관리하는 Solana program을 위한 경량 test harness로, 완전한 validator runtime의 오버헤드 없이 program 실행에 직접적인 인터페이스를 제공합니다.
+
+Mollusk는 완전한 validator 환경을 시뮬레이션하는 대신, 저수준 Solana Virtual Machine (SVM) 구성 요소를 사용하여 program 실행 파이프라인을 구축합니다. 이 접근 방식은 철저한 program testing에 필요한 필수 기능을 유지하면서 불필요한 오버헤드를 제거합니다.
+
+이 framework는 Agave validator 구현에서 `AccountsDB` 및 `Bank`와 같은 헤비급 구성 요소를 제외하여 탁월한 성능을 달성합니다. 이러한 설계 선택은 명시적인 account provisioning을 요구하는데, 이는 account state에 대한 정확한 제어를 허용하고 전체 validator 환경에서는 재현하기 어려운 테스트 시나리오를 가능하게 하므로 실제로 이점이 됩니다.
+
+Mollusk의 test harness는 compute budget 조정, feature set 수정, sysvar 사용자 지정을 포함한 포괄적인 구성 옵션을 지원합니다. 이러한 구성은 `Mollusk` struct를 통해 직접 관리되며 내장 helper 함수를 사용하여 수정할 수 있습니다.
+
+<ArticleSection name="First Steps" id="first-steps" level="h2" />
+
+핵심 `mollusk-svm` crate는 기본적인 testing infrastructure를 제공하며, 추가 crate는 `Token` 및 `Memo` program과 같은 일반적인 Solana program을 위한 특수 helper를 제공합니다.
+
+### Setup
+
+프로젝트에 주요 Mollusk crate를 추가하세요:
+
+```
+cargo add mollusk-svm --dev
+```
+
+필요에 따라 program별 helper를 포함하세요:
+
+```
+cargo add mollusk-svm-programs-memo mollusk-svm-programs-token --dev
+```
+
+이러한 추가 crate는 표준 Solana program을 위한 사전 구성된 helper를 제공합니다. 이를 통해 boilerplate 코드를 줄이고 token operation 또는 memo instruction과 관련된 일반적인 testing 시나리오 설정을 간소화합니다.
+
+> `cargo add <crate-name> --dev` 명령어의 `--dev` 플래그는 `Cargo.toml` 파일의 `[dev-dependencies]` 섹션에 crate를 추가하여 program binary를 경량으로 유지하는 데 사용됩니다.
+> 이 구성은 testing utility가 program의 배포 크기를 늘리지 않으면서 개발 중에 필요한 모든 Solana type 및 helper 함수에 대한 액세스를 제공하도록 보장합니다.
+
+### Additional Dependencies
+
+여러 Solana crate는 필수 type 및 utility를 제공하여 testing 경험을 향상시킵니다:
+
+```
+cargo add solana-precompiles solana-account solana-pubkey solana-feature-set solana-program solana-sdk --dev
+```
+
+<ArticleSection name="Mollusk Basics" id="mollusk-basics" level="h2" />
+
+`program_id`를 선언하고, testing 중에 "ProgramMismatch" 오류를 발생시키지 않고 올바르게 호출되도록 program에서 사용한 주소와 빌드된 program의 경로를 사용하여 `Mollusk` instance를 생성하는 것으로 시작합니다. 다음과 같습니다:
+
+```rust
+use mollusk_svm::Mollusk;
+use solana_sdk::pubkey::Pubkey;
+
+const ID: Pubkey = solana_sdk::pubkey!("22222222222222222222222222222222222222222222");
+
+// Alternative using an Array of bytes
+// pub const ID: [u8; 32] = [
+//    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+//    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+//    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+//    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+// ];
+
+#[test]
+fn test() {
+    // Omit the `.so` file extension for the program name since
+    // it is automatically added when Mollusk is loading the file.
+    let mollusk = Mollusk::new(&ID, "target/deploy/program");
+
+    // Alternative using an Array of bytes
+    // let mollusk = Mollusk::new(&Pubkey::new_from_array(ID), "target/deploy/program")
+}
+```
+
+테스트를 위해 다음 네 가지 주요 API method 중 하나를 사용할 수 있습니다:
+
+- `process_instruction`: instruction을 처리하고 결과를 반환합니다.
+- `process_and_validate_instruction`: instruction을 처리하고 결과에 대해 일련의 check를 수행하며, check가 실패하면 panic을 발생시킵니다.
+- `process_instruction_chain`: instruction 체인을 처리하고 결과를 반환합니다.
+- `process_and_validate_instruction_chain`: instruction 체인을 처리하고 각 결과에 대해 일련의 check를 수행하며, check가 실패하면 panic을 발생시킵니다.
+
+하지만 이 method를 사용하려면 account와 instruction struct를 생성하여 전달해야 합니다:
+
+### Accounts
+
+Mollusk로 Solana program을 테스트할 때, 실제 program 실행 시나리오를 반영하는 여러 유형의 account와 작업하게 됩니다. 효과적인 testing을 위해서는 이러한 account를 올바르게 구성하는 방법을 이해하는 것이 중요합니다.
+
+가장 기본적인 account type은 `SystemAccount`이며, 두 가지 주요 변형이 있습니다:
+- Payer: program account 생성 또는 lamport transfer에 자금을 제공하는 lamport를 가진 account
+- Default Account: 비어 있고 lamport가 없는 account로, 일반적으로 instruction 내에서 초기화를 기다리는 program account를 나타내는 데 사용됩니다.
+
+System account는 data를 포함하지 않으며 System Program이 소유합니다. Payer account와 초기화되지 않은 account의 주요 차이점은 lamport 잔액입니다. Payer는 자금을 가지고 있고, 초기화되지 않은 account는 비어 있는 상태로 시작합니다.
+
+Mollusk에서 이러한 기본 account를 생성하는 방법은 다음과 같습니다:
+
+```rust
+use solana_sdk::{
+    account::Account,
+    system_program
+};
+
+// Payer account with lamports for transactions
+let payer = Pubkey::new_unique();
+let payer_account = Account::new(100_000_000, 0, &system_program::id());
+
+// Uninitialized account with no lamports
+let default_account = Account::default();
+```
+
+data를 포함하는 `ProgramAccount`의 경우 두 가지 구성 접근 방식이 있습니다:
+
+```rust
+use solana_sdk::account::Account;
+
+let data = vec![
+    // Your serialized account data
+];
+let lamports = mollusk
+    .sysvars
+    .rent
+    .minimum_balance(data.len());
+
+let program_account = Pubkey::new_unique();
+let program_account_account = Account {
+    lamports,
+    data,
+    owner: ID, // The program's that owns the account
+    executable: false,
+    rent_epoch: 0,
+};
+```
+
+account를 생성했으면 Mollusk가 예상하는 형식으로 컴파일합니다:
+
+```rust
+let accounts = [
+    (user, user_account),
+    (program_account, program_account_account)
+];
+```
+
+### Instructions
+
+Mollusk testing을 위한 instruction을 생성하는 것은 세 가지 필수 구성 요소(`program_id`, discriminator와 parameters를 포함하는 `instruction_data`, 그리고 어떤 account가 관련되고 그들의 권한을 지정하는 account metadata)를 이해하면 간단합니다.
+
+다음은 기본 instruction 구조입니다:
+
+```rust
+use solana_sdk::instruction::{Instruction, AccountMeta};
+
+let instruction = Instruction::new_with_bytes(
+    ID, // Your program's ID
+    &[0], // Instruction data (discriminator + parameters)
+    vec![AccountMeta::new(payer, true)], // Account metadata
+);
+```
+
+instruction data에는 instruction discriminator 다음에 instruction이 요구하는 모든 parameter가 포함되어야 합니다. Anchor program의 경우, 기본 discriminator는 instruction 이름에서 파생된 8-byte 값입니다.
+
+Anchor discriminator 생성을 단순화하려면 다음 helper 함수를 사용하고, discriminator와 직렬화된 parameter를 연결하여 instruction data를 구성하세요:
+
+```rust
+use sha2::{Sha256, Digest};
+
+let instruction_data = &[
+    &get_anchor_discriminator_from_name("deposit"),
+    &1_000_000u64.to_le_bytes()[..],
+]
+.concat();
+
+pub fn get_anchor_discriminator_from_name(name: &str) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("global:{}", name));
+    let result = hasher.finalize();
+
+    [
+        result[0], result[1], result[2], result[3],
+        result[4], result[5], result[6], result[7],
+    ]
+}
+```
+
+`AccountMeta` struct의 경우 account permissions에 따라 적절한 constructor를 사용해야 합니다:
+
+- `AccountMeta::new(pubkey, is_signer)`: mutable account용
+- `AccountMeta::new_readonly(pubkey, is_signer)`: read-only account용
+
+boolean parameter는 account가 transaction에 서명해야 하는지 여부를 나타냅니다. 대부분의 account는 non-signer (false)이지만, operation을 승인해야 하는 payer 및 authority는 예외입니다.
+
+### Execution
+
+account와 instruction이 준비되면 이제 Mollusk의 execution API를 사용하여 program 로직을 실행하고 검증할 수 있습니다. Mollusk는 validation check가 필요한지 여부와 단일 또는 여러 instruction을 테스트하는지 여부에 따라 네 가지 다른 execution method를 제공합니다.
+
+가장 간단한 execution method는 validation 없이 단일 instruction을 처리합니다:
+
+```rust
+mollusk.process_instruction(&instruction, &accounts);
+```
+이는 수동으로 검사할 수 있는 execution 결과를 반환하지만, 자동 validation은 수행하지 않습니다.
+
+포괄적인 testing을 위해 예상되는 결과를 지정할 수 있는 validation method를 사용하세요:
+
+```rust
+mollusk.process_and_validate_instruction(
+    &instruction,
+    &accounts,
+    &[
+        Check::success(), // Verify the transaction succeeded
+        Check::compute_units(5_000), // Expect specific compute usage
+        Check::account(&payer).data(&expected_data).build(), // Validate account data
+        Check::account(&payer).owner(&ID).build(), // Validate account owner
+        Check::account(&payer).lamports(expected_lamports).build(), // Check lamport balance
+    ],
+);
+```
+
+> 다음과 같이 여러 check를 "묶어서" 동일한 account에 대해 수행할 수 있습니다: `Check::account(&payer).data(&expected_data).owner(&ID).build()`
+
+validation 시스템은 execution 결과의 다양한 측면을 확인하기 위해 다양한 check type을 지원합니다. 엣지 케이스 testing의 경우, instruction이 예상대로 실패하는지 확인할 수 있습니다:
+
+```rust
+mollusk.process_and_validate_instruction(
+    &instruction,
+    &accounts,
+    &[
+        Check::err(ProgramError::MissingRequiredSignature), // Expect specific error
+    ],
+);
+```
+
+여러 instruction을 요구하는 복잡한 workflow를 테스트하려면 instruction chain method를 사용하세요:
+
+```rust
+mollusk.process_instruction_chain(
+    &[
+        (&instruction, &accounts),
+        (&instruction_2, &accounts_2)
+    ]
+);
+```
+
+포괄적인 validation과 함께 여러 instruction을 결합하세요:
+
+```rust
+mollusk.process_and_validate_instruction_chain(&[
+    (&instruction, &accounts, &[Check::success()]),
+    (&instruction_2, &accounts_2, &[
+        Check::success(),
+        Check::account(&target_account).lamports(final_balance).build(),
+    ]),
+]);
+```

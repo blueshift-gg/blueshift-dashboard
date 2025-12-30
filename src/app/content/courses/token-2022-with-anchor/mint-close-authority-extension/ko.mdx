@@ -1,0 +1,79 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mint Close Authority 확장 기능
+
+`MintCloseAuthority` 확장 기능은 현재 공급량이 0인 `Mint` account에서 권한자가 account를 닫고 임대료를 회수할 수 있도록 하는 `Mint` 확장 기능입니다.
+
+이 확장 기능은 사용되지 않는 mint를 정리하고 account의 임대료 면제 비용으로 지불되었던 SOL을 회수하는 데 유용합니다. mint는 유통 중인 token이 없을 때만 닫을 수 있습니다.
+
+<ArticleSection name="Initializing the Mint Account" id="initializing-the-mint-account" level="h2" />
+
+`Mint` account에서 `MintCloseAuthority` 확장 기능을 초기화하기 위해 `Anchor`가 제공하는 매크로를 간단히 사용할 수 있습니다.
+
+Mint Close 확장 기능으로 mint를 생성하는 방법은 다음과 같습니다:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        payer = signer,
+        mint::decimals = 6,
+        mint::authority = signer.key(),
+        mint::token_program = token_program,
+        extensions::close_authority::authority = signer,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+```
+
+<ArticleSection name="Closing the Mint Account" id="closing-the-mint-account" level="h2" />
+
+`Mint` account의 공급량이 0인 경우, `CloseMint Authority`는 다음과 같이 `close_account()` instruction을 사용하여 해당 account의 임대료를 회수할 수 있습니다:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{close_account, CloseAccount},
+    token_interface::{
+        spl_token_2022::{
+            extension::{
+                mint_close_authority::MintCloseAuthority
+            },
+        },
+        Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        extensions::close_authority::authority = authority,
+    )]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+pub fn close(ctx: Context<Close>) -> Result<()> {
+    // cpi to token extensions programs to close mint account
+    // alternatively, this can also be done in the client
+    close_account(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        CloseAccount {
+            account: ctx.accounts.mint_account.to_account_info(),
+            destination: ctx.accounts.authority.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        },
+    ))?;
+    Ok(())
+}
+```

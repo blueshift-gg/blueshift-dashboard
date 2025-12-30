@@ -1,0 +1,103 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 명령어 인트로스펙션
+
+![Instruction Introspection](/graphics/course-banners/instruction-introspection.png)
+
+Instruction introspection은 Solana의 강력한 기능으로, 프로그램이 동일한 transaction 내의 다른 instruction들을, 아직 실행되지 않은 것까지 포함하여 분석할 수 있도록 합니다. 이는 safeguard를 주입하거나, 동작을 검증하거나, 외부 프로그램의 instruction들을 자신의 로직에 통합하는 등, 이 instruction들에 동적으로 응답하거나 보강할 수 있게 해줍니다.
+
+이는 `Instructions` sysvar라고 불리는 특별한 system account를 통해 가능합니다. Sysvar는 Solana 런타임에 의해 유지되는 읽기 전용 account로, 프로그램에 내부 상태를 노출합니다(예: clock, rent, epoch schedule 등). `Instructions` sysvar는 특히 현재 transaction의 전체 instruction 목록과 그 metadata 및 serialized data를 노출합니다.
+
+Solana가 런타임에 이 정보를 직렬화하는 방법은 다음과 같습니다:
+
+```rust
+// First encode the number of instructions:
+//  0..2 - num_instructions
+//
+// Then a table of offsets of where to find them in the data
+//  3..2 * num_instructions table of instruction offsets
+//
+// Each instruction is then encoded as:
+//   0..2 - num_accounts
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
+//   3..35 - pubkey - 32 bytes
+//   35..67 - program_id
+//   67..69 - data len - u16
+//   69..data_len - data
+#[cfg(not(target_os = "solana"))]
+fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
+    // 64 bytes is a reasonable guess, calculating exactly is slower in benchmarks
+    let mut data = Vec::with_capacity(instructions.len() * (32 * 2));
+    append_u16(&mut data, instructions.len() as u16);
+    for _ in 0..instructions.len() {
+        append_u16(&mut data, 0);
+    }
+
+    for (i, instruction) in instructions.iter().enumerate() {
+        let start_instruction_offset = data.len() as u16;
+        let start = 2 + (2 * i);
+        data[start..start + 2].copy_from_slice(&start_instruction_offset.to_le_bytes());
+        append_u16(&mut data, instruction.accounts.len() as u16);
+        for account_meta in &instruction.accounts {
+            let mut account_meta_flags = InstructionsSysvarAccountMeta::empty();
+            if account_meta.is_signer {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_SIGNER;
+            }
+            if account_meta.is_writable {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_WRITABLE;
+            }
+            append_u8(&mut data, account_meta_flags.bits());
+            append_slice(&mut data, account_meta.pubkey.as_ref());
+        }
+
+        append_slice(&mut data, instruction.program_id.as_ref());
+        append_u16(&mut data, instruction.data.len() as u16);
+        append_slice(&mut data, instruction.data);
+    }
+    data
+}
+```
+
+이는 프로그램 내에서 `Instructions` sysvar account를 읽음으로써 현재 transaction에 포함된 모든 instruction에 접근할 수 있음을 의미합니다.
+
+raw bytes를 수동으로 파싱할 필요는 없습니다. Solana는 다음 helper function들을 제공합니다:
+- `load_current_index_checked`: 현재 실행 중인 instruction의 index를 반환합니다.
+- `load_instruction_at_checked`: 특정 instruction을 파싱되고 deserialized된 형식으로 index를 통해 로드할 수 있게 해줍니다.
+
+<ArticleSection name="작동 방식" id="how-does-it-work" level="h2" />
+
+각 Solana instruction은 다음을 포함합니다:
+- 해당 instruction이 목표로 하는 program ID,
+- 상호작용하는 account들 (signer/writable과 같은 metadata 포함),
+- 그리고 data payload (일반적으로 discriminator + argument).
+
+그리고 이것이 바로 `Instructions` sysvar의 `load_instruction_at_checked` function이 제공하는 내용입니다:
+- program_id: 이 instruction이 호출하는 program.
+- accounts: metadata를 포함하는 관련 account 목록.
+- data: raw input payload (Anchor instruction을 인트로스펙션하는 경우, 종종 8-byte discriminator 다음에 parameter가 옵니다).
+
+다른 instruction들을 안전하고 효율적으로 인트로스펙션하려면 다음 단계를 따르세요:
+- 현재 Instruction Index 결정: `load_current_index_checked`를 사용하여 현재 실행 중인 instruction의 index를 찾으세요.
+> 유의하세요: 당신의 instruction이 transaction에서 첫 번째(index 0)가 아닐 수도 있습니다.
+
+- 분석할 대상 Instruction 로드: index를 사용하여 `load_instruction_at_checked(index)`로 동일한 transaction 내의 다른 instruction을 로드하세요—이전, 이후 또는 특정 위치의 instruction을 로드할 수 있습니다.
+> 이는 동작을 검증하고, 예상되는 input을 확인하며, 프로그램 간에 안전하게 구성(composing)하는 데 유용합니다.
+
+- 악의적인 동작을 방지하기 위한 제약 조건 구축: Instruction introspection은 강력하지만, 새로운 attack surface를 도입합니다. 다음을 확인하세요: 인트로스펙션된 instruction이 예상되는 program을 대상으로 하는지 검증하고, account address 및 data가 예상되는 패턴과 일치하는지 확인하며, 명시적으로 강제되지 않는 한 instruction 순서에 대한 가정을 피하십시오.
+
+이러한 예방 조치를 취함으로써 instruction introspection을 안전하게 활용하여 강력하고 구성 가능하며 안전한 Solana 프로그램을 구축할 수 있습니다.
+
+<ArticleSection name="인트로스펙션을 위한 일반적인 제약 조건" id="common-constraints-for-introspection" level="h2" />
+
+instruction introspection을 사용할 때는 악의적이거나 예상치 못한 동작을 방지하기 위해 엄격한 제약 조건을 적용하는 것이 필수적입니다. 가장 일반적인 safeguard는 다음과 같습니다:
+- Instruction 검증: instruction의 program ID와 discriminator를 검증하여 올바른 것인지 확인하세요. Discriminator(일반적으로 instruction data의 처음 1, 4 또는 8 bytes)는 어떤 function이 호출되는지를 고유하게 식별합니다.
+> 이 단계는 의도한 instruction을 검사하고 있으며, 위조되거나 잘못된 instruction이 아님을 보장합니다.
+
+- 변수 검증: discriminator 이후, instruction이 사용하는 중요한 변수들을 파싱하고 확인하세요. 여기에는 amount, direction (예: long/short) 또는 ID가 포함될 수 있으며, 이러한 field가 integration 또는 safeguard의 예상 로직과 일치하는지 항상 확인해야 합니다.
+- Account 검증: instruction account들의 구조와 ID를 검증하세요. 예상되는 account가 특정 위치(예: signer, vault, collateral)에 나타나는지 확인하고, signer/writable 상태와 같은 역할이 가정과 일치하는지 확인하세요.
+
+이러한 제약 조건을 적용함으로써, 프로그램이 유효하고 신뢰할 수 있는 instruction에만 응답하도록 보장하여 로직을 더욱 견고하고 구성 가능하며 안전하게 만듭니다.
+
+transaction atomicity와 함께, 이러한 검사는 동일한 transaction 내의 다른 프로그램 및 instruction과 안전하게 상호작용할 수 있는 견고하고 구성 가능한 로직을 구축할 수 있게 해줍니다.
+
+> 기억하세요, Solana의 transaction은 atomic입니다. 어떤 instruction이든 실패하면 전체 transaction이 roll back됩니다.

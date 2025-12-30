@@ -1,0 +1,118 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Solana Pay
+
+![Solana Pay](/graphics/course-banners/solana-pay.png)
+
+Solana Pay는 Solana에서 즉각적이며 거의 제로에 가까운 수수료의 transaction을 가능하게 하는 오픈 소스 결제 프레임워크입니다.
+
+Shopify 통합을 통해 이미 수백만 기업의 신뢰를 받고 있으며, 전통적인 결제 중개자를 완전히 없애 상거래를 혁신합니다.
+
+> Solana Pay는 URL을 통해 결제를 표준화합니다. 복잡한 wallet 통합 대신, 모든 Solana wallet에서 자동으로 작동하는 간단한 링크를 생성할 수 있습니다.
+
+<ArticleSection name="핵심 기능" id="core-functionalities" level="h2" />
+
+Solana Pay의 특징은 다음과 같습니다:
+- **직접 정산 (Direct Settlement):** 결제는 고객의 wallet에서 판매자의 wallet으로 SOL 또는 모든 SPL token으로 직접 전송됩니다. 은행, 프로세서, 또는 중개자의 수수료가 없습니다.
+- **즉각적인 Finality (Instant Finality):** Solana의 1초 미만 정산 덕분에 확인 즉시 자금이 도착합니다.
+- **보편적 호환성 (Universal Compatibility):** 단일 구현으로 모든 Solana wallet 및 application에서 작동합니다.
+
+모든 것은 두 가지 기본적인 request type을 통해 이루어집니다:
+
+### Transfer Requests (간단한 결제)
+
+사전에 결정된 transaction을 위한 비대화형 URL. 모든 정보가 URL에 인코딩됩니다.
+
+```
+solana:mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN?amount=0.01&spl-token=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+```
+
+> 적합한 용도: E-commerce 결제, 기부, 구독, 모든 단순 token 전송.
+
+### Transaction Requests (동적 결제)
+
+복잡한 transaction을 서버 측에서 구성하는 대화형 URL.
+
+wallet이 사용자 서버에 HTTP request를 보내면, 서버는 실시간 데이터로 구축된 맞춤형 transaction을 반환합니다.
+
+> 적합한 용도: 동적 가격 책정 NFT, DeFi 상호작용, 로열티 프로그램, 복잡한 비즈니스 로직.
+
+### 통합 옵션
+
+Solana Pay는 다음을 제공합니다:
+- **QR 코드:** 즉각적인 대면 결제
+- **공유 가능한 링크:** 모든 플랫폼에서 작동
+- **임베디드 버튼:** 원활한 결제 경험
+- **커스텀 Flow:** 다자간 transaction, 조건부 접근, 부분 서명
+
+<ArticleSection name="중요성" id="why-it-matters" level="h2" />
+
+Solana Pay는 전체 전통적인 결제 stack을 간단한 URL로 대체합니다. 여러 wallet과 통합하고 복잡한 transaction flow를 처리하는 대신, 어디서나 자동으로 작동하는 표준화된 링크를 생성할 수 있습니다.
+
+**전통적인 결제 Flow:** 고객 → 은행 → 결제 프로세서 → 사용자 은행 → 사용자 (며칠 후, 수수료 제외)
+
+**Solana Pay Flow:** 고객 → 사용자 (즉시, 거의 제로 수수료)
+
+> Solana Pay 사양은 복잡한 wallet 통합을 어디서나 작동하는 간단하고 표준화된 URL로 대체함으로써 블록체인 결제를 근본적으로 변화시킵니다.
+
+<ArticleSection name="Reference" id="reference" level="h2" />
+
+Reference는 Solana Pay stack에서 가장 중요한 부분 중 하나입니다. 사용자 backend가 network에 transaction을 제출하는 것이 아니라 wallet이 서명하는 transaction response만 반환하기 때문에, 결제가 완료되었는지 확인하는 데 도움이 되는 transaction signature가 없습니다.
+
+`reference`는 transaction에서 non-signer, non-writable account로 포함되는 고유한 public key입니다. 이는 transaction 동작에는 영향을 미치지 않지만, 추적 식별자 역할을 합니다.
+
+작동 flow는 다음과 같습니다:
+1. 각 결제 request에 대해 고유한 reference (public key)를 생성합니다.
+2. 이를 transaction request URL에 parameter로 포함합니다.
+3. 이를 transaction instructions에 non-signer account로 추가합니다.
+4. reference를 사용하여 transaction을 추적합니다.
+
+Solana의 `getSignaturesForAddress` RPC method 또는 `@solana/pay` 라이브러리의 `findReference` 헬퍼를 사용하여 사용자 reference를 포함하는 transaction을 다음과 같이 찾을 수 있습니다:
+
+```ts
+useEffect(() => {
+    // reference address를 포함하는 transaction을 network에서 폴링합니다.
+    const interval = setInterval(async () => {
+        try {
+            // reference address를 포함하는 transaction을 찾습니다.
+            const signatureInfo = await findReference(connection, reference, {
+                until: mostRecentNotifiedTransaction.current, // 가장 최근에 찾은 transaction 이후의 transaction만 찾습니다.
+                finality: "confirmed",
+            });
+            // 가장 최근에 찾은 transaction을 방금 찾은 transaction으로 업데이트합니다.
+            mostRecentNotifiedTransaction.current = signatureInfo.signature;
+            // 토스트 알림
+            displayToast(signatureInfo.signature);
+        } catch (e) {
+            if (e instanceof FindReferenceError) {
+                // 아직 transaction이 발견되지 않았습니다. 이 오류는 무시합니다.
+                return;
+            }
+            console.error("Unknown error", e);
+        }
+    }, 1000); // 매 초마다 새로운 transaction을 확인합니다.
+    
+    return () => {
+        clearInterval(interval);
+    };
+}, [reference]);
+```
+
+<ArticleSection name="QR 코드 생성" id="qr-code-generation" level="h2" />
+
+`@solana/pay` 라이브러리를 사용하여 모든 transaction request를 스캔 가능한 QR 코드로 변환합니다:
+
+```ts
+import { createQR, encodeURL, TransactionRequestURLFields } from '@solana/pay'; 
+
+const urlParams: TransactionRequestURLFields = {
+  link: new URL("https://yourapi.com/pay"),
+};
+const solanaUrl = encodeURL(urlParams);
+
+const qr = createQR(
+  solanaUrl,
+  400,
+  "transparent"
+);
+```
