@@ -1,0 +1,85 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Assembly Memo Challenge](/graphics/challenge-banners/assembly-memo.png)
+
+# Assembly Memo
+
+이 단원에서는 sBPF Assembly를 사용하여 프로그램의 로깅 메커니즘을 만들어 보겠습니다.
+
+간단한 메모 프로그램은 sBPF 어셈블리 여정을 시작하기에 완벽한 출발점입니다!
+
+어셈블리 프로그래밍에 익숙하지 않다면 [어셈블리 입문 과정](/en/courses/introduction-to-assembly)을 따라가세요
+
+<ArticleSection name="프로그램 설계" id="program-design" level="h2" />
+
+우리 프로그램은 단순히 올바른 메모리 위치를 올바른 레지스터에 넣은 다음 `sol_log_` 시스템 콜을 수행합니다. 다음과 같이 보일 것입니다:
+
+```sbpf
+.equ NUM_ACCOUNTS, 0x00
+.equ DATA_LEN, 0x08
+.equ DATA, 0x10
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]
+  ldxdw r2, [r1+DATA_LEN]
+  add64 r1, DATA
+  call sol_log_
+  exit
+```
+
+<ArticleSection name="메모리 오프셋" id="memory-offsets" level="h2" />
+
+프로그램은 명령어 데이터의 메모리 레이아웃을 정의하는 세 개의 `.equ` 상수를 선언하는 것으로 시작합니다:
+
+```sbpf
+.equ NUM_ACCOUNTS, 0x00  ; Offset for number of accounts
+.equ DATA_LEN, 0x08      ; Offset for data length
+.equ DATA, 0x10          ; Offset for actual data
+```
+
+이 상수들은 `r1`의 엔트리 버퍼 포인터를 기준으로 한 바이트 오프셋을 표시합니다:
+- `NUM_ACCOUNTS` (0x0000): 검증을 위한 명령어 데이터 헤더의 계정 수를 가리킵니다
+- `DATA_LEN` (0x08): 명령어 데이터 헤더의 명령어 데이터 길이를 가리킵니다
+- `DATA` (0x10): 명령어 데이터 헤더의 명령어 데이터를 가리킵니다
+
+메모리 레이아웃을 추상화하는 고수준 언어와 달리, 어셈블리는 모든 데이터가 정확히 어디에 있는지 알아야 합니다.
+
+<ArticleSection name="진입점 및 초기 검증" id="entrypoint-and-validations" level="h2" />
+
+```sbpf
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]   ; Load number of accounts into r0
+```
+
+모든 sBPF 프로그램은 전역 `.entrypoint` 심볼에서 시작합니다. Solana 런타임은 레지스터 `r1`를 통해 계정 및 명령어 데이터를 제공합니다.
+
+이 첫 번째 명령어는 계정 수를 `r0`에 로드합니다. `r0`는 VM이 종료 시 읽는 레지스터이므로, 이는 두 가지 목적을 수행합니다:
+1. 사용을 위해 계정 수를 로드합니다
+2. 계정이 전달되면 프로그램이 자동으로 실패하도록 보장합니다 (r0의 0이 아닌 값)
+
+<ArticleSection name="Sol Log Syscall" id="sol-log-syscall" level="h2" />
+
+다음으로, `sol_log_` 시스템 콜을 위한 인수를 준비합니다:
+
+```sbpf
+ldxdw r2, [r1+DATA_LEN]   ; Load length of memo into r2
+add64  r1, DATA           ; Adjust r1 to point to memo bytes
+```
+
+이 명령어들은 `sol_log_`를 위한 인수를 설정합니다:
+- `r2`는 메모 데이터의 길이를 받습니다
+- `r1`는 메모 바이트를 직접 가리키도록 조정됩니다
+
+그 후, `sol_log_`를 호출하고 종료합니다:
+
+```sbpf
+call 16   ; Call sol_log_ (helper ID 16)
+exit      ; Return using r0 value
+```
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+
+프로그램은:
+1. 16 (`sol_log_`)을 호출하여 메모를 검증자 로그에 출력합니다
+2. `r0`의 값을 사용하여 종료합니다

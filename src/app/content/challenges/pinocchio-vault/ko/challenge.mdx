@@ -1,0 +1,305 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 볼트
+
+![Pinocchio Vault Challenge](/graphics/challenge-banners/pinocchio-vault.png)
+
+볼트는 사용자가 자산을 안전하게 보관할 수 있도록 합니다. 볼트는 DeFi의 기본 구성 요소로, 핵심적으로 사용자가 자산(이 경우 lamports)을 안전하게 보관하고 나중에 동일한 사용자만 인출할 수 있도록 합니다.
+
+이 챌린지에서는 기본 계정, 프로그램 파생 주소(PDA), 크로스 프로그램 호출(CPI) 작업 방법을 보여주는 간단한 lamport 볼트를 구축합니다. Pinocchio에 익숙하지 않다면 [Pinocchio 소개](/en/courses/introduction-to-pinocchio)를 먼저 읽고 이 프로그램에서 사용할 핵심 개념을 숙지해야 합니다.
+
+<ArticleSection name="설치" id="installation" level="h2" />
+
+시작하기 전에 Rust와 Pinocchio가 설치되어 있는지 확인하세요. 그런 다음 터미널에서 다음을 실행하세요:
+
+```bash
+# create workspace
+cargo new blueshift_vault --lib --edition 2021
+cd blueshift_vault
+```
+
+Pinocchio 추가:
+
+```bash
+cargo add pinocchio pinocchio-system
+```
+
+`Cargo.toml`에서 crate 타입을 선언하여 `target/deploy`에 배포 아티팩트를 생성합니다:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+<ArticleSection name="템플릿" id="template" level="h2" />
+
+기본 프로그램 구조부터 시작하겠습니다. 이것은 간단한 프로그램이므로 `lib.rs`에 모든 것을 구현하겠습니다. 다음은 필요한 핵심 구성 요소가 포함된 초기 템플릿입니다:
+
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+<ArticleSection name="입금" id="deposit" level="h2" />
+
+입금 명령은 다음 단계를 수행합니다:
+1. 이중 입금을 방지하기 위해 볼트가 비어 있는지(lamports가 0인지) 확인합니다
+2. 입금 금액이 기본 계정의 렌트 면제 최소값을 초과하는지 확인합니다
+3. System Program에 대한 CPI를 사용하여 소유자에서 볼트로 lamports를 전송합니다
+
+먼저 입금을 위한 계정 구조체를 정의하겠습니다:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Accounts Checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, _) = find_program_address(&[b"vault", owner.key()], &crate::ID);
+        if vault.key().ne(&vault_key) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Return the accounts
+        Ok(Self { owner, vault })
+    }
+}
+```
+
+각 계정 검사를 분석해 보겠습니다:
+1. `owner`: 트랜잭션을 승인해야 하므로 서명자여야 합니다
+2. `vault`: 
+   - System Program이 소유해야 합니다
+   - lamports가 0이어야 합니다("새로운" 입금 보장)
+   - 올바른 시드에서 파생되어야 합니다
+   - 예상되는 PDA 주소와 일치해야 합니다
+
+이제 instruction 데이터 구조체를 구현해 보겠습니다:
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // Instruction Checks
+        if amount.eq(&0) {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+
+여기서는 금액이 0이 아닌지 확인합니다.
+
+마지막으로 deposit instruction을 구현해 보겠습니다:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        Transfer {
+            from: self.accounts.owner,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()?;
+
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Withdraw" id="withdraw" level="h2" />
+
+withdraw instruction은 다음 단계를 수행합니다:
+1. vault에 lamport가 포함되어 있는지(비어 있지 않은지) 확인합니다
+2. vault의 PDA를 사용하여 자체적으로 전송에 서명합니다
+3. vault에서 소유자에게 모든 lamport를 전송합니다
+
+먼저 withdraw를 위한 계정 구조체를 정의해 보겠습니다:
+
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub bumps: [u8; 1],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Basic Accounts Checks
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, bump) = find_program_address(&[b"vault", owner.key()], &crate::ID);
+        if &vault_key != vault.key() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Ok(Self { owner, vault, bumps: [bump] })
+    }
+}
+```
+
+각 계정 검사를 자세히 살펴보겠습니다:
+1. `owner`: 트랜잭션을 승인해야 하므로 서명자여야 합니다
+2. `vault`: 
+   - System Program이 소유해야 합니다
+   - 올바른 seed에서 파생되어야 합니다
+   - 예상되는 PDA 주소와 일치해야 합니다
+3. `bumps`: PDA 서명에 사용하기 위해 bump seed를 저장합니다
+
+이제 withdraw instruction을 구현해 보겠습니다:
+
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+
+        Ok(Self { accounts })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Create PDA signer seeds
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(self.accounts.owner.key().as_ref()),
+            Seed::from(&self.accounts.bumps),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        // Transfer all lamports from vault to owner
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.owner,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)?;
+
+        Ok(())
+    }
+}
+```
+
+이 출금의 보안은 두 가지 요소로 보장됩니다:
+1. vault의 PDA는 소유자의 공개 키를 사용하여 파생되므로 원래 예금자만 출금할 수 있습니다
+2. PDA의 전송 서명 능력은 `invoke_signed`에 제공하는 seed를 통해 검증됩니다
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+
+이제 단위 테스트를 통해 프로그램을 테스트하고 NFT를 받을 수 있습니다!
+
+터미널에서 다음 명령을 사용하여 프로그램을 빌드하는 것부터 시작하세요:
+
+```bash
+cargo build-sbf
+```
+
+이렇게 하면 `target/deploy` 폴더에 `.so` 파일이 직접 생성됩니다. 
+
+이제 `take challenge` 버튼을 클릭하고 파일을 드롭하세요!

@@ -1,0 +1,438 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Secp256r1 볼트
+
+![Pinocchio Secp256r1 볼트 챌린지](/graphics/challenge-banners/pinocchio-secp256r1-vault.png)
+
+볼트는 사용자가 자산을 안전하게 보관할 수 있는 방법을 제공하는 DeFi의 기본 구성 요소입니다.
+
+이 챌린지에서는 트랜잭션 검증을 위해 Secp256r1 서명을 사용하는 볼트를 구축합니다. 이것이 특히 흥미로운 이유는 Secp256r1이 패스키와 같은 최신 인증 방법에서 사용되는 것과 동일한 타원 곡선이기 때문입니다. 패스키를 사용하면 사용자가 기존 지갑 기반 서명 대신 생체 인증(Face ID 또는 Touch ID 등)을 사용하여 트랜잭션에 서명할 수 있습니다.
+
+여기서 핵심 혁신은 트랜잭션 수수료 지불을 실제 사용자 인증과 분리한다는 것입니다. 즉, 사용자가 Secp256r1 서명(최신 인증 방법을 통해 생성 가능)을 사용하여 트랜잭션을 인증할 수 있지만, 실제 트랜잭션 수수료는 서비스 제공자가 지불할 수 있습니다. 이를 통해 보안을 유지하면서 더욱 원활한 사용자 경험을 제공합니다.
+
+이 챌린지에서는 [Pinocchio 볼트 챌린지](/en/challenges/pinocchio-vault)에서 구축한 간단한 램포트 볼트를 업데이트하여 Secp256r1 서명을 트랜잭션 검증 방법으로 허용합니다.
+
+<ArticleSection name="설치" id="installation" level="h2" />
+
+시작하기 전에 Rust와 Pinocchio가 설치되어 있는지 확인하세요. 그런 다음 터미널에서 다음을 실행하세요:
+
+```bash
+# create workspace
+cargo new blueshift_secp256r1_vault --lib --edition 2021
+cd blueshift_secp256r1_vault
+```
+
+Pinocchio와 Pinocchio 호환 `Secp256r1` 크레이트를 추가하세요
+
+```bash
+cargo add pinocchio pinocchio-system pinocchio-secp256r1-instruction
+```
+
+`target/deploy`에 배포 아티팩트를 생성하기 위해 `Cargo.toml`에서 크레이트 타입을 선언하세요:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+<ArticleSection name="템플릿" id="template" level="h2" />
+
+기본 프로그램 구조부터 시작하겠습니다. 이것은 간단한 프로그램이므로 `lib.rs`에 모든 것을 구현하겠습니다. 다음은 필요한 핵심 구성 요소가 포함된 초기 템플릿입니다:
+
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+<ArticleSection name="입금" id="deposit" level="h2" />
+
+입금 명령은 다음 단계를 수행합니다:
+1. 이중 입금을 방지하기 위해 보관소가 비어 있는지(램포트가 0인지) 확인합니다
+2. 입금 금액이 기본 계정의 임대료 면제 최소값을 초과하는지 확인합니다
+3. 시스템 프로그램에 대한 CPI를 사용하여 지불자로부터 보관소로 램포트를 전송합니다
+
+일반 보관소와 Secp256r1 보관소의 주요 차이점은 PDA를 파생하는 방식과 "소유자"로 간주되는 대상입니다.
+
+Secp256r1 서명을 사용하면 실제 지갑 소유자가 거래 수수료를 지불할 필요가 없으므로, `owner` 계정을 `payer`와 같은 보다 일반적인 명명 규칙으로 변경합니다.
+
+따라서 `deposit`의 계정 구조체는 다음과 같습니다:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Accounts Checks
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Return the accounts
+        Ok(Self { payer, vault })
+    }
+}
+```
+
+각 계정 검사를 분석해 보겠습니다:
+1. `payer`: 램포트 전송을 승인해야 하므로 서명자여야 합니다
+2. `vault`: 
+   - 시스템 프로그램이 소유해야 합니다
+   - 램포트가 0이어야 합니다("새로운" 입금 보장)
+
+`vault`의 경우 다음을 확인합니다:
+- 올바른 시드에서 파생되었는지
+- 예상 PDA 주소와 일치하는지
+시드의 일부가 현재 액세스할 수 없는 `instruction_data`에 있기 때문입니다.
+
+이제 명령 데이터 구조체를 구현해 보겠습니다:
+
+```rust
+#[repr(C, packed)]
+pub struct DepositInstructionData {
+    pub pubkey: Secp256r1Pubkey,
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<Self>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let (pubkey_bytes, amount_bytes) = data.split_at(size_of::<Secp256r1Pubkey>());
+
+        Ok(Self {
+            pubkey: pubkey_bytes.try_into().unwrap(),
+            amount: u64::from_le_bytes(amount_bytes.try_into().unwrap()),
+      })
+    }
+}
+```
+
+명령 데이터를 다음을 포함하는 `DepositInstructionData` 구조체로 역직렬화합니다:
+- `pubkey`: 입금하는 사용자의 Secp256r1 공개 키
+- `amount`: 입금할 램포트 금액
+
+unwrap은 일반적으로 프로덕션 코드에서 권장되지 않지만, 이 경우 `try_from` 메서드에서 이미 데이터 길이를 검증했기 때문에 안전하게 사용됩니다. 데이터 길이가 일치하지 않으면 이 지점에 도달하기 전에 오류를 반환합니다.
+
+마지막으로 deposit 명령어를 구현해 보겠습니다:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Check vault address
+        let (vault_key, _) = find_program_address(
+            &[
+                b"vault",
+                &self.instruction_data.pubkey[..1],
+                &self.instruction_data.pubkey[1..33]
+            ],
+            &crate::ID
+        );
+        if vault_key.ne(self.accounts.vault.key()) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Transfer {
+            from: self.accounts.payer,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()
+    }
+}
+```
+
+앞서 언급했듯이, vault PDA가 올바른 시드에서 파생되었는지 확인해야 합니다. 이 Secp256r1 기반 vault에서는 기존의 소유자 공개 키 대신 `Secp256r1Pubkey`를 시드의 일부로 사용합니다. 이는 해당 Secp256r1 키의 소유자만 vault에 접근할 수 있도록 보장하는 중요한 보안 조치입니다.
+
+`Secp256r1Pubkey`는 타원 곡선 공개 키의 압축된 포인트 표현을 사용하기 때문에 33바이트 길이입니다. 이 형식은 다음으로 구성됩니다:
+- 포인트의 패리티를 나타내는 1바이트 (y 좌표가 짝수인지 홀수인지 표시)
+- x 좌표를 나타내는 32바이트
+
+Solana의 `find_program_address` 함수는 각 시드에 대해 32바이트 제한이 있으므로, `Secp256r1Pubkey`를 두 부분으로 나누어야 합니다:
+1. 패리티 바이트 (`pubkey[..1]`)
+2. x 좌표 바이트 (`pubkey[1..33]`)
+
+<ArticleSection name="출금" id="withdraw" level="h2" />
+
+withdraw 명령어는 다음 단계를 수행합니다:
+1. vault에 lamport가 포함되어 있는지 확인 (비어 있지 않은지)
+2. vault의 PDA를 사용하여 자체적으로 전송에 서명
+3. vault에서 소유자에게 모든 lamport를 전송
+
+먼저 withdraw를 위한 계정 구조체를 정의해 보겠습니다:
+
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub instructions: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, instructions, _system_program] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(Self { payer, vault, instructions })
+    }
+}
+```
+
+이제 명령어 데이터 구조체를 구현해 보겠습니다:
+
+```rust
+pub struct WithdrawInstructionData {
+    pub bump: [u8;1]
+}
+
+impl<'a> TryFrom<&'a [u8]> for WithdrawInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            bump: [*data.first().ok_or(ProgramError::InvalidInstructionData)?],
+        })
+    }
+}
+```
+
+보시다시피, 최적화 목적으로 bump를 명령어 데이터로 전달하여 다른 모든 필요한 검사로 인해 이미 "무거운" `process()`에서 파생할 필요가 없도록 했습니다.
+
+마지막으로 `withdraw` 명령어를 구현해 보겠습니다:
+
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+    pub instruction_data: WithdrawInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+        let instruction_data = WithdrawInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Deserialize our instructions
+        let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+        // Get instruction directly after this one
+        let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+        // Get Secp256r1 instruction
+        let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+        // Enforce that we only have one signature
+        if secp256r1_ix.num_signatures() != 1 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        // Enforce that the signer of the first signature is our PDA owner
+        let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+
+        // Check that our fee payer is the correct 
+        let (payer, expiry) = secp256r1_ix
+            .get_message_data(0)?
+            .split_at_checked(32)
+            .ok_or(ProgramError::InvalidInstructionData)?;
+
+        if self.accounts.payer.key().ne(payer) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Get current timestamp
+        let now = Clock::get()?.unix_timestamp;
+        // Get signature expiry timestamp
+        let expiry = i64::from_le_bytes(
+            expiry
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?
+        );
+        if now > expiry {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        
+        // Create signer seeds for our CPI
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(signer[..1].as_ref()),
+            Seed::from(signer[1..].as_ref()),
+            Seed::from(&self.instruction_data.bump),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.payer,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)
+    }
+}
+```
+
+출금 프로세스는 트랜잭션이 합법적인지 확인하기 위해 여러 보안 검사를 포함합니다. Secp256r1 서명을 검증하고 잠재적인 공격으로부터 보호하는 방법을 자세히 살펴보겠습니다:
+
+1. **명령어 검사**
+- instruction sysvar를 사용하여 트랜잭션의 다음 명령어를 검사합니다
+- 이를 통해 서명 키의 소유권을 증명하는 Secp256r1 서명을 검증할 수 있습니다
+- Secp256r1에 대한 서명 검증은 항상 별도의 명령어에서 수행됩니다
+
+2. **서명 검증**
+
+```rust
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+if secp256r1_ix.num_signatures() != 1 {
+    return Err(ProgramError::InvalidInstructionData);
+}
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+```
+
+- 정확히 하나의 서명이 있는지 확인합니다
+- 서명자의 공개 키를 추출하며, 이는 검증 목적으로 vault PDA를 생성하는 데 사용된 키와 일치해야 합니다
+
+3. **메시지 검증**
+
+```rust
+let (payer, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+```
+
+- 서명된 메시지에는 두 가지 중요한 정보가 포함됩니다:
+    - 의도된 수신자의 주소 (32바이트)
+    - 서명이 만료되는 시점의 타임스탬프 (8바이트)
+- 이는 누군가가 유효한 서명을 가로채서 다른 `payer`를 전달하고 vault에 있는 금액을 청구하는 MEV 공격을 방지합니다
+
+4. **만료 확인**
+
+```rust
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into()?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+- 서명이 만료되지 않았는지 확인합니다
+- 이는 서명 재사용을 방지하기 위한 시간 기반 보안 계층을 추가합니다
+- 만료 시간은 "불응 기간"으로 간주되어야 하며, 만료되기 전까지는 새로운 vault를 생성할 수 없습니다. 그렇지 않으면 실제 소유자의 지식 없이 재사용될 수 있습니다.
+
+5. **PDA 서명**
+
+```rust
+let seeds = [
+    Seed::from(b"vault"),
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+    Seed::from(&self.instruction_data.bump),
+];
+```
+
+- 마지막으로 검증된 공개 키를 사용하여 PDA 시드를 생성합니다
+- 이를 통해 정당한 Secp256r1 키 소유자만이 출금 트랜잭션에 서명할 수 있습니다
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+
+이제 단위 테스트를 통해 프로그램을 테스트하고 NFT를 받을 수 있습니다!
+
+터미널에서 다음 명령어를 사용하여 프로그램을 빌드하는 것부터 시작하세요:
+
+```bash
+cargo build-sbf
+```
+
+이것은 `.so` 파일을 `target/deploy` 폴더에 직접 생성했습니다. 
+
+이제 `take challenge` 버튼을 클릭하고 파일을 거기에 드롭하세요!

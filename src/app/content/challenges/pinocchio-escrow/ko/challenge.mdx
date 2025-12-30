@@ -1,0 +1,204 @@
+import ArticleSection from "../../../../components/ArticleSection/ArticleSection";
+
+# 에스크로
+
+![Pinocchio Escrow Challenge](/graphics/challenge-banners/pinocchio-escrow.png)
+
+에스크로는 두 당사자 간의 안전한 토큰 교환을 가능하게 하는 강력한 금융 도구입니다.
+
+한 사용자가 토큰 A를 잠가두고, 다른 사용자가 토큰 B를 예치할 때까지 기다린 후 교환이 완료되는 디지털 안전 금고라고 생각하면 됩니다.
+
+이를 통해 어느 쪽도 상대방이 거래를 철회할 것을 걱정할 필요가 없는 무신뢰 환경이 만들어집니다.
+
+이 챌린지에서는 세 가지 간단하지만 강력한 명령어를 통해 이 개념을 구현할 것입니다:
+- **Make**: 메이커(첫 번째 사용자)가 거래 조건을 정의하고 합의된 양의 토큰 A를 안전한 금고에 예치합니다. 이는 안전 금고에 물건을 넣고 교환 조건을 설정하는 것과 같습니다.
+- **Take**: 테이커(두 번째 사용자)가 약속된 양의 토큰 B를 메이커에게 전송하여 제안을 수락하고, 그 대가로 잠긴 토큰 A를 받습니다. 이는 양측이 거래의 각자 몫을 완료하는 순간입니다.
+- **Refund**: 메이커가 마음을 바꾸거나 적절한 테이커를 찾지 못한 경우, 제안을 취소하고 토큰 A를 회수할 수 있습니다. 이는 거래가 무산될 경우 안전 금고에서 물건을 돌려받는 것과 같습니다.
+
+**참고**: Pinocchio에 익숙하지 않다면, 이 프로그램에서 사용할 핵심 개념을 익히기 위해 [Introduction to Pinocchio](/en/courses/introduction-to-pinocchio)를 먼저 읽어보시기 바랍니다.
+
+<ArticleSection name="설치" id="installation" level="h2" />
+
+먼저 새로운 Rust 환경을 생성하는 것부터 시작하겠습니다:
+
+```bash
+# create workspace
+cargo new blueshift_escrow --lib --edition 2021
+cd blueshift_escrow
+```
+
+pinocchio, pinocchio-system, pinocchio-token 및 pinocchio-associated-token을 추가하세요:
+
+```bash
+cargo add pinocchio pinocchio-system pinocchio-token pinocchio-associated-token-account
+```
+
+`Cargo.toml`에서 크레이트 타입을 선언하여 `target/deploy`에 배포 아티팩트를 생성하세요:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+이제 에스크로 프로그램을 작성할 준비가 되었습니다.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+이번에는 모든 것을 `lib.rs`에 몰아넣는 대신 프로그램을 작고 집중된 모듈로 분할할 것입니다. 폴더 트리는 대략 다음과 같이 보일 것입니다:
+
+```
+src
+├── instructions
+│       ├── make.rs
+│       ├── helpers.rs
+│       ├── mod.rs
+│       ├── refund.rs
+│       └── take.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+`lib.rs`에 있는 엔트리포인트는 이전 레슨에서 했던 것과 매우 유사하므로 빠르게 살펴보겠습니다:
+
+```rust
+use pinocchio::{account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+pub mod state;
+pub use state::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Make::DISCRIMINATOR, data)) => Make::try_from((data, accounts))?.process(),
+        Some((Take::DISCRIMINATOR, _)) => Take::try_from(accounts)?.process(),
+        Some((Refund::DISCRIMINATOR, _)) => Refund::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+<ArticleSection name="State" id="state" level="h2" />
+
+이제 `Escrow`의 모든 데이터가 있는 `state.rs`로 이동하겠습니다. 이것을 두 부분으로 나누어 살펴보겠습니다: 구조체 정의와 그 구현입니다.
+
+먼저 구조체 정의를 살펴보겠습니다:
+
+```rust
+use pinocchio::{program_error::ProgramError, pubkey::Pubkey};
+use core::mem::size_of;
+
+#[repr(C)]
+pub struct Escrow {
+    pub seed: u64,        // Random seed for PDA derivation
+    pub maker: Pubkey,    // Creator of the escrow
+    pub mint_a: Pubkey,   // Token being deposited
+    pub mint_b: Pubkey,   // Token being requested
+    pub receive: u64,     // Amount of token B wanted
+    pub bump: [u8;1]      // PDA bump seed
+}
+```
+
+`#[repr(C)]` 속성은 구조체가 예측 가능한 메모리 레이아웃을 갖도록 보장하며, 이는 온체인 데이터에 매우 중요합니다. 각 필드는 특정 목적을 수행합니다:
+- **seed**: 한 명의 메이커가 동일한 토큰 쌍으로 여러 에스크로를 생성할 수 있도록 하는 난수
+- **maker**: 에스크로를 생성하고 토큰을 받을 지갑 주소
+- **mint_a**: 예치되는 토큰의 SPL 토큰 민트 주소
+- **mint_b**: 요청되는 토큰의 SPL 토큰 민트 주소
+- **receive**: 메이커가 받고자 하는 토큰 B의 정확한 수량
+- **bump**: 주소가 Ed25519 곡선 위에 있지 않도록 보장하기 위해 PDA 유도에 사용되는 단일 바이트
+
+이제 모든 헬퍼 메서드가 포함된 구현을 살펴보겠습니다:
+
+```rust
+impl Escrow {
+    pub const LEN: usize = size_of::<u64>() 
+    + size_of::<Pubkey>() 
+    + size_of::<Pubkey>() 
+    + size_of::<Pubkey>() 
+    + size_of::<u64>()
+    + size_of::<[u8;1]>();
+
+    #[inline(always)]
+    pub fn load_mut(bytes: &mut [u8]) -> Result<&mut Self, ProgramError> {
+        if bytes.len() != Escrow::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &mut *core::mem::transmute::<*mut u8, *mut Self>(bytes.as_mut_ptr()) })
+    }
+
+    #[inline(always)]
+    pub fn load(bytes: &[u8]) -> Result<&Self, ProgramError> {
+        if bytes.len() != Escrow::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &*core::mem::transmute::<*const u8, *const Self>(bytes.as_ptr()) })
+    }
+
+    #[inline(always)]
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
+    #[inline(always)]
+    pub fn set_maker(&mut self, maker: Pubkey) {
+        self.maker = maker;
+    }
+
+    #[inline(always)]
+    pub fn set_mint_a(&mut self, mint_a: Pubkey) {
+        self.mint_a = mint_a;
+    }
+
+    #[inline(always)]
+    pub fn set_mint_b(&mut self, mint_b: Pubkey) {
+        self.mint_b = mint_b;
+    }
+
+    #[inline(always)]
+    pub fn set_receive(&mut self, receive: u64) {
+        self.receive = receive;
+    }
+
+    #[inline(always)]
+    pub fn set_bump(&mut self, bump: [u8;1]) {
+        self.bump = bump;
+    }
+
+    #[inline(always)]
+    pub fn set_inner(&mut self, seed: u64, maker: Pubkey, mint_a: Pubkey, mint_b: Pubkey, receive: u64, bump: [u8;1]) {
+        self.seed = seed;
+        self.maker = maker;
+        self.mint_a = mint_a;
+        self.mint_b = mint_b;
+        self.receive = receive;
+        self.bump = bump;
+    }
+}
+```
+
+이 구현은 여러 주요 기능을 제공합니다:
+1. **정확한 크기 계산**: `LEN`는 각 필드의 크기를 합산하여 계정 크기를 정확하게 계산합니다
+2. **안전한 로딩**: `load`는 에스크로 데이터를 로드하고 검증하는 안전한 방법을 제공합니다
+3. **성능 최적화**:
+   - 최대 성능을 위한 게터의 `#[inline(always)]`
+   - 차용이 안전하다고 알고 있을 때 사용하는 안전하지 않은 메서드
+   - `set_inner`를 사용한 효율적인 필드 설정
+4. **메모리 안전성**: 계정 데이터 길이 및 소유권의 적절한 검증
+5. **문서화**: 각 메서드의 목적과 안전성 고려 사항을 설명하는 명확한 주석
+
+이 구현은 적절한 검증과 성능 최적화를 통해 에스크로 상태가 안전하고 효율적임을 보장합니다.

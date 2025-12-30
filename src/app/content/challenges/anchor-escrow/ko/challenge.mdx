@@ -1,0 +1,161 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor Escrow Challenge](/graphics/challenge-banners/anchor-escrow.png)
+
+# 에스크로 (The Escrow)
+
+에스크로는 두 당사자 간의 안전한 토큰 교환(Swap)을 가능하게 하는 강력한 금융 도구입니다.
+
+사용자 A가 토큰 A를 잠가두고, 상대방이 토큰 B를 입금할 때까지 기다렸다가 교환이 완료되는 **디지털 안전 금고**라고 생각하면 이해하기 쉽습니다.
+
+이 방식은 어느 쪽도 상대방이 거래를 철회하거나 속일까 봐 걱정할 필요가 없는 **트러스트리스(Trustless, 신뢰가 필요 없는)** 환경을 조성합니다.
+
+이번 챌린지에서는 다음 세 가지 핵심 명령(Instruction)을 통해 이 개념을 구현해 보겠습니다.
+
+- **Make (생성)**: 생성자(Maker, 첫 번째 사용자)가 거래 조건을 정의하고 합의된 수량의 토큰 A를 보안 금고(Vault)에 입금합니다. 이는 마치 안전 금고에 물건을 넣고 교환 조건을 설정하는 것과 같습니다.
+- **Take (수락)**: 수락자(Taker, 두 번째 사용자)가 약속된 수량의 토큰 B를 생성자에게 전송하고, 그 대가로 잠겨 있던 토큰 A를 받습니다. 양측이 각자의 거래 조건을 완료하는 시점입니다.
+- **Refund (환불)**: 생성자가 마음을 바꾸거나 적절한 수락자를 찾지 못한 경우, 제안을 취소하고 자신의 토큰 A를 회수할 수 있습니다. 거래가 무산되었을 때 금고에서 자신의 물건을 다시 찾아오는 것과 같습니다.
+
+**참고**: Anchor 프레임워크가 처음이시라면, 이 프로그램에서 사용할 핵심 개념들을 익히기 위해 [입문자를 위한 Anchor 가이드](/en/courses/anchor-for-dummies)를 먼저 읽어보시는 것을 권장합니다.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+## 설치 및 설정
+
+먼저 새로운 Anchor 워크스페이스를 생성하는 것으로 시작합니다.
+
+```bash
+anchor init blueshift_anchor_escrow
+cd blueshift_anchor_escrow
+```
+
+그다음 anchor-lang 크레이트에서 init-if-needed 기능을 활성화하고, anchor-spl 크레이트를 추가합니다.
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+```
+
+anchor-spl을 사용하기 때문에 programs/blueshift_anchor_escrow/Cargo.toml 파일의 idl-build 기능에 anchor-spl/idl-build를 포함시켜야 합니다.
+Cargo.toml을 열면 다음과 같은 idl-build 라인이 있을 것입니다.
+
+```toml
+idl-build = ["anchor-lang/idl-build"]
+```
+이를 다음과 같이 수정하여 anchor-spl/idl-build를 추가하세요.
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+이제 생성된 폴더를 열고 코딩을 시작할 준비가 되었습니다!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+템플릿 구조
+이번 프로그램은 다소 복잡하므로 모든 내용을 lib.rs에 몰아넣는 대신, 작고 집중적인 모듈로 분할하여 관리하겠습니다.
+
+폴더 구조는 다음과 같은 형태가 됩니다.
+
+```
+src
+├── instructions
+│       ├── make.rs
+│       ├── mod.rs
+│       ├── refund.rs
+│       └── take.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+이에 따라 lib.rs는 대략 다음과 같은 모습이 됩니다.
+
+```rust
+use anchor_lang::prelude::*;
+
+mod state;
+mod errors;
+mod instructions;
+use instructions::*;
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_escrow {
+    use super::*;
+
+    #[instruction(discriminator = 0)]
+    pub fn make(ctx: Context<Make>, seed: u64, receive: u64, amount: u64) -> Result<()> {
+        //...
+    }
+
+    #[instruction(discriminator = 1)]
+    pub fn take(ctx: Context<Take>) -> Result<()> {
+        //...
+    }
+
+    #[instruction(discriminator = 2)]
+    pub fn refund(ctx: Context<Refund>) -> Result<()> {
+        //...
+    }
+}
+```
+보시는 것처럼 각 명령에 커스텀 디스크리미네이터(Custom Discriminator)를 구현했습니다. 따라서 Anchor 버전 0.31.0 이상을 사용하고 있는지 확인해 주세요.
+
+<ArticleSection name="State" id="state" level="h2" />
+
+상태 (State)
+이제 Escrow 계정의 데이터가 저장될 state.rs로 이동하겠습니다. 커스텀 디스크리미네이터를 부여하고 구조체를 #[account] 매크로로 감싸줍니다.
+
+```rust
+use anchor_lang::prelude::*;
+
+#[derive(InitSpace)]
+#[account(discriminator = 1)]
+pub struct Escrow {
+    pub seed: u64,
+    pub maker: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub receive: u64,
+    pub bump: u8,
+}
+```
+각 필드의 역할:
+
+seed: 한 명의 생성자가 동일한 토큰 쌍으로 여러 개의 에스크로를 열 수 있도록 시드 유도에 사용되는 랜덤 숫자입니다. 온체인에 저장되므로 언제든 PDA를 다시 유도할 수 있습니다.
+
+maker: 에스크로를 생성한 지갑 주소입니다. 환불 처리 및 대금을 수령할 때 필요합니다.
+
+mint_a & mint_b: 교환 대상이 되는 "주는" 토큰과 "받는" 토큰의 SPL 민트(Mint) 주소입니다.
+
+receive: 생성자가 받기를 원하는 토큰 B의 수량입니다. (금고의 잔액 자체가 예치된 토큰 A의 양을 나타내므로, 토큰 A의 양은 따로 저장하지 않습니다.)
+
+bump: 캐싱된 펌프(Bump) 바이트입니다. 실시간으로 유도하는 것은 연산 비용이 들기 때문에 한 번 저장해 둡니다.
+
+더 많은 정보를 담을 수도 있지만, 바이트가 늘어나면 그만큼 렌트(Rent, 임대료) 비용이 증가합니다. 필수적인 데이터만 저장함으로써 예치 비용을 낮게 유지하면서도 프로그램이 규칙을 강제하는 데 필요한 모든 요소를 갖출 수 있습니다.
+
+마지막으로 #[derive(InitSpace)] 매크로를 추가하여 구조체의 렌트 비용을 수동으로 계산할 필요가 없도록 설정합니다.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+에러 (Errors)
+마지막으로 나중에 사용할 커스텀 에러들을 errors.rs 파일에 추가하겠습니다.
+
+```rust
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum EscrowError {
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Invalid maker")]
+    InvalidMaker,
+    #[msg("Invalid mint a")]
+    InvalidMintA,
+    #[msg("Invalid mint b")]
+    InvalidMintB,
+}
+```
+각 열거형(Enum)은 제약 조건이나 require!() 문이 실패할 때 Anchor가 표시할 사람이 읽기 쉬운 메시지와 매핑됩니다.

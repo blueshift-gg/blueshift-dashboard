@@ -1,0 +1,91 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# 양자 금고
+
+![Pinocchio 양자 금고 챌린지](/graphics/challenge-banners/pinocchio-quantum-vault.png)
+
+금고는 사용자가 자산을 안전하게 보관할 수 있는 방법을 제공하는 DeFi의 기본 구성 요소입니다.
+
+이번 챌린지에서는 거래 검증을 위해 Winternitz 서명을 사용하는 금고를 구축할 것입니다. 이는 Winternitz 서명이 솔라나에 통합된 최초의 포스트 양자 서명이기 때문에 특히 흥미롭습니다.
+
+> Winternitz 서명에 익숙하지 않다면, [솔라나의 Winternitz 서명](/en/courses/winternitz-signatures-on-solana)을 먼저 읽어 핵심 개념과 기본 암호화를 이해하세요.
+
+이번 챌린지에서는 [Pinocchio 금고 챌린지](/en/challenges/pinocchio-vault)에서 구축한 간단한 램포트 금고를 업데이트하여 Winternitz 서명을 거래 검증 방법으로 허용할 것입니다.
+
+<ArticleSection name="설치" id="installation" level="h2" />
+
+시작하기 전에 Rust와 Pinocchio가 설치되어 있는지 확인하세요. 그런 다음 터미널에서 다음을 실행하세요:
+
+```bash
+# create workspace
+cargo new blueshift-pinocchio-quantum-vault --lib --edition 2021
+cd blueshift-pinocchio-quantum-vault
+```
+
+`pinocchio`, `pinocchio-system`, `solana-nostd-sha256` 및 `solana-winternitz`를 추가하세요:
+
+```bash
+cargo add pinocchio pinocchio-system solana-nostd-sha256 solana-winternitz
+```
+
+`Cargo.toml`에서 크레이트 타입을 선언하여 `target/deploy`에 배포 아티팩트를 생성하세요:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+이제 양자 금고 프로그램을 작성할 준비가 되었습니다.
+
+<ArticleSection name="템플릿" id="template" level="h2" />
+
+이번에는 모든 것을 `lib.rs`에 배치하는 대신 프로그램을 작고 집중된 모듈로 분할할 것입니다. 폴더 트리는 대략 다음과 같습니다:
+
+```
+src
+├── instructions
+│       ├── close.rs
+│       ├── open.rs
+│       ├── mod.rs
+│       └── split.rs
+└── lib.rs
+```
+
+**참고**: 프로그램을 테스트하기 위해 내부적으로 사용하므로 프로그램 ID를 `22222222222222222222222222222222222222222222`로 변경하는 것을 잊지 마세요.
+
+`lib.rs`의 엔트리포인트는 [Pinocchio 입문 과정](/en/courses/introduction-to-pinocchio)에서 다룬 내용과 매우 유사합니다.
+
+```rust
+pub mod instructions;
+use instructions::*;
+
+use pinocchio::{
+    account_info::AccountInfo, program_entrypoint, program_error::ProgramError,
+    pubkey::Pubkey, ProgramResult,
+};
+
+program_entrypoint!(process_instruction);
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee, 
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7, 
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {    
+    match instruction_data.split_first() {
+        Some((OpenVault::DISCRIMINATOR, data)) => OpenVault::try_from((data, accounts))?.process(),
+        Some((SplitVault::DISCRIMINATOR, data)) => SplitVault::try_from((data, accounts))?.process(),
+        Some((CloseVault::DISCRIMINATOR, data)) => CloseVault::try_from((data, accounts))?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+이를 위한 상태 설정은 필요하지 않으므로 명령어 생성으로 바로 넘어가겠습니다.

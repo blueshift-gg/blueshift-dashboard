@@ -1,0 +1,353 @@
+import ArticleSection from "../../../../components/ArticleSection/ArticleSection";
+
+# AMM
+
+![Pinocchio Amm Challenge](/graphics/challenge-banners/pinocchio-amm.png)
+
+자동화된 마켓 메이커(AMM)는 탈중앙화 금융의 기본 구성 요소로, 사용자가 전통적인 주문장이나 중앙화 거래소에 의존하지 않고 스마트 컨트랙트와 직접 토큰을 교환할 수 있게 합니다.
+
+AMM을 자동 운영되는 유동성 풀로 생각해보세요. 사용자가 토큰 쌍을 예치하면 AMM은 수학 공식을 사용하여 가격을 결정하고 토큰 간 교환을 촉진합니다. 이를 통해 누구나 상대방 없이 언제든지 즉시 토큰을 거래할 수 있습니다.
+
+자세히 살펴보면 AMM은 추가 단계, 계산 및 로직이 포함된 에스크로에 불과하다는 것을 알 수 있습니다. 따라서 놓쳤다면 이 과정을 진행하기 전에 [Pinocchio 에스크로 챌린지](/en/challenges/pinocchio-escrow)를 먼저 진행하세요.
+
+이 챌린지에서는 네 가지 핵심 명령어로 간단한 AMM을 구현합니다.
+- **초기화**: 구성 계정을 생성하고 풀의 지분을 나타내는 LP(유동성 공급자) 토큰을 발행하여 AMM을 설정합니다.
+- **예치**: 사용자가 풀에 `token_x`와 `token_y`를 모두 공급할 수 있도록 합니다. 그 대가로 유동성 지분을 나타내는 비례적인 양의 LP 토큰을 받게 됩니다.
+- **인출**: 사용자가 LP 토큰을 상환하여 풀에서 자신의 `token_x`와 `token_y` 지분을 인출할 수 있도록 하여 유동성을 제거합니다.
+- **교환**: 누구나 풀을 사용하여 token_x를 `token_y`로(또는 그 반대로) 거래할 수 있도록 하며, 유동성 공급자에게 소액의 수수료를 지불합니다.
+
+**참고**: Pinocchio에 익숙하지 않다면 이 프로그램에서 사용할 핵심 개념을 익히기 위해 먼저 [Pinocchio 소개](/en/courses/introduction-to-pinocchio)를 읽어야 합니다.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+새로운 Rust 환경을 만드는 것부터 시작하겠습니다:
+
+```bash
+# create workspace
+cargo new blueshift_native_amm --lib --edition 2021
+cd blueshift_native_amm
+```
+
+`pinocchio`, `pinocchio-system`, `pinocchio-token`, `pinocchio-associated-token-account` 및 [Dean](https://x.com/deanmlittle)이 만든 `constant-product-curve`를 추가하여 AMM의 모든 계산을 처리합니다:
+
+```bash
+cargo add pinocchio pinocchio-system pinocchio-token pinocchio-associated-token-account
+cargo add --git="https://github.com/deanmlittle/constant-product-curve" constant-product-curve
+```
+
+`Cargo.toml`에서 크레이트 타입을 선언하여 `target/deploy`에 배포 아티팩트를 생성합니다:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+이제 AMM 프로그램을 작성할 준비가 되었습니다.
+
+<ArticleSection name="Constant Product Curve" id="constant-product-curve" level="h2" />
+
+대부분의 AMM의 핵심에는 상수 곱 곡선이라는 간단하지만 강력한 공식이 있습니다. 이 공식은 사용자가 거래하거나 유동성을 제공하더라도 풀에 있는 두 토큰 보유량의 곱이 항상 일정하게 유지되도록 보장합니다.
+
+### 공식
+
+가장 일반적인 AMM 공식은 다음과 같습니다: `x * y = k` 여기서:
+- `x` = 풀에 있는 토큰 X의 양
+- `y` = 풀에 있는 토큰 Y의 양
+- `k` = 상수 (변하지 않음)
+
+누군가 한 토큰을 다른 토큰으로 교환할 때마다 풀은 `k`의 곱이 변하지 않도록 보유량을 조정합니다. 이는 수요와 공급에 따라 자동으로 조정되는 가격 곡선을 만듭니다.
+
+### 예시
+
+풀이 토큰 X 100개와 토큰 Y 100개로 시작한다고 가정합니다: `100 * 100 = 10,000`.
+
+사용자가 토큰 X 10개를 토큰 Y로 교환하려는 경우, 풀은 `k = 10,000`를 유지해야 합니다. 따라서 `x_new` = 110 (입금 후)이면, `y_new`를 구합니다: `110 * y_new = 10,000` 따라서 `y_new = 10,000 / 110 ≈ 90.91`.
+
+사용자는 `100 - 90.91 = 9.09` 토큰 Y를 받게 됩니다 (수수료 제외).
+
+### 유동성 공급
+
+사용자가 두 토큰을 모두 풀에 예치하면 유동성 공급자(LP)가 됩니다. 그 대가로 풀에서 자신의 지분을 나타내는 LP 토큰을 받습니다.
+- LP 토큰은 추가한 유동성의 양에 비례하여 발행됩니다.
+- 인출할 때는 LP 토큰을 소각하여 두 토큰의 지분(그리고 스왑에서 수집된 수수료의 지분)을 회수합니다.
+
+첫 번째 유동성 공급자가 초기 비율을 설정합니다. 예를 들어, 100 X와 100 Y를 예치하면 100 LP 토큰을 받을 수 있습니다.
+
+그 후, 풀에 이미 100 X와 100 Y가 있고 10 X와 10 Y를 추가하면 기여도에 비례하여 LP 토큰을 받습니다: `share = deposit_x / total_x = 10 / 100 = 10%` 따라서 Amm은 사용자 지갑에 전체 LP 공급량의 10%를 발행합니다.
+
+### 수수료
+
+각 스왑은 일반적으로 소액의 수수료(예: 0.3%)를 부과하며, 이는 풀에 추가됩니다. 이는 LP가 거래 수수료의 일부를 얻게 되어 시간이 지남에 따라 LP 토큰의 가치가 증가하고 사람들이 유동성을 제공하도록 유도합니다.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+이번에는 모든 것을 `lib.rs`에 몰아넣는 대신 프로그램을 작고 집중된 모듈로 분할할 것입니다. 폴더 트리는 대략 다음과 같습니다:
+
+```
+src
+├── instructions
+│       ├── deposit.rs
+│       ├── initialize.rs
+│       ├── mod.rs
+│       ├── swap.rs
+│       └── withdraw.rs
+├── lib.rs
+└── state.rs
+```
+
+`lib.rs`에 있는 진입점은 항상 동일합니다:
+
+```rust
+use pinocchio::{
+    account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey,
+    ProgramResult,
+};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+pub mod state;
+pub use state::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07, 0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07, 0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Initialize::DISCRIMINATOR, data)) => {
+            Initialize::try_from((data, accounts))?.process()
+        }
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, data)) => Withdraw::try_from((data, accounts))?.process(),
+        Some((Swap::DISCRIMINATOR, data)) => Swap::try_from((data, accounts))?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+<ArticleSection name="State" id="state" level="h2" />
+
+이제 `AMM`의 모든 데이터가 있는 `state.rs`로 이동하겠습니다.
+
+이것을 세 부분으로 나누어 보겠습니다: 구조체 정의, 읽기 헬퍼, 쓰기 헬퍼
+
+먼저 구조체 정의를 살펴보겠습니다:
+
+```rust
+use core::mem::size_of;
+use pinocchio::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
+
+#[repr(C)]
+pub struct Config {
+    state: u8,
+    seed: [u8; 8],
+    authority: Pubkey,
+    mint_x: Pubkey,
+    mint_y: Pubkey,
+    fee: [u8; 2],
+    config_bump: [u8; 1],
+}
+
+#[repr(u8)]
+pub enum AmmState {
+    Uninitialized = 0u8,
+    Initialized = 1u8,
+    Disabled = 2u8,
+    WithdrawOnly = 3u8,
+}
+
+impl Config {
+    pub const LEN: usize = size_of::<Config>();
+
+    //...
+}
+```
+
+`#[repr(C)]` 속성은 구조체가 다양한 플랫폼과 Rust 컴파일러 버전에서 일관되게 유지되는 예측 가능한 C 호환 메모리 레이아웃을 갖도록 보장합니다. 이는 데이터를 안정적으로 직렬화하고 역직렬화해야 하는 온체인 프로그램에서 매우 중요합니다.
+
+`seed`(u64)와 `fee`(u16)를 네이티브 타입 대신 바이트 배열로 저장하여 안전한 역직렬화를 보장합니다. 계정 스토리지에서 데이터를 읽을 때 메모리 정렬에 대한 보장이 없으며, 정렬되지 않은 메모리 주소에서 `u64`를 읽는 것은 정의되지 않은 동작입니다. 바이트 배열을 사용하고 `from_le_bytes()`로 변환함으로써 정렬과 관계없이 데이터를 안전하게 읽을 수 있으며, 모든 플랫폼에서 일관된 리틀 엔디안 바이트 순서를 보장합니다.
+
+`Config` 구조체의 각 필드는 특정 목적을 수행합니다:
+- **state**: AMM의 현재 상태를 추적합니다(예: 초기화되지 않음, 초기화됨, 비활성화됨 또는 출금 전용).
+- **seed**: 프로그램 파생 주소(PDA) 생성에 사용되는 고유 값으로, 서로 다른 구성을 가진 여러 AMM이 존재할 수 있도록 합니다.
+- **authority**: AMM에 대한 관리 권한을 가진 공개 키입니다(예: 풀 일시 중지 또는 업그레이드). `[0u8; 32]`를 전달하여 불변으로 설정할 수 있습니다.
+- **mint_x**: 풀의 토큰 X에 대한 SPL 토큰 민트 주소입니다.
+- **mint_y**: 풀의 토큰 Y에 대한 SPL 토큰 민트 주소입니다.
+- **fee**: 베이시스 포인트로 표현되는 스왑 수수료(1 베이시스 포인트 = 0.01%)로, 각 거래에서 징수되어 유동성 공급자에게 분배됩니다.
+- **config_bump**: PDA 파생에 사용되는 범프 시드로, 구성 계정 주소가 유효하고 고유한지 확인합니다. PDA 파생을 더 효율적으로 만들기 위해 저장됩니다.
+
+`AmmState` 열거형은 AMM의 가능한 상태를 정의하여, 풀의 수명 주기를 쉽게 관리하고 상태에 따라 특정 작업을 제한할 수 있도록 합니다.
+
+### 읽기 헬퍼
+
+읽기 헬퍼는 적절한 검증과 차용을 통해 `Config` 데이터에 안전하고 효율적으로 접근할 수 있도록 합니다:
+
+```rust
+impl Config {
+    //...
+
+    #[inline(always)]
+    pub fn load(account_info: &AccountInfo) -> Result<Ref<Self>, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(Ref::map(account_info.try_borrow_data()?, |data| unsafe {
+            Self::from_bytes_unchecked(data)
+        }))
+    }
+
+    #[inline(always)]
+    pub unsafe fn load_unchecked(account_info: &AccountInfo) -> Result<&Self, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner() != &crate::ID {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(Self::from_bytes_unchecked(
+            account_info.borrow_data_unchecked(),
+        ))
+    }
+
+    /// Return a `Config` from the given bytes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `bytes` contains a valid representation of `Config`, and
+    /// it is properly aligned to be interpreted as an instance of `Config`.
+    /// At the moment `Config` has an alignment of 1 byte.
+    /// This method does not perform a length validation.
+    #[inline(always)]
+    pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
+        &*(bytes.as_ptr() as *const Config)
+    }
+
+    /// Return a mutable `Config` reference from the given bytes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `bytes` contains a valid representation of `Config`.
+    #[inline(always)]
+    pub unsafe fn from_bytes_unchecked_mut(bytes: &mut [u8]) -> &mut Self {
+        &mut *(bytes.as_mut_ptr() as *mut Config)
+    }
+
+    // Getter methods for safe field access
+    #[inline(always)]
+    pub fn state(&self) -> u8 { self.state }
+
+    #[inline(always)]
+    pub fn seed(&self) -> u64 { u64::from_le_bytes(self.seed) }
+
+    #[inline(always)]
+    pub fn authority(&self) -> &Pubkey { &self.authority }
+
+    #[inline(always)]
+    pub fn mint_x(&self) -> &Pubkey { &self.mint_x }
+
+    #[inline(always)]
+    pub fn mint_y(&self) -> &Pubkey { &self.mint_y }
+
+    #[inline(always)]
+    pub fn fee(&self) -> u16 { u16::from_le_bytes(self.fee) }
+
+    #[inline(always)]
+    pub fn config_bump(&self) -> [u8; 1] { self.config_bump }
+}
+```
+
+읽기 헬퍼의 주요 기능:
+- 안전한 차용: `load` 메서드는 계정 데이터로부터의 차용을 안전하게 관리하는 `Ref<Self>`를 반환하여, 데이터 경합을 방지하고 메모리 안전성을 보장합니다.
+- 검증: `load`와 `load_unchecked` 모두 구조체에 대한 접근을 허용하기 전에 계정 데이터 길이와 소유자를 검증합니다.
+- 게터 메서드: 모든 필드는 바이트 배열을 적절한 타입으로 변환하는 게터 메서드를 통해 접근됩니다(예: `seed`에 대한 `u64::from_le_bytes`).
+- 성능: `#[inline(always)]` 속성은 자주 호출되는 이러한 메서드들이 최적의 성능을 위해 인라인되도록 보장합니다.
+
+### 쓰기 헬퍼
+
+쓰기 헬퍼는 `Config` 데이터를 수정하기 위한 안전하고 검증된 메서드를 제공합니다:
+
+```rust
+impl Config {
+    //...
+
+    #[inline(always)]
+    pub fn load_mut(account_info: &AccountInfo) -> Result<RefMut<Self>, ProgramError> {
+        if account_info.data_len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        if account_info.owner().ne(&crate::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        Ok(RefMut::map(account_info.try_borrow_mut_data()?, |data| unsafe {
+            Self::from_bytes_unchecked_mut(data)
+        }))
+    }
+
+    #[inline(always)]
+    pub fn set_state(&mut self, state: u8) -> Result<(), ProgramError> {
+        if state.ge(&(AmmState::WithdrawOnly as u8)) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        self.state = state as u8;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn set_fee(&mut self, fee: u16) -> Result<(), ProgramError> {
+        if fee.ge(&10_000) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        self.fee = fee.to_le_bytes();
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn set_inner(
+        &mut self,
+        seed: u64,
+        authority: Pubkey,
+        mint_x: Pubkey,
+        mint_y: Pubkey,
+        fee: u16,
+        config_bump: [u8; 1],
+    ) -> Result<(), ProgramError> {
+        self.set_state(AmmState::Initialized as u8)?;
+        self.set_seed(seed);
+        self.set_authority(authority);
+        self.set_mint_x(mint_x);
+        self.set_mint_y(mint_y);
+        self.set_fee(fee)?;
+        self.set_config_bump(config_bump);
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn has_authority(&self) -> Option<Pubkey> {
+        let bytes = self.authority();
+        let chunks: &[u64; 4] = unsafe { &*(bytes.as_ptr() as *const [u64; 4]) };
+        if chunks.iter().any(|&x| x != 0) {
+            Some(self.authority)
+        } else {
+            None
+        }
+    }
+}
+```
+
+쓰기 헬퍼의 주요 기능:
+- 가변 차용: `load_mut` 메서드는 계정 데이터로부터 가변 차용을 안전하게 관리하는 `RefMut<Self>`를 반환합니다.
+- 입력 검증: `set_state` 및 `set_fee`와 같은 메서드는 유효한 값만 저장되도록 검증을 포함합니다(예: 수수료는 10,000 베이시스 포인트를 초과할 수 없음).
+- 원자적 업데이트: `set_inner` 메서드는 모든 구조체 필드를 한 번에 효율적이고 원자적으로 업데이트할 수 있어 불일치 상태의 위험을 최소화합니다.
+- 권한 확인: `has_authority` 메서드는 권한이 설정되어 있는지(0이 아님) 또는 AMM이 불변인지(모두 0) 효율적으로 확인하는 방법을 제공합니다.
+- 바이트 변환: 멀티바이트 값은 `to_le_bytes()`와 같은 메서드를 사용하여 리틀 엔디안 바이트 배열로 적절히 변환되어 일관된 크로스 플랫폼 동작을 보장합니다.

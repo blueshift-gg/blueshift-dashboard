@@ -1,0 +1,110 @@
+import ArticleSection from "../../../../components/ArticleSection/ArticleSection";
+
+![Assembly Slippage Challenge](/graphics/challenge-banners/assembly-slippage.png)
+
+# Assembly 슬리피지
+
+이 단원에서는 sBPF Assembly를 사용하여 기본 슬리피지 확인 명령어를 만들어 보겠습니다. 이러한 명령어를 명령어 배열의 마지막 인덱스에 포함시킴으로써, 스마트 컨트랙트 버그나 악의적인 비트 플립 컨트랙트에 대한 최후의 보호 장치를 추가로 만들 수 있습니다.
+
+슬리피지 확인이 어셈블리에 이상적인 후보가 되는 몇 가지 속성이 있습니다:
+
+- 단일하고 제한된 사용 사례
+- 서명자/계정 확인을 수행할 필요 없음
+- 보안만 향상시킬 수 있음
+
+어셈블리 프로그램 작성 방법에 익숙하지 않다면 [Assembly 입문 과정](/en/courses/introduction-to-assembly)을 따라가세요
+
+<ArticleSection name="프로그램 설계" id="program-design" level="h2" />
+
+우리 프로그램은 간단하지만 중요한 작업을 구현합니다: 트랜잭션을 진행하기 전에 토큰 계정에 충분한 잔액이 있는지 검증하는 것입니다. 이 패턴은 AMM 스왑부터 대출 프로토콜까지 DeFi 전반에 걸쳐 나타납니다.
+
+프로그램은 다음을 기대합니다:
+- 계정 배열에 단일 SPL 토큰 계정
+- 명령어 데이터에 8바이트 금액
+- 잔액 ≥ 금액이면 성공을 반환하고, 그렇지 않으면 오류를 반환
+
+<ArticleSection name="메모리 오프셋" id="memory-offsets" level="h2" />
+
+sBPF 프로그램은 계정 데이터를 연속된 메모리 영역으로 받습니다. 이러한 상수는 바이트 오프셋을 정의합니다. 프로그램이 단일 계정만 받고 그것이 SPL 토큰 계정이라고 가정하면, 이러한 오프셋을 다음과 같이 정적으로 도출할 수 있습니다:
+
+```sbpf
+.equ TOKEN_ACCOUNT_BALANCE, 0x00a0
+.equ MINIMUM_BALANCE, 0x2918
+```
+
+- `TOKEN_ACCOUNT_BALANCE (0x00a0)`: SPL 토큰 계정 데이터의 잔액 필드를 가리킵니다. 토큰 계정은 잔액(8바이트, 리틀 엔디안)이 오프셋 160에 위치하는 표준 레이아웃을 따릅니다.
+
+- `MINIMUM_BALANCE (0x2918)`: Solana가 명령어 데이터 페이로드를 배치하는 위치를 찾습니다. 이 오프셋은 런타임의 계정 정보 구조의 일부입니다.
+
+> [sbpf.xyz](https://sbpf.xyz)에서 제공하는 도구를 사용하여 오프셋을 생성할 수 있습니다
+
+메모리 레이아웃을 추상화하는 고수준 언어와 달리, 어셈블리는 모든 데이터가 정확히 어디에 위치하는지 알아야 합니다.
+
+<ArticleSection name="Entrypoint and Initial Validation" id="entrypoint-and-validations" level="h2" />
+
+```sbpf
+.globl entrypoint
+entrypoint:
+    ldxdw r3, [r1+MINIMUM_BALANCE]      // Get amount from IX data
+    ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE] // Get balance from token account
+```
+
+모든 sBPF 프로그램은 전역 `.entrypoint` 심볼에서 시작합니다. Solana 런타임은 레지스터 `r1`를 통해 계정 및 명령 데이터를 제공합니다.
+
+`ldxdw` 명령은 메모리에서 레지스터로 8바이트(더블 워드, `dx`) 값을 로드(`ldx`)합니다. 다음과 같이 동작합니다:
+- `ldxdw r3, [r1+MINIMUM_BALANCE]`: 필요한 금액이 포함된 메모리 주소를 계산합니다. 값은 `r3`에 로드됩니다.
+- `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`: 토큰 계정의 잔액 필드를 가리킵니다. 이 64비트 값은 `r4`에 저장됩니다.
+
+두 작업 모두 제로 카피 방식입니다: 역직렬화 오버헤드 없이 계정 데이터에서 직접 읽습니다.
+
+<ArticleSection name="Conditional Logic and Branching" id="conditional-logic-and-branching" level="h2" />
+
+```sbpf
+jge r3, r4, end         // Skip to exit if balance is valid
+```
+
+`jge`(크거나 같으면 점프) 명령은 `r3`(필요한 금액)를 `r4`(사용 가능한 잔액)와 비교합니다. `r3 >= r4`이면 `end` 레이블로 점프합니다. 이는 조기 반환과 같습니다.
+
+조건이 실패하면 실행은 오류 처리 경로로 계속됩니다. 이러한 조건부 분기 패턴은 어셈블리가 if/else 로직을 구현하는 방식입니다.
+
+<ArticleSection name="Error Handling and Logging" id="error-handling-and-logging" level="h2" />
+
+```sbpf
+lddw r1, e              // Load error message address
+lddw r2, 17             // Load length of error message  
+call sol_log_           // Log out error message
+lddw r0, 1              // Return error code 1
+```
+
+검증이 실패하면 종료하기 전에 사람이 읽을 수 있는 오류를 로깅합니다:
+- `lddw`는 즉시 값을 로드합니다. 이 경우 `.rodata` 섹션에 있는 오류 문자열의 주소와 길이("Slippage exceeded"의 경우 17바이트)를 로드합니다.
+- `call sol_log_`는 Solana의 로깅 시스템 콜을 호출합니다. 런타임은 메모리에서 메시지를 읽고 트랜잭션 로그에 추가합니다.
+- 그런 다음 `1`를 `r0`에 로드하여 프로그램 실패를 알립니다. 런타임은 트랜잭션을 중단하고 이 오류 코드를 반환합니다.
+
+<ArticleSection name="Program Termination" id="program-termination" level="h2" />
+
+```sbpf
+end:
+    exit
+```
+
+`exit` 명령어는 프로그램 실행을 종료하고 Solana 런타임에 제어권을 반환합니다. `r0`의 값은 프로그램의 종료 코드가 됩니다(성공 시 0, 오류 시 0이 아닌 값).
+
+자동 정리 기능이 있는 고수준 언어와 달리, 어셈블리 프로그램은 명시적으로 종료해야 합니다. 코드의 끝에서 벗어나는 것은 정의되지 않은 동작입니다.
+
+## 읽기 전용 데이터
+
+```sbpf
+.rodata
+    e: .ascii "Slippage exceeded"
+```
+
+`.rodata`(읽기 전용 데이터) 섹션에는 오류 메시지 문자열이 포함되어 있습니다.
+
+<ArticleSection name="Conclusion" id="conclusion" level="h2" />
+  
+이 작은 프로그램은 Rust가 수십 개의 CU로 수행할 작업을 통과 케이스에서는 `4 CUs`, 실패 케이스에서는 ---INLINE-CODE-PLACEHOLDER-7099273fc54a17875398c7e7209a0ced---, 오류 메시지를 기록하는 실패 케이스에서는 `106 CUs`만으로 달성합니다.
+
+트레이드오프는 메모리 레이아웃, 호출 규칙, 오류 처리를 가장 낮은 수준에서 이해해야 한다는 것입니다. 하지만 성능이 중요한 작업의 경우, 이러한 노력이 종종 정당화됩니다.
+
+> 이 코드는 단독으로는 "안전"하지 않습니다. 전달된 계정에 대해 아무것도 확인하지 않습니다. 하지만 이것은 애드온 명령어를 목표로 하므로 선의로 실행되어야 합니다.
