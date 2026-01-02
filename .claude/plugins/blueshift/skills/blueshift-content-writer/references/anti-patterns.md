@@ -56,6 +56,36 @@ Common mistakes to flag during review.
 - "Be aware of potential issues"
 </mistakes>
 
+<ai_tells>
+## 🤖 AI Writing Tells
+
+These patterns scream "AI wrote this":
+
+**Marketing compression**
+- "secure, efficient, and decentralized" (triple adjective structure)
+- "powerful", "robust", "elegant" without explaining why
+- Short sentences that summarize instead of explain
+
+**Equal-weight syndrome**
+- Every concept gets the same amount of space
+- Marching through a checklist: one paragraph per item
+- No dwelling on hard parts, no skipping obvious ones
+
+**Artificial structure**
+- "Key Takeaways" boxes
+- "Security Checklist" at the end
+- Numbered lists that should be prose
+- Headers like "Learning Objectives" instead of just teaching
+
+**Compression without depth**
+- "This prevents inflation attacks" (what attack? how?)
+- "Implements slippage protection" (what happens without it?)
+- Summarizing when you should be explaining
+
+**The dead giveaway:** If you could delete a sentence and lose no information, it's filler. AI loves filler.
+
+</ai_tells>
+
 <fixes>
 ## ✅ How to Fix Them
 
@@ -101,3 +131,36 @@ Common mistakes to flag during review.
 - `Error: Stack offset of -30728 exceeded max offset of -4096`
 - Include actual error messages developers will see
 </fixes>
+
+<expansion_examples>
+## Expansion vs Compression
+
+**Real expertise is knowing which parts deserve 3 sentences and which deserve 0.**
+
+❌ **Compressed (AI-style):**
+> "The MINIMUM_LIQUIDITY constant prevents inflation attacks by maintaining virtual LP tokens that dilute manipulation attempts."
+
+✅ **Expanded (human-style):**
+> "If we give ALL the LP tokens to the first depositor, an attacker could create a pool with tiny amounts (1 token each), receive 1 LP token, then donate a huge amount directly to the vault. Now each LP token is worth millions, and the next depositor's deposit might round down to 0 LP tokens.
+>
+> To prevent this, we subtract MINIMUM_LIQUIDITY from the first mint. These LP tokens are never given to anyone - they're burned virtually, diluting any such attack."
+
+The second is longer but feels shorter because it's actually teaching something. The first sounds "efficient" but you learn nothing.
+
+---
+
+❌ **Compressed:**
+> "We round up on deposits to protect the pool from rounding exploits."
+
+✅ **Expanded:**
+> "If we rounded down, users could deposit 9.09 worth of tokens but get 10 LP tokens. One transaction is negligible, but an attacker doing this thousands of times would slowly drain the pool. Rounding up means users always pay slightly more than the mathematical fair share."
+
+---
+
+❌ **Compressed:**
+> "The min parameter provides slippage protection against sandwich attacks."
+
+✅ **Expanded:**
+> "Without the min parameter, you're vulnerable to sandwich attacks: an attacker sees your pending swap, front-runs to move the price, your swap executes at a worse rate, then they back-run to profit. With a tight min, their manipulation would cause your transaction to fail instead."
+
+</expansion_examples>

@@ -1,0 +1,420 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Modify Liquidity" id="modify-liquidity" level="h2" />
+
+Once a position exists, the NFT holder can add or remove liquidity. Both operations share the same account structure but differ in their token flow direction.
+
+<ArticleSection name="Accounts" id="liquidity-accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct ModifyLiquidity<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        constraint = position.pool == pool.key()
+    )]
+    pub position: Account<'info, Position>,
+
+    #[account(
+        constraint = position_token_account.mint == position.position_mint,
+        constraint = position_token_account.amount > 0,
+        constraint = position_token_account.owner == owner.key()
+    )]
+    pub position_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = tick_array_lower.load()?.pool == pool.key() @ ClammError::InvalidTick
+    )]
+    pub tick_array_lower: AccountLoader<'info, TickArray>,
+
+    #[account(
+        mut,
+        constraint = tick_array_upper.load()?.pool == pool.key() @ ClammError::InvalidTick
+    )]
+    pub tick_array_upper: AccountLoader<'info, TickArray>,
+
+    #[account(
+        mut,
+        constraint = token_vault_x.mint == pool.token_mint_x,
+        constraint = token_vault_x.owner == pool.key()
+    )]
+    pub token_vault_x: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = token_vault_y.mint == pool.token_mint_y,
+        constraint = token_vault_y.owner == pool.key()
+    )]
+    pub token_vault_y: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = user_token_x.mint == pool.token_mint_x)]
+    pub user_token_x: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = user_token_y.mint == pool.token_mint_y)]
+    pub user_token_y: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Ownership is proven by holding the position NFT (`position_token_account.amount > 0` and `owner == signer`).
+
+<ArticleSection name="Shared Logic" id="shared-logic" level="h3" />
+
+Both add and remove operations need these helpers:
+
+```rust
+impl<'info> ModifyLiquidity<'info> {
+    pub fn get_fee_growth_inside(&self) -> Result<(u128, u128)> {
+        let tick_array_lower = self.tick_array_lower.load()?;
+        let tick_array_upper = self.tick_array_upper.load()?;
+
+        let tick_lower = tick_array_lower
+            .get_tick(self.position.tick_lower_index, self.pool.tick_spacing)
+            .ok_or(ClammError::TickNotInArray)?;
+        let tick_upper = tick_array_upper
+            .get_tick(self.position.tick_upper_index, self.pool.tick_spacing)
+            .ok_or(ClammError::TickNotInArray)?;
+
+        Ok(get_fee_growth_inside(
+            tick_lower,
+            tick_upper,
+            self.position.tick_lower_index,
+            self.position.tick_upper_index,
+            self.pool.tick_current_index,
+            self.pool.fee_growth_global_x,
+            self.pool.fee_growth_global_y,
+        ))
+    }
+
+    pub fn update_position_fees(&mut self, fee_growth_inside_x: u128, fee_growth_inside_y: u128) {
+        self.position.update_fees_owed(fee_growth_inside_x, fee_growth_inside_y);
+    }
+
+    pub fn calculate_token_amounts(&self, liquidity: u128, round_up: bool) -> Result<(u64, u64)> {
+        let sqrt_price_lower = sqrt_price_from_tick_index(self.position.tick_lower_index)?;
+        let sqrt_price_upper = sqrt_price_from_tick_index(self.position.tick_upper_index)?;
+
+        get_amounts_for_liquidity(
+            self.pool.sqrt_price,
+            sqrt_price_lower,
+            sqrt_price_upper,
+            liquidity,
+            round_up,
+        )
+    }
+
+    pub fn update_tick(
+        &self,
+        tick_array: &AccountLoader<'info, TickArray>,
+        tick_index: i32,
+        liquidity_delta: i128,
+        is_upper: bool,
+    ) -> Result<()> {
+        let mut tick_array = tick_array.load_mut()?;
+        let tick = tick_array
+            .get_tick_mut(tick_index, self.pool.tick_spacing)
+            .ok_or(ClammError::TickNotInArray)?;
+        tick.update(liquidity_delta, is_upper);
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Add Liquidity" id="add-liquidity" level="h3" />
+
+Adding liquidity is similar to opening a position, but we update an existing position instead of creating one:
+
+```rust
+pub fn add_liquidity_handler(ctx: Context<ModifyLiquidity>, liquidity_delta: u128) -> Result<()> {
+    // First, update fees - this ensures any fees earned before this change are credited
+    let (fee_growth_inside_x, fee_growth_inside_y) = ctx.accounts.get_fee_growth_inside()?;
+    ctx.accounts.update_position_fees(fee_growth_inside_x, fee_growth_inside_y);
+
+    // Calculate token amounts (round up for deposits)
+    let (amount_x, amount_y) = ctx.accounts.calculate_token_amounts(liquidity_delta, true)?;
+
+    // Update boundary ticks (positive delta)
+    ctx.accounts.update_tick(
+        &ctx.accounts.tick_array_lower,
+        ctx.accounts.position.tick_lower_index,
+        liquidity_delta as i128,
+        false,
+    )?;
+    ctx.accounts.update_tick(
+        &ctx.accounts.tick_array_upper,
+        ctx.accounts.position.tick_upper_index,
+        liquidity_delta as i128,
+        true,
+    )?;
+
+    // Update pool liquidity if in range
+    let pool = &mut ctx.accounts.pool;
+    let position = &ctx.accounts.position;
+    if pool.is_price_in_range(position.tick_lower_index, position.tick_upper_index) {
+        pool.liquidity = pool.liquidity
+            .checked_add(liquidity_delta)
+            .ok_or(ClammError::LiquidityOverflow)?;
+    }
+
+    // Update position liquidity
+    ctx.accounts.position.liquidity = ctx.accounts.position.liquidity
+        .checked_add(liquidity_delta)
+        .ok_or(ClammError::LiquidityOverflow)?;
+
+    // Transfer tokens from user to vault
+    ctx.accounts.deposit_tokens(amount_x, amount_y)?;
+
+    Ok(())
+}
+```
+
+The fee update is critical - it must happen BEFORE changing liquidity. Otherwise, we'd calculate fees on the new liquidity amount instead of the old one.
+
+<ArticleSection name="Remove Liquidity" id="remove-liquidity" level="h3" />
+
+Removing liquidity is the reverse - we withdraw tokens from the vault:
+
+```rust
+pub fn remove_liquidity_handler(ctx: Context<ModifyLiquidity>, liquidity_delta: u128) -> Result<()> {
+    require!(
+        liquidity_delta <= ctx.accounts.position.liquidity,
+        ClammError::LiquidityUnderflow
+    );
+
+    // Update fees first
+    let (fee_growth_inside_x, fee_growth_inside_y) = ctx.accounts.get_fee_growth_inside()?;
+    ctx.accounts.update_position_fees(fee_growth_inside_x, fee_growth_inside_y);
+
+    // Calculate token amounts (round down for withdrawals)
+    let (amount_x, amount_y) = ctx.accounts.calculate_token_amounts(liquidity_delta, false)?;
+
+    // Update ticks (negative delta)
+    ctx.accounts.update_tick(
+        &ctx.accounts.tick_array_lower,
+        ctx.accounts.position.tick_lower_index,
+        -(liquidity_delta as i128),
+        false,
+    )?;
+    ctx.accounts.update_tick(
+        &ctx.accounts.tick_array_upper,
+        ctx.accounts.position.tick_upper_index,
+        -(liquidity_delta as i128),
+        true,
+    )?;
+
+    // Update pool liquidity
+    let pool = &mut ctx.accounts.pool;
+    let position = &ctx.accounts.position;
+    if pool.is_price_in_range(position.tick_lower_index, position.tick_upper_index) {
+        pool.liquidity = pool.liquidity
+            .checked_sub(liquidity_delta)
+            .ok_or(ClammError::LiquidityUnderflow)?;
+    }
+
+    // Update position liquidity
+    ctx.accounts.position.liquidity = ctx.accounts.position.liquidity
+        .checked_sub(liquidity_delta)
+        .ok_or(ClammError::LiquidityUnderflow)?;
+
+    // Transfer tokens from vault to user
+    ctx.accounts.withdraw_tokens(amount_x, amount_y)?;
+
+    Ok(())
+}
+```
+
+Key differences from add:
+- Round DOWN for amounts (user receives less)
+- Negative liquidity delta to ticks
+- Subtract from pool and position liquidity
+- Transfer from vault to user (requires PDA signing)
+
+The withdrawal requires the pool PDA to sign:
+
+```rust
+impl<'info> ModifyLiquidity<'info> {
+    pub fn withdraw_tokens(&self, amount_x: u64, amount_y: u64) -> Result<()> {
+        let seeds = &[
+            b"pool".as_ref(),
+            self.pool.token_mint_x.as_ref(),
+            self.pool.token_mint_y.as_ref(),
+            &[self.pool.bump],
+        ];
+        let signer = &[&seeds[..]];
+
+        if amount_x > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    self.token_program.to_account_info(),
+                    Transfer {
+                        from: self.token_vault_x.to_account_info(),
+                        to: self.user_token_x.to_account_info(),
+                        authority: self.pool.to_account_info(),
+                    },
+                    signer,
+                ),
+                amount_x,
+            )?;
+        }
+        if amount_y > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    self.token_program.to_account_info(),
+                    Transfer {
+                        from: self.token_vault_y.to_account_info(),
+                        to: self.user_token_y.to_account_info(),
+                        authority: self.pool.to_account_info(),
+                    },
+                    signer,
+                ),
+                amount_y,
+            )?;
+        }
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Collect Fees" id="collect-fees" level="h2" />
+
+Fees accumulate in the position's `tokens_owed_x/y` fields. The collect instruction withdraws them:
+
+<ArticleSection name="Accounts" id="fees-accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct CollectFees<'info> {
+    pub pool: Account<'info, Pool>,
+
+    #[account(mut, constraint = position.pool == pool.key())]
+    pub position: Account<'info, Position>,
+
+    #[account(
+        constraint = position_token_account.mint == position.position_mint,
+        constraint = position_token_account.amount > 0,
+        constraint = position_token_account.owner == owner.key()
+    )]
+    pub position_token_account: Account<'info, TokenAccount>,
+
+    #[account(constraint = tick_array_lower.load()?.pool == pool.key())]
+    pub tick_array_lower: AccountLoader<'info, TickArray>,
+
+    #[account(constraint = tick_array_upper.load()?.pool == pool.key())]
+    pub tick_array_upper: AccountLoader<'info, TickArray>,
+
+    #[account(
+        mut,
+        constraint = token_vault_x.mint == pool.token_mint_x,
+        constraint = token_vault_x.owner == pool.key()
+    )]
+    pub token_vault_x: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = token_vault_y.mint == pool.token_mint_y,
+        constraint = token_vault_y.owner == pool.key()
+    )]
+    pub token_vault_y: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = user_token_x.mint == pool.token_mint_x)]
+    pub user_token_x: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = user_token_y.mint == pool.token_mint_y)]
+    pub user_token_y: Account<'info, TokenAccount>,
+
+    pub owner: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Note the pool is read-only here - we're not changing pool state, just reading it to compute fee growth.
+
+<ArticleSection name="Logic" id="fees-logic" level="h3" />
+
+```rust
+impl<'info> CollectFees<'info> {
+    pub fn update_and_reset_fees(
+        &mut self, 
+        fee_growth_inside_x: u128, 
+        fee_growth_inside_y: u128
+    ) -> (u64, u64) {
+        // Update position to credit any new fees since last interaction
+        self.position.update_fees_owed(fee_growth_inside_x, fee_growth_inside_y);
+
+        // Read and reset the accumulated fees
+        let fees_x = self.position.tokens_owed_x;
+        let fees_y = self.position.tokens_owed_y;
+
+        self.position.tokens_owed_x = 0;
+        self.position.tokens_owed_y = 0;
+
+        (fees_x, fees_y)
+    }
+
+    pub fn transfer_fees(&self, fees_x: u64, fees_y: u64) -> Result<()> {
+        let seeds = &[
+            b"pool".as_ref(),
+            self.pool.token_mint_x.as_ref(),
+            self.pool.token_mint_y.as_ref(),
+            &[self.pool.bump],
+        ];
+        let signer = &[&seeds[..]];
+
+        if fees_x > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    self.token_program.to_account_info(),
+                    Transfer {
+                        from: self.token_vault_x.to_account_info(),
+                        to: self.user_token_x.to_account_info(),
+                        authority: self.pool.to_account_info(),
+                    },
+                    signer,
+                ),
+                fees_x,
+            )?;
+        }
+
+        if fees_y > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    self.token_program.to_account_info(),
+                    Transfer {
+                        from: self.token_vault_y.to_account_info(),
+                        to: self.user_token_y.to_account_info(),
+                        authority: self.pool.to_account_info(),
+                    },
+                    signer,
+                ),
+                fees_y,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn collect_fees_handler(ctx: Context<CollectFees>) -> Result<()> {
+    let (fee_growth_inside_x, fee_growth_inside_y) = ctx.accounts.get_fee_growth_inside()?;
+    let (fees_x, fees_y) = ctx.accounts.update_and_reset_fees(fee_growth_inside_x, fee_growth_inside_y);
+    ctx.accounts.transfer_fees(fees_x, fees_y)
+}
+```
+
+The fee collection is gas-efficient because:
+1. We only compute fee_growth_inside when the user collects
+2. No iteration over swap history needed
+3. The global accumulator design makes this O(1)
+
+This is the power of the global fee accumulator pattern - thousands of swaps can occur, and fee collection still requires only constant-time computation.
+
+Now let's implement the most complex instruction: swaps with tick crossing.

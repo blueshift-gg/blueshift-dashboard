@@ -1,0 +1,104 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Deposit" id="deposit" level="h2" />
+
+We can now move to the `deposit` instruction, that lives in the `deposit.rs` and will perform these actions:
+- Validates the pool is not locked and the request hasn't expired
+- Calculates the required amounts of token X and Y based on the requested LP tokens
+- Transfers tokens from the user to the vaults
+- Mints LP tokens to the user
+
+When a user wants to add liquidity, they specify how many LP tokens they want to receive. We then calculate how much of each token they need to provide - proportionally to the current pool state.
+
+### Accounts 
+
+The accounts needed in this context are:
+- `user`: the signer providing liquidity
+- `mint_x`: the first token mint
+- `mint_y`: the second token mint
+- `mint_lp`: the LP token mint (mutable, to mint new LP tokens)
+- `vault_x`: the pool's reserve for token X (mutable, receiving deposits)
+- `vault_y`: the pool's reserve for token Y (mutable, receiving deposits)
+- `user_x`: the user's token account for mint_x (mutable, sending tokens)
+- `user_y`: the user's token account for mint_y (mutable, sending tokens)
+- `user_lp`: the user's LP token account (mutable, receiving LP tokens)
+- `config`: the pool configuration (read-only)
+- `token_program`, `token_2022_program` (optional)
+
+Unlike initialize, we don't need to create any accounts here - everything should already exist.
+
+### Logic 
+
+We start with validation checks:
+
+```rust
+impl<'info> Deposit<'info> {
+    pub fn checks(&self, amount: u64, max_x: u64, max_y: u64, expiration: i64) -> Result<()> {
+        require_eq!(self.config.locked, false, AmmError::PoolLocked);
+        require_gt!(expiration, Clock::get()?.unix_timestamp, AmmError::OfferExpired);
+        require_gt!(amount, 0, AmmError::InvalidAmount);
+        require_gt!(max_x, 0, AmmError::InvalidAmount);
+        require_gt!(max_y, 0, AmmError::InvalidAmount);
+        require_gt!(self.mint_lp.supply, 0, AmmError::PoolNotInitialized);
+        Ok(())
+    }
+}
+```
+
+The `expiration` parameter lets users set a deadline - if the transaction doesn't execute by then, it fails. This prevents stale transactions from executing at completely different prices days later.
+
+Now for the calculation. Remember from initialize that we subtracted `MINIMUM_LIQUIDITY` from the first mint? Those LP tokens were never given to anyone, but they still "exist" conceptually. We must account for them:
+
+```rust
+pub fn calculate_amounts(&self, amount: u64) -> Result<(u64, u64)> {
+    let adjusted_supply = (self.mint_lp.supply as u128)
+        .checked_add(MINIMUM_LIQUIDITY as u128)
+        .ok_or(AmmError::Overflow)?;
+
+    let x = (self.vault_x.amount as u128)
+        .checked_mul(amount as u128)
+        .ok_or(AmmError::Overflow)?
+        .checked_div(adjusted_supply)
+        .ok_or(AmmError::Overflow)?
+        .checked_add(1) // Round up
+        .ok_or(AmmError::Overflow)? as u64;
+
+    let y = (self.vault_y.amount as u128)
+        .checked_mul(amount as u128)
+        .ok_or(AmmError::Overflow)?
+        .checked_div(adjusted_supply)
+        .ok_or(AmmError::Overflow)?
+        .checked_add(1) // Round up
+        .ok_or(AmmError::Overflow)? as u64;
+
+    Ok((x, y))
+}
+```
+
+Notice the `checked_add(1)` at the end - we round UP on deposits. Why? If we rounded down, users could deposit 9.09 worth of tokens but get 10 LP tokens. One transaction is negligible, but an attacker doing this thousands of times would slowly drain the pool. Rounding up means users always pay slightly more than the mathematical fair share.
+
+The `max_x` and `max_y` parameters are slippage protection. If someone else deposits while your transaction is pending, the pool ratio changes. Without protection, you might end up depositing way more than expected. If calculated amounts exceed your maximums, the transaction fails and you can retry with fresh calculations.
+
+The handler puts it together:
+
+```rust
+pub fn deposit(
+    ctx: Context<Deposit>,
+    amount: u64,
+    max_x: u64,
+    max_y: u64,
+    expiration: i64,
+) -> Result<()> {
+    ctx.accounts.checks(amount, max_x, max_y, expiration)?;
+    let (x, y) = ctx.accounts.calculate_amounts(amount)?;
+
+    require_gte!(max_x, x, AmmError::SlippageExceeded);
+    require_gte!(max_y, y, AmmError::SlippageExceeded);
+
+    ctx.accounts.deposit_tokens(true, x)?;
+    ctx.accounts.deposit_tokens(false, y)?;
+    ctx.accounts.mint_lp_tokens(amount)
+}
+```
+
+You'll need to implement `deposit_tokens` (transfer from user to vault, handling both token programs) and `mint_lp_tokens` (mint LP tokens using config as signer).

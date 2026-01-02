@@ -1,0 +1,394 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Swap" id="swap" level="h2" />
+
+The swap instruction is where all the CLAMM complexity comes together. Unlike a constant product AMM where one formula handles everything, a CLAMM swap may cross multiple tick boundaries, each requiring liquidity updates and fee calculations.
+
+<ArticleSection name="The Swap Loop" id="swap-loop" level="h3" />
+
+A swap proceeds in steps:
+
+1. Find the next initialized tick in the swap direction
+2. Calculate how much can be swapped before reaching that tick
+3. If we have more input remaining, cross the tick and repeat
+4. Update pool state and transfer tokens
+
+Each tick crossing changes the active liquidity - positions whose range includes that tick either activate or deactivate.
+
+<ArticleSection name="Accounts" id="swap-accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        constraint = tick_array_0.load()?.pool == pool.key() @ ClammError::InvalidTick
+    )]
+    pub tick_array_0: AccountLoader<'info, TickArray>,
+
+    #[account(
+        mut,
+        constraint = tick_array_1.load()?.pool == pool.key() @ ClammError::InvalidTick
+    )]
+    pub tick_array_1: Option<AccountLoader<'info, TickArray>>,
+
+    #[account(
+        mut,
+        constraint = tick_array_2.load()?.pool == pool.key() @ ClammError::InvalidTick
+    )]
+    pub tick_array_2: Option<AccountLoader<'info, TickArray>>,
+
+    #[account(
+        mut,
+        constraint = token_vault_x.mint == pool.token_mint_x,
+        constraint = token_vault_x.owner == pool.key()
+    )]
+    pub token_vault_x: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = token_vault_y.mint == pool.token_mint_y,
+        constraint = token_vault_y.owner == pool.key()
+    )]
+    pub token_vault_y: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_token_in: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_token_out: Account<'info, TokenAccount>,
+
+    pub user: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+We provide up to 3 TickArrays to handle swaps that cross array boundaries. Most swaps use only one, but large swaps may need more. The optional arrays let us save rent when they're not needed.
+
+<ArticleSection name="Swap Direction" id="swap-direction" level="h3" />
+
+The `zero_for_one` parameter determines direction:
+- `true`: Swap token X for Y (price decreases, tick decreases)
+- `false`: Swap token Y for X (price increases, tick increases)
+
+When price decreases, we're moving left on the price curve. We search for initialized ticks to the left (lower tick indices). Vice versa for price increases.
+
+<ArticleSection name="Finding Next Initialized Tick" id="find-tick" level="h3" />
+
+We need to find the next tick where liquidity changes:
+
+```rust
+fn find_next_initialized_tick<'info>(
+    tick_array_0: &AccountLoader<'info, TickArray>,
+    tick_array_1: &Option<AccountLoader<'info, TickArray>>,
+    tick_array_2: &Option<AccountLoader<'info, TickArray>>,
+    current_tick: i32,
+    tick_spacing: u16,
+    zero_for_one: bool,
+) -> Result<(i32, usize)> {
+    let spacing = tick_spacing as i32;
+
+    // Search tick_array_0 first
+    let ta0 = tick_array_0.load()?;
+    if let Some((tick, _)) = search_tick_in_array(&ta0, current_tick, spacing, zero_for_one) {
+        return Ok((tick, 0));
+    }
+
+    // Search tick_array_1 if provided
+    if let Some(ta1_loader) = tick_array_1 {
+        let ta1 = ta1_loader.load()?;
+        if let Some((tick, _)) = search_tick_in_array(&ta1, current_tick, spacing, zero_for_one) {
+            return Ok((tick, 1));
+        }
+    }
+
+    // Search tick_array_2 if provided
+    if let Some(ta2_loader) = tick_array_2 {
+        let ta2 = ta2_loader.load()?;
+        if let Some((tick, _)) = search_tick_in_array(&ta2, current_tick, spacing, zero_for_one) {
+            return Ok((tick, 2));
+        }
+    }
+
+    // No initialized tick found - return array boundary
+    let ta0 = tick_array_0.load()?;
+    let boundary = if zero_for_one {
+        ta0.start_tick_index
+    } else {
+        ta0.start_tick_index + (TICK_ARRAY_SIZE as i32) * spacing - spacing
+    };
+    Ok((boundary, 0))
+}
+```
+
+The search within an array:
+
+```rust
+fn search_tick_in_array(
+    tick_array: &TickArray,
+    current_tick: i32,
+    tick_spacing: i32,
+    zero_for_one: bool,
+) -> Option<(i32, usize)> {
+    let start = tick_array.start_tick_index;
+    let end = start + (TICK_ARRAY_SIZE as i32) * tick_spacing;
+
+    if zero_for_one {
+        // Search left (lower ticks)
+        let mut search_tick = (current_tick / tick_spacing) * tick_spacing;
+        if search_tick > current_tick {
+            search_tick -= tick_spacing;
+        }
+
+        while search_tick >= start {
+            if search_tick < end {
+                let offset = ((search_tick - start) / tick_spacing) as usize;
+                if offset < TICK_ARRAY_SIZE && tick_array.ticks[offset].is_initialized() {
+                    return Some((search_tick, offset));
+                }
+            }
+            search_tick -= tick_spacing;
+        }
+    } else {
+        // Search right (higher ticks)
+        let mut search_tick = ((current_tick / tick_spacing) + 1) * tick_spacing;
+
+        while search_tick < end {
+            if search_tick >= start {
+                let offset = ((search_tick - start) / tick_spacing) as usize;
+                if offset < TICK_ARRAY_SIZE && tick_array.ticks[offset].is_initialized() {
+                    return Some((search_tick, offset));
+                }
+            }
+            search_tick += tick_spacing;
+        }
+    }
+
+    None
+}
+```
+
+<ArticleSection name="Crossing a Tick" id="cross-tick" level="h3" />
+
+When price reaches an initialized tick, we must:
+
+1. Flip the tick's `fee_growth_outside` values
+2. Apply the tick's `liquidity_net` to active liquidity
+
+```rust
+// In the swap loop, when sqrt_price reaches the target tick:
+if sqrt_price_current == sqrt_price_target {
+    let tick_array = get_tick_array_by_index(
+        &ctx.accounts.tick_array_0,
+        &ctx.accounts.tick_array_1,
+        &ctx.accounts.tick_array_2,
+        next_tick_array_index,
+    )?;
+
+    let mut tick_array_data = tick_array.load_mut()?;
+    if let Some(tick) = tick_array_data.get_tick_mut(next_tick, tick_spacing) {
+        if tick.is_initialized() {
+            // Flip fee growth - "outside" becomes "inside" perspective
+            tick.cross(pool.fee_growth_global_x, pool.fee_growth_global_y);
+
+            // Apply liquidity change
+            let tick_liquidity_net = tick.get_liquidity_net();
+            let liquidity_net = if zero_for_one {
+                -tick_liquidity_net  // Crossing down: negate
+            } else {
+                tick_liquidity_net   // Crossing up: as-is
+            };
+
+            if liquidity_net > 0 {
+                liquidity = liquidity.checked_add(liquidity_net as u128)
+                    .ok_or(ClammError::LiquidityOverflow)?;
+            } else {
+                liquidity = liquidity.checked_sub((-liquidity_net) as u128)
+                    .ok_or(ClammError::LiquidityUnderflow)?;
+            }
+        }
+    }
+
+    // Update current tick
+    tick_current = if zero_for_one { next_tick - 1 } else { next_tick };
+}
+```
+
+The direction matters! When crossing down (zero_for_one), we negate liquidity_net because we're passing the tick in the opposite direction from when the position was created.
+
+<ArticleSection name="The Full Swap Handler" id="swap-handler" level="h3" />
+
+```rust
+pub fn swap_handler(
+    ctx: Context<Swap>,
+    amount_in: u64,
+    zero_for_one: bool,
+    min_amount_out: u64,
+) -> Result<()> {
+    ctx.accounts.validate(amount_in)?;
+
+    let pool = &mut ctx.accounts.pool;
+    let tick_spacing = pool.tick_spacing;
+    let fee_rate = pool.fee_rate;
+
+    let mut sqrt_price_current = pool.sqrt_price;
+    let mut tick_current = pool.tick_current_index;
+    let mut liquidity = pool.liquidity;
+    let mut amount_remaining = amount_in;
+    let mut amount_out_total: u64 = 0;
+    let mut fee_growth_global = if zero_for_one {
+        pool.fee_growth_global_x
+    } else {
+        pool.fee_growth_global_y
+    };
+
+    let mut iterations = 0;
+    const MAX_ITERATIONS: u32 = 100;
+
+    while amount_remaining > 0 && iterations < MAX_ITERATIONS {
+        iterations += 1;
+
+        // Find next tick to target
+        let (next_tick, next_tick_array_index) = find_next_initialized_tick(
+            &ctx.accounts.tick_array_0,
+            &ctx.accounts.tick_array_1,
+            &ctx.accounts.tick_array_2,
+            tick_current,
+            tick_spacing,
+            zero_for_one,
+        )?;
+
+        let sqrt_price_target = sqrt_price_from_tick_index(next_tick)?;
+
+        // Compute swap step
+        let step_result = compute_swap_step(
+            sqrt_price_current,
+            sqrt_price_target,
+            liquidity,
+            amount_remaining,
+            fee_rate,
+        )?;
+
+        // Update running totals
+        sqrt_price_current = step_result.sqrt_price_next;
+        amount_remaining = amount_remaining.saturating_sub(
+            step_result.amount_in + step_result.fee_amount
+        );
+        amount_out_total = amount_out_total.saturating_add(step_result.amount_out);
+
+        // Accumulate fees to global tracker
+        if liquidity > 0 && step_result.fee_amount > 0 {
+            let fee_growth_delta = ((step_result.fee_amount as u128) << 64) / liquidity;
+            fee_growth_global = fee_growth_global.wrapping_add(fee_growth_delta);
+        }
+
+        // Cross tick if we reached it
+        if sqrt_price_current == sqrt_price_target {
+            // ... tick crossing logic from above ...
+        } else {
+            // Didn't reach target, recalculate current tick from price
+            tick_current = tick_index_from_sqrt_price(sqrt_price_current)?;
+        }
+    }
+
+    // Slippage check
+    require!(amount_out_total >= min_amount_out, ClammError::SlippageExceeded);
+
+    // Update pool state
+    let pool = &mut ctx.accounts.pool;
+    pool.sqrt_price = sqrt_price_current;
+    pool.tick_current_index = tick_current;
+    pool.liquidity = liquidity;
+    if zero_for_one {
+        pool.fee_growth_global_x = fee_growth_global;
+    } else {
+        pool.fee_growth_global_y = fee_growth_global;
+    }
+
+    // Transfer tokens
+    let amount_in_used = amount_in - amount_remaining;
+    ctx.accounts.transfer_in(amount_in_used, zero_for_one)?;
+    ctx.accounts.transfer_out(amount_out_total, zero_for_one)?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Token Transfers" id="transfers" level="h3" />
+
+```rust
+impl<'info> Swap<'info> {
+    pub fn transfer_in(&self, amount: u64, zero_for_one: bool) -> Result<()> {
+        let (from, to) = if zero_for_one {
+            (self.user_token_in.to_account_info(), self.token_vault_x.to_account_info())
+        } else {
+            (self.user_token_in.to_account_info(), self.token_vault_y.to_account_info())
+        };
+
+        token::transfer(
+            CpiContext::new(
+                self.token_program.to_account_info(),
+                Transfer { from, to, authority: self.user.to_account_info() },
+            ),
+            amount,
+        )
+    }
+
+    pub fn transfer_out(&self, amount: u64, zero_for_one: bool) -> Result<()> {
+        let seeds = &[
+            b"pool".as_ref(),
+            self.pool.token_mint_x.as_ref(),
+            self.pool.token_mint_y.as_ref(),
+            &[self.pool.bump],
+        ];
+        let signer = &[&seeds[..]];
+
+        let (from, to) = if zero_for_one {
+            (self.token_vault_y.to_account_info(), self.user_token_out.to_account_info())
+        } else {
+            (self.token_vault_x.to_account_info(), self.user_token_out.to_account_info())
+        };
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(),
+                Transfer { from, to, authority: self.pool.to_account_info() },
+                signer,
+            ),
+            amount,
+        )
+    }
+}
+```
+
+<ArticleSection name="Fee Accumulation" id="fee-accumulation" level="h3" />
+
+The key insight for fee accounting: we add fees to `fee_growth_global` in Q64.64 format, divided by current liquidity:
+
+```rust
+let fee_growth_delta = ((step_result.fee_amount as u128) << 64) / liquidity;
+fee_growth_global = fee_growth_global.wrapping_add(fee_growth_delta);
+```
+
+This means each unit of liquidity earns `fee_growth_delta` from this swap step. Positions multiply this by their liquidity to get actual fees. The wrapping arithmetic handles overflow correctly since we only care about differences.
+
+<ArticleSection name="Gas Considerations" id="gas" level="h3" />
+
+Swaps that cross many ticks use more compute. The `MAX_ITERATIONS` limit prevents runaway computation. In practice, most swaps cross 0-3 ticks.
+
+Large swaps might need to be split across multiple transactions, or the caller can provide more TickArrays to increase the range covered in one swap.
+
+<ArticleSection name="Slippage Protection" id="slippage" level="h3" />
+
+The `min_amount_out` parameter protects against:
+1. Price movement between transaction submission and execution
+2. Sandwich attacks that manipulate the pool
+3. Unexpectedly large price impact from crossing many ticks
+
+Always set a reasonable minimum based on current pool state and acceptable slippage tolerance.
+
+Now you have all the pieces to implement a complete CLAMM. Build your program and submit it for verification!

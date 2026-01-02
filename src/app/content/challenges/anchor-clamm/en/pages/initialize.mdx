@@ -1,0 +1,292 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Initialize Pool" id="initialize-pool" level="h2" />
+
+The first instruction creates a new liquidity pool. Unlike a constant product AMM, we don't deposit liquidity here, we just set up the pool state with an initial price.
+
+<ArticleSection name="Accounts" id="pool-accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct InitializePool<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = Pool::LEN,
+        seeds = [
+            b"pool",
+            token_mint_x.key().min(token_mint_y.key()).as_ref(),                                                                                                               
+            token_mint_x.key().max(token_mint_y.key()).as_ref()
+        ],
+        bump,
+    )]
+    pub pool: Account<'info, Pool>,
+
+    pub token_mint_x: Account<'info, Mint>,
+    pub token_mint_y: Account<'info, Mint>,
+
+    #[account(
+        init_if_needed,
+        payer = payer,
+        associated_token::mint = token_mint_x,
+        associated_token::authority = pool,
+    )]
+    pub token_vault_x: Account<'info, TokenAccount>,
+
+    #[account(
+        init_if_needed,
+        payer = payer,
+        associated_token::mint = token_mint_y,
+        associated_token::authority = pool,
+    )]
+    pub token_vault_y: Account<'info, TokenAccount>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```
+
+Key points:
+- The pool PDA is derived from both mints, sorted lexicographically to ensure that it exists only one pool per token pair.
+- We use `min/max` to normalize the order regardless of how mints are passed.
+- Token vaults are ATAs owned by the pool PDA, created lazily with `init_if_needed`.
+
+<ArticleSection name="Validation" id="pool-validation" level="h3" />
+
+Before initializing, we validate the parameters:
+
+```rust
+impl<'info> InitializePool<'info> {
+    pub fn validate(
+        &self,
+        initial_sqrt_price: u128, 
+        fee_rate: u16, 
+        tick_spacing: u16
+    ) -> Result<()> {
+        require!(
+            initial_sqrt_price >= MIN_SQRT_PRICE && initial_sqrt_price <= MAX_SQRT_PRICE,
+            ClammError::InvalidSqrtPrice
+        );
+
+        require!(fee_rate <= MAX_FEE_RATE as u16, ClammError::InvalidFeeRate);
+        require!(tick_spacing > 0, ClammError::InvalidTickSpacing);
+
+        Ok(())
+    }
+}
+```
+
+The sqrt_price bounds prevent extreme prices that would cause numerical issues and the max fee rate (10%) prevents pool creators from setting exploitative fees.
+
+<ArticleSection name="Logic" id="pool-logic" level="h3" />
+
+The initialization is straightforward: compute the initial sqrt_price from token amounts and set up the pool state:
+
+```rust
+impl<'info> InitializePool<'info> {
+    pub fn initialize_pool(
+        &mut self,
+        initial_sqrt_price: u128,
+        tick_current_index: i32,
+        fee_rate: u16,
+        tick_spacing: u16,
+        bump: u8,
+    ) {
+        self.pool.set_inner(Pool {
+            token_mint_x: self.token_mint_x.key(),
+            token_mint_y: self.token_mint_y.key(),
+            sqrt_price: initial_sqrt_price,
+            tick_current_index,
+            liquidity: 0,  // No liquidity yet!
+            fee_rate,
+            tick_spacing,
+            fee_growth_global_x: 0,
+            fee_growth_global_y: 0,
+            bump,
+        });
+    }
+}
+```
+
+> `liquidity` starts at 0 since the pool exists but has no liquidity until positions are opened.
+
+The handler computes sqrt_price from the provided token amounts:
+
+```rust
+pub fn initialize_pool_handler(
+    ctx: Context<InitializePool>,
+    amount_x: u64,
+    amount_y: u64,
+    fee_rate: u16,
+    tick_spacing: u16,
+) -> Result<()> {
+    let initial_sqrt_price = sqrt_price_from_amounts(amount_x, amount_y)?;
+    
+    ctx.accounts.validate(initial_sqrt_price, fee_rate, tick_spacing)?;
+
+    let tick_current_index = tick_index_from_sqrt_price(initial_sqrt_price)?;
+
+    ctx.accounts.initialize_pool(
+        initial_sqrt_price,
+        tick_current_index,
+        fee_rate,
+        tick_spacing,
+        ctx.bumps.pool,
+    );
+
+    Ok(())
+}
+```
+
+The `amount_x` and `amount_y` parameters aren't actual deposits but they are used just to define the ratio to compute the initial price. If you want price = 2000 (e.g., 1 ETH = 2000 USDC), you'd pass amounts that give that ratio.
+
+<ArticleSection name="Initialize Tick Array" id="initialize-tick-array" level="h2" />
+
+TickArrays are created lazily: only when needed. Before opening a position or swapping through a tick range, the relevant TickArray must exist.
+
+<ArticleSection name="Accounts" id="tick-array-accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+#[instruction(start_tick_index: i32)]
+pub struct InitializeTickArray<'info> {
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = TickArray::LEN,
+        seeds = [b"tick_array", pool.key().as_ref(), &start_tick_index.to_le_bytes()],
+        bump
+    )]
+    pub tick_array: AccountLoader<'info, TickArray>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+> We use `AccountLoader` instead of `Account` because TickArray uses `zero_copy` loading the raw bytes directly without full deserialization.
+
+The `start_tick_index` is part of the PDA seeds, allowing multiple arrays per pool at different tick ranges.
+
+<ArticleSection name="Validation" id="tick-array-validation" level="h3" />
+
+The start index must be aligned to `TICK_ARRAY_SIZE * tick_spacing`:
+
+```rust
+impl<'info> InitializeTickArray<'info> {
+    pub fn validate(&self, start_tick_index: i32) -> Result<()> {
+        let tick_spacing = self.pool.tick_spacing as i32;
+        let ticks_in_array = (TICK_ARRAY_SIZE as i32) * tick_spacing;
+
+        require!(
+            start_tick_index % ticks_in_array == 0,
+            ClammError::InvalidTickArrayStart
+        );
+
+        Ok(())
+    }
+}
+```
+
+With tick_spacing=64 and TICK_ARRAY_SIZE=88, each array covers 5632 ticks. Arrays must start at multiples of this value.
+
+<ArticleSection name="Logic" id="tick-array-logic" level="h3" />
+
+Initialization just sets the pool reference and start index. All ticks start uninitialized (their `initialized` byte is 0):
+
+```rust
+impl<'info> InitializeTickArray<'info> {
+    pub fn initialize(&self, start_tick_index: i32) -> Result<()> {
+        let mut tick_array = self.tick_array.load_init()?;
+        tick_array.pool = self.pool.key();
+        tick_array.start_tick_index = start_tick_index;
+        Ok(())
+    }
+}
+```
+
+The `load_init()` method is used for newly created zero_copy accounts. It gives us mutable access to initialize the data.
+
+The handler:
+
+```rust
+pub fn initialize_tick_array_handler(
+    ctx: Context<InitializeTickArray>, 
+    start_tick_index: i32
+) -> Result<()> {
+    ctx.accounts.validate(start_tick_index)?;
+    ctx.accounts.initialize(start_tick_index)
+}
+```
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+Before moving to positions, define the error types we'll need:
+
+```rust
+#[error_code]
+pub enum ClammError {
+    #[msg("Invalid tick: must be within bounds and divisible by tick spacing")]
+    InvalidTick,
+
+    #[msg("Invalid tick range: lower must be less than upper")]
+    InvalidTickRange,
+
+    #[msg("Invalid sqrt price: must be within bounds")]
+    InvalidSqrtPrice,
+
+    #[msg("Invalid fee rate: exceeds maximum")]
+    InvalidFeeRate,
+
+    #[msg("Invalid tick spacing")]
+    InvalidTickSpacing,
+
+    #[msg("Invalid tick array: start index not aligned")]
+    InvalidTickArrayStart,
+
+    #[msg("Tick not found in provided tick array")]
+    TickNotInArray,
+
+    #[msg("Liquidity overflow")]
+    LiquidityOverflow,
+
+    #[msg("Liquidity underflow")]
+    LiquidityUnderflow,
+
+    #[msg("Token amount overflow")]
+    TokenAmountOverflow,
+
+    #[msg("Insufficient output amount (slippage exceeded)")]
+    SlippageExceeded,
+
+    #[msg("Pool has zero liquidity")]
+    ZeroLiquidity,
+
+    #[msg("Invalid token amounts: both must be greater than zero")]
+    InvalidTokenAmounts,
+
+    #[msg("Cannot close position with remaining liquidity")]
+    PositionHasLiquidity,
+
+    #[msg("Cannot close position with uncollected fees")]
+    PositionHasUncollectedFees,
+
+    #[msg("Math overflow")]
+    MathOverflow,
+
+    #[msg("Sqrt price out of bounds")]
+    SqrtPriceOutOfBounds,
+}
+```
+
+These errors provide clear feedback when operations fail. Good error messages are essential for debugging on-chain programs.
+
+Now let's implement positions: where liquidity actually lives.

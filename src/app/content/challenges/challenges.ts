@@ -2,6 +2,7 @@ import { ChallengeMetadata } from "@/app/utils/challenges";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 
 export const challenges: ChallengeMetadata[] = [
+  /// Anchor Challenges
   {
     slug: "anchor-vault",
     language: "Anchor",
@@ -35,6 +36,58 @@ export const challenges: ChallengeMetadata[] = [
     collectionMintAddress: "2E5K7FxDWGXkbRpFEAkhR8yQwiUBGggVyng2vaAhah5L",
   },
   {
+    slug: "anchor-amm",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 3,
+    isFeatured: true,
+    unitName: "Anchor AMM",
+    apiPath: "/v1/verify/anchor/amm",
+    tags: ["Anchor", "AMM", "DeFi",],
+    pages: [
+      { slug: "initialize" },
+      { slug: "deposit" },
+      { slug: "withdraw" },
+      { slug: "swap" },
+    ],
+    requirements: [
+      { instructionKey: "initialize" },
+      { instructionKey: "deposit" },
+      { instructionKey: "withdraw" },
+      { instructionKey: "swap" },
+    ],
+    collectionMintAddress: "", // TODO: Add collection mint address
+  },
+  {
+    slug: "anchor-clamm",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 4,
+    isFeatured: true,
+    unitName: "Anchor CLAMM",
+    apiPath: "/v1/verify/anchor/clamm",
+    tags: ["Anchor", "AMM", "DeFi", "Concentrated Liquidity"],
+    pages: [
+      { slug: "state" },
+      { slug: "math" },
+      { slug: "initialize" },
+      { slug: "position" },
+      { slug: "liquidity" },
+      { slug: "swap" },
+    ],
+    requirements: [
+      { instructionKey: "initialize_pool" },
+      { instructionKey: "initialize_tick_array" },
+      { instructionKey: "open_position" },
+      { instructionKey: "close_position" },
+      { instructionKey: "add_liquidity" },
+      { instructionKey: "remove_liquidity" },
+      { instructionKey: "collect_fees" },
+      { instructionKey: "swap" },
+    ],
+    collectionMintAddress: "", // TODO: Add collection mint address
+  },
+  {
     slug: "anchor-flash-loan",
     language: "Anchor",
     color: BRAND_COLOURS.anchor,
@@ -48,6 +101,8 @@ export const challenges: ChallengeMetadata[] = [
     ],
     collectionMintAddress: "4HJoxVtwKsLNKx3QsxG34FW39ENQZSZHmXi7wsuEVrAy",
   },
+
+  /// Pinocchio Challenges
   {
     slug: "pinocchio-vault",
     language: "Rust",
@@ -136,6 +191,27 @@ export const challenges: ChallengeMetadata[] = [
     collectionMintAddress: "9L975Y5Y6Gub2RHNFECyP3cJh3aiE1eVgo2A6mVV8YQu",
   },
   {
+    slug: "pinocchio-quantum-vault",
+    language: "Rust",
+    color: BRAND_COLOURS.rust,
+    difficulty: 2,
+    isFeatured: true,
+    unitName: "Pinocchio Quantum Vault",
+    apiPath: "/v1/verify/pinocchio/quantum-vault",
+    pages: [
+      { slug: "open" },
+      { slug: "split" },
+      { slug: "close" },
+    ],
+    requirements: [
+      { instructionKey: "open" },
+      { instructionKey: "close" },
+    ],
+    collectionMintAddress: "HEZn1PnhPBejGJQS7wtNAeBv73ExhqDhxYMxdRs8AM8W",
+  },
+
+  /// Typescript Challenges
+  {
     slug: "typescript-mint-an-spl-token",
     language: "Typescript",
     color: BRAND_COLOURS.typescript,
@@ -152,6 +228,8 @@ export const challenges: ChallengeMetadata[] = [
     ],
     collectionMintAddress: "2NVDhSXZck9AX2aUdPSxMemLN2wtqEd5sNEcwuZVCbHW",
   },
+
+  /// Assembly Challenges
   {
     slug: "assembly-memo",
     language: "Assembly",
@@ -195,24 +273,5 @@ export const challenges: ChallengeMetadata[] = [
       { instructionKey: "timeout_failure" },
     ],
     collectionMintAddress: "FW9LJEjJwGL1fkAjfM9HxuJuftTU9KrRvPBgP5ZzJx3D",
-  },
-  {
-    slug: "pinocchio-quantum-vault",
-    language: "Rust",
-    color: BRAND_COLOURS.rust,
-    difficulty: 2,
-    isFeatured: true,
-    unitName: "Pinocchio Quantum Vault",
-    apiPath: "/v1/verify/pinocchio/quantum-vault",
-    pages: [
-      { slug: "open" },
-      { slug: "split" },
-      { slug: "close" },
-    ],
-    requirements: [
-      { instructionKey: "open" },
-      { instructionKey: "close" },
-    ],
-    collectionMintAddress: "HEZn1PnhPBejGJQS7wtNAeBv73ExhqDhxYMxdRs8AM8W",
   },
 ];

@@ -1,0 +1,107 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Swap" id="swap" level="h2" />
+
+We can now move to the `swap` instruction, that lives in the `swap.rs` and will perform these actions:
+- Validates the pool is not locked and the request hasn't expired
+- Determines which direction the swap is going (X→Y or Y→X)
+- Calculates the output amount using the constant product curve
+- Transfers input tokens from user to vault
+- Transfers output tokens from vault to user
+- Collects fees for liquidity providers
+
+This is where the AMM magic happens. The constant product formula `x * y = k` automatically determines how much output you get for a given input.
+
+Let's walk through an example. Pool has 1000 X and 2000 Y, so k = 2,000,000. User wants to swap 100 X for Y:
+
+```
+(1000 + 100) * (2000 - output) = 2,000,000
+1100 * (2000 - output) = 2,000,000
+output = 2000 - (2,000,000 / 1100) = 181.82
+```
+
+The user gets ~181 Y for 100 X, even though the "price" was 1 X = 2 Y. This difference is price impact - large swaps move the price against you. It's a feature that prevents draining the pool.
+
+### Accounts 
+
+The accounts needed in this context are:
+- `user`: the signer performing the swap
+- `mint_from`: the mint of the token being sold
+- `mint_to`: the mint of the token being bought
+- `user_from`: user's account for the input token (mutable)
+- `user_to`: user's account for the output token (mutable)
+- `vault_from`: pool's vault receiving input (mutable)
+- `vault_to`: pool's vault sending output (mutable)
+- `config`: the pool configuration (read-only)
+- `token_program`, `token_2022_program` (optional)
+
+We use `mint_from`/`mint_to` instead of `mint_x`/`mint_y` so the same instruction handles both directions. The logic figures out which way based on comparing `mint_from` to `config.mint_x`.
+
+### Logic 
+
+We use the `constant-product-curve` crate for the calculations. It handles edge cases and fee math that we might get wrong:
+
+```rust
+use constant_product_curve::{ConstantProduct, LiquidityPair};
+
+impl<'info> Swap<'info> {
+    pub fn calculate_swap_amounts(&self, amount: u64, min: u64) -> Result<(u64, u64, u64)> {
+        let (x_amount, y_amount, pair) = if self.mint_from.key() == self.config.mint_x.key() {
+            require_eq!(self.mint_to.key(), self.config.mint_y.key(), AmmError::InvalidMint);
+            (self.vault_from.amount, self.vault_to.amount, LiquidityPair::X)
+        } else if self.mint_from.key() == self.config.mint_y.key() {
+            require_eq!(self.mint_to.key(), self.config.mint_x.key(), AmmError::InvalidMint);
+            (self.vault_to.amount, self.vault_from.amount, LiquidityPair::Y)
+        } else {
+            return Err(AmmError::InvalidMint.into());
+        };
+
+        let mut curve = ConstantProduct::init(
+            x_amount,
+            y_amount,
+            x_amount,
+            self.config.fee,
+            None
+        ).map_err(AmmError::from)?;
+
+        let amounts = curve.swap(pair, amount, min).map_err(AmmError::from)?;
+
+        require_gt!(amounts.deposit, 0, AmmError::InvalidAmount);
+        require_gt!(amounts.withdraw, 0, AmmError::InvalidAmount);
+
+        Ok((amounts.deposit, amounts.withdraw, amounts.fee))
+    }
+}
+```
+
+We also validate that `mint_to` matches the expected opposite token. Otherwise someone could try to swap X for X, which would break things.
+
+The fee (typically 0.3%) is taken from the input before calculating output. This fee stays in the pool - it's not sent anywhere. Since LP tokens represent pool shares, each LP token becomes worth slightly more after each swap. When LPs withdraw, they get their share of original deposits plus accumulated fees.
+
+The `min` parameter is crucial slippage protection. Without it, you're vulnerable to sandwich attacks: an attacker sees your pending swap, front-runs to move the price, your swap executes at a worse rate, then they back-run to profit. With a tight `min`, their manipulation would cause your transaction to fail instead.
+
+The handler:
+
+```rust
+pub fn swap(
+    ctx: Context<Swap>,
+    amount: u64,
+    min: u64,
+    expiration: i64,
+) -> Result<()> {
+    ctx.accounts.checks(amount, min, expiration)?;
+    let (deposit_amount, withdraw_amount, fee_amount) = 
+        ctx.accounts.calculate_swap_amounts(amount, min)?;
+
+    ctx.accounts.deposit_token(deposit_amount)?;
+    ctx.accounts.withdraw_token(withdraw_amount)?;
+    ctx.accounts.pay_fee(fee_amount)
+}
+```
+
+You'll need to implement three transfer helpers:
+- `deposit_token`: transfer from user_from to vault_from (user signs)
+- `withdraw_token`: transfer from vault_to to user_to (config PDA signs)
+- `pay_fee`: transfer fee from user_from to vault_from (user signs)
+
+The fee is paid separately from the main deposit - both go to the same vault, but the fee stays there permanently while the deposit is "exchanged" for the withdrawal.

@@ -1,0 +1,387 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="The Math Behind CLAMMs" id="math" level="h2" />
+
+CLAMMs require precise mathematical operations on prices, liquidity, and fees. We can't use floating-point numbers on-chain - they're non-deterministic across different hardware. Instead, we use fixed-point arithmetic.
+
+<ArticleSection name="Q64.64 Fixed-Point Format" id="q64-64" level="h3" />
+
+The Q64.64 format stores numbers as u128 where:
+- The upper 64 bits represent the integer part
+- The lower 64 bits represent the fractional part
+
+```
+Value = stored_value / 2^64
+```
+
+For example, to represent 1.5:
+```
+1.5 * 2^64 = 27670116110564327424 (as u128)
+```
+
+The constant `Q64 = 1u128 << 64` represents 1.0 in this format.
+
+```rust
+pub const Q64: u128 = 1u128 << 64;
+```
+
+**Multiplication** of two Q64.64 numbers requires shifting right by 64 to maintain scale:
+
+```rust
+pub fn mul_shift_64(a: u128, b: u128, round_up: bool) -> u128 {
+    let (hi, lo) = full_mul_u128(a, b);
+    let result = (hi << 64) | (lo >> 64);
+    if round_up && (lo & ((1u128 << 64) - 1)) > 0 {
+        result + 1
+    } else {
+        result
+    }
+}
+```
+
+We need 256-bit intermediate precision because multiplying two 128-bit numbers can overflow. The `full_mul_u128` function returns the result as (high, low) parts:
+
+```rust
+fn full_mul_u128(a: u128, b: u128) -> (u128, u128) {
+    let a_lo = a & 0xFFFFFFFFFFFFFFFF;
+    let a_hi = a >> 64;
+    let b_lo = b & 0xFFFFFFFFFFFFFFFF;
+    let b_hi = b >> 64;
+
+    let p0 = a_lo * b_lo;
+    let p1 = a_lo * b_hi;
+    let p2 = a_hi * b_lo;
+    let p3 = a_hi * b_hi;
+
+    let (lo, carry0) = p0.overflowing_add(p1 << 64);
+    let (lo, carry1) = lo.overflowing_add(p2 << 64);
+    let hi = p3 + (p1 >> 64) + (p2 >> 64) + carry0 as u128 + carry1 as u128;
+
+    (hi, lo)
+}
+```
+
+**Division** with 64-bit left shift:
+
+```rust
+pub fn shift_64_div(a: u128, b: u128, round_up: bool) -> Result<u128> {
+    require!(b > 0, ClammError::MathOverflow);
+    let (hi, lo) = (a >> 64, a << 64);
+    let result = div_u256_by_u128(hi, lo, b);
+    if round_up && mul_shift_64(result, b, false) < a << 64 {
+        Ok(result + 1)
+    } else {
+        Ok(result)
+    }
+}
+```
+
+**Multiply-then-divide** with full precision:
+
+```rust
+pub fn mul_div(a: u128, b: u128, c: u128, round_up: bool) -> Result<u128> {
+    require!(c > 0, ClammError::MathOverflow);
+    let (hi, lo) = full_mul_u128(a, b);
+    let result = div_u256_by_u128(hi, lo, c);
+    // Handle rounding if needed
+    Ok(result)
+}
+```
+
+<ArticleSection name="Computing sqrt_price from Token Amounts" id="sqrt-price-amounts" level="h3" />
+
+When initializing a pool, we compute sqrt_price from the initial token amounts:
+
+```rust
+pub fn sqrt_price_from_amounts(amount_x: u64, amount_y: u64) -> Result<u128> {
+    require!(amount_x > 0 && amount_y > 0, ClammError::InvalidTokenAmounts);
+
+    // sqrt_price = sqrt(y/x) * 2^64
+    let sqrt_y = sqrt_u128(amount_y as u128);
+    let sqrt_x = sqrt_u128(amount_x as u128);
+
+    let numerator = (sqrt_y as u128) << 64;
+    let result = numerator / sqrt_x;
+
+    Ok(result)
+}
+```
+
+The integer square root uses Newton's method:
+
+```rust
+pub fn sqrt_u128(n: u128) -> u128 {
+    if n == 0 { return 0; }
+    if n == 1 { return 1; }
+
+    let mut x = 1u128 << ((128 - n.leading_zeros() + 1) / 2);
+    loop {
+        let x1 = (x + n / x) >> 1;
+        if x1 >= x { return x; }
+        x = x1;
+    }
+}
+```
+
+<ArticleSection name="Tick Math: Converting Between Ticks and Prices" id="tick-math" level="h3" />
+
+The relationship between ticks and sqrt_price is:
+```
+sqrt_price = sqrt(1.0001)^tick
+```
+
+Converting tick to sqrt_price uses binary decomposition. Since any tick can be expressed as a sum of powers of 2, we precompute `sqrt(1.0001)^(2^i)` for each bit position:
+
+```rust
+pub fn sqrt_price_from_tick_index(tick: i32) -> Result<u128> {
+    require!(tick >= MIN_TICK && tick <= MAX_TICK, ClammError::InvalidTick);
+
+    if tick >= 0 {
+        Ok(get_sqrt_price_positive_tick(tick))
+    } else {
+        Ok(get_sqrt_price_negative_tick(tick))
+    }
+}
+```
+
+For positive ticks, we multiply the precomputed constants:
+
+```rust
+fn get_sqrt_price_positive_tick(tick: i32) -> u128 {
+    let mut ratio: u128 = if tick & 1 != 0 {
+        79232123823359799118286999567  // sqrt(1.0001)^1 in Q96.32
+    } else {
+        79228162514264337593543950336  // 1.0 in Q96.32
+    };
+
+    if tick & 2 != 0 {
+        ratio = mul_shift_96(ratio, 79236085330515764027303304731);
+    }
+    if tick & 4 != 0 {
+        ratio = mul_shift_96(ratio, 79244008939048815603706035061);
+    }
+    // ... continue for each bit position up to 2^18
+    
+    ratio >> 32  // Convert from Q96.32 to Q64.64
+}
+```
+
+For negative ticks, we use reciprocals of the constants (since sqrt(1.0001)^-n = 1/sqrt(1.0001)^n):
+
+```rust
+fn get_sqrt_price_negative_tick(tick: i32) -> u128 {
+    let abs_tick = tick.abs();
+    let mut ratio: u128 = if abs_tick & 1 != 0 {
+        18445821805675392311  // 1/sqrt(1.0001) in Q64.64
+    } else {
+        18446744073709551616  // 1.0 in Q64.64
+    };
+
+    if abs_tick & 2 != 0 {
+        ratio = (ratio * 18444899583751176498) >> 64;
+    }
+    // ... continue for each bit
+    
+    ratio
+}
+```
+
+The reverse operation (sqrt_price to tick) uses logarithms:
+
+```rust
+pub fn tick_index_from_sqrt_price(sqrt_price: u128) -> Result<i32> {
+    // Compute log_1.0001(sqrt_price^2) = 2 * log_1.0001(sqrt_price)
+    // Using: log_b(x) = log_2(x) / log_2(b)
+    
+    // Find MSB position for integer part of log2
+    let msb = 128 - sqrt_price.leading_zeros() - 1;
+    let log2p_integer_x32 = ((msb as i128) - 64) << 32;
+    
+    // Iterative refinement for fractional part
+    // ... (detailed implementation)
+    
+    // Convert from base 2 to base 1.0001
+    const LOG_B_2_X32: i128 = 59543866431248;
+    let tick = (log2p_x32 * LOG_B_2_X32) >> 64;
+    
+    Ok(tick as i32)
+}
+```
+
+<ArticleSection name="Liquidity Math" id="liquidity-math" level="h3" />
+
+Given a liquidity amount and price range, how many tokens are needed?
+
+For token X: `amount_x = L * (1/sqrt(P_lower) - 1/sqrt(P_upper))`
+
+```rust
+pub fn get_amount_x_delta(
+    sqrt_price_lower: u128,
+    sqrt_price_upper: u128,
+    liquidity: u128,
+    round_up: bool,
+) -> Result<u64> {
+    if liquidity == 0 || sqrt_price_lower == sqrt_price_upper {
+        return Ok(0);
+    }
+
+    let sqrt_price_diff = sqrt_price_upper - sqrt_price_lower;
+    let denominator = mul_shift_64(sqrt_price_upper, sqrt_price_lower, false);
+    
+    let result = mul_div(liquidity, sqrt_price_diff, denominator, round_up)?;
+
+    // Result is already in integer units (not Q64.64)
+    // numerator = L * diff (where diff is Q64.64, so this is L * diff_real * 2^64)
+    // denominator = (upper * lower) >> 64 (which is upper_real * lower_real * 2^64)
+    // result = (L * diff_real * 2^64) / (upper_real * lower_real * 2^64)
+    //        = L * diff_real / (upper_real * lower_real) -- no shift needed!
+    if result > u64::MAX as u128 {
+        return Err(ClammError::TokenAmountOverflow.into());
+    }
+    
+    Ok(result as u64)
+}
+```
+
+For token Y: `amount_y = L * (sqrt(P_upper) - sqrt(P_lower))`
+
+```rust
+pub fn get_amount_y_delta(
+    sqrt_price_lower: u128,
+    sqrt_price_upper: u128,
+    liquidity: u128,
+    round_up: bool,
+) -> Result<u64> {
+    if liquidity == 0 || sqrt_price_lower == sqrt_price_upper {
+        return Ok(0);
+    }
+
+    let sqrt_price_diff = sqrt_price_upper - sqrt_price_lower;
+    let result = mul_shift_64(liquidity, sqrt_price_diff, round_up);
+    
+    Ok(result as u64)
+}
+```
+
+The asymmetry is key: X amounts depend on the reciprocal of sqrt_price, while Y amounts are linear in sqrt_price.
+
+<ArticleSection name="Swap Math: Computing Price Movement" id="swap-math" level="h3" />
+
+During a swap, we need to compute how price changes given an input amount.
+
+When swapping X for Y (price decreases):
+```
+sqrt_P' = L * sqrt_P / (L + delta_x * sqrt_P)
+```
+
+```rust
+pub fn get_next_sqrt_price_x_up(
+    sqrt_price: u128,
+    liquidity: u128,
+    amount: u64,
+    add: bool,
+) -> Result<u128> {
+    if amount == 0 { return Ok(sqrt_price); }
+
+    let product = mul_shift_64(amount as u128, sqrt_price, false);
+    let liquidity_shifted = liquidity << 64;
+    
+    let denominator = if add {
+        liquidity_shifted.checked_add(product).ok_or(ClammError::MathOverflow)?
+    } else {
+        liquidity_shifted.checked_sub(product).ok_or(ClammError::LiquidityUnderflow)?
+    };
+
+    mul_div(liquidity_shifted, sqrt_price, denominator, true)
+}
+```
+
+When swapping Y for X (price increases):
+```
+sqrt_P' = sqrt_P + delta_y / L
+```
+
+```rust
+pub fn get_next_sqrt_price_y_down(
+    sqrt_price: u128,
+    liquidity: u128,
+    amount: u64,
+    add: bool,
+) -> Result<u128> {
+    if amount == 0 { return Ok(sqrt_price); }
+
+    let delta = ((amount as u128) << 64) / liquidity;
+
+    if add {
+        sqrt_price.checked_add(delta).ok_or(ClammError::SqrtPriceOutOfBounds.into())
+    } else {
+        sqrt_price.checked_sub(delta).ok_or(ClammError::SqrtPriceOutOfBounds.into())
+    }
+}
+```
+
+<ArticleSection name="Fee Math" id="fee-math" level="h3" />
+
+Fees are straightforward to calculate:
+
+```rust
+pub fn calculate_fee(amount: u64, fee_rate: u16) -> u64 {
+    ((amount as u128) * (fee_rate as u128) / 1_000_000) as u64
+}
+```
+
+The fee rate is in hundredths of a basis point, so 3000 means 0.30%.
+
+When fees are collected during a swap, they're added to the global fee accumulator:
+
+```rust
+let fee_growth_delta = ((fee_amount as u128) << 64) / liquidity;
+fee_growth_global = fee_growth_global.wrapping_add(fee_growth_delta);
+```
+
+This accumulates fees per unit of liquidity in Q64.64 format. Positions multiply this by their liquidity and shift right 64 to get actual token amounts.
+
+<ArticleSection name="Putting It Together: Swap Step" id="swap-step" level="h3" />
+
+A single swap step computes how much can be traded before reaching a tick boundary:
+
+```rust
+pub fn compute_swap_step(
+    sqrt_price_current: u128,
+    sqrt_price_target: u128,
+    liquidity: u128,
+    amount_remaining: u64,
+    fee_rate: u16,
+) -> Result<SwapStepResult> {
+    let zero_for_one = sqrt_price_current >= sqrt_price_target;
+    
+    let fee_amount = calculate_fee(amount_remaining, fee_rate);
+    let amount_remaining_after_fee = amount_remaining - fee_amount;
+    
+    // Can we reach the target price?
+    let amount_in_to_target = if zero_for_one {
+        get_amount_x_delta(sqrt_price_target, sqrt_price_current, liquidity, true)?
+    } else {
+        get_amount_y_delta(sqrt_price_current, sqrt_price_target, liquidity, true)?
+    };
+    
+    if amount_remaining_after_fee >= amount_in_to_target {
+        // Yes - we reach target and have leftover
+        // Calculate output at target price
+    } else {
+        // No - compute partial move
+        let sqrt_price_next = if zero_for_one {
+            get_next_sqrt_price_x_up(sqrt_price_current, liquidity, amount_remaining_after_fee, true)?
+        } else {
+            get_next_sqrt_price_y_down(sqrt_price_current, liquidity, amount_remaining_after_fee, true)?
+        };
+        // Calculate output at new price
+    }
+    
+    Ok(SwapStepResult { sqrt_price_next, amount_in, amount_out, fee_amount })
+}
+```
+
+The full swap loops through multiple steps, crossing ticks as needed. We'll implement that in the swap instruction.
+
+Now let's build the instructions that use all this math.

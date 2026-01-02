@@ -1,0 +1,131 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Initialize" id="initialize" level="h2" />
+
+We can now move to the `initialize` instruction, that lives in the `initialize.rs` and will perform these actions:
+- Creates the Config account to store pool parameters
+- Creates the LP mint for liquidity provider tokens
+- Creates vault accounts for both token X and token Y
+- Transfers initial liquidity from the initializer
+- Mints initial LP tokens to the initializer
+
+Before we dive into the code, let's understand why we calculate initial LP tokens the way we do.
+
+When creating a pool with 1000 USDC and 10 SOL, how many LP tokens should the first depositor receive? We use the geometric mean: `sqrt(amount_x * amount_y)`. 
+
+This is price-neutral, it doesn't favor either token, and it's what Uniswap V2 established as the standard.
+
+There's a catch though. If we give ALL the LP tokens to the first depositor, an attacker could create a pool with tiny amounts (1 token each), receive 1 LP token, then donate a huge amount directly to the vault. Now each LP token is worth millions, and the next depositor's deposit might round down to 0 LP tokens. 
+
+To prevent this, we subtract `MINIMUM_LIQUIDITY` (typically 1000) from the first mint. These LP tokens are never given to anyone - they're "burned" virtually, diluting any such attack.
+
+### Accounts 
+
+The accounts needed in this context are:
+- `initializer`: the user that creates the pool and provides initial liquidity
+- `mint_x`: the first token of the trading pair
+- `mint_y`: the second token of the trading pair
+- `mint_lp`: the LP token mint, derived as a PDA from the config
+- `vault_x`: the token account for mint_x, owned by config
+- `vault_y`: the token account for mint_y, owned by config
+- `initializer_x`: the initializer's token account for mint_x
+- `initializer_y`: the initializer's token account for mint_y
+- `initializer_lp`: where the initializer receives their LP tokens
+- `config`: the pool configuration PDA, derived from `[b"config", seed, mint_x, mint_y]`
+- `system_program`, `token_program`, `token_2022_program` (optional), `associated_token_program`
+
+The config PDA uses the seed plus both mints, allowing multiple pools for the same token pair. The mint_lp PDA uses `[b"lp", config]`, tying LP tokens to a specific pool. We use `InterfaceAccount` for token accounts to support both SPL Token and Token-2022.
+
+### Logic 
+
+We start by initializing the config with all the pool parameters:
+
+```rust
+impl<'info> Initialize<'info> {
+    pub fn initialize_config(
+        &mut self,
+        seed: u64,
+        authority: Pubkey,
+        fee: u16,
+        bumps: &InitializeBumps
+    ) -> Result<()> {
+        self.config.set_inner(
+            Config {
+                seed,
+                authority,
+                mint_x: self.mint_x.key(),
+                mint_y: self.mint_y.key(),
+                fee,
+                locked: false,
+                lp_bump: bumps.mint_lp,
+                bump: bumps.config
+            }
+        );
+        Ok(())
+    }
+}
+```
+
+We store both bumps in the config. Why? Deriving PDAs costs compute units. By caching the bumps, future instructions can verify the PDAs cheaply without re-deriving.
+
+Next we need to transfer the initial tokens from the initializer to the vaults. 
+
+This is your first exercise; you'll need to check which program owns the mint (`spl_token` vs `spl_token_2022`) and use the correct one for the transfer CPI.
+
+For minting the initial LP tokens, we need the config PDA to sign since it's the mint authority. You'll implement this using `CpiContext::new_with_signer` with the config's seeds.
+
+The handler ties everything together:
+
+```rust
+pub fn initialize(
+    ctx: Context<Initialize>,
+    seed: u64,
+    authority: Pubkey,
+    fee: u16,
+    init_amount_x: u64,
+    init_amount_y: u64,
+) -> Result<()> {
+    require!(fee <= 10000, AmmError::InvalidFee);
+    require!(init_amount_x > 0, AmmError::InvalidAmount);
+    require!(init_amount_y > 0, AmmError::InvalidAmount);
+
+    ctx.accounts.initialize_config(seed, authority, fee, &ctx.bumps)?;
+    ctx.accounts.deposit_tokens(true, init_amount_x)?;
+    ctx.accounts.deposit_tokens(false, init_amount_y)?;
+
+    // Calculate LP tokens: sqrt(x * y) - MINIMUM_LIQUIDITY
+    let product = (init_amount_x as u128)
+        .checked_mul(init_amount_y as u128)
+        .ok_or(AmmError::Overflow)?;
+    let liquidity = integer_sqrt(product) as u64;
+
+    require!(liquidity > MINIMUM_LIQUIDITY, AmmError::InsufficientInitialLiquidity);
+
+    let lp_to_mint = liquidity
+        .checked_sub(MINIMUM_LIQUIDITY)
+        .ok_or(AmmError::Overflow)?;
+
+    ctx.accounts.mint_initial_lp(lp_to_mint, &ctx.bumps)?;
+
+    Ok(())
+}
+```
+
+We validate the fee is <= 10000 (100% in basis points) and both amounts are positive. We use `checked_mul` and `checked_sub` because Solana programs should never panic: overflow in release mode wraps silently, which could let an attacker manipulate calculations.
+
+You'll also need a helper function for the integer square root using Newton's method:
+
+```rust
+fn integer_sqrt(n: u128) -> u128 {
+    if n == 0 { return 0; }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+```
+
+This iteratively improves a guess until it converges on the largest integer whose square is <= n.

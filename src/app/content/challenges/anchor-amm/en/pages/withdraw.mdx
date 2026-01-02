@@ -1,0 +1,124 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Withdraw" id="withdraw" level="h2" />
+
+We can now move to the `withdraw` instruction, that lives in the `withdraw.rs` and will perform these actions:
+- Validates the pool is not locked and the request hasn't expired
+- Calculates the amounts of token X and Y to return based on LP tokens being burned
+- Transfers tokens from the vaults to the user
+- Burns the user's LP tokens
+
+This is essentially the inverse of deposit - users burn their LP tokens to reclaim their proportional share of the pool.
+
+### Accounts 
+
+The accounts needed in this context are:
+- `user`: the signer withdrawing liquidity
+- `mint_x`: the first token mint
+- `mint_y`: the second token mint
+- `mint_lp`: the LP token mint (mutable, to burn LP tokens)
+- `vault_x`: the pool's reserve for token X (mutable, sending tokens out)
+- `vault_y`: the pool's reserve for token Y (mutable, sending tokens out)
+- `user_x`: the user's token account for mint_x (mutable, receiving tokens)
+- `user_y`: the user's token account for mint_y (mutable, receiving tokens)
+- `user_lp`: the user's LP token account (mutable, LP tokens being burned)
+- `config`: the pool configuration (read-only)
+- `token_program`, `token_2022_program` (optional)
+
+The key difference from deposit is the direction of token flow - vaults send to user accounts instead of receiving.
+
+### Logic 
+
+The checks are similar to deposit:
+
+```rust
+impl<'info> Withdraw<'info> {
+    pub fn checks(&self, amount: u64, min_x: u64, min_y: u64, expiration: i64) -> Result<()> {
+        require_eq!(self.config.locked, false, AmmError::PoolLocked);
+        require_gt!(expiration, Clock::get()?.unix_timestamp, AmmError::OfferExpired);
+        require_gt!(amount, 0, AmmError::InvalidAmount);
+        require_gt!(min_x, 0, AmmError::InvalidAmount);
+        require_gt!(min_y, 0, AmmError::InvalidAmount);
+        Ok(())
+    }
+}
+```
+
+The calculation is the same formula as deposit, but with one critical difference - we round DOWN instead of UP:
+
+```rust
+pub fn calculate_amounts(&self, amount: u64) -> Result<(u64, u64)> {
+    let adjusted_supply = (self.mint_lp.supply as u128)
+        .checked_add(MINIMUM_LIQUIDITY as u128)
+        .ok_or(AmmError::Overflow)?;
+
+    let x = (self.vault_x.amount as u128)
+        .checked_mul(amount as u128)
+        .ok_or(AmmError::Overflow)?
+        .checked_div(adjusted_supply)
+        .ok_or(AmmError::Overflow)? as u64; // No +1 here
+
+    let y = (self.vault_y.amount as u128)
+        .checked_mul(amount as u128)
+        .ok_or(AmmError::Overflow)?
+        .checked_div(adjusted_supply)
+        .ok_or(AmmError::Overflow)? as u64; // No +1 here
+
+    Ok((x, y))
+}
+```
+
+This asymmetry protects the pool. Deposits round up (users pay more), withdrawals round down (users receive less). The pool always keeps the dust, preventing extraction through many small operations.
+
+For slippage, withdraw uses `min_x` and `min_y` instead of maximums - you want to ensure you receive at least this much:
+
+```rust
+require_gte!(x, min_x, AmmError::SlippageExceeded);
+require_gte!(y, min_y, AmmError::SlippageExceeded);
+```
+
+When withdrawing tokens from the vaults, we need the config account to sign the transfer since it's the vault authority. PDAs can't sign directly - they don't have private keys. Instead we use PDA signing through CPIs:
+
+```rust
+pub fn withdraw_tokens(&self, is_x: bool, amount: u64) -> Result<()> {
+    let seed_binding = self.config.seed.to_le_bytes();
+    let mint_x_binding = self.mint_x.key().to_bytes();
+    let mint_y_binding = self.mint_y.key().to_bytes();
+
+    let seeds: &[&[u8]] = &[
+        b"config".as_ref(),
+        seed_binding.as_ref(),
+        mint_x_binding.as_ref(),
+        mint_y_binding.as_ref(),
+        &[self.config.bump],
+    ];
+    let signer_seeds = &[&seeds[..]];
+
+    // Use CpiContext::new_with_signer with these seeds
+    // The runtime verifies the seeds derive the config address
+}
+```
+
+The handler:
+
+```rust
+pub fn withdraw(
+    ctx: Context<Withdraw>,
+    amount: u64,
+    min_x: u64,
+    min_y: u64,
+    expiration: i64,
+) -> Result<()> {
+    ctx.accounts.checks(amount, min_x, min_y, expiration)?;
+    let (x, y) = ctx.accounts.calculate_amounts(amount)?;
+
+    require_gte!(x, min_x, AmmError::SlippageExceeded);
+    require_gte!(y, min_y, AmmError::SlippageExceeded);
+
+    ctx.accounts.withdraw_tokens(true, x)?;
+    ctx.accounts.withdraw_tokens(false, y)?;
+    ctx.accounts.burn_lp_tokens(amount)
+}
+```
+
+You'll need to implement `withdraw_tokens` (transfer from vault to user with PDA signing) and `burn_lp_tokens`. For the burn, think about who the authority is - the user owns their LP tokens, so the user is the authority, not the config. No PDA signing needed for the burn.

@@ -1,0 +1,157 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor CLAMM Challenge](/graphics/challenge-banners/anchor-clamm.png)
+
+# Concentrated Liquidity AMM
+
+Traditional AMMs spread liquidity evenly across all possible prices, from zero to infinity but most trading happens in a narrow price range. 
+
+CLAMM concentrate liquidity providers capital where it actually gets used.
+
+If you want to learn more, read the [Concentrated Liquidity Lesson](/en/courses/amm-architectures/concentrated-liquidity)
+
+<ArticleSection name="The Challenge" id="challenge" level="h2" />
+
+In this challenge, you'll implement a complete CLAMM with eight core instructions:
+
+- **initialize_pool**: Create a pool with initial sqrt_price derived from token amounts
+- **initialize_tick_array**: Lazily create storage for tick ranges
+- **open_position**: Create a liquidity position in a price range, represented by an NFT
+- **close_position**: Remove an empty position and burn its NFT
+- **add_liquidity**: Increase liquidity in an existing position
+- **remove_liquidity**: Decrease liquidity and withdraw tokens
+- **collect_fees**: Claim accumulated trading fees from a position
+- **swap**: Execute trades across tick boundaries
+
+This is significantly more complex than the constant product AMM. We'll build up the concepts piece by piece, starting with the data structures, then the math, and finally the instructions.
+
+> **Prerequisites**: You should be comfortable with the [Anchor for Dummies](/en/courses/anchor-for-dummies) course and ideally have completed the [Anchor AMM](/en/challenges/anchor-amm) challenge first. 
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Let's create a fresh Anchor workspace:
+
+```bash
+anchor init blueshift_anchor_clamm
+cd blueshift_anchor_clamm
+```
+
+Enable the features we need:
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+```
+
+Update `programs/blueshift_anchor_clamm/Cargo.toml` to include the IDL build feature:
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+<ArticleSection name="Project Structure" id="structure" level="h2" />
+
+This program is more complex than the simple AMM. We'll organize it into focused modules:
+
+```
+src
+├── instructions
+│       ├── initialize_pool.rs
+│       ├── initialize_tick_array.rs
+│       ├── open_position.rs
+│       ├── close_position.rs
+│       ├── modify_liquidity.rs
+│       ├── collect_fees.rs
+│       ├── swap.rs
+│       └── mod.rs
+├── math
+│       ├── q64_64.rs
+│       ├── tick_math.rs
+│       ├── liquidity_math.rs
+│       ├── sqrt_price_math.rs
+│       ├── fee_math.rs
+│       └── mod.rs
+├── state
+│       ├── pool.rs
+│       ├── position.rs
+│       ├── tick.rs
+│       ├── tick_array.rs
+│       └── mod.rs
+├── constants.rs
+├── errors.rs
+└── lib.rs
+```
+
+The `lib.rs` entry point will look like this:
+
+```rust
+use anchor_lang::prelude::*;
+
+pub mod constants;
+pub mod errors;
+pub mod instructions;
+pub mod math;
+pub mod state;
+
+use instructions::*;
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_clamm {
+    use super::*;
+
+    pub fn initialize_pool(
+        ctx: Context<InitializePool>,
+        amount_x: u64,
+        amount_y: u64,
+        fee_rate: u16,
+        tick_spacing: u16,
+    ) -> Result<()> {
+        instructions::initialize_pool::initialize_pool_handler(ctx, amount_x, amount_y, fee_rate, tick_spacing)
+    }
+
+    pub fn initialize_tick_array(
+        ctx: Context<InitializeTickArray>,
+        start_tick_index: i32,
+    ) -> Result<()> {
+        instructions::initialize_tick_array::initialize_tick_array_handler(ctx, start_tick_index)
+    }
+
+    pub fn open_position(
+        ctx: Context<OpenPosition>,
+        tick_lower_index: i32,
+        tick_upper_index: i32,
+        liquidity: u128,
+    ) -> Result<()> {
+        instructions::open_position::open_position_handler(ctx, tick_lower_index, tick_upper_index, liquidity)
+    }
+
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        instructions::close_position::close_position_handler(ctx)
+    }
+
+    pub fn add_liquidity(ctx: Context<ModifyLiquidity>, liquidity_delta: u128) -> Result<()> {
+        instructions::modify_liquidity::add_liquidity_handler(ctx, liquidity_delta)
+    }
+
+    pub fn remove_liquidity(ctx: Context<ModifyLiquidity>, liquidity_delta: u128) -> Result<()> {
+        instructions::modify_liquidity::remove_liquidity_handler(ctx, liquidity_delta)
+    }
+
+    pub fn collect_fees(ctx: Context<CollectFees>) -> Result<()> {
+        instructions::collect_fees::collect_fees_handler(ctx)
+    }
+
+    pub fn swap(
+        ctx: Context<Swap>,
+        amount_in: u64,
+        zero_for_one: bool,
+        min_amount_out: u64,
+    ) -> Result<()> {
+        instructions::swap::swap_handler(ctx, amount_in, zero_for_one, min_amount_out)
+    }
+}
+```
+
+Let's start by understanding the state structures that make concentrated liquidity possible.

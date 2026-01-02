@@ -1,0 +1,270 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="State Structures" id="state" level="h2" />
+
+Before diving into instructions, we need to understand the four core data structures that make concentrated liquidity work. 
+
+Each serves a specific purpose in tracking prices, positions, and fees.
+
+<ArticleSection name="Pool" id="pool" level="h3" />
+
+The Pool account is the heart of the CLAMM. It stores the current price state and global fee accumulators:
+
+```rust
+#[account]
+pub struct Pool {
+    pub token_mint_x: Pubkey,
+    pub token_mint_y: Pubkey,
+    pub sqrt_price: u128,
+    pub tick_current_index: i32,
+    pub liquidity: u128,
+    pub fee_rate: u16,
+    pub tick_spacing: u16,
+    pub fee_growth_global_x: u128,
+    pub fee_growth_global_y: u128,
+    pub bump: u8,
+}
+```
+
+Let's break down each field:
+
+- **token_mint_x / token_mint_y**: The two tokens in the pair ordered lexicographically (mint_x < mint_y)
+- **sqrt_price**: Current price as sqrt(y/x) in Q64.64 fixed-point format.
+- **tick_current_index**: The tick corresponding to sqrt_price that is updated on every swap.
+- **liquidity**: Total liquidity currently active at the current tick. Only positions whose range includes the current tick contribute here.
+- **fee_rate**: Fee in basis point (3000 = 0.30%).
+- **tick_spacing**: Minimum distance between position boundaries.
+- **fee_growth_global_x / fee_growth_global_y**: Cumulative fees per unit of liquidity, in Q64.64. This is the key to O(1) fee calculation.
+- **bump**: PDA bump seed, cached to avoid recomputation.
+
+The pool is derived as a PDA from `[b"pool", min(mint_x, mint_y), max(mint_x, mint_y)]`, ensuring one pool per token pair.
+
+```rust
+impl Pool {
+    pub const LEN: usize = 8 + 32 + 32 + 16 + 4 + 16 + 2 + 2 + 16 + 16 + 1;
+
+    pub fn is_price_in_range(&self, tick_lower: i32, tick_upper: i32) -> bool {
+        self.tick_current_index >= tick_lower && self.tick_current_index < tick_upper
+    }
+}
+```
+
+<ArticleSection name="The Global Fee Accumulator" id="fee-accumulator" level="h3" />
+
+Differently from the constant product curve, where fees are shared across ALL liquidity provider, in the CLAMM fees needs to go to only the people that have active liquidity in that specific tick. 
+
+The naive approach would be to loop through all atvie positions every swap and update their fee balances. This is O(n) and doesn't scale.
+
+The way that we solve this is by tracking fees in a single global counter (`fee_growth_global`) that increases with every fee. 
+
+Each position then stores a "checkpoint" of where this counter was when they last interacted so the difference tells the fees earned.
+
+Think of it like a odometer: the pool's `fee_growth_global_x` is the total distance traveled and your position's `fee_growth_inside_last_x` is the odometer reading when you last checked. The difference × your liquidity = your fees.
+
+```
+fees_earned = (fee_growth_global - fee_growth_checkpoint) × liquidity
+```
+
+<ArticleSection name="Position" id="position" level="h3" />
+
+A Position represents one LP's liquidity in a specific price range. Ownership is tracked via an NFT for easiness of accounting:
+
+```rust
+#[account]
+pub struct Position {
+    pub pool: Pubkey,
+    pub position_mint: Pubkey,
+    pub tick_lower_index: i32,
+    pub tick_upper_index: i32,
+    pub liquidity: u128,
+    pub fee_growth_inside_last_x: u128,
+    pub fee_growth_inside_last_y: u128,
+    pub tokens_owed_x: u64,
+    pub tokens_owed_y: u64,
+}
+```
+
+- **pool**: Which pool this position belongs to
+- **position_mint**: NFT mint that represents ownership. Whoever holds this NFT owns the position.
+- **tick_lower_index / tick_upper_index**: The price range bounds. Lower is inclusive, upper is exclusive.
+- **liquidity**: How much liquidity this position provides when price is in range.
+- **fee_growth_inside_last_x/y**: Checkpoints for fee calculation. Stores the `fee_growth_inside` at last update.
+- **tokens_owed_x/y**: Accumulated fees waiting to be collected.
+
+The position is derived from its NFT mint: `[b"position", position_mint]`.
+
+```rust
+impl Position {
+    pub fn update_fees_owed(
+        &mut self,
+        fee_growth_inside_x: u128,
+        fee_growth_inside_y: u128,
+    ) {
+        let fee_growth_delta_x = fee_growth_inside_x.wrapping_sub(self.fee_growth_inside_last_x);
+        let fee_growth_delta_y = fee_growth_inside_y.wrapping_sub(self.fee_growth_inside_last_y);
+
+        let fees_x = ((fee_growth_delta_x as u128) * self.liquidity) >> 64;
+        let fees_y = ((fee_growth_delta_y as u128) * self.liquidity) >> 64;
+
+        self.tokens_owed_x = self.tokens_owed_x.saturating_add(fees_x as u64);
+        self.tokens_owed_y = self.tokens_owed_y.saturating_add(fees_y as u64);
+
+        self.fee_growth_inside_last_x = fee_growth_inside_x;
+        self.fee_growth_inside_last_y = fee_growth_inside_y;
+    }
+}
+```
+
+Note the `wrapping_sub`: fee growth only increases, but can overflow so wrapping subtraction handles this correctly because we only care about the difference.
+
+<ArticleSection name="Tick" id="tick" level="h3" />
+
+Ticks are the boundaries where liquidity changes. When price crosses a tick, some positions become active and others become inactive.
+
+```rust
+#[zero_copy(unsafe)]
+#[repr(C)]
+#[derive(Default)]
+pub struct Tick {
+    pub initialized: u8,
+    pub _padding: [u8; 7],
+    pub liquidity_net_lo: i64,
+    pub liquidity_net_hi: i64,
+    pub liquidity_gross: u128,
+    pub fee_growth_outside_x: u128,
+    pub fee_growth_outside_y: u128,
+}
+```
+
+We use `#[zero_copy]` because ticks are stored in arrays and accessed frequently. This avoids deserialization overhead and avoids "blowing up" the stack.
+
+- **initialized**: Whether any position uses this tick as a boundary
+- **liquidity_net**: Net liquidity change when crossing this tick left-to-right. Stored as two i64s because i128 isn't Pod-safe.
+- **liquidity_gross**: Total liquidity referencing this tick (used to know when to uninitialize)
+- **fee_growth_outside_x/y**: Fee growth accumulated "outside" this tick
+
+The `liquidity_net` is the key insight. If a position has range [100, 200]:
+- At tick 100 (lower bound): liquidity_net += position.liquidity
+- At tick 200 (upper bound): liquidity_net -= position.liquidity
+
+When price crosses tick 100 going up, that liquidity becomes active. When it crosses tick 200 going up, it becomes inactive. The net change is already precomputed!
+
+<ArticleSection name="fee_growth_outside" id="fee-growth-outside" level="h3" />
+
+To calculate `fee_growth_inside` a range, we need to know fees accumulated above and below that range. The `fee_growth_outside` field tracks this, but "outside" is relative to the current price.
+
+The invariant: `fee_growth_outside` represents fees accumulated on the side of the tick that does NOT contain the current price.
+
+When price crosses a tick, we "flip" the outside value:
+```rust
+pub fn cross(&mut self, fee_growth_global_x: u128, fee_growth_global_y: u128) {
+    self.fee_growth_outside_x = fee_growth_global_x.wrapping_sub(self.fee_growth_outside_x);
+    self.fee_growth_outside_y = fee_growth_global_y.wrapping_sub(self.fee_growth_outside_y);
+}
+```
+
+Why does this work? Before crossing, `outside` represents fees on one side. After crossing, we want fees on the other side. Since `global = outside + inside` for any tick, flipping gives us `global - outside = inside`, which becomes the new `outside` from the other perspective.
+
+The full formula for fee growth inside a range [lower, upper]:
+
+```rust
+pub fn get_fee_growth_inside(
+    tick_lower: &Tick,
+    tick_upper: &Tick,
+    tick_lower_index: i32,
+    tick_upper_index: i32,
+    tick_current_index: i32,
+    fee_growth_global_x: u128,
+    fee_growth_global_y: u128,
+) -> (u128, u128) {
+    // Fee growth below the position
+    let (fee_growth_below_x, fee_growth_below_y) = if tick_current_index >= tick_lower_index {
+        (tick_lower.fee_growth_outside_x, tick_lower.fee_growth_outside_y)
+    } else {
+        (
+            fee_growth_global_x.wrapping_sub(tick_lower.fee_growth_outside_x),
+            fee_growth_global_y.wrapping_sub(tick_lower.fee_growth_outside_y),
+        )
+    };
+
+    // Fee growth above the position  
+    let (fee_growth_above_x, fee_growth_above_y) = if tick_current_index < tick_upper_index {
+        (tick_upper.fee_growth_outside_x, tick_upper.fee_growth_outside_y)
+    } else {
+        (
+            fee_growth_global_x.wrapping_sub(tick_upper.fee_growth_outside_x),
+            fee_growth_global_y.wrapping_sub(tick_upper.fee_growth_outside_y),
+        )
+    };
+
+    // inside = global - below - above
+    let fee_growth_inside_x = fee_growth_global_x
+        .wrapping_sub(fee_growth_below_x)
+        .wrapping_sub(fee_growth_above_x);
+    let fee_growth_inside_y = fee_growth_global_y
+        .wrapping_sub(fee_growth_below_y)
+        .wrapping_sub(fee_growth_above_y);
+
+    (fee_growth_inside_x, fee_growth_inside_y)
+}
+```
+
+<ArticleSection name="TickArray" id="tick-array" level="h3" />
+
+With ticks ranging from -443636 to +443636, we can't store them all. Instead, we use TickArrays: contiguous chunks of 88 ticks each:
+
+```rust
+#[account(zero_copy(unsafe))]
+#[repr(C)]
+pub struct TickArray {
+    pub pool: Pubkey,
+    pub start_tick_index: i32,
+    pub _padding: [u8; 4],  // Required for repr(C) alignment
+    pub ticks: [Tick; TICK_ARRAY_SIZE], // 88 ticks
+}
+```
+
+> The `_padding` field: when using `#[repr(C)]`, the compiler inserts padding to align the `ticks` array to an 8-byte boundary (since `Tick` contains `i64` and `u128` fields). We must explicitly account for this in the struct and in the `LEN` constant, otherwise account allocation will be 4 bytes short.
+
+TickArrays are created lazily: only when a position or swap needs them. The start index must be aligned to `TICK_ARRAY_SIZE * tick_spacing`.
+
+```rust
+impl TickArray {
+    pub const LEN: usize = 8 +  // discriminator
+        32 +                     // pool
+        4 +                      // start_tick_index
+        4 +                      // _padding (repr(C) alignment)
+        (Tick::LEN * TICK_ARRAY_SIZE); // ticks
+
+    pub fn get_start_tick_index(tick_index: i32, tick_spacing: u16) -> i32 {
+        let ticks_in_array = (TICK_ARRAY_SIZE as i32) * (tick_spacing as i32);
+        let mut start = (tick_index / ticks_in_array) * ticks_in_array;
+        if tick_index < 0 && tick_index % ticks_in_array != 0 {
+            start -= ticks_in_array;
+        }
+        start
+    }
+}
+```
+
+The `zero_copy` attribute means we load the account data directly without deserializing. This is essential for performance since TickArrays are ~6KB each.
+
+<ArticleSection name="Constants" id="constants" level="h3" />
+
+Finally, the constants that define the system's bounds:
+
+```rust
+pub const MIN_TICK: i32 = -443636;
+pub const MAX_TICK: i32 = 443636;
+pub const TICK_ARRAY_SIZE: usize = 88;
+pub const Q64: u128 = 1u128 << 64;
+pub const FEE_RATE_DENOMINATOR: u64 = 1_000_000;
+pub const MAX_FEE_RATE: u64 = 100_000; // 10% max
+
+pub const MIN_SQRT_PRICE: u128 = 4295048016;
+pub const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
+```
+
+The tick bounds correspond to a price range of approximately 2^-128 to 2^128 - enough for any realistic token pair.
+
+Now let's dive into the math that makes these structures work together.

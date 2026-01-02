@@ -61,6 +61,22 @@ Write like you're explaining to a smart friend, not lecturing a classroom.
 - Cut "At this point in time" (use "Now")
 - Cut "It is important to understand that" (just explain it)
 
+**No artificial structure**
+- Cut "Key takeaways" and "Summary" sections
+- Cut numbered lists that could be prose
+- Cut "Security Checklist" boxes - weave security into the explanation
+- Headers are functional (Accounts, Logic) not pedagogical (Learning Objectives)
+
+**No equal-weight syndrome**
+- Don't give every concept the same amount of space
+- Dwell on the weird/tricky parts, skip the obvious
+- If something deserves 3 sentences, give it 3. If it deserves 0, cut it.
+
+**No compression without depth**
+- "This prevents attacks" is useless - walk through the attack
+- "Implements slippage protection" is useless - show what happens without it
+- Never summarize when you should explain
+
 </never_do>
 
 <examples>
@@ -111,3 +127,19 @@ Before finishing, read the content out loud. Does it sound like:
 The goal: readers feel smarter, not lectured at.
 
 </tone_check>
+
+<the_meta_rule>
+
+**Write like you're explaining to someone who interrupted you with a question while you were both looking at the code.**
+
+You'd just... tell them. No structure, no formality, no "Let me explain." Just the answer.
+
+This is the "senior dev explaining to a junior over coffee" voice:
+- Conversational but not dumbed down
+- Shows the "why" through storytelling, not bullet points
+- Code-first with inline commentary
+- Practical honesty ("There's a catch though...")
+- No artificial structure - flows naturally
+- Respects their time - no repetition, no filler
+
+</the_meta_rule>

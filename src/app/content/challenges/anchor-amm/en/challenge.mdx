@@ -1,0 +1,226 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor AMM Challenge](/graphics/challenge-banners/anchor-amm.png)
+
+# The AMM
+
+An Automated Market Maker (AMM) is a foundational building block of decentralized finance, enabling users to swap tokens directly with a smart contract rather than relying on a traditional order book or centralized exchange.
+
+<ArticleSection name="Constant Product Curve" id="constant-product-curve" level="h2" />
+
+At the heart of most AMMs is a simple but powerful formula known as the constant product curve. This formula ensures that the product of the two token reserves in the pool always remains constant, even as users trade or provide liquidity.
+
+### The Formula
+
+The most common AMM formula is: `x * y = k` where:
+- `x` = amount of token X in the pool
+- `y` = amount of token Y in the pool
+- `k` = a constant (never changes)
+
+Whenever someone swaps one token for another, the pool adjusts the reserves so that the product `k` remains unchanged. This creates a price curve that automatically adjusts based on supply and demand.
+
+> We talked closely about this mechanism in our [AMM architectures course](en/courses/amm-architectures/); make sure to start there before this challenge.
+
+### The Challenge
+
+In this challenge, you'll implement a simple AMM with four core instructions:
+- **Initialize**: Set up all the accounts needed for the AMM.
+- **Deposit**: Allow users to supply both `token_x` and `token_y` to receive LP tokens.
+- **Withdraw**: Enable users to redeem their LP tokens to withdraw their share of `token_x` and `token_y` from the pool.
+- **Swap**: Let anyone trade `token_x` for `token_y` (or vice versa) using the pool, with a small fee paid to liquidity providers.
+
+**Note**: If you're not familiar with Anchor, you should start by reading the [Anchor for Dummies](/en/courses/anchor-for-dummies) course to familiarize yourself with the core concepts that we're going to use in this program.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Let's start by creating a fresh Anchor workspace:
+
+```bash
+anchor init blueshift_anchor_amm
+cd blueshift_anchor_amm
+```
+
+We then continue by enabling `init-if-needed` on the `anchor-lang` crate and by adding the required crates:
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+cargo add --git="https://github.com/deanmlittle/constant-product-curve" constant-product-curve
+```
+
+The `constant-product-curve` crate created by [Dean](https://x.com/deanmlittle) handles all the mathematical calculations for our AMM.
+
+Since we're using `anchor-spl`, we also need to update the `programs/blueshift_anchor_amm/Cargo.toml` file to include `anchor-spl/idl-build` in the `idl-build` feature:
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+You can now open the newly generated folder, and you're ready to start coding!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+This time, since the program is quite complex, we're going to split it into small, focused modules instead of cramming everything into the `lib.rs`.
+
+The folder tree will look roughly like this:
+
+```
+src
+├── instructions
+│       ├── initialize.rs
+│       ├── deposit.rs
+│       ├── withdraw.rs
+│       ├── swap.rs
+│       ├── config_action.rs
+│       └── mod.rs
+├── constants.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+The `lib.rs` will look roughly like this:
+
+```rust
+use anchor_lang::prelude::*;
+
+mod state;
+mod errors;
+mod constants;
+mod instructions;
+
+pub use instructions::*;
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_amm {
+    use super::*;
+
+    #[instruction(discriminator = 0)]
+    pub fn initialize(
+        ctx: Context<Initialize>, 
+        seed: u64, 
+        authority: Pubkey, 
+        fee: u16,
+        init_amount_x: u64,
+        init_amount_y: u64,
+    ) -> Result<()> {
+        instructions::initialize(ctx, seed, authority, fee, init_amount_x, init_amount_y)
+    }
+
+    #[instruction(discriminator = 1)]
+    pub fn deposit(ctx: Context<Deposit>, amount: u64, max_x: u64, max_y: u64, expiration: i64) -> Result<()> {
+        instructions::deposit(ctx, amount, max_x, max_y, expiration)
+    }
+
+    #[instruction(discriminator = 2)]
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64, min_x: u64, min_y: u64, expiration: i64) -> Result<()> {
+        instructions::withdraw(ctx, amount, min_x, min_y, expiration)
+    }
+
+    #[instruction(discriminator = 3)]
+    pub fn swap(ctx: Context<Swap>, amount: u64, min: u64, expiration: i64) -> Result<()> {
+        instructions::swap(ctx, amount, min, expiration)
+    }
+}
+```
+
+As you see, we implemented custom discriminators for the instructions. Make sure to use Anchor version 0.31.0 or newer.
+
+<ArticleSection name="State" id="state" level="h2" />
+
+We're going to move into the `state.rs` where all the data for our AMM lives. We'll define the `Config` struct that holds the pool configuration:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[account(discriminator = 1)]
+#[derive(InitSpace)]
+pub struct Config {
+    pub seed: u64,
+    pub authority: Pubkey,
+    pub mint_x: Pubkey,
+    pub mint_y: Pubkey,
+    pub fee: u16,
+    pub locked: bool,
+    pub lp_bump: u8,
+    pub bump: u8
+}
+```
+
+What each field does:
+- **seed**: Random number used during seed derivation so one authority can create multiple pools with the same token pair.
+- **authority**: The wallet with administrative control over the AMM (can lock/unlock, update fees).
+- **mint_x** & **mint_y**: The SPL token mint addresses for the two tokens in the pool.
+- **fee**: The swap fee in basis points (1 basis point = 0.01%).
+- **locked**: Whether the pool is locked (prevents deposits/withdrawals/swaps).
+- **lp_bump**: Cached bump byte for the LP mint PDA.
+- **bump**: Cached bump byte for the config PDA.
+
+<ArticleSection name="Constants" id="constants" level="h2" />
+
+In `constants.rs`, we define a critical security measure:
+
+```rust
+pub const MINIMUM_LIQUIDITY: u64 = 1000;
+```
+
+This `MINIMUM_LIQUIDITY` is subtracted from the first LP mint and effectively "burned" (never minted to anyone). 
+
+This prevents inflation attacks where an attacker could manipulate the pool with tiny amounts of liquidity.
+
+> You can read more about Inflation Attack in our [Introduction to DeFi course](en/courses/introduction-to-defi/liquidity-provision)
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+In `errors.rs`, we define the custom errors for our AMM:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum AmmError {
+    #[msg("Invalid fee")]
+    InvalidFee,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Overflow")]
+    Overflow,
+    #[msg("Insufficient initial liquidity")]
+    InsufficientInitialLiquidity,
+    #[msg("Pool is locked")]
+    PoolLocked,
+    #[msg("Offer expired")]
+    OfferExpired,
+    #[msg("Pool not initialized")]
+    PoolNotInitialized,
+    #[msg("Slippage exceeded")]
+    SlippageExceeded,
+    #[msg("Invalid mint")]
+    InvalidMint,
+    #[msg("Invalid token")]
+    InvalidToken,
+}
+```
+
+<ArticleSection name="Token-2022 Support" id="token-2022" level="h2" />
+
+A key feature of this AMM is its support for both the original SPL Token program and the newer Token-2022 program. This is achieved by using the `token_interface` module from `anchor-spl`:
+
+```rust
+use anchor_spl::token_interface::{Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount};
+use anchor_spl::token_2022::{Token2022, spl_token_2022};
+```
+
+When performing transfers, we check which program owns the mint and use the appropriate program:
+
+```rust
+let program = if *mint.owner == spl_token_2022::ID {
+    self.token_2022_program.as_ref().ok_or(AmmError::InvalidToken)?.to_account_info()
+} else {
+    self.token_program.to_account_info()
+};
+```
+
+This allows the AMM to work with both standard SPL tokens and Token-2022 tokens seamlessly.
