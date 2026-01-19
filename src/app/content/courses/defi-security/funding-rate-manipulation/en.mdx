@@ -1,0 +1,769 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Funding Rate Manipulation
+
+March 2024. A trader on Hyperliquid notices something unusual. The JELLY token has a tiny perp market - less than $1M in open interest. They open a massive position, deliberately pushing the funding rate to extreme levels. Other traders, trapped in positions they can't exit, bleed money to the attacker every 8 hours.
+
+Hyperliquid loses $12 million unwinding the position. The attacker walks away profitable.
+
+This is funding rate manipulation. When the mechanism designed to keep prices aligned becomes a weapon.
+
+<ArticleSection name="How Funding Rates Work" id="how-funding-works" level="h2" />
+
+Perpetual futures have no expiry date. Without expiry, there's no natural force keeping the perp price aligned with spot. Funding rates create artificial alignment.
+
+The rule:
+- **Perp price > Spot price**: Longs pay shorts
+- **Perp price < Spot price**: Shorts pay longs
+
+```rust
+pub fn calculate_funding_rate(mark_price: u64, index_price: u64) -> i64 {
+    // Premium = (mark - index) / index
+    let premium = (mark_price as i128 - index_price as i128) * 1_000_000
+        / index_price as i128;
+
+    // Funding rate = premium * scaling factor
+    // Typical: 1/24 (settles every 8 hours, 3x per day)
+    let funding_rate = premium / 24;
+
+    funding_rate as i64
+}
+
+pub fn apply_funding(position: &mut Position, funding_rate: i64) {
+    // Funding payment = position_size * funding_rate
+    let payment = position.size as i128 * funding_rate / 1_000_000;
+
+    if position.is_long {
+        // Longs pay when funding is positive
+        position.margin -= payment as i64;
+    } else {
+        // Shorts receive when funding is positive
+        position.margin += payment as i64;
+    }
+}
+```
+
+This creates an equilibrium. If too many traders are long, funding goes positive, making longs expensive. Some longs close, some shorts open, and the market rebalances.
+
+<ArticleSection name="When Funding Becomes an Attack Vector" id="attack-vector" level="h2" />
+
+### The Problem: Thin Markets
+
+Funding rate manipulation works when:
+
+1. **Market is thin** - Few participants, low open interest
+2. **Attacker can dominate one side** - Enough capital to be 80%+ of longs or shorts
+3. **Other traders are trapped** - Can't exit without moving price against themselves
+4. **Funding accrues faster than they can escape**
+
+### Attack Mechanics
+
+```
+Initial state:
+  JELLY-PERP open interest: $500K long, $500K short
+  Funding rate: 0.01% per 8 hours (normal)
+
+Attacker opens $5M long:
+  New state: $5.5M long, $500K short
+  Massive imbalance → funding rate spikes
+
+New funding rate: 0.5% per 8 hours
+  Shorts pay: $500K × 0.5% = $2,500 every 8 hours
+  Attacker receives most of this (owns ~91% of longs)
+
+Per day: Shorts bleed ~$7,500 to attacker
+Per week: ~$52,500
+
+Meanwhile:
+  - Shorts can't close without moving price up (attacker profits on position)
+  - New shorts are expensive (high funding discourages them)
+  - Attacker extracts value until shorts capitulate
+```
+
+<ArticleSection name="Real Incidents" id="real-incidents" level="h2" />
+
+### Hyperliquid JELLY Incident (March 2024)
+
+A trader identified that JELLY had minimal perp liquidity:
+
+1. Opened massive long position ($5M+ on a $1M OI market)
+2. Funding rate spiked to extreme levels (reportedly 1%+ per 8 hours)
+3. Shorts were trapped - couldn't exit at reasonable prices
+4. Shorts bled funding payments for days
+5. Hyperliquid eventually had to manually unwind positions
+6. Protocol took ~$12M in losses covering bad debt
+
+The attacker profited both from funding payments and from the protocol's forced unwind.
+
+### dYdX SUSHI Manipulation (2022)
+
+Similar attack on dYdX's SUSHI perpetual market:
+
+1. Attacker accumulated large position
+2. Manipulated funding rates through position dominance
+3. Extracted ~$9M before being stopped
+4. dYdX had to implement emergency circuit breakers
+
+### Perpetual Protocol Attacks
+
+Multiple incidents on Perpetual Protocol's virtual AMM:
+
+1. Thin markets allowed single traders to dominate
+2. Funding rates reached 100%+ APR
+3. Protocol had to deprecate affected markets
+
+<ArticleSection name="The Vulnerable Pattern" id="vulnerable-pattern" level="h2" />
+
+```rust
+// VULNERABLE: No limits on position dominance
+pub fn open_position(ctx: Context<OpenPosition>, size: u64, is_long: bool) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let position = &mut ctx.accounts.position;
+
+    if is_long {
+        market.total_long_oi += size;
+    } else {
+        market.total_short_oi += size;
+    }
+
+    position.size = size;
+    position.is_long = is_long;
+
+    // No check for:
+    // - Position dominance (% of total OI)
+    // - Open interest imbalance limits
+    // - Funding rate caps
+
+    Ok(())
+}
+
+// VULNERABLE: Funding rate can go arbitrarily high
+pub fn calculate_funding_rate(market: &Market) -> i64 {
+    let mark = market.mark_price;
+    let index = market.index_price;
+
+    // Simple premium calculation - no bounds
+    let premium = (mark as i128 - index as i128) * 1_000_000 / index as i128;
+
+    premium as i64 / 24
+}
+```
+
+Problems:
+
+1. **No position size limits relative to market** - Single user can own 90%+ of one side
+2. **No funding rate caps** - Rates can reach extreme levels
+3. **No open interest imbalance limits** - One side can be 10x the other
+4. **No velocity limits** - Rates can spike instantly
+
+<ArticleSection name="The Fix: Position Dominance Limits" id="fix-dominance" level="h2" />
+
+Prevent any single user from dominating a market:
+
+```rust
+#[account]
+pub struct Market {
+    pub total_long_oi: u64,
+    pub total_short_oi: u64,
+    pub max_position_dominance: u16,  // e.g., 2000 = 20%
+    pub max_oi_imbalance: u16,        // e.g., 5000 = 5:1 ratio
+}
+
+pub fn open_position(ctx: Context<OpenPosition>, size: u64, is_long: bool) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let user_position = &ctx.accounts.position;
+
+    // Calculate new position size
+    let new_position_size = user_position.size + size;
+
+    // Check dominance limit
+    let same_side_oi = if is_long {
+        market.total_long_oi + size
+    } else {
+        market.total_short_oi + size
+    };
+
+    let dominance = new_position_size * 10000 / same_side_oi;
+
+    require!(
+        dominance <= market.max_position_dominance as u64,
+        ErrorCode::ExceedsPositionDominance
+    );
+
+    // Check OI imbalance limit
+    let (larger, smaller) = if is_long {
+        (market.total_long_oi + size, market.total_short_oi)
+    } else {
+        (market.total_short_oi + size, market.total_long_oi)
+    };
+
+    let imbalance = larger * 10000 / smaller.max(1);
+
+    require!(
+        imbalance <= market.max_oi_imbalance as u64,
+        ErrorCode::ExceedsOiImbalance
+    );
+
+    // ... rest of position opening logic
+
+    Ok(())
+}
+```
+
+### Example
+
+```
+Market config:
+  max_position_dominance: 20%
+  max_oi_imbalance: 3:1
+
+Current state:
+  Long OI: $1M
+  Short OI: $1M
+
+Attacker tries to open $5M long:
+  Would create: $6M long vs $1M short
+  Dominance: $5M / $6M = 83% ✗ (exceeds 20%)
+  Imbalance: 6:1 ✗ (exceeds 3:1)
+
+  → Position rejected
+
+Attacker can only open ~$250K long:
+  Would create: $1.25M long vs $1M short
+  Dominance: $250K / $1.25M = 20% ✓
+  Imbalance: 1.25:1 ✓
+
+  → Position allowed, but can't dominate market
+```
+
+<ArticleSection name="The Fix: Funding Rate Caps" id="fix-funding-caps" level="h2" />
+
+Limit how extreme funding can get:
+
+```rust
+#[account]
+pub struct FundingConfig {
+    pub max_funding_rate: i64,        // e.g., 10000 = 0.1% per period
+    pub max_funding_velocity: i64,    // Max change per period
+    pub last_funding_rate: i64,
+    pub dampening_factor: u16,        // Slow down rate changes
+}
+
+impl FundingConfig {
+    pub fn calculate_funding_rate(
+        &mut self,
+        mark_price: u64,
+        index_price: u64,
+    ) -> i64 {
+        // Calculate raw premium
+        let premium = (mark_price as i128 - index_price as i128) * 1_000_000
+            / index_price as i128;
+
+        // Target rate based on premium
+        let target_rate = premium as i64 / 24;
+
+        // Apply dampening - rate moves gradually toward target
+        let rate_change = (target_rate - self.last_funding_rate)
+            * self.dampening_factor as i64 / 10000;
+
+        let new_rate = self.last_funding_rate + rate_change;
+
+        // Apply velocity limit
+        let clamped_change = rate_change.clamp(
+            -self.max_funding_velocity,
+            self.max_funding_velocity,
+        );
+        let velocity_limited = self.last_funding_rate + clamped_change;
+
+        // Apply absolute cap
+        let final_rate = velocity_limited.clamp(
+            -self.max_funding_rate,
+            self.max_funding_rate,
+        );
+
+        self.last_funding_rate = final_rate;
+        final_rate
+    }
+}
+```
+
+### Example
+
+```
+Config:
+  max_funding_rate: 0.1% per 8 hours
+  max_funding_velocity: 0.02% change per period
+  dampening_factor: 50%
+
+Period 1:
+  Market imbalance creates 0.5% "target" rate
+  Current rate: 0.01%
+  Change needed: 0.49%
+  Dampened change: 0.49% × 50% = 0.245%
+  Velocity limited: 0.02% (max)
+  New rate: 0.03%
+
+Period 2:
+  Target still 0.5%
+  Change: 0.02% (velocity limited)
+  New rate: 0.05%
+
+Period 3:
+  Change: 0.02%
+  New rate: 0.07%
+
+Period 4:
+  Change: 0.02%
+  New rate: 0.09%
+
+Period 5:
+  Would be 0.11%, but capped at 0.1%
+  Final rate: 0.1% (max cap hit)
+```
+
+The attacker can't spike funding instantly. Other traders have time to react.
+
+<ArticleSection name="The Fix: Dynamic Fees" id="fix-dynamic-fees" level="h2" />
+
+Charge higher fees when positions increase imbalance:
+
+```rust
+pub fn calculate_trading_fee(
+    market: &Market,
+    size: u64,
+    is_long: bool,
+) -> u64 {
+    let base_fee = size * 10 / 10000;  // 0.1% base
+
+    // Calculate how much this trade increases imbalance
+    let current_imbalance = market.total_long_oi as i128 - market.total_short_oi as i128;
+    let new_imbalance = if is_long {
+        current_imbalance + size as i128
+    } else {
+        current_imbalance - size as i128
+    };
+
+    // If trade increases imbalance, charge premium
+    if new_imbalance.abs() > current_imbalance.abs() {
+        let imbalance_increase = new_imbalance.abs() - current_imbalance.abs();
+        let total_oi = market.total_long_oi + market.total_short_oi;
+
+        // Premium scales with how much imbalance worsens
+        let premium_bps = imbalance_increase * 100 / total_oi as i128;
+        let premium = size * premium_bps as u64 / 10000;
+
+        base_fee + premium
+    } else {
+        // Trade reduces imbalance - give discount
+        base_fee / 2
+    }
+}
+```
+
+Attackers pay extra to create imbalance. Traders who reduce imbalance get discounts.
+
+<ArticleSection name="The Fix: Insurance Against Extreme Funding" id="fix-insurance" level="h2" />
+
+Cap losses from extreme funding:
+
+```rust
+#[account]
+pub struct Position {
+    pub owner: Pubkey,
+    pub size: u64,
+    pub margin: u64,
+    pub is_long: bool,
+    pub funding_paid: i64,            // Total funding paid (negative) or received
+    pub max_funding_loss: u64,        // User-set cap on funding losses
+}
+
+pub fn apply_funding(
+    position: &mut Position,
+    funding_rate: i64,
+    insurance_fund: &mut u64,
+) -> Result<()> {
+    let payment = position.size as i128 * funding_rate / 1_000_000;
+
+    let net_payment = if position.is_long {
+        -payment  // Longs pay when rate is positive
+    } else {
+        payment   // Shorts receive when rate is positive
+    } as i64;
+
+    // Track total funding
+    let new_total = position.funding_paid + net_payment;
+
+    // Check if user would exceed their funding loss cap
+    if new_total < -(position.max_funding_loss as i64) {
+        // Insurance covers excess
+        let excess = -(new_total) - position.max_funding_loss as i64;
+
+        require!(
+            *insurance_fund >= excess as u64,
+            ErrorCode::InsuranceInsufficient
+        );
+
+        *insurance_fund -= excess as u64;
+        position.funding_paid = -(position.max_funding_loss as i64);
+    } else {
+        position.funding_paid = new_total;
+    }
+
+    // Apply to margin
+    position.margin = (position.margin as i64 + net_payment).max(0) as u64;
+
+    Ok(())
+}
+```
+
+Users can set a max funding loss. Beyond that, insurance kicks in (paid for by position fees).
+
+<ArticleSection name="Complete Funding Rate Protection" id="complete-system" level="h2" />
+
+```rust
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct ProtectedPerpMarket {
+    pub authority: Pubkey,
+    pub mark_price: u64,
+    pub index_price: u64,
+    pub total_long_oi: u64,
+    pub total_short_oi: u64,
+    pub insurance_fund: u64,
+
+    // Position limits
+    pub max_position_dominance_bps: u16,   // Max % of one side
+    pub max_oi_imbalance_ratio: u16,       // Max long/short ratio
+
+    // Funding limits
+    pub max_funding_rate_bps: i64,         // Max rate per period
+    pub max_funding_velocity_bps: i64,     // Max rate change per period
+    pub funding_dampening_bps: u16,        // Slowdown factor
+    pub current_funding_rate: i64,
+    pub last_funding_update: i64,
+
+    // Circuit breaker
+    pub emergency_mode: bool,
+    pub max_oi: u64,                       // Cap total market size
+}
+
+impl ProtectedPerpMarket {
+    pub fn check_position_limits(
+        &self,
+        new_size: u64,
+        current_position_size: u64,
+        is_long: bool,
+    ) -> Result<()> {
+        let total_new_size = current_position_size + new_size;
+
+        // Check total OI cap
+        let new_total_oi = self.total_long_oi + self.total_short_oi + new_size;
+        require!(
+            new_total_oi <= self.max_oi,
+            ErrorCode::ExceedsMaxOi
+        );
+
+        // Check dominance
+        let same_side_oi = if is_long {
+            self.total_long_oi + new_size
+        } else {
+            self.total_short_oi + new_size
+        };
+
+        let dominance_bps = total_new_size * 10000 / same_side_oi;
+        require!(
+            dominance_bps <= self.max_position_dominance_bps as u64,
+            ErrorCode::ExceedsPositionDominance
+        );
+
+        // Check imbalance
+        let (larger, smaller) = if is_long {
+            (self.total_long_oi + new_size, self.total_short_oi)
+        } else {
+            (self.total_short_oi + new_size, self.total_long_oi)
+        };
+
+        if smaller > 0 {
+            let ratio = larger * 100 / smaller;
+            require!(
+                ratio <= self.max_oi_imbalance_ratio as u64 * 100,
+                ErrorCode::ExceedsOiImbalance
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn update_funding_rate(&mut self, clock: &Clock) -> Result<i64> {
+        // Only update once per period (e.g., every hour)
+        let period = 3600; // 1 hour
+        if clock.unix_timestamp - self.last_funding_update < period {
+            return Ok(self.current_funding_rate);
+        }
+
+        // Calculate target rate based on premium
+        let premium_bps = if self.index_price > 0 {
+            (self.mark_price as i128 - self.index_price as i128) * 10000
+                / self.index_price as i128
+        } else {
+            0
+        };
+
+        // Target = premium / 8 (for 8-hour convergence)
+        let target_rate = premium_bps as i64 / 8;
+
+        // Apply dampening
+        let rate_change = (target_rate - self.current_funding_rate)
+            * self.funding_dampening_bps as i64 / 10000;
+
+        // Apply velocity limit
+        let clamped_change = rate_change.clamp(
+            -self.max_funding_velocity_bps,
+            self.max_funding_velocity_bps,
+        );
+
+        let new_rate = self.current_funding_rate + clamped_change;
+
+        // Apply absolute cap
+        self.current_funding_rate = new_rate.clamp(
+            -self.max_funding_rate_bps,
+            self.max_funding_rate_bps,
+        );
+
+        self.last_funding_update = clock.unix_timestamp;
+
+        Ok(self.current_funding_rate)
+    }
+
+    pub fn calculate_fee(&self, size: u64, is_long: bool) -> u64 {
+        let base_fee_bps = 10; // 0.1%
+        let base_fee = size * base_fee_bps / 10000;
+
+        // Check if trade worsens imbalance
+        let current_imbalance = self.total_long_oi as i128 - self.total_short_oi as i128;
+        let trade_impact = if is_long { size as i128 } else { -(size as i128) };
+        let new_imbalance = current_imbalance + trade_impact;
+
+        if new_imbalance.abs() > current_imbalance.abs() {
+            // Worsens imbalance - charge premium
+            let total_oi = (self.total_long_oi + self.total_short_oi).max(1);
+            let imbalance_change = (new_imbalance.abs() - current_imbalance.abs()) as u64;
+            let premium_bps = imbalance_change * 50 / total_oi; // Up to 5% extra
+            let premium = size * premium_bps / 10000;
+
+            base_fee + premium.min(size * 500 / 10000) // Cap at 5%
+        } else {
+            // Reduces imbalance - discount
+            base_fee * 50 / 100 // 50% discount
+        }
+    }
+}
+
+#[account]
+pub struct ProtectedPosition {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+    pub size: u64,
+    pub entry_price: u64,
+    pub margin: u64,
+    pub is_long: bool,
+    pub cumulative_funding: i64,
+    pub max_funding_loss: u64,        // User-configured cap
+    pub opened_at: i64,
+}
+
+pub fn open_position(
+    ctx: Context<OpenPosition>,
+    size: u64,
+    is_long: bool,
+    max_funding_loss: u64,
+) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let position = &mut ctx.accounts.position;
+    let clock = Clock::get()?;
+
+    // Emergency mode check
+    require!(!market.emergency_mode, ErrorCode::MarketPaused);
+
+    // Check position limits
+    market.check_position_limits(size, position.size, is_long)?;
+
+    // Calculate and collect fee
+    let fee = market.calculate_fee(size, is_long);
+    transfer_fee(fee)?;
+
+    // Update market state
+    if is_long {
+        market.total_long_oi += size;
+    } else {
+        market.total_short_oi += size;
+    }
+
+    // Update position
+    position.size += size;
+    position.is_long = is_long;
+    position.max_funding_loss = max_funding_loss;
+    position.opened_at = clock.unix_timestamp;
+
+    emit!(PositionOpened {
+        user: position.owner,
+        market: market.key(),
+        size,
+        is_long,
+        fee,
+    });
+
+    Ok(())
+}
+
+pub fn apply_funding(ctx: Context<ApplyFunding>) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let position = &mut ctx.accounts.position;
+    let clock = Clock::get()?;
+
+    // Update market funding rate
+    let funding_rate = market.update_funding_rate(&clock)?;
+
+    // Calculate payment
+    let payment_bps = position.size as i128 * funding_rate as i128 / 10000;
+    let payment = if position.is_long {
+        -payment_bps // Longs pay when rate positive
+    } else {
+        payment_bps  // Shorts receive when rate positive
+    } as i64;
+
+    // Track cumulative funding
+    let new_cumulative = position.cumulative_funding + payment;
+
+    // Check funding loss cap
+    if new_cumulative < -(position.max_funding_loss as i64) {
+        let excess = (-new_cumulative) as u64 - position.max_funding_loss;
+
+        // Try to cover from insurance
+        if market.insurance_fund >= excess {
+            market.insurance_fund -= excess;
+            position.cumulative_funding = -(position.max_funding_loss as i64);
+
+            emit!(FundingCapped {
+                position: position.key(),
+                excess_covered: excess,
+            });
+        } else {
+            // Insurance insufficient - apply what we can
+            let covered = market.insurance_fund;
+            market.insurance_fund = 0;
+            position.cumulative_funding = -(position.max_funding_loss as i64 + covered);
+
+            emit!(InsuranceExhausted {
+                position: position.key(),
+                uncovered_amount: excess - covered,
+            });
+        }
+    } else {
+        position.cumulative_funding = new_cumulative;
+    }
+
+    // Apply to margin
+    position.margin = (position.margin as i64 + payment).max(0) as u64;
+
+    Ok(())
+}
+
+pub fn emergency_pause(ctx: Context<EmergencyPause>) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+
+    // Only authority can pause
+    require!(
+        ctx.accounts.authority.key() == market.authority,
+        ErrorCode::Unauthorized
+    );
+
+    // Check for extreme conditions
+    let imbalance_ratio = if market.total_short_oi > 0 {
+        market.total_long_oi * 100 / market.total_short_oi
+    } else if market.total_long_oi > 0 {
+        10000 // Extreme imbalance
+    } else {
+        100 // Balanced
+    };
+
+    // Auto-trigger if imbalance is extreme
+    if imbalance_ratio > 1000 || imbalance_ratio < 10 {
+        market.emergency_mode = true;
+        emit!(EmergencyPauseTriggered {
+            market: market.key(),
+            imbalance_ratio,
+        });
+    }
+
+    Ok(())
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Exceeds maximum open interest")]
+    ExceedsMaxOi,
+    #[msg("Position would dominate market")]
+    ExceedsPositionDominance,
+    #[msg("Would create excessive OI imbalance")]
+    ExceedsOiImbalance,
+    #[msg("Market is paused")]
+    MarketPaused,
+    #[msg("Unauthorized")]
+    Unauthorized,
+}
+
+#[event]
+pub struct PositionOpened {
+    pub user: Pubkey,
+    pub market: Pubkey,
+    pub size: u64,
+    pub is_long: bool,
+    pub fee: u64,
+}
+
+#[event]
+pub struct FundingCapped {
+    pub position: Pubkey,
+    pub excess_covered: u64,
+}
+
+#[event]
+pub struct InsuranceExhausted {
+    pub position: Pubkey,
+    pub uncovered_amount: u64,
+}
+
+#[event]
+pub struct EmergencyPauseTriggered {
+    pub market: Pubkey,
+    pub imbalance_ratio: u64,
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+Funding rate manipulation exploits the gap between mechanism design and market reality:
+
+**1. Thin markets are vulnerable**
+
+Funding rates assume competitive markets. When one trader can dominate, the mechanism breaks.
+
+**2. Limits need to be multi-dimensional**
+
+Position size limits alone aren't enough. You need dominance limits, imbalance limits, and rate caps working together.
+
+**3. Speed is the enemy**
+
+Instant rate changes favor attackers. Dampening and velocity limits give defenders time to react.
+
+**4. Incentivize balance**
+
+Dynamic fees that penalize imbalance make attacks expensive. Discounts for reducing imbalance attract defenders.
+
+**5. Plan for extreme cases**
+
+Insurance, circuit breakers, and emergency modes accept that attacks will happen. The question is how much damage they can do.
+
+When you build a perpetuals protocol, don't just model normal market conditions. Model a single trader with $10M trying to extract value from your funding mechanism. If they can profit, they will.

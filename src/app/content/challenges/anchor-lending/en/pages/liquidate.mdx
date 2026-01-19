@@ -1,0 +1,176 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Liquidate" id="liquidate" level="h2" />
+
+Liquidation is the enforcement mechanism that keeps the protocol solvent. When a position's health factor drops below 1.0, anyone can repay part of the debt and receive collateral at a discount.
+
+### Accounts
+
+- `market`: The lending market PDA
+- `repay_reserve`: Reserve of the debt being repaid
+- `repay_vault`: Vault for the repay reserve
+- `collateral_reserve`: Reserve of the collateral being seized
+- `collateral_vault`: Vault holding the collateral
+- `collateral_mint`: Mint for collateral shares (needed to track supply reduction)
+- `obligation`: The underwater position being liquidated
+- `liquidator_repay_account`: Liquidator's tokens to repay debt
+- `liquidator_collateral_account`: Where liquidator receives seized collateral
+- `liquidator`: Signer executing the liquidation
+- `token_program`: SPL Token program
+
+### Security: Same-Slot Refresh
+
+The most critical security check in liquidation:
+
+```rust
+require!(
+    ctx.accounts.obligation.last_refresh_slot == clock.slot,
+    LendingError::ObligationStale
+);
+```
+
+Why same-slot? Consider this attack without it:
+1. Attacker refreshes obligation at slot N (health = 0.95)
+2. Price moves favorably at slot N+1
+3. At slot N+2, attacker liquidates using stale health factor
+4. Victim loses collateral despite being healthy
+
+By requiring same-slot refresh, the health factor calculation uses the exact same prices as the liquidation.
+
+### Logic
+
+```rust
+pub fn liquidate_handler(ctx: Context<Liquidate>, max_repay: u64) -> Result<()> {
+    let clock = Clock::get()?;
+    
+    // Safety checks
+    require!(
+        ctx.accounts.repay_vault.key() != ctx.accounts.liquidator_repay_account.key(),
+        LendingError::InvalidAccountInput
+    );
+    require!(
+        ctx.accounts.collateral_vault.key() != ctx.accounts.liquidator_collateral_account.key(),
+        LendingError::InvalidAccountInput
+    );
+    
+    // Reserves must be fresh
+    require!(!ctx.accounts.repay_reserve.is_stale(clock.slot), LendingError::ReserveStale);
+    require!(!ctx.accounts.collateral_reserve.is_stale(clock.slot), LendingError::ReserveStale);
+    
+    // CRITICAL: Obligation must be refreshed THIS SLOT
+    require!(
+        ctx.accounts.obligation.last_refresh_slot == clock.slot,
+        LendingError::ObligationStale
+    );
+    
+    // Must be underwater
+    require!(
+        ctx.accounts.obligation.last_health_factor < PRECISION,
+        LendingError::PositionHealthy
+    );
+    
+    // Find the positions
+    let borrow = ctx.accounts.obligation.get_borrow(ctx.accounts.repay_reserve.key())
+        .ok_or(LendingError::ReserveNotFound)?;
+    let deposit = ctx.accounts.obligation.get_deposit(ctx.accounts.collateral_reserve.key())
+        .ok_or(LendingError::ReserveNotFound)?;
+    
+    // Calculate actual debt
+    let actual_debt = borrow.get_debt(ctx.accounts.repay_reserve.cumulative_borrow_rate);
+    
+    // Apply close factor (can't liquidate more than 50%)
+    let max_close = (actual_debt as u128 * CLOSE_FACTOR_BPS as u128 / BPS_SCALE as u128) as u64;
+    let repay_amount = std::cmp::min(max_repay, max_close);
+    let repay_amount = std::cmp::min(repay_amount, actual_debt);
+    require!(repay_amount > 0, LendingError::InvalidAmount);
+
+    // Calculate collateral to seize using USD values
+    let repay_usd = ctx.accounts.repay_reserve.get_debt_value(
+        (repay_amount as u128) * PRECISION / ctx.accounts.repay_reserve.cumulative_borrow_rate
+    );
+    
+    // Add liquidation bonus
+    let bonus_multiplier = BPS_SCALE as u128 + ctx.accounts.collateral_reserve.liquidation_bonus_bps as u128;
+    let seize_usd = repay_usd * bonus_multiplier / BPS_SCALE as u128;
+    
+    // Convert USD to collateral tokens
+    let collateral_price = ctx.accounts.collateral_reserve.cached_price;
+    require!(collateral_price > 0, LendingError::InvalidOraclePrice);
+    
+    // ... price conversion math (handling decimals and exponents)
+    
+    // Cap at available collateral
+    let seize_collateral = std::cmp::min(calculated_seize, deposit.collateral_shares);
+    let actual_seize_liquidity = ctx.accounts.collateral_reserve.collateral_to_liquidity(seize_collateral);
+    require!(actual_seize_liquidity > 0, LendingError::InvalidAmount);
+
+    // Scale factor for debt reduction
+    let settle_sf = (repay_amount as u128) * PRECISION / ctx.accounts.repay_reserve.cumulative_borrow_rate;
+
+    // Execute transfers
+    // 1. Liquidator repays debt
+    token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.liquidator_repay_account.to_account_info(),
+                to: ctx.accounts.repay_vault.to_account_info(),
+                authority: ctx.accounts.liquidator.to_account_info(),
+            },
+        ),
+        repay_amount,
+    )?;
+
+    // 2. Collateral transferred to liquidator
+    let seeds = &[
+        RESERVE_SEED,
+        market_key.as_ref(),
+        collateral_mint_key.as_ref(),
+        &[ctx.accounts.collateral_reserve.bump],
+    ];
+
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.collateral_vault.to_account_info(),
+                to: ctx.accounts.liquidator_collateral_account.to_account_info(),
+                authority: ctx.accounts.collateral_reserve.to_account_info(),
+            },
+            &[seeds],
+        ),
+        actual_seize_liquidity,
+    )?;
+
+    // Update repay reserve
+    ctx.accounts.repay_reserve.available_liquidity += repay_amount;
+    ctx.accounts.repay_reserve.borrowed_liquidity = 
+        ctx.accounts.repay_reserve.borrowed_liquidity.saturating_sub(repay_amount);
+
+    // Update collateral reserve
+    ctx.accounts.collateral_reserve.available_liquidity -= actual_seize_liquidity;
+    ctx.accounts.collateral_reserve.collateral_mint_supply -= seize_collateral;
+
+    // Update obligation
+    ctx.accounts.obligation.reduce_borrow(ctx.accounts.repay_reserve.key(), settle_sf)?;
+    ctx.accounts.obligation.remove_deposit(ctx.accounts.collateral_reserve.key(), seize_collateral)?;
+
+    msg!("Liquidated: repaid {}, seized {} collateral", repay_amount, actual_seize_liquidity);
+    Ok(())
+}
+```
+
+### Key Points
+
+**Close Factor**: We limit liquidation to 50% of debt. This protects borrowers from being completely wiped out by a brief price dip and prevents cascade effects from dumping large amounts of collateral.
+
+**Liquidation Bonus**: The liquidator receives collateral worth `repay_amount × (1 + bonus_bps / 10000)`. A 5% bonus means repaying $1000 of debt yields $1050 of collateral. This incentivizes liquidators to act quickly.
+
+**Price Conversion**: Converting between USD and token amounts requires careful handling of:
+- Token decimals (SOL has 9, USDC has 6)
+- Oracle price exponents (Pyth uses negative exponents)
+- Precision loss (always round in protocol's favor)
+
+**Collateral Share Reduction**: We reduce `collateral_mint_supply` even though we're not burning shares. The shares are effectively "transferred" via the underlying liquidity transfer. This keeps the exchange rate accurate for remaining depositors.
+
+**No Collateral Transfer to Victim**: Unlike some protocols, we transfer actual tokens (liquidity) to the liquidator, not collateral shares. This is simpler and doesn't require the liquidator to later redeem shares.

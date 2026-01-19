@@ -1,0 +1,586 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Position Mechanics
+
+You click "Long 10 SOL at 10x leverage." What actually happens?
+
+Behind that simple action lies a cascade of state changes: margin gets locked, a position account gets created, entry price gets recorded, and the protocol starts tracking your PnL every block.
+
+Understanding position mechanics is foundational. Get this wrong, and everything else breaks.
+
+<ArticleSection name="What Is a Position?" id="what-is-position" level="h2" />
+
+### The Core Data Structure
+
+A perpetual position tracks your bet against the market:
+
+```rust
+#[account]
+pub struct Position {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+
+    // Position details
+    pub size: i64,              // Positive = long, negative = short
+    pub entry_price: u64,       // Weighted average entry
+    pub margin: u64,            // Collateral backing position
+
+    // Funding tracking
+    pub last_funding_index: i128,
+    pub accumulated_funding: i64,
+
+    // Metadata
+    pub opened_at: i64,
+    pub last_update: i64,
+}
+```
+
+**Size** is signed. Positive means long (profit when price goes up), negative means short (profit when price goes down). This simplifies PnL calculations because the math works the same way for both directions.
+
+**Entry price** is your cost basis. For a new position, it's the price you opened at. For additions to existing positions, it's a weighted average.
+
+**Margin** is your collateral. This is what you can lose.
+
+### Notional Value
+
+The notional value is what your position controls:
+
+```
+Notional = |size| × current_price
+
+10 SOL long at $100 = $1,000 notional
+-10 SOL short at $100 = $1,000 notional (absolute value)
+```
+
+Notional matters because:
+- It determines your exposure to price moves
+- It's used to calculate margin requirements
+- It's what you're leveraged against
+
+<ArticleSection name="Opening a Position" id="opening-position" level="h2" />
+
+### The Long Position
+
+When you long 10 SOL at $100 with $100 margin:
+
+```rust
+pub fn open_position(
+    ctx: Context<OpenPosition>,
+    size: i64,      // 10 (positive = long)
+    leverage: u64,  // 10x
+) -> Result<()> {
+    let market = &ctx.accounts.market;
+    let position = &mut ctx.accounts.position;
+
+    // Get current price from oracle
+    let price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    // Calculate required margin
+    let notional = (size.unsigned_abs() as u128 * price as u128) / PRECISION;
+    let required_margin = notional / leverage as u128;
+
+    require!(
+        ctx.accounts.user_collateral.amount >= required_margin as u64,
+        ErrorCode::InsufficientMargin
+    );
+
+    // Transfer margin from user
+    transfer_tokens(
+        ctx.accounts.user_collateral,
+        ctx.accounts.vault,
+        required_margin as u64,
+    )?;
+
+    // Initialize position
+    position.owner = ctx.accounts.user.key();
+    position.market = market.key();
+    position.size = size;
+    position.entry_price = price;
+    position.margin = required_margin as u64;
+    position.last_funding_index = market.cumulative_funding_index;
+    position.opened_at = Clock::get()?.unix_timestamp;
+
+    // Update market open interest
+    if size > 0 {
+        market.long_open_interest += notional as u64;
+    } else {
+        market.short_open_interest += notional as u64;
+    }
+
+    Ok(())
+}
+```
+
+### The Short Position
+
+Shorting works identically, but with negative size:
+
+```rust
+// Long 10 SOL
+open_position(size: 10, leverage: 10)
+
+// Short 10 SOL
+open_position(size: -10, leverage: 10)
+```
+
+The only difference is the sign. This elegance is intentional: it means one codebase handles both directions.
+
+### Entry Price Calculation
+
+For a fresh position, entry price equals the execution price. But what if you add to an existing position?
+
+```rust
+pub fn add_to_position(
+    position: &mut Position,
+    additional_size: i64,
+    execution_price: u64,
+) -> Result<()> {
+    // Must be same direction
+    require!(
+        position.size.signum() == additional_size.signum(),
+        ErrorCode::DirectionMismatch
+    );
+
+    let old_size = position.size.unsigned_abs();
+    let new_size = additional_size.unsigned_abs();
+
+    // Weighted average entry price
+    // entry = (old_size * old_entry + new_size * new_entry) / total_size
+    let weighted_sum = (old_size as u128 * position.entry_price as u128)
+        + (new_size as u128 * execution_price as u128);
+    let total_size = old_size + new_size;
+
+    position.entry_price = (weighted_sum / total_size as u128) as u64;
+    position.size += additional_size;
+
+    Ok(())
+}
+```
+
+Example:
+```
+Existing: 10 SOL long at $100
+Add: 5 SOL long at $120
+
+New entry = (10 × $100 + 5 × $120) / 15
+         = ($1000 + $600) / 15
+         = $106.67
+```
+
+<ArticleSection name="PnL Calculation" id="pnl-calculation" level="h2" />
+
+### Unrealized PnL
+
+PnL (Profit and Loss) measures how much you've made or lost. Unrealized PnL is your paper profit before closing:
+
+```rust
+pub fn calculate_unrealized_pnl(
+    position: &Position,
+    current_price: u64,
+) -> i64 {
+    let price_diff = current_price as i64 - position.entry_price as i64;
+
+    // size is signed, so this handles both long and short
+    // Long (positive size): profit when price goes up
+    // Short (negative size): profit when price goes down
+    (position.size as i128 * price_diff as i128 / PRICE_PRECISION as i128) as i64
+}
+```
+
+Let's trace through examples:
+
+```
+Long 10 SOL at $100, price now $110:
+  price_diff = 110 - 100 = 10
+  pnl = 10 × 10 = +$100 profit
+
+Long 10 SOL at $100, price now $90:
+  price_diff = 90 - 100 = -10
+  pnl = 10 × (-10) = -$100 loss
+
+Short 10 SOL at $100, price now $90:
+  price_diff = 90 - 100 = -10
+  pnl = (-10) × (-10) = +$100 profit
+
+Short 10 SOL at $100, price now $110:
+  price_diff = 110 - 100 = 10
+  pnl = (-10) × 10 = -$100 loss
+```
+
+The sign of `size` makes the math work automatically for both directions.
+
+### Realized PnL
+
+When you close (fully or partially), unrealized PnL becomes realized:
+
+```rust
+pub fn close_position(
+    ctx: Context<ClosePosition>,
+    close_size: u64,  // How much to close (absolute value)
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    // Calculate PnL for the portion being closed
+    let pnl = calculate_unrealized_pnl(position, price);
+    let close_ratio = close_size as u128 * PRECISION / position.size.unsigned_abs() as u128;
+    let realized_pnl = (pnl as i128 * close_ratio as i128 / PRECISION as i128) as i64;
+
+    // Settle funding payments
+    let funding_pnl = calculate_funding_pnl(position, &ctx.accounts.market)?;
+    let total_pnl = realized_pnl + funding_pnl;
+
+    // Calculate margin to return
+    let margin_portion = (position.margin as u128 * close_ratio / PRECISION) as u64;
+
+    let payout = if total_pnl >= 0 {
+        margin_portion + total_pnl as u64
+    } else {
+        margin_portion.saturating_sub((-total_pnl) as u64)
+    };
+
+    // Transfer payout to user
+    transfer_tokens(ctx.accounts.vault, ctx.accounts.user_collateral, payout)?;
+
+    // Update position
+    let remaining_ratio = PRECISION - close_ratio;
+    position.size = (position.size as i128 * remaining_ratio as i128 / PRECISION as i128) as i64;
+    position.margin = (position.margin as u128 * remaining_ratio / PRECISION) as u64;
+
+    // Close account if fully closed
+    if position.size == 0 {
+        // Return rent to user
+        close_account(position)?;
+    }
+
+    Ok(())
+}
+```
+
+### PnL Including Funding
+
+The full PnL includes funding payments:
+
+```rust
+pub fn calculate_total_pnl(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> i64 {
+    let price_pnl = calculate_unrealized_pnl(position, current_price);
+    let funding_pnl = calculate_funding_pnl(position, market);
+
+    price_pnl + funding_pnl
+}
+```
+
+A position can be profitable on price but underwater after funding. Or vice versa:
+
+```
+Long 10 SOL at $100, price now $105: +$50 price PnL
+Held for 30 days with avg 0.1% daily funding (longs pay): -$30 funding
+Total PnL: +$20
+```
+
+<ArticleSection name="Equity and Margin Ratio" id="equity-margin" level="h2" />
+
+### Position Equity
+
+Equity is what you'd have if you closed now:
+
+```rust
+pub fn calculate_equity(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> i64 {
+    let total_pnl = calculate_total_pnl(position, market, current_price);
+    position.margin as i64 + total_pnl
+}
+```
+
+Example:
+```
+Margin: $100
+Unrealized PnL: +$50
+Funding PnL: -$10
+
+Equity = $100 + $50 - $10 = $140
+```
+
+If equity goes negative, the position is bankrupt. In practice, liquidation triggers before this.
+
+### Margin Ratio
+
+The margin ratio tells you how healthy your position is:
+
+```rust
+pub fn calculate_margin_ratio(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> u64 {
+    let equity = calculate_equity(position, market, current_price);
+
+    if equity <= 0 {
+        return 0;
+    }
+
+    let notional = position.size.unsigned_abs() as u128
+        * current_price as u128
+        / PRICE_PRECISION;
+
+    // Return as basis points (10000 = 100%)
+    (equity as u128 * 10_000 / notional) as u64
+}
+```
+
+Example:
+```
+Position: 10 SOL long at $100 (10x leverage)
+Margin: $100
+Current price: $100
+Equity: $100
+Notional: $1,000
+
+Margin ratio = $100 / $1,000 = 10% = 1000 bps
+```
+
+When margin ratio drops below the maintenance threshold (often 5%), liquidation can trigger.
+
+<ArticleSection name="Leverage Math" id="leverage-math" level="h2" />
+
+### What Leverage Actually Means
+
+Leverage is the ratio of notional to margin:
+
+```
+Leverage = Notional / Margin
+
+$1,000 notional with $100 margin = 10x leverage
+$1,000 notional with $10 margin = 100x leverage
+```
+
+### Why High Leverage Is Dangerous
+
+At 100x leverage, your margin is 1% of notional. A 1% price move wipes you out:
+
+```
+100x leverage:
+  Margin: $100
+  Notional: $10,000
+
+  Price moves 1%:
+    PnL = $10,000 × 1% = ±$100
+    That's 100% of your margin
+```
+
+This is why most Solana perp protocols cap leverage at 10-20x. Ethereum L1 can't process liquidations fast enough for higher leverage.
+
+### Effective Leverage Changes
+
+As PnL accrues, your effective leverage changes:
+
+```rust
+pub fn calculate_effective_leverage(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> u64 {
+    let equity = calculate_equity(position, market, current_price);
+
+    if equity <= 0 {
+        return u64::MAX; // Infinite leverage (bankrupt)
+    }
+
+    let notional = position.size.unsigned_abs() as u128
+        * current_price as u128
+        / PRICE_PRECISION;
+
+    (notional * PRECISION / equity as u128) as u64
+}
+```
+
+Example progression:
+```
+Open: 10x leverage ($100 margin, $1000 notional)
+
+Price +10%:
+  Equity: $200
+  Notional: $1,100
+  Leverage: $1,100 / $200 = 5.5x (safer)
+
+Price -5%:
+  Equity: $50
+  Notional: $950
+  Leverage: $950 / $50 = 19x (more dangerous)
+```
+
+Profits reduce leverage. Losses increase it. This is why losing positions cascade.
+
+<ArticleSection name="Position Sizing" id="position-sizing" level="h2" />
+
+### Open Interest Limits
+
+Protocols limit total exposure to manage risk:
+
+```rust
+#[account]
+pub struct Market {
+    pub max_open_interest: u64,      // Total max exposure
+    pub long_open_interest: u64,     // Current long exposure
+    pub short_open_interest: u64,    // Current short exposure
+    pub max_position_size: u64,      // Per-position limit
+}
+
+pub fn check_position_limits(
+    market: &Market,
+    new_size: u64,
+    is_long: bool,
+) -> Result<()> {
+    // Per-position limit
+    require!(
+        new_size <= market.max_position_size,
+        ErrorCode::PositionTooLarge
+    );
+
+    // Market-wide limit
+    let current_oi = if is_long {
+        market.long_open_interest
+    } else {
+        market.short_open_interest
+    };
+
+    require!(
+        current_oi + new_size <= market.max_open_interest,
+        ErrorCode::OpenInterestExceeded
+    );
+
+    Ok(())
+}
+```
+
+### Why Limit Position Size?
+
+**Liquidity risk**: A $100M position in a $50M liquidity pool can't be liquidated without massive slippage.
+
+**Oracle manipulation**: Large positions create incentives to manipulate the price feed.
+
+**Concentration risk**: One whale's liquidation shouldn't destabilize the entire market.
+
+### Skew Limits
+
+Some protocols also limit the imbalance between longs and shorts:
+
+```rust
+pub fn check_skew_limit(
+    market: &Market,
+    new_size: i64,
+) -> Result<()> {
+    let new_long_oi = if new_size > 0 {
+        market.long_open_interest + new_size as u64
+    } else {
+        market.long_open_interest
+    };
+
+    let new_short_oi = if new_size < 0 {
+        market.short_open_interest + new_size.unsigned_abs()
+    } else {
+        market.short_open_interest
+    };
+
+    let total_oi = new_long_oi + new_short_oi;
+    let skew = if new_long_oi > new_short_oi {
+        (new_long_oi - new_short_oi) * 10_000 / total_oi
+    } else {
+        (new_short_oi - new_long_oi) * 10_000 / total_oi
+    };
+
+    require!(skew <= market.max_skew_bps, ErrorCode::SkewTooHigh);
+
+    Ok(())
+}
+```
+
+Skew matters because extreme imbalance means:
+- One side is taking all the risk
+- Funding rates become extreme
+- Liquidation cascades affect one direction
+
+<ArticleSection name="Account Architecture on Solana" id="account-architecture" level="h2" />
+
+### The Position Account Pattern
+
+Each position lives in its own account, derived from market and user:
+
+```rust
+#[derive(Accounts)]
+pub struct OpenPosition<'info> {
+    #[account(mut)]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        init,
+        payer = user,
+        space = 8 + Position::INIT_SPACE,
+        seeds = [
+            b"position",
+            market.key().as_ref(),
+            user.key().as_ref(),
+        ],
+        bump
+    )]
+    pub position: Account<'info, Position>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub user_collateral: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+
+    pub oracle: Account<'info, PriceAccount>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Why PDA Positions?
+
+**Parallelization**: Different users' positions are different accounts. Solana can process them in parallel.
+
+**Composability**: Other programs can find your position using the same seed derivation.
+
+**Security**: Position accounts are derived from the user's pubkey. No one else can close or modify them.
+
+### Multiple Positions Per Market
+
+What if a user wants multiple positions in the same market? Add a position ID:
+
+```rust
+seeds = [
+    b"position",
+    market.key().as_ref(),
+    user.key().as_ref(),
+    &position_id.to_le_bytes(),
+],
+```
+
+This allows cross-margin (one position per market) or isolated margin (multiple positions).
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Position mechanics form the foundation of perpetual protocols:
+
+1. **Signed size** handles both longs and shorts with the same math
+2. **Entry price** is weighted average when adding to positions
+3. **PnL** is `size × price_diff`, automatically correct for both directions
+4. **Equity** is margin plus total PnL (including funding)
+5. **Leverage** amplifies both gains and losses; effective leverage changes as PnL accrues
+6. **Position limits** protect against concentration and manipulation
+7. **Solana's account model** enables parallel processing of different positions
+
+With positions understood, we can explore what keeps them safe: margin systems.

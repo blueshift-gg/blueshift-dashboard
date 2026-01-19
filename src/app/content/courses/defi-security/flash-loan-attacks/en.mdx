@@ -1,0 +1,645 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Flash Loan Attacks on Solana
+
+Flash loans let you borrow unlimited capital with zero collateral - as long as you repay within the same transaction. On Ethereum, this superpower enabled billions in exploits. On Solana, the same attacks are possible, but the execution looks different.
+
+This lesson covers how flash loans work on Solana, the attack patterns they enable, and how to build protocols that can't be drained by them.
+
+<ArticleSection name="Flash Loans on Solana" id="flash-loans-solana" level="h2" />
+
+### How They Work
+
+A flash loan is a loan that must be repaid in the same transaction. If repayment fails, the entire transaction reverts. The borrower risks nothing except gas fees.
+
+On Ethereum:
+```solidity
+// Single function call, callback pattern
+function flashLoan(uint amount) {
+    token.transfer(msg.sender, amount);  // Lend
+    IFlashBorrower(msg.sender).executeOperation(amount);  // Callback
+    require(token.balanceOf(this) >= previousBalance + fee);  // Verify repayment
+}
+```
+
+On Solana, we use instruction introspection instead of callbacks:
+
+```rust
+// Flash loan instruction (first in transaction)
+pub fn flash_borrow(ctx: Context<FlashBorrow>, amount: u64) -> Result<()> {
+    // Verify that a repay instruction exists later in this transaction
+    let ixs = ctx.accounts.instructions.to_account_info();
+    let current_index = load_current_index(&ixs)?;
+
+    // Search for matching repay instruction
+    let mut found_repay = false;
+    for i in (current_index + 1)..get_instruction_count(&ixs)? {
+        let ix = load_instruction_at(i, &ixs)?;
+        if ix.program_id == crate::ID && is_repay_instruction(&ix.data) {
+            found_repay = true;
+            break;
+        }
+    }
+
+    require!(found_repay, FlashLoanError::NoRepayInstruction);
+
+    // Transfer tokens to borrower
+    anchor_spl::token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.pool.to_account_info(),
+                to: ctx.accounts.borrower_ata.to_account_info(),
+                authority: ctx.accounts.pool_authority.to_account_info(),
+            },
+            &[&[b"pool", &[ctx.accounts.pool.bump]]],
+        ),
+        amount,
+    )?;
+
+    // Record loan in state
+    ctx.accounts.flash_loan_state.amount = amount;
+    ctx.accounts.flash_loan_state.borrower = ctx.accounts.borrower.key();
+
+    Ok(())
+}
+
+// Flash repay instruction (must come later in same transaction)
+pub fn flash_repay(ctx: Context<FlashRepay>) -> Result<()> {
+    let state = &ctx.accounts.flash_loan_state;
+    let fee = state.amount * 9 / 10000;  // 0.09% fee
+
+    // Transfer repayment from borrower
+    anchor_spl::token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.borrower_ata.to_account_info(),
+                to: ctx.accounts.pool.to_account_info(),
+                authority: ctx.accounts.borrower.to_account_info(),
+            },
+        ),
+        state.amount + fee,
+    )?;
+
+    // Clear state
+    ctx.accounts.flash_loan_state.amount = 0;
+
+    Ok(())
+}
+```
+
+### Solana Flash Loan Providers
+
+Several protocols offer flash loans on Solana:
+
+**Solend**: Largest flash loan provider. Flash borrow from any lending pool.
+
+**MarginFi**: Flash loans integrated with their margin trading.
+
+**Kamino**: Flash loans from their DeFi vaults.
+
+The amounts available are massive - often hundreds of millions in stablecoins.
+
+<ArticleSection name="Attack Pattern: Price Manipulation" id="price-manipulation" level="h2" />
+
+The classic flash loan attack: manipulate price, profit, restore price.
+
+### Vulnerable Protocol
+
+Consider a vault that calculates share value using AMM spot price:
+
+```rust
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    // VULNERABLE: Uses current AMM price
+    let amm_price = get_amm_price(&ctx.accounts.amm_pool)?;
+    let share_value = vault.total_assets * amm_price / vault.total_shares;
+    let withdrawal_amount = shares * share_value;
+
+    // Transfer to user...
+
+    Ok(())
+}
+```
+
+### The Attack
+
+```
+Transaction instructions:
+1. Flash borrow $10M USDC from Solend
+2. Swap $10M USDC → SOL on Raydium (tanks SOL price on this pool)
+3. Withdraw from vulnerable vault (gets more assets due to low price)
+4. Swap SOL → USDC on Raydium (restores price)
+5. Flash repay $10M + fee to Solend
+
+Profit: Whatever was extracted from the vault minus flash loan fee
+Cost: ~$900 (0.09% of $10M)
+```
+
+### The Fix
+
+Don't use spot prices for value calculations:
+
+```rust
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    // SAFE: Use oracle price, not AMM price
+    let oracle = &ctx.accounts.oracle;
+    require!(oracle.is_valid(), ErrorCode::OracleInvalid);
+
+    // SAFE: Check oracle confidence
+    require!(
+        oracle.confidence < oracle.price / 100,  // <1% confidence interval
+        ErrorCode::OracleUncertain
+    );
+
+    let share_value = vault.total_assets * oracle.price / vault.total_shares;
+    let withdrawal_amount = shares * share_value;
+
+    // Transfer to user...
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Attack Pattern: Governance Manipulation" id="governance-manipulation" level="h2" />
+
+Flash loans can grant instant voting power in governance systems that use token-based voting without time locks.
+
+### Vulnerable Governance
+
+```rust
+pub fn vote(ctx: Context<Vote>, proposal_id: u64, support: bool) -> Result<()> {
+    let governance = &ctx.accounts.governance;
+    let voter = &ctx.accounts.voter;
+
+    // VULNERABLE: Uses current token balance for voting power
+    let voting_power = ctx.accounts.voter_tokens.amount;
+
+    let proposal = &mut ctx.accounts.proposal;
+
+    if support {
+        proposal.yes_votes += voting_power;
+    } else {
+        proposal.no_votes += voting_power;
+    }
+
+    Ok(())
+}
+
+pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
+    let proposal = &ctx.accounts.proposal;
+
+    require!(
+        proposal.yes_votes > proposal.no_votes,
+        GovernanceError::ProposalRejected
+    );
+
+    // Execute proposal actions...
+    // Could be: drain treasury, change admin, upgrade contract
+
+    Ok(())
+}
+```
+
+### The Attack
+
+```
+Transaction instructions:
+1. Flash borrow $100M worth of governance tokens
+2. Vote on malicious proposal (now have majority)
+3. Execute proposal (drain treasury)
+4. Return governance tokens
+5. Flash repay
+
+Result: Treasury drained, attacker keeps proceeds
+```
+
+### Real Example: Beanstalk (April 2022)
+
+On Ethereum, Beanstalk was exploited for $182 million using exactly this pattern:
+
+1. Attacker created a proposal to send all funds to their address
+2. Flash-borrowed enough BEAN tokens to pass the vote
+3. Executed proposal immediately
+4. Repaid flash loan
+
+Beanstalk had no time delay between voting and execution.
+
+### The Fix: Time-Locked Voting
+
+```rust
+#[account]
+pub struct VotingPosition {
+    pub owner: Pubkey,
+    pub token_amount: u64,
+    pub locked_until: i64,      // Cannot withdraw until this time
+    pub voting_power: u64,       // Snapshot at lock time
+}
+
+pub fn lock_tokens_for_voting(
+    ctx: Context<LockTokens>,
+    amount: u64,
+) -> Result<()> {
+    let clock = Clock::get()?;
+
+    // Transfer tokens to escrow
+    anchor_spl::token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.user_tokens.to_account_info(),
+                to: ctx.accounts.voting_escrow.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        amount,
+    )?;
+
+    // Create voting position with lock period
+    let position = &mut ctx.accounts.voting_position;
+    position.owner = ctx.accounts.user.key();
+    position.token_amount = amount;
+    position.locked_until = clock.unix_timestamp + 7 * 24 * 3600; // 7 days
+    position.voting_power = amount;  // Snapshot voting power
+
+    Ok(())
+}
+
+pub fn vote(ctx: Context<Vote>, proposal_id: u64, support: bool) -> Result<()> {
+    let position = &ctx.accounts.voting_position;
+    let clock = Clock::get()?;
+
+    // Must have locked tokens (can't use flash-loaned tokens)
+    require!(
+        position.locked_until > clock.unix_timestamp,
+        GovernanceError::NoVotingPower
+    );
+
+    // Use snapshotted voting power, not current balance
+    let voting_power = position.voting_power;
+
+    // ... rest of voting logic
+}
+
+pub fn queue_proposal(ctx: Context<QueueProposal>) -> Result<()> {
+    let proposal = &mut ctx.accounts.proposal;
+    let clock = Clock::get()?;
+
+    require!(
+        proposal.yes_votes > proposal.no_votes,
+        GovernanceError::ProposalRejected
+    );
+
+    // Time delay before execution
+    proposal.executable_at = clock.unix_timestamp + 2 * 24 * 3600; // 2 day delay
+
+    Ok(())
+}
+
+pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
+    let proposal = &ctx.accounts.proposal;
+    let clock = Clock::get()?;
+
+    require!(
+        clock.unix_timestamp >= proposal.executable_at,
+        GovernanceError::TimelockActive
+    );
+
+    // Execute...
+}
+```
+
+<ArticleSection name="Attack Pattern: Self-Liquidation" id="self-liquidation" level="h2" />
+
+Flash loans enable a counterintuitive attack: profitably liquidating yourself.
+
+### The Setup
+
+Consider a lending protocol where liquidators receive a bonus:
+
+```rust
+pub fn liquidate(ctx: Context<Liquidate>, repay_amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let oracle = &ctx.accounts.oracle;
+
+    // Check position is underwater
+    let collateral_value = position.collateral * oracle.price;
+    let debt_value = position.debt;
+    let health = collateral_value * 100 / debt_value;
+
+    require!(health < 110, LendingError::PositionHealthy); // <110% = liquidatable
+
+    // Liquidator repays debt, gets collateral + 10% bonus
+    let collateral_to_seize = repay_amount * 110 / 100 / oracle.price;
+
+    // Transfer repayment from liquidator
+    // Transfer collateral + bonus to liquidator
+
+    position.debt -= repay_amount;
+    position.collateral -= collateral_to_seize;
+
+    Ok(())
+}
+```
+
+### The Exploit (Euler Finance Style)
+
+Euler Finance was exploited for $197 million in March 2023. The attack used a creative self-liquidation:
+
+1. Flash borrow massive amount of collateral token
+2. Deposit as collateral, borrow maximum debt
+3. **Donate** to your own position (increases collateral without affecting debt)
+4. This triggers a bug where liquidation bonus exceeds actual debt
+5. Liquidate yourself - receive more than you owe
+6. Repay flash loan, keep profit
+
+### Vulnerable Pattern
+
+```rust
+pub fn donate_to_reserves(ctx: Context<Donate>, amount: u64) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+
+    // Transfer tokens to market reserves
+    anchor_spl::token::transfer(...)?;
+
+    // VULNERABLE: Increases reserves without matching liability
+    market.total_reserves += amount;
+
+    Ok(())
+}
+
+pub fn liquidate(ctx: Context<Liquidate>, debt_to_repay: u64) -> Result<()> {
+    let position = &ctx.accounts.position;
+    let market = &ctx.accounts.market;
+
+    // Calculate collateral to seize
+    // VULNERABLE: Uses market reserves which can be artificially inflated
+    let collateral_value = position.collateral_shares * market.total_reserves
+        / market.total_shares;
+
+    let bonus_rate = 110; // 10% liquidation bonus
+    let collateral_to_seize = debt_to_repay * bonus_rate / 100;
+
+    // ... seize collateral
+}
+```
+
+### The Fix: Proper Reserve Accounting
+
+```rust
+#[account]
+pub struct Market {
+    pub total_deposited: u64,    // From user deposits
+    pub total_borrowed: u64,     // Outstanding loans
+    pub total_reserves: u64,     // Protocol-owned (from interest)
+    pub bad_debt: u64,           // Unrecoverable debt
+}
+
+pub fn donate_to_reserves(ctx: Context<Donate>, amount: u64) -> Result<()> {
+    // DISABLED: Don't allow arbitrary donations
+    // Reserves should only come from interest accrual
+    return Err(ErrorCode::DonationsDisabled.into());
+}
+
+pub fn liquidate(ctx: Context<Liquidate>, debt_to_repay: u64) -> Result<()> {
+    let position = &ctx.accounts.position;
+    let market = &ctx.accounts.market;
+
+    // Calculate collateral based on USER's deposits, not total reserves
+    let position_collateral_value = position.collateral_amount * oracle.price;
+
+    // Cap liquidation bonus to prevent draining
+    let max_seizable = position.collateral_amount * 95 / 100;  // Leave 5% cushion
+    let desired_seize = debt_to_repay * 110 / 100 / oracle.price;
+    let actual_seize = std::cmp::min(desired_seize, max_seizable);
+
+    // Verify liquidator isn't the position owner
+    require!(
+        ctx.accounts.liquidator.key() != position.owner,
+        LendingError::SelfLiquidation
+    );
+
+    // ... proceed with liquidation
+}
+```
+
+<ArticleSection name="Attack Pattern: Sandwich via Flash Loan" id="sandwich-flash-loan" level="h2" />
+
+On Ethereum, sandwich attacks use MEV. On Solana, you can achieve similar effects with flash loans.
+
+### The Setup
+
+User submits a large swap:
+```
+User wants: Swap 100,000 USDC → SOL
+Expected: ~1,000 SOL (at $100/SOL)
+Slippage tolerance: 1%
+```
+
+### The Attack
+
+```
+Attacker's transaction (front-runs user):
+1. Flash borrow $5M USDC
+2. Swap $5M USDC → SOL (moves price up)
+3. User's swap executes at worse price (gets 990 SOL instead of 1000)
+4. Swap SOL → USDC (captures profit from user's price impact)
+5. Flash repay
+
+Attacker profit: Price impact extracted from user
+User loss: ~$1,000 (1% of $100,000)
+```
+
+### Solana-Specific Considerations
+
+On Solana, this is harder than Ethereum because:
+
+1. **No mempool**: Transactions aren't visible before inclusion
+2. **Leader schedule**: Only the current leader sees pending txs
+3. **Jito**: Bundle auctions create MEV opportunities
+
+However, sophisticated attackers can:
+- Run their own validators
+- Use Jito bundles to guarantee ordering
+- Analyze patterns in RPC endpoints
+
+### The Fix: Time-Weighted Execution
+
+```rust
+pub fn create_swap_request(
+    ctx: Context<CreateSwap>,
+    amount_in: u64,
+    min_amount_out: u64,
+) -> Result<()> {
+    let clock = Clock::get()?;
+
+    let request = &mut ctx.accounts.swap_request;
+    request.user = ctx.accounts.user.key();
+    request.amount_in = amount_in;
+    request.min_amount_out = min_amount_out;
+    request.created_at = clock.unix_timestamp;
+    request.executable_after = clock.unix_timestamp + 60; // 1 minute delay
+
+    // Lock user's tokens
+    anchor_spl::token::transfer(...)?;
+
+    Ok(())
+}
+
+pub fn execute_swap(ctx: Context<ExecuteSwap>) -> Result<()> {
+    let request = &ctx.accounts.swap_request;
+    let clock = Clock::get()?;
+
+    // Must wait for delay
+    require!(
+        clock.unix_timestamp >= request.executable_after,
+        SwapError::TooEarly
+    );
+
+    // Use TWAP price from delay period, not spot price
+    let oracle = &ctx.accounts.oracle;
+    let twap = oracle.get_twap(60)?; // 1-minute TWAP
+
+    // Execute at TWAP price
+    let amount_out = request.amount_in * twap.input_price / twap.output_price;
+
+    require!(
+        amount_out >= request.min_amount_out,
+        SwapError::SlippageExceeded
+    );
+
+    // Transfer output to user
+
+    Ok(())
+}
+```
+
+The delay means attackers can't predict when swaps will execute. The TWAP averages out manipulation.
+
+<ArticleSection name="Flash Loan Defense Checklist" id="defense-checklist" level="h2" />
+
+When building protocols on Solana, assume flash loans will be used against you:
+
+### 1. Never Use Spot Prices for Critical Calculations
+
+```rust
+// VULNERABLE
+let value = amount * amm_pool.get_spot_price();
+
+// SAFE
+let value = amount * oracle.get_twap_price(300); // 5-minute TWAP
+```
+
+### 2. Add Time Delays to Sensitive Operations
+
+```rust
+// VULNERABLE
+pub fn withdraw(amount: u64) -> Result<()> {
+    transfer_immediately(amount)?;
+    Ok(())
+}
+
+// SAFE
+pub fn request_withdrawal(amount: u64) -> Result<()> {
+    create_pending_withdrawal(amount, clock.timestamp + DELAY)?;
+    Ok(())
+}
+```
+
+### 3. Snapshot Voting Power
+
+```rust
+// VULNERABLE
+let votes = token_balance.amount;
+
+// SAFE
+let votes = voting_escrow.locked_balance_at(proposal.snapshot_time);
+```
+
+### 4. Limit Single-Block Operations
+
+```rust
+// Track operations per block
+#[account]
+pub struct RateLimiter {
+    pub last_slot: u64,
+    pub operations_this_slot: u64,
+    pub max_per_slot: u64,
+}
+
+pub fn check_rate_limit(limiter: &mut RateLimiter) -> Result<()> {
+    let clock = Clock::get()?;
+
+    if limiter.last_slot != clock.slot {
+        limiter.last_slot = clock.slot;
+        limiter.operations_this_slot = 0;
+    }
+
+    require!(
+        limiter.operations_this_slot < limiter.max_per_slot,
+        ErrorCode::RateLimitExceeded
+    );
+
+    limiter.operations_this_slot += 1;
+    Ok(())
+}
+```
+
+### 5. Verify Transaction Isolation
+
+For extremely sensitive operations, verify no flash loans are active:
+
+```rust
+pub fn sensitive_operation(ctx: Context<Sensitive>) -> Result<()> {
+    // Check instruction sysvar for flash loan patterns
+    let ixs = &ctx.accounts.instructions;
+
+    for i in 0..get_instruction_count(ixs)? {
+        let ix = load_instruction_at(i, ixs)?;
+
+        // Known flash loan program IDs
+        let flash_loan_programs = [
+            solend::ID,
+            marginfi::ID,
+            // ... other flash loan providers
+        ];
+
+        if flash_loan_programs.contains(&ix.program_id) {
+            return Err(ErrorCode::FlashLoanDetected.into());
+        }
+    }
+
+    // Proceed with operation
+    Ok(())
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+Flash loans remove the capital barrier from attacks:
+
+**1. Unlimited capital is available**
+
+Attackers don't need millions in capital. They need a profitable strategy and $10 in gas fees.
+
+**2. Same-transaction manipulation is the threat model**
+
+If your protocol can be exploited within a single transaction, flash loans make it trivial.
+
+**3. Time is your defense**
+
+Delays, TWAPs, snapshots, and rate limits all break the single-transaction assumption.
+
+**4. Assume everything is manipulable**
+
+Spot prices, token balances, pool reserves - all can change within your transaction.
+
+**5. Flash loans will find every economic flaw**
+
+They're like a fuzzer for your economic model. If there's a profitable attack, someone will find it.
+
+Build your protocols assuming an attacker has unlimited capital and can execute any sequence of operations atomically. If it survives that threat model, it might survive mainnet.

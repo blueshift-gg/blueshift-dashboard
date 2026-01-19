@@ -1,0 +1,571 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Liquidation Mechanisms
+
+Your health factor drops below 1.0. You're underwater. Someone, somewhere, is about to make money at your expense.
+
+Liquidation is how lending protocols stay solvent. When collateral no longer covers debt, third parties step in to close positions before bad debt accumulates. They're rewarded with a bonus for the service.
+
+The mechanism design determines who gets liquidated, how much they lose, and whether the protocol survives market chaos.
+
+<ArticleSection name="Fixed-Bonus Liquidations" id="fixed-bonus" level="h2" />
+
+### The Standard Model
+
+Most protocols use fixed-bonus liquidations (Aave, Compound, Solend):
+
+1. Health factor < 1.0 triggers eligibility
+2. Liquidator repays up to 50% of debt (close factor)
+3. Liquidator receives collateral worth debt + bonus (typically 5-10%)
+
+```
+Position:
+  Collateral: 10 SOL worth $900
+  Debt: $850 USDC
+  Health factor: 0.95 (liquidatable)
+  Liquidation bonus: 5%
+  Close factor: 50%
+
+Liquidation:
+  Liquidator repays: $425 USDC (50% of debt)
+  Liquidator receives: $425 × 1.05 = $446.25 worth of SOL
+  SOL seized: $446.25 / $90 = 4.96 SOL
+  
+After liquidation:
+  Remaining collateral: 5.04 SOL ($453.60)
+  Remaining debt: $425 USDC
+  New health factor: 1.07 (healthy again)
+```
+
+```rust
+pub fn liquidate(ctx: Context<Liquidate>, debt_to_repay: u64) -> Result<()> {
+    let pool = &ctx.accounts.pool;
+    let position = &mut ctx.accounts.borrower_position;
+    let asset_config = &ctx.accounts.collateral_config;
+    
+    // 1. Verify position is liquidatable
+    let health = calculate_health_factor(position, pool)?;
+    require!(health < HEALTH_PRECISION, ErrorCode::PositionHealthy);
+    
+    // 2. Apply close factor
+    let max_repay = position.debt * pool.close_factor_bps as u64 / 10_000;
+    let repay_amount = std::cmp::min(debt_to_repay, max_repay);
+    
+    // 3. Calculate collateral to seize (with bonus)
+    let debt_value = repay_amount;  // Assuming debt is in USD terms
+    let collateral_value = debt_value * 
+        (10_000 + asset_config.liquidation_bonus_bps as u64) / 10_000;
+    
+    let collateral_price = get_price(&ctx.accounts.oracle)?;
+    let collateral_amount = collateral_value * PRICE_PRECISION / collateral_price;
+    
+    // 4. Cap at available collateral
+    let collateral_to_seize = std::cmp::min(
+        collateral_amount, 
+        position.collateral_amount
+    );
+    
+    // 5. Execute transfers
+    transfer_from_liquidator_to_pool(ctx, repay_amount)?;
+    transfer_collateral_to_liquidator(ctx, collateral_to_seize)?;
+    
+    // 6. Update state
+    position.debt -= repay_amount;
+    position.collateral_amount -= collateral_to_seize;
+    
+    emit!(LiquidationEvent {
+        borrower: position.owner,
+        liquidator: ctx.accounts.liquidator.key(),
+        debt_repaid: repay_amount,
+        collateral_seized: collateral_to_seize,
+    });
+    
+    Ok(())
+}
+```
+
+### Pros and Cons
+
+**Advantages:**
+- Simple to implement and understand
+- Predictable liquidator profits
+- Fast execution (no auction delay)
+
+**Disadvantages:**
+- Fixed bonus may be too high (borrowers lose unnecessarily) or too low (no liquidators show up)
+- Race conditions: many liquidators compete for same liquidation
+- MEV extraction: searchers front-run liquidation calls
+
+<ArticleSection name="Dutch Auctions" id="dutch-auction" level="h2" />
+
+### Price Discovery Through Time
+
+Instead of a fixed bonus, Dutch auctions start high and decrease over time:
+
+```
+Auction start: 15% bonus
+After 1 minute: 12% bonus
+After 2 minutes: 9% bonus
+After 3 minutes: 6% bonus
+After 5 minutes: 3% bonus
+After 10 minutes: 0% bonus (liquidation at par)
+```
+
+Liquidators wait for their desired profit margin. Competition drives the bonus down to market-clearing rate.
+
+```rust
+#[account]
+pub struct LiquidationAuction {
+    pub borrower: Pubkey,
+    pub debt_amount: u64,
+    pub collateral_amount: u64,
+    pub collateral_mint: Pubkey,
+    pub start_time: i64,
+    pub initial_bonus_bps: u16,
+    pub min_bonus_bps: u16,
+    pub duration_seconds: i64,
+}
+
+impl LiquidationAuction {
+    pub fn current_bonus(&self, current_time: i64) -> u16 {
+        let elapsed = current_time - self.start_time;
+        
+        if elapsed >= self.duration_seconds {
+            return self.min_bonus_bps;
+        }
+        
+        let bonus_range = self.initial_bonus_bps - self.min_bonus_bps;
+        let reduction = (bonus_range as i64 * elapsed / self.duration_seconds) as u16;
+        
+        self.initial_bonus_bps - reduction
+    }
+}
+
+pub fn bid_on_auction(ctx: Context<BidAuction>) -> Result<()> {
+    let auction = &ctx.accounts.auction;
+    let current_time = Clock::get()?.unix_timestamp;
+    
+    let current_bonus = auction.current_bonus(current_time);
+    
+    let collateral_value = auction.debt_amount * 
+        (10_000 + current_bonus as u64) / 10_000;
+    
+    // Execute at current bonus rate...
+    
+    Ok(())
+}
+```
+
+### MakerDAO's Clipper Auctions
+
+MakerDAO uses a sophisticated Dutch auction system:
+
+1. **Linear decrease**: Price drops linearly from ~50% above market to market price
+2. **Reset mechanism**: If no bids, auction can reset at higher price
+3. **Flash lending**: Bidders can borrow during auction (no capital needed upfront)
+
+```rust
+pub fn calculate_clipper_price(
+    initial_price: u64,     // ~150% of oracle price
+    duration: i64,          // Time until price = 0
+    elapsed: i64,
+) -> u64 {
+    if elapsed >= duration {
+        return 0;
+    }
+    
+    // Linear decrease
+    initial_price * (duration - elapsed) as u64 / duration as u64
+}
+```
+
+### When Auctions Beat Fixed Bonus
+
+**High volatility**: Optimal bonus changes rapidly. Auctions adapt.
+
+**Large liquidations**: Fixed bonus on $10M liquidation = $500K in profits. Auctions let competition reduce this.
+
+**Thin markets**: Fixed bonus assumes liquidators can immediately sell. Auctions give time for liquidity.
+
+<ArticleSection name="Partial vs Full Liquidations" id="partial-full" level="h2" />
+
+### The Close Factor Trade-off
+
+**50% close factor (partial liquidation)**:
+```
+Position: $10,000 collateral, $8,500 debt
+First liquidation: $4,250 repaid
+Position after: $5,500 collateral, $4,250 debt
+Still underwater? Maybe another liquidation needed.
+```
+
+**100% close factor (full liquidation)**:
+```
+Position: $10,000 collateral, $8,500 debt
+Liquidation: $8,500 repaid
+Position after: $1,062.50 collateral, $0 debt
+Borrower keeps dust, fully closed out.
+```
+
+### Arguments for Partial (50%)
+
+1. **Price recovery**: Brief dips shouldn't wipe out positions
+2. **Market impact**: Selling all collateral at once crashes prices
+3. **User experience**: Partial loss is better than total loss
+4. **Competition**: Multiple liquidators can participate
+
+### Arguments for Full (100%)
+
+1. **Simplicity**: One liquidation, done
+2. **Capital efficiency**: No need to monitor partially liquidated positions
+3. **Gas efficiency**: One transaction vs potentially many
+4. **Certainty**: Protocol knows position is closed
+
+### Adaptive Close Factors
+
+Some protocols vary close factor based on health:
+
+```rust
+pub fn calculate_close_factor(health_factor: u128) -> u16 {
+    // Deeper underwater = higher close factor
+    if health_factor >= 950_000 {      // 0.95-1.0
+        return 2500;  // 25%
+    } else if health_factor >= 900_000 { // 0.90-0.95
+        return 5000;  // 50%
+    } else if health_factor >= 800_000 { // 0.80-0.90
+        return 7500;  // 75%
+    } else {                            // < 0.80
+        return 10000; // 100%
+    }
+}
+```
+
+<ArticleSection name="MEV and Liquidator Competition" id="mev" level="h2" />
+
+### The Liquidation Race
+
+When a position becomes liquidatable, everyone sees it:
+- Block explorers show health factors
+- Bots monitor oracle updates
+- Mempool shows pending transactions
+
+The result: a race. Whoever's transaction lands first wins the liquidation bonus.
+
+```
+Block N: Oracle updates, position becomes liquidatable
+Block N: 50 liquidation transactions submitted
+Block N: One wins, 49 fail (wasted gas)
+```
+
+### Priority Gas Auctions (PGA)
+
+Liquidators bid with gas prices. Higher gas = higher priority = more likely to win.
+
+```
+Liquidation profit: $10,000
+Liquidator A bids: 100 gwei → $500 in gas
+Liquidator B bids: 200 gwei → $1,000 in gas
+Liquidator C bids: 800 gwei → $4,000 in gas
+
+C wins, nets $6,000.
+A and B lose their gas fees.
+```
+
+The gas auction extracts value from liquidators into validators.
+
+### Solana's Advantages
+
+Solana doesn't have gas auctions the same way:
+- Transactions have fixed costs
+- Priority fees exist but are lower stakes
+- Faster blocks (400ms) mean less time to compete
+
+But Solana has its own MEV:
+- Jito bundles allow searchers to pay for transaction ordering
+- Liquidation bots still compete, just differently
+
+### Private Liquidation Pools
+
+Some protocols reduce MEV by restricting who can liquidate:
+
+1. **Staked liquidators**: Must stake tokens, earn exclusive liquidation rights
+2. **Time-delayed auctions**: Give time for fair price discovery
+3. **Batch liquidations**: Process multiple in one transaction
+
+```rust
+#[account]
+pub struct LiquidatorRegistry {
+    pub min_stake: u64,
+    pub registered_liquidators: Vec<Pubkey>,
+}
+
+pub fn liquidate_restricted(ctx: Context<LiquidateRestricted>, ...) -> Result<()> {
+    let registry = &ctx.accounts.registry;
+    
+    // Only registered liquidators can call
+    require!(
+        registry.registered_liquidators.contains(&ctx.accounts.liquidator.key()),
+        ErrorCode::NotRegisteredLiquidator
+    );
+    
+    // Verify stake is still sufficient
+    let stake = ctx.accounts.liquidator_stake.amount;
+    require!(stake >= registry.min_stake, ErrorCode::InsufficientStake);
+    
+    // Proceed with liquidation...
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Bad Debt Handling" id="bad-debt" level="h2" />
+
+### When Liquidations Fail
+
+Sometimes prices move too fast:
+
+```
+Block 1: Health = 1.05
+Block 2: Flash crash, health = 0.70
+Block 3: Liquidators execute
+
+By block 3:
+  Collateral: $700
+  Debt: $1,000
+  Liquidation bonus: 5%
+  
+  Liquidator needs: $1,000 × 1.05 = $1,050 of collateral
+  Available: $700
+  
+  No one will liquidate at a loss.
+```
+
+The position is underwater with no path to solvency. This is **bad debt**.
+
+### Bad Debt Accumulation
+
+```rust
+pub fn attempt_liquidation(ctx: Context<Liquidate>, ...) -> Result<()> {
+    let position = &ctx.accounts.position;
+    
+    let collateral_value = get_collateral_value(position)?;
+    let debt_value = get_debt_value(position)?;
+    
+    // Check if position has bad debt
+    if collateral_value < debt_value {
+        // This is bad debt - can't be profitably liquidated
+        // Mark for special handling
+        position.has_bad_debt = true;
+        return Err(ErrorCode::PositionHasBadDebt.into());
+    }
+    
+    // Normal liquidation proceeds...
+    Ok(())
+}
+```
+
+### Handling Mechanisms
+
+**1. Insurance Fund**
+
+Protocol accumulates reserves from fees. Bad debt is paid from reserves:
+
+```rust
+pub fn socialize_bad_debt(ctx: Context<SocializeBadDebt>) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let position = &mut ctx.accounts.bad_debt_position;
+    
+    let bad_debt = position.debt;
+    
+    // Pay from insurance fund first
+    let from_insurance = std::cmp::min(bad_debt, pool.insurance_fund);
+    pool.insurance_fund -= from_insurance;
+    
+    let remaining = bad_debt - from_insurance;
+    
+    if remaining > 0 {
+        // Socialize remaining across depositors
+        pool.total_deposits -= remaining;
+    }
+    
+    // Close the bad debt position
+    position.debt = 0;
+    
+    Ok(())
+}
+```
+
+**2. Socialized Losses**
+
+If insurance is depleted, depositors share the loss:
+
+```
+Insurance fund: $100,000
+Bad debt: $150,000
+
+Insurance covers: $100,000
+Remaining: $50,000 socialized
+
+Total deposits: $10,000,000
+Each depositor loses: 0.5%
+```
+
+**3. Protocol Token Backstop**
+
+Mint and sell protocol tokens to cover bad debt:
+
+```rust
+pub fn backstop_with_token(ctx: Context<Backstop>, bad_debt: u64) -> Result<()> {
+    let amount_to_mint = bad_debt * PROTOCOL_TOKEN_PRICE / PRECISION;
+    
+    // Mint protocol tokens
+    mint_to(ctx.accounts.backstop_mint, amount_to_mint)?;
+    
+    // Auction tokens for stablecoin to cover debt
+    create_auction(ctx.accounts.auction, amount_to_mint)?;
+    
+    Ok(())
+}
+```
+
+This dilutes token holders but keeps depositors whole.
+
+<ArticleSection name="Liquidation Cascades" id="cascades" level="h2" />
+
+### The Death Spiral
+
+Liquidations can trigger more liquidations:
+
+```
+1. ETH drops 10%
+2. 1000 positions become liquidatable
+3. Liquidators sell seized ETH
+4. Selling pressure drops ETH another 5%
+5. 500 more positions become liquidatable
+6. More selling, more drops, more liquidations...
+```
+
+### March 2020 ("Black Thursday")
+
+ETH dropped 50% in hours. MakerDAO faced:
+- Massive liquidation demand
+- Ethereum network congestion
+- Gas prices spiked 100x
+- Liquidators couldn't get transactions through
+- Some auctions closed at $0 (bidders paid nothing for collateral)
+- $8.3M in bad debt accumulated
+
+### Circuit Breakers
+
+Protocols can pause during extreme conditions:
+
+```rust
+#[account]
+pub struct CircuitBreaker {
+    pub max_liquidations_per_hour: u64,
+    pub current_hour_liquidations: u64,
+    pub hour_start: i64,
+    pub max_price_drop_bps: u16,
+    pub paused: bool,
+}
+
+pub fn check_circuit_breaker(
+    ctx: Context<CheckBreaker>,
+    price_change_bps: i16,
+) -> Result<()> {
+    let breaker = &mut ctx.accounts.circuit_breaker;
+    let current_time = Clock::get()?.unix_timestamp;
+    
+    // Reset hourly counter if needed
+    if current_time - breaker.hour_start > 3600 {
+        breaker.current_hour_liquidations = 0;
+        breaker.hour_start = current_time;
+    }
+    
+    // Check liquidation rate
+    if breaker.current_hour_liquidations >= breaker.max_liquidations_per_hour {
+        breaker.paused = true;
+        return Err(ErrorCode::CircuitBreakerTripped.into());
+    }
+    
+    // Check price drop
+    if price_change_bps.abs() as u16 > breaker.max_price_drop_bps {
+        breaker.paused = true;
+        return Err(ErrorCode::CircuitBreakerTripped.into());
+    }
+    
+    breaker.current_hour_liquidations += 1;
+    Ok(())
+}
+```
+
+### Gradual Liquidations
+
+Instead of instant liquidations, spread over time:
+
+```rust
+pub struct GradualLiquidation {
+    pub position: Pubkey,
+    pub total_debt_to_liquidate: u64,
+    pub liquidated_so_far: u64,
+    pub rate_per_hour: u64,  // Max liquidation per hour
+    pub started_at: i64,
+}
+
+pub fn execute_gradual_liquidation(ctx: Context<GradualLiquidate>) -> Result<()> {
+    let gradual = &mut ctx.accounts.gradual_liquidation;
+    let current_time = Clock::get()?.unix_timestamp;
+    
+    let hours_elapsed = (current_time - gradual.started_at) / 3600;
+    let max_liquidatable = gradual.rate_per_hour * hours_elapsed as u64;
+    let available = max_liquidatable - gradual.liquidated_so_far;
+    
+    if available == 0 {
+        return Err(ErrorCode::RateLimitExceeded.into());
+    }
+    
+    // Liquidate up to available amount...
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Case Studies" id="case-studies" level="h2" />
+
+### Solend Whale Situation (June 2022)
+
+A single wallet had $170M in SOL collateral with $108M USDC debt. If liquidated on-chain, the selling would crash SOL.
+
+Solend governance proposed taking over the wallet to liquidate OTC (off-chain, negotiated sale). Controversy erupted:
+- Is protocol intervention ever acceptable?
+- What about user sovereignty?
+- Who decides when positions are "too big to liquidate normally"?
+
+The proposal was reversed after community backlash. The whale eventually reduced their position voluntarily.
+
+**Lesson**: Protocol design should consider concentrated positions before they become crises.
+
+### Mango Markets (October 2022)
+
+Attacker Avraham Eisenberg:
+1. Deposited $5M as collateral
+2. Manipulated MNGO perpetual price (thin liquidity)
+3. Used inflated position value to borrow $116M
+4. Didn't repay, kept the borrowed funds
+
+Not a liquidation failure per se, but shows how oracle manipulation bypasses liquidation entirely.
+
+**Lesson**: Liquidation mechanisms assume honest prices. Oracle security is prerequisite.
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+1. **Fixed bonus** is simple but inflexible; **Dutch auctions** find market-clearing prices
+2. **Close factors** limit liquidation size; adaptive factors respond to position health
+3. **MEV** extracts value from liquidations; private pools and batching can help
+4. **Bad debt** is inevitable; insurance funds, socialization, and token backstops handle it
+5. **Cascades** can create death spirals; circuit breakers and gradual liquidations mitigate
+6. **Large positions** need special consideration before they become systemic risks
+
+Liquidation is the immune response of lending protocols. Fast, efficient liquidations keep the protocol healthy. Slow or failed liquidations accumulate bad debt until the protocol is insolvent.
+
+Next, we'll examine the foundation everything depends on: oracles and price feeds.

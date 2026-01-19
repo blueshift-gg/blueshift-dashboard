@@ -88,6 +88,29 @@ export const challenges: ChallengeMetadata[] = [
     collectionMintAddress: "", // TODO: Add collection mint address
   },
   {
+    slug: "anchor-stableswap",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 3,
+    isFeatured: true,
+    unitName: "Anchor StableSwap",
+    apiPath: "/v1/verify/anchor/stableswap",
+    tags: ["Anchor", "AMM", "DeFi", "StableSwap", "Stablecoins"],
+    pages: [
+      { slug: "math" },
+      { slug: "initialize" },
+      { slug: "liquidity" },
+      { slug: "swap" },
+    ],
+    requirements: [
+      { instructionKey: "initialize_pool" },
+      { instructionKey: "add_liquidity" },
+      { instructionKey: "remove_liquidity" },
+      { instructionKey: "swap" },
+    ],
+    collectionMintAddress: "", // TODO: Add collection mint address
+  },
+  {
     slug: "anchor-flash-loan",
     language: "Anchor",
     color: BRAND_COLOURS.anchor,
@@ -100,6 +123,35 @@ export const challenges: ChallengeMetadata[] = [
       { instructionKey: "flash_loan" },
     ],
     collectionMintAddress: "4HJoxVtwKsLNKx3QsxG34FW39ENQZSZHmXi7wsuEVrAy",
+  },
+  {
+    slug: "anchor-lending",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 4,
+    isFeatured: true,
+    unitName: "Anchor Lending",
+    apiPath: "/v1/verify/anchor/lending",
+    tags: ["Anchor", "Lending", "DeFi"],
+    pages: [
+      { slug: "deposit" },
+      { slug: "borrow" },
+      { slug: "liquidate" },
+      { slug: "conclusion" },
+    ],
+    requirements: [
+      { instructionKey: "init_market" },
+      { instructionKey: "init_reserve" },
+      { instructionKey: "init_obligation" },
+      { instructionKey: "refresh_reserve" },
+      { instructionKey: "refresh_obligation" },
+      { instructionKey: "deposit" },
+      { instructionKey: "withdraw" },
+      { instructionKey: "borrow" },
+      { instructionKey: "repay" },
+      { instructionKey: "liquidate" },
+    ],
+    collectionMintAddress: "",
   },
 
   /// Pinocchio Challenges

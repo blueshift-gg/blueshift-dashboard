@@ -1,0 +1,260 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="StableSwap Math" id="math" level="h2" />
+
+The heart of StableSwap is the mathematical invariant that governs how the pool behaves. Understanding this math is necessary for implementing the AMM correctly.
+
+<ArticleSection name="The D Invariant" id="d-invariant" level="h3" />
+
+The StableSwap invariant for n tokens is:
+
+```
+A * n^n * sum(x_i) + D = A * D * n^n + D^(n+1) / (n^n * prod(x_i))
+```
+
+This equation cannot be solved analytically, so we use **Newton's method** to find D iteratively.
+
+### Computing D
+
+```rust
+pub fn compute_d(reserves: &[u128], amp: u128) -> Result<u128> {
+    let n = reserves.len() as u128;
+    if n == 0 {
+        return Ok(0);
+    }
+
+    let sum: u128 = reserves.iter().sum();
+    if sum == 0 {
+        return Ok(0);
+    }
+
+    // A * n^n
+    let ann = amp.checked_mul(n.pow(n as u32))
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    let mut d = sum;
+    
+    for _ in 0..255 {
+        let d_prev = d;
+        
+        // D_P = D^(n+1) / (n^n * prod(reserves))
+        let mut d_p = d;
+        for &reserve in reserves {
+            if reserve == 0 {
+                return Err(StableSwapError::EmptyPool.into());
+            }
+            d_p = d_p
+                .checked_mul(d)
+                .ok_or(StableSwapError::MathOverflow)?
+                .checked_div(reserve.checked_mul(n).ok_or(StableSwapError::MathOverflow)?)
+                .ok_or(StableSwapError::MathOverflow)?;
+        }
+
+        // Newton's method:
+        // d = (ann * sum + d_p * n) * d / ((ann - 1) * d + (n + 1) * d_p)
+        let numerator = ann
+            .checked_mul(sum)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_add(d_p.checked_mul(n).ok_or(StableSwapError::MathOverflow)?)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_mul(d)
+            .ok_or(StableSwapError::MathOverflow)?;
+
+        let denominator = ann
+            .checked_sub(1)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_mul(d)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_add(
+                n.checked_add(1)
+                    .ok_or(StableSwapError::MathOverflow)?
+                    .checked_mul(d_p)
+                    .ok_or(StableSwapError::MathOverflow)?
+            )
+            .ok_or(StableSwapError::MathOverflow)?;
+
+        d = numerator.checked_div(denominator).ok_or(StableSwapError::MathOverflow)?;
+
+        // Convergence check
+        if d.abs_diff(d_prev) <= 1 {
+            return Ok(d);
+        }
+    }
+
+    Err(StableSwapError::ConvergenceFailed.into())
+}
+```
+
+The iteration converges when consecutive D values differ by at most 1. For reasonable inputs, this happens in 5-10 iterations.
+
+<ArticleSection name="Computing Y (Swap Output)" id="compute-y" level="h3" />
+
+When swapping, we need to find the new reserve of the output token. Given:
+- Current reserves
+- New reserve of input token (after adding input amount)
+- The D invariant (unchanged by swaps)
+
+We solve for the new output reserve using Newton's method again:
+
+```rust
+pub fn compute_y(
+    reserves: &[u128],
+    i: usize,      // input token index
+    j: usize,      // output token index
+    new_reserve_i: u128,
+    amp: u128,
+) -> Result<u128> {
+    let n = reserves.len() as u128;
+    let d = compute_d(reserves, amp)?;
+    let ann = amp.checked_mul(n.pow(n as u32))
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    // c = D^(n+1) / (n^n * prod(reserves_except_j) * ann)
+    let mut c = d;
+    let mut s: u128 = 0;
+
+    for (k, &reserve) in reserves.iter().enumerate() {
+        let x = if k == i {
+            new_reserve_i
+        } else if k == j {
+            continue; // Skip j, we're solving for it
+        } else {
+            reserve
+        };
+
+        s = s.checked_add(x).ok_or(StableSwapError::MathOverflow)?;
+        c = c
+            .checked_mul(d)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_div(x.checked_mul(n).ok_or(StableSwapError::MathOverflow)?)
+            .ok_or(StableSwapError::MathOverflow)?;
+    }
+
+    c = c
+        .checked_mul(d)
+        .ok_or(StableSwapError::MathOverflow)?
+        .checked_div(ann.checked_mul(n).ok_or(StableSwapError::MathOverflow)?)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    let b = s
+        .checked_add(d.checked_div(ann).ok_or(StableSwapError::MathOverflow)?)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    // Newton's method to solve for y
+    let mut y = d;
+
+    for _ in 0..255 {
+        let y_prev = y;
+        
+        // y = (y^2 + c) / (2y + b - d)
+        let numerator = y
+            .checked_mul(y)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_add(c)
+            .ok_or(StableSwapError::MathOverflow)?;
+
+        let denominator = y
+            .checked_mul(2)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_add(b)
+            .ok_or(StableSwapError::MathOverflow)?
+            .checked_sub(d)
+            .ok_or(StableSwapError::MathOverflow)?;
+
+        y = numerator.checked_div(denominator).ok_or(StableSwapError::MathOverflow)?;
+
+        if y.abs_diff(y_prev) <= 1 {
+            return Ok(y);
+        }
+    }
+
+    Err(StableSwapError::ConvergenceFailed.into())
+}
+```
+
+<ArticleSection name="Swap Calculation" id="swap-calc" level="h3" />
+
+Putting it together, the swap calculation:
+
+```rust
+pub fn calculate_swap(
+    reserves: &[u128],
+    input_index: usize,
+    output_index: usize,
+    amount_in: u128,
+    amp: u128,
+    fee_bps: u16,
+) -> Result<(u128, u128)> {
+    require!(amount_in > 0, StableSwapError::ZeroAmount);
+    
+    let new_reserve_in = reserves[input_index]
+        .checked_add(amount_in)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    let new_reserve_out = compute_y(reserves, input_index, output_index, new_reserve_in, amp)?;
+
+    let amount_out_before_fee = reserves[output_index]
+        .checked_sub(new_reserve_out)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    // Calculate fee
+    let fee_amount = amount_out_before_fee
+        .checked_mul(fee_bps as u128)
+        .ok_or(StableSwapError::MathOverflow)?
+        .checked_div(10000)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    let amount_out = amount_out_before_fee
+        .checked_sub(fee_amount)
+        .ok_or(StableSwapError::MathOverflow)?;
+
+    Ok((amount_out, fee_amount))
+}
+```
+
+The fee is deducted from the output, not the input. This means the fee stays in the pool, increasing the value of LP tokens over time.
+
+<ArticleSection name="LP Token Math" id="lp-math" level="h3" />
+
+### First Deposit
+
+For the first deposit, we mint LP tokens equal to D (the invariant):
+
+```rust
+let d = compute_d(&deposits, amp)?;
+require!(d > MINIMUM_LIQUIDITY as u128, StableSwapError::InsufficientInitialLiquidity);
+let lp_to_mint = (d - MINIMUM_LIQUIDITY as u128) as u64;
+```
+
+### Subsequent Deposits
+
+For later deposits, LP tokens are proportional to the increase in D:
+
+```rust
+let d_before = compute_d(&reserves, amp)?;
+let d_after = compute_d(&reserves_after_deposit, amp)?;
+
+// Use adjusted supply to account for virtual dead shares
+let adjusted_supply = lp_supply + MINIMUM_LIQUIDITY;
+let lp_to_mint = adjusted_supply * (d_after - d_before) / d_before;
+```
+
+### Withdrawals
+
+Withdrawals are proportional - you get your share of each token:
+
+```rust
+let adjusted_supply = lp_supply + MINIMUM_LIQUIDITY;
+let amount_i = reserve_i * lp_burned / adjusted_supply;
+```
+
+The `adjusted_supply` includes the virtual MINIMUM_LIQUIDITY that was never minted. This dilutes the impact of any inflation attack on the first depositor.
+
+<ArticleSection name="Precision Considerations" id="precision" level="h3" />
+
+All math uses `u128` to avoid overflow. Key considerations:
+
+1. **Overflow protection**: Every arithmetic operation uses `checked_*` methods
+2. **Division last**: We multiply before dividing to preserve precision
+3. **Convergence tolerance**: We allow ±1 difference for Newton's method convergence
+4. **Fee precision**: Fees in basis points (10000 = 100%) give 0.01% granularity

@@ -1,0 +1,578 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Collateral & Risk Parameters
+
+You deposit $10,000 in SOL and borrow $7,500 in USDC. SOL drops 10%. Your collateral is now worth $9,000 backing a $7,500 debt.
+
+Are you liquidated? It depends on the **risk parameters**.
+
+These numbers, LTV, liquidation threshold, close factor, determine who gets liquidated when, and how much they lose. Set them too loose, and bad debt accumulates. Set them too tight, and borrowers flee to competitors.
+
+Risk parameters are where protocol design meets market reality.
+
+<ArticleSection name="The Core Parameters" id="core-parameters" level="h2" />
+
+### Loan-to-Value (LTV)
+
+LTV is the maximum you can borrow against your collateral:
+
+```
+Max Borrow = Collateral Value × LTV
+
+$10,000 collateral at 75% LTV:
+Max borrow = $10,000 × 0.75 = $7,500
+```
+
+Different assets get different LTVs:
+
+| Asset | LTV | Why |
+|-------|-----|-----|
+| ETH | 80% | High liquidity, moderate volatility |
+| SOL | 75% | Good liquidity, higher volatility |
+| LINK | 65% | Medium liquidity, high volatility |
+| New memecoin | 0% | Not accepted as collateral |
+
+```rust
+#[account]
+pub struct AssetConfig {
+    pub mint: Pubkey,
+    pub ltv_bps: u16,              // 7500 = 75%
+    pub liquidation_threshold_bps: u16,
+    pub liquidation_bonus_bps: u16,
+    pub oracle: Pubkey,
+    pub is_active: bool,
+    pub can_be_collateral: bool,
+    pub can_be_borrowed: bool,
+}
+
+pub fn calculate_max_borrow(
+    collateral_value: u64,
+    ltv_bps: u16,
+) -> u64 {
+    (collateral_value as u128 * ltv_bps as u128 / 10_000) as u64
+}
+```
+
+### Liquidation Threshold
+
+The liquidation threshold is when your position becomes liquidatable:
+
+```
+Liquidation occurs when:
+Debt Value > Collateral Value × Liquidation Threshold
+
+$10,000 collateral at 80% threshold:
+Liquidation when debt > $8,000
+```
+
+The gap between LTV (75%) and liquidation threshold (80%) is your **buffer zone**:
+
+```
+Borrow at max LTV:
+  Collateral: $10,000
+  Debt: $7,500 (75%)
+  Liquidation at: $8,000 (80%)
+  Buffer: $500 (5% of collateral)
+
+If collateral drops 6.25% ($625):
+  New collateral: $9,375
+  Liquidation threshold: $9,375 × 80% = $7,500
+  Your debt: $7,500
+  Result: Liquidatable
+```
+
+A 6.25% price drop takes you from max borrow to liquidation. That's tight.
+
+### Health Factor
+
+Health factor combines everything into one number:
+
+```
+Health Factor = (Collateral × Liquidation Threshold) / Debt
+
+health > 1.0 → Safe
+health < 1.0 → Liquidatable
+```
+
+```rust
+pub const HEALTH_PRECISION: u128 = 1_000_000;
+
+pub fn calculate_health_factor(
+    collateral_value: u64,
+    debt_value: u64,
+    liquidation_threshold_bps: u16,
+) -> u128 {
+    if debt_value == 0 {
+        return u128::MAX;  // No debt = infinite health
+    }
+    
+    let weighted_collateral = collateral_value as u128 
+        * liquidation_threshold_bps as u128 
+        / 10_000;
+    
+    weighted_collateral * HEALTH_PRECISION / debt_value as u128
+}
+
+pub fn is_liquidatable(health_factor: u128) -> bool {
+    health_factor < HEALTH_PRECISION
+}
+```
+
+### Close Factor
+
+When liquidated, you don't lose everything at once. The **close factor** limits how much can be liquidated:
+
+```
+Close factor = 50%
+
+Position: $10,000 collateral, $8,500 debt
+Max liquidatable debt: $8,500 × 50% = $4,250
+```
+
+Why not liquidate 100%?
+
+1. **Borrower protection**: If price briefly dips then recovers, you're not fully wiped
+2. **Price impact**: Dumping all collateral at once crashes the price
+3. **Competition**: Multiple liquidators can participate, improving efficiency
+
+```rust
+pub const CLOSE_FACTOR_BPS: u16 = 5000;  // 50%
+
+pub fn calculate_max_liquidatable(
+    total_debt: u64,
+    close_factor_bps: u16,
+) -> u64 {
+    (total_debt as u128 * close_factor_bps as u128 / 10_000) as u64
+}
+```
+
+### Liquidation Bonus
+
+Liquidators need profit incentive. The **liquidation bonus** (or penalty, from borrower's perspective) provides it:
+
+```
+Liquidation bonus = 5%
+
+Liquidator repays: $4,250 debt
+Liquidator receives: $4,250 × 1.05 = $4,462.50 worth of collateral
+Liquidator profit: $212.50
+```
+
+Higher bonus = more liquidator competition = faster liquidations = safer protocol
+Higher bonus = more borrower loss = users go elsewhere
+
+```rust
+pub fn calculate_collateral_to_seize(
+    debt_to_repay: u64,
+    liquidation_bonus_bps: u16,
+    collateral_price: u64,
+    debt_price: u64,
+) -> u64 {
+    let debt_value = debt_to_repay as u128 * debt_price as u128;
+    let bonus_multiplier = 10_000 + liquidation_bonus_bps as u128;
+    let collateral_value = debt_value * bonus_multiplier / 10_000;
+    
+    (collateral_value / collateral_price as u128) as u64
+}
+```
+
+<ArticleSection name="Per-Asset Risk Tiers" id="risk-tiers" level="h2" />
+
+### Why Assets Get Different Parameters
+
+Not all collateral is equal:
+
+**ETH**: $50B+ daily volume, deep liquidity, moderate volatility
+- Can be sold quickly without moving price
+- 80% LTV, 85% threshold, 5% bonus
+
+**LINK**: $500M daily volume, decent liquidity, high volatility
+- Larger sales move price more
+- 65% LTV, 70% threshold, 7% bonus
+
+**Small-cap token**: $1M daily volume, thin liquidity, extreme volatility
+- Large liquidations crash price, causing more liquidations
+- 40% LTV, 50% threshold, 10% bonus (or not accepted)
+
+```rust
+pub fn create_conservative_config() -> AssetConfig {
+    AssetConfig {
+        ltv_bps: 4000,                    // 40%
+        liquidation_threshold_bps: 5000,   // 50%
+        liquidation_bonus_bps: 1000,       // 10%
+        ..Default::default()
+    }
+}
+
+pub fn create_bluechip_config() -> AssetConfig {
+    AssetConfig {
+        ltv_bps: 8000,                    // 80%
+        liquidation_threshold_bps: 8500,   // 85%
+        liquidation_bonus_bps: 500,        // 5%
+        ..Default::default()
+    }
+}
+```
+
+### The Risk Scoring Approach
+
+Some protocols calculate parameters algorithmically:
+
+```rust
+pub struct RiskScore {
+    pub volatility_score: u8,      // 0-100 based on historical volatility
+    pub liquidity_score: u8,       // 0-100 based on depth/volume
+    pub market_cap_score: u8,      // 0-100 based on market cap
+    pub smart_contract_score: u8,  // 0-100 based on audit/history
+}
+
+impl RiskScore {
+    pub fn calculate_ltv(&self) -> u16 {
+        // Weighted average, lower score = lower LTV
+        let composite = (
+            self.volatility_score as u32 * 30 +
+            self.liquidity_score as u32 * 40 +
+            self.market_cap_score as u32 * 20 +
+            self.smart_contract_score as u32 * 10
+        ) / 100;
+        
+        // Map to LTV: score 100 = 80% LTV, score 0 = 30% LTV
+        let ltv = 3000 + (composite * 50);  // 30% + up to 50%
+        ltv as u16
+    }
+}
+```
+
+<ArticleSection name="Cross-Collateral Positions" id="cross-collateral" level="h2" />
+
+### Mixed Collateral Math
+
+When you deposit multiple assets as collateral, each contributes to your borrowing power weighted by its own parameters:
+
+```
+Deposit: 1 ETH ($2,000) at 80% LTV + 100 LINK ($1,000) at 65% LTV
+Total collateral value: $3,000
+Weighted borrow power: (2000 × 0.80) + (1000 × 0.65) = $2,250
+```
+
+Health factor also uses weighted thresholds:
+
+```rust
+pub fn calculate_cross_collateral_health(
+    positions: &[(u64, u64, u16)],  // (amount, price, liq_threshold_bps)
+    total_debt_value: u64,
+) -> u128 {
+    if total_debt_value == 0 {
+        return u128::MAX;
+    }
+    
+    let mut weighted_collateral: u128 = 0;
+    
+    for (amount, price, threshold) in positions {
+        let value = *amount as u128 * *price as u128 / PRICE_PRECISION;
+        weighted_collateral += value * *threshold as u128 / 10_000;
+    }
+    
+    weighted_collateral * HEALTH_PRECISION / total_debt_value as u128
+}
+```
+
+### The Weighted Average Problem
+
+Mixed collateral creates complexity in liquidations:
+
+```
+Position:
+  1 ETH ($2,000, 5% bonus)
+  100 LINK ($1,000, 7% bonus)
+  Debt: $2,400 USDC
+
+Which collateral does the liquidator take?
+```
+
+Common approaches:
+
+**Option A: Liquidator chooses**
+- Liquidators pick the most profitable collateral
+- Usually the highest bonus asset
+- Can leave bad collateral behind
+
+**Option B: Pro-rata**
+- Seize proportionally from each collateral
+- More complex execution
+- Fairer distribution
+
+**Option C: Lowest health first**
+- Calculate "marginal health" contribution of each collateral
+- Liquidate the one dragging health down most
+- Optimizes position health improvement
+
+```rust
+pub fn select_collateral_for_liquidation(
+    collaterals: &[(Pubkey, u64, u64, u16)],  // (mint, amount, value, bonus)
+    debt_to_repay: u64,
+    strategy: LiquidationStrategy,
+) -> Vec<(Pubkey, u64)> {
+    match strategy {
+        LiquidationStrategy::HighestBonus => {
+            // Sort by bonus descending, take from highest
+            let mut sorted = collaterals.to_vec();
+            sorted.sort_by(|a, b| b.3.cmp(&a.3));
+            // Calculate seizure from first asset...
+        }
+        LiquidationStrategy::ProRata => {
+            // Proportional from each asset
+            let total_value: u64 = collaterals.iter().map(|c| c.2).sum();
+            collaterals.iter().map(|(mint, amount, value, _)| {
+                let share = *value as u128 * 10_000 / total_value as u128;
+                let seize = *amount as u128 * share / 10_000;
+                (*mint, seize as u64)
+            }).collect()
+        }
+    }
+}
+```
+
+<ArticleSection name="E-Mode: Efficiency for Correlated Assets" id="e-mode" level="h2" />
+
+### The Correlation Insight
+
+If you deposit stETH and borrow ETH, both assets move together. When stETH drops 10%, ETH drops ~10% too. Your debt decreases proportionally with your collateral.
+
+Standard parameters don't account for this. They assume collateral could crash while debt stays stable.
+
+Aave's **E-Mode** (Efficiency Mode) offers higher LTVs for correlated asset pairs:
+
+| Category | Assets | LTV | Liq Threshold |
+|----------|--------|-----|---------------|
+| Standard | Any | 80% | 85% |
+| ETH Correlated | stETH, wETH, rETH | 93% | 95% |
+| Stablecoins | USDC, USDT, DAI | 97% | 98% |
+
+```rust
+#[account]
+pub struct EMode {
+    pub id: u8,
+    pub label: String,
+    pub ltv_bps: u16,
+    pub liquidation_threshold_bps: u16,
+    pub liquidation_bonus_bps: u16,
+    pub oracle: Option<Pubkey>,  // Optional: unified oracle for category
+    pub assets: Vec<Pubkey>,     // Assets in this category
+}
+
+pub fn get_effective_ltv(
+    asset: &AssetConfig,
+    user_emode: Option<&EMode>,
+) -> u16 {
+    match user_emode {
+        Some(emode) if emode.assets.contains(&asset.mint) => emode.ltv_bps,
+        _ => asset.ltv_bps,
+    }
+}
+```
+
+### E-Mode Constraints
+
+E-Mode comes with restrictions:
+
+1. **Single category**: You can only be in one E-Mode at a time
+2. **Borrow restriction**: Can only borrow assets in the same category
+3. **Collateral restriction**: Only E-Mode collateral gets boosted parameters
+
+```rust
+pub fn validate_emode_borrow(
+    user_emode: &EMode,
+    borrow_asset: &Pubkey,
+) -> Result<()> {
+    require!(
+        user_emode.assets.contains(borrow_asset),
+        ErrorCode::AssetNotInEMode
+    );
+    Ok(())
+}
+```
+
+<ArticleSection name="Isolated Positions" id="isolated" level="h2" />
+
+### Containing Risk
+
+Some assets are too risky for cross-collateral. A new token might have decent liquidity today but could crash 90% tomorrow.
+
+**Isolated positions** limit exposure:
+
+1. Only that asset as collateral (no mixing)
+2. Caps on total borrowed against it
+3. Can only borrow specific assets (usually stablecoins)
+
+```rust
+#[account]
+pub struct IsolatedAssetConfig {
+    pub mint: Pubkey,
+    pub ltv_bps: u16,
+    pub liquidation_threshold_bps: u16,
+    pub liquidation_bonus_bps: u16,
+    pub debt_ceiling: u64,         // Max total borrowed against this asset
+    pub current_debt: u64,
+    pub allowed_borrows: Vec<Pubkey>,  // Usually just USDC/USDT
+}
+
+pub fn borrow_against_isolated(
+    ctx: Context<BorrowIsolated>,
+    amount: u64,
+) -> Result<()> {
+    let config = &mut ctx.accounts.isolated_config;
+    
+    // Check debt ceiling
+    require!(
+        config.current_debt + amount <= config.debt_ceiling,
+        ErrorCode::DebtCeilingExceeded
+    );
+    
+    // Check asset is allowed
+    require!(
+        config.allowed_borrows.contains(&ctx.accounts.borrow_mint.key()),
+        ErrorCode::AssetNotAllowedInIsolation
+    );
+    
+    // Check user has no other collateral
+    require!(
+        ctx.accounts.user_position.collaterals.len() == 1,
+        ErrorCode::IsolatedPositionMustBeSingle
+    );
+    
+    config.current_debt += amount;
+    // Continue with borrow...
+    
+    Ok(())
+}
+```
+
+### Debt Ceilings
+
+Protocol-wide limits on how much can be borrowed against risky assets:
+
+```
+Asset: NEW_TOKEN
+Debt ceiling: $1,000,000
+
+Even if $100M is deposited, only $1M can be borrowed against it.
+If NEW_TOKEN crashes, max bad debt = $1M
+```
+
+This protects the protocol from catastrophic losses on any single asset.
+
+<ArticleSection name="Dynamic Risk Parameters" id="dynamic" level="h2" />
+
+### Reactive Risk Management
+
+Static parameters can't react to changing conditions. During high volatility, you might want:
+- Lower LTVs (less borrowing)
+- Higher liquidation bonuses (faster liquidations)
+- Lower debt ceilings
+
+Some protocols adjust parameters automatically:
+
+```rust
+pub fn adjust_ltv_for_volatility(
+    base_ltv: u16,
+    recent_volatility: u64,   // 30-day realized volatility in bps
+    volatility_threshold: u64,
+) -> u16 {
+    if recent_volatility <= volatility_threshold {
+        return base_ltv;
+    }
+    
+    // Reduce LTV by 1% for every 5% excess volatility
+    let excess = recent_volatility - volatility_threshold;
+    let reduction = (excess / 500) * 100;  // 100 bps = 1%
+    
+    base_ltv.saturating_sub(reduction as u16)
+}
+```
+
+### Governance vs Automation
+
+Trade-offs:
+
+**Governance-controlled**:
+- Human judgment on risk
+- Slow to react (days/weeks)
+- Can be attacked via governance exploits
+
+**Automated**:
+- Fast reaction to market conditions
+- Predictable, gameable
+- Oracle-dependent
+
+Most protocols use governance with guardrails: humans set parameters within bounds, can't exceed safety limits.
+
+```rust
+pub fn update_ltv(
+    ctx: Context<UpdateConfig>,
+    new_ltv: u16,
+) -> Result<()> {
+    // Governance can only set LTV within bounds
+    require!(new_ltv >= MIN_LTV, ErrorCode::LTVTooLow);
+    require!(new_ltv <= MAX_LTV, ErrorCode::LTVTooHigh);
+    
+    // Must maintain gap between LTV and liquidation threshold
+    let config = &mut ctx.accounts.asset_config;
+    require!(
+        config.liquidation_threshold_bps >= new_ltv + MIN_BUFFER,
+        ErrorCode::InsufficientBuffer
+    );
+    
+    config.ltv_bps = new_ltv;
+    Ok(())
+}
+```
+
+<ArticleSection name="Risk Parameter Attacks" id="attacks" level="h2" />
+
+### Parameter Manipulation via Governance
+
+Attack: Use flash loan to gain governance power, change parameters, exploit, repay.
+
+**Beanstalk (April 2022)**: Attacker borrowed $1B in governance power, passed malicious proposal, drained $182M.
+
+Defense:
+- Time-locks on parameter changes
+- Snapshot voting (power determined before proposal)
+- Bounds on parameter values
+
+### Oracle Price Manipulation
+
+Attack: Manipulate oracle price up, borrow maximum, let price correct, don't repay.
+
+The risk parameters you set assume honest prices. Bad oracles make any parameter dangerous.
+
+### Liquidation Threshold Gaming
+
+Attack: Deposit illiquid asset, borrow maximum, manipulate oracle to avoid liquidation while underwater.
+
+If liquidation threshold is 80% but oracle can be manipulated by 5%, effective threshold is 85%.
+
+```rust
+pub fn safe_liquidation_threshold(
+    base_threshold: u16,
+    oracle_confidence: u16,  // How much oracle could be wrong
+) -> u16 {
+    // Effective threshold accounts for oracle uncertainty
+    base_threshold.saturating_sub(oracle_confidence)
+}
+```
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+1. **LTV** sets max borrowing; **liquidation threshold** triggers liquidations
+2. **Buffer zone** (LTV to threshold gap) protects borrowers from immediate liquidation
+3. **Close factor** limits liquidation size; **liquidation bonus** incentivizes liquidators
+4. **Per-asset parameters** reflect volatility and liquidity differences
+5. **E-Mode** boosts efficiency for correlated assets
+6. **Isolated positions** contain risk for volatile assets
+7. **Debt ceilings** cap protocol exposure to any single asset
+
+Risk parameters are the immune system of lending protocols. Get them right, and the protocol survives market chaos. Get them wrong, and bad debt accumulates until the protocol is insolvent.
+
+Next, we'll examine what happens when positions go underwater: the liquidation mechanisms that actually enforce these parameters.

@@ -1,0 +1,202 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Swap" id="swap" level="h2" />
+
+The swap instruction is where StableSwap shines. Users can exchange any token in the pool for any other, with minimal slippage for balanced pools.
+
+<ArticleSection name="Accounts" id="accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Remaining Accounts
+
+For swap operations:
+- First `n` accounts: All vault token accounts (in order of `token_mints`)
+- Next: User's input token account
+- Last: User's output token account
+
+```
+remaining_accounts = [vault_0, vault_1, ..., vault_n-1, user_input, user_output]
+```
+
+<ArticleSection name="Validation" id="validation" level="h3" />
+
+```rust
+impl<'info> Swap<'info> {
+    pub fn validate_vaults(&self, vaults: &[AccountInfo<'info>]) -> Result<()> {
+        for (i, vault) in vaults.iter().enumerate() {
+            let expected = get_associated_token_address(
+                &self.pool.key(),
+                &self.pool.token_mints[i],
+            );
+            require!(vault.key() == expected, StableSwapError::InvalidVault);
+        }
+        Ok(())
+    }
+
+    pub fn read_reserves(&self, vaults: &[AccountInfo<'info>]) -> Result<Vec<u128>> {
+        let mut reserves = Vec::with_capacity(vaults.len());
+        for vault in vaults {
+            let data = TokenAccount::try_deserialize(&mut &**vault.try_borrow_data()?)?;
+            reserves.push(data.amount as u128);
+        }
+        Ok(reserves)
+    }
+}
+```
+
+<ArticleSection name="Handler Logic" id="handler" level="h3" />
+
+```rust
+pub fn swap_handler<'info>(
+    ctx: Context<'_, '_, 'info, 'info, Swap<'info>>,
+    amount_in: u64,
+    min_amount_out: u64,
+    input_index: u8,
+    output_index: u8,
+) -> Result<()> {
+    require!(amount_in > 0, StableSwapError::ZeroAmount);
+
+    let pool = &ctx.accounts.pool;
+    let n = pool.n_tokens as usize;
+    let remaining = ctx.remaining_accounts;
+
+    // Validate indices
+    require!(input_index < pool.n_tokens, StableSwapError::InvalidTokenIndex);
+    require!(output_index < pool.n_tokens, StableSwapError::InvalidTokenIndex);
+    require!(input_index != output_index, StableSwapError::SameTokenSwap);
+
+    // Validate remaining accounts: n vaults + 2 user ATAs
+    require!(remaining.len() == n + 2, StableSwapError::InvalidRemainingAccounts);
+
+    let vaults = &remaining[0..n];
+    let user_input = &remaining[n];
+    let user_output = &remaining[n + 1];
+
+    ctx.accounts.validate_vaults(vaults)?;
+    let reserves = ctx.accounts.read_reserves(vaults)?;
+
+    // Calculate swap using StableSwap math
+    let (amount_out, fee_amount) = calculate_swap(
+        &reserves,
+        input_index as usize,
+        output_index as usize,
+        amount_in as u128,
+        pool.amplification as u128,
+        pool.fee_bps,
+    )?;
+
+    // Slippage check
+    require!(amount_out >= min_amount_out as u128, StableSwapError::SlippageExceeded);
+
+    // Execute transfers
+    ctx.accounts.transfer_in(user_input, &vaults[input_index as usize], amount_in)?;
+    ctx.accounts.transfer_out(&vaults[output_index as usize], user_output, amount_out as u64)?;
+
+    msg!("Swap: {} in -> {} out (fee: {})", amount_in, amount_out, fee_amount);
+    Ok(())
+}
+```
+
+<ArticleSection name="Transfer Helpers" id="transfers" level="h3" />
+
+```rust
+impl<'info> Swap<'info> {
+    /// Transfer input tokens from user to vault
+    pub fn transfer_in(
+        &self,
+        user_ata: &AccountInfo<'info>,
+        vault: &AccountInfo<'info>,
+        amount: u64,
+    ) -> Result<()> {
+        token::transfer(
+            CpiContext::new(
+                self.token_program.to_account_info(),
+                Transfer {
+                    from: user_ata.to_account_info(),
+                    to: vault.to_account_info(),
+                    authority: self.user.to_account_info(),
+                },
+            ),
+            amount,
+        )
+    }
+
+    /// Transfer output tokens from vault to user
+    pub fn transfer_out(
+        &self,
+        vault: &AccountInfo<'info>,
+        user_ata: &AccountInfo<'info>,
+        amount: u64,
+    ) -> Result<()> {
+        let seeds: &[&[u8]] = &[
+            b"pool", 
+            self.pool.lp_mint.as_ref(), 
+            &[self.pool.bump]
+        ];
+        
+        token::transfer(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(),
+                Transfer {
+                    from: vault.to_account_info(),
+                    to: user_ata.to_account_info(),
+                    authority: self.pool.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )
+    }
+}
+```
+
+Key difference: 
+- **transfer_in**: User signs (they're sending tokens)
+- **transfer_out**: Pool PDA signs (it owns the vaults)
+
+<ArticleSection name="Fee Handling" id="fees" level="h3" />
+
+Fees in StableSwap work differently than you might expect:
+
+1. We calculate the raw output amount using the curve
+2. We deduct the fee from the output
+3. The fee stays in the pool (vault balance decreases less than the raw calculation)
+
+This means fees accumulate in the pool, increasing the value of LP tokens over time. LPs earn fees proportional to their share when they withdraw.
+
+### Example
+
+Pool: 1M USDC, 1M USDT, A=100, fee=4bps (0.04%)
+
+User swaps 10,000 USDC for USDT:
+- Raw output (from curve): 9,998 USDT
+- Fee (0.04%): 4 USDT
+- User receives: 9,994 USDT
+- Pool now has: 1,010,000 USDC, 990,006 USDT
+
+The 4 USDT fee stays in the pool, benefiting all LPs.
+
+<ArticleSection name="Slippage Protection" id="slippage" level="h3" />
+
+The `min_amount_out` parameter protects you. Without it:
+
+1. Attacker sees your pending swap transaction
+2. They front-run with a large swap that moves the price against you
+3. Your swap executes at a worse rate
+4. They back-run to profit from the price movement
+
+With slippage protection, if the price moves too much, your transaction simply fails instead of giving you a bad deal.
+
+For stablecoin pools, you might set `min_amount_out = amount_in * 0.9995` (allowing 0.05% slippage including fees).

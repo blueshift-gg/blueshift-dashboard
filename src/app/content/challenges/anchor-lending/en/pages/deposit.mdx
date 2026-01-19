@@ -1,0 +1,147 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Deposit" id="deposit" level="h2" />
+
+The deposit instruction allows users to supply tokens to a reserve and receive collateral shares in return. These shares can be used as collateral for borrowing.
+
+### Accounts
+
+The accounts needed for deposit:
+- `market`: The lending market PDA
+- `reserve`: The reserve being deposited into
+- `vault`: Token account holding the reserve's liquidity, owned by reserve PDA
+- `collateral_mint`: The mint for collateral shares, authority is reserve PDA
+- `obligation`: User's obligation account tracking their positions
+- `user_token_account`: User's token account for the deposit asset
+- `user_collateral_account`: Where user receives collateral shares
+- `owner`: Signer authorizing the deposit
+- `token_program`: SPL Token program
+
+### Logic
+
+The deposit flow:
+1. Validate amount is positive and reserve is active
+2. Check deposit cap won't be exceeded
+3. Accrue interest to get accurate exchange rate
+4. Calculate collateral shares to mint
+5. Transfer tokens to vault
+6. Mint collateral shares to user
+7. Update reserve and obligation state
+8. Verify vault balance matches expected
+
+```rust
+pub fn deposit_handler(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    require!(amount > 0, LendingError::InvalidAmount);
+    
+    require!(
+        ctx.accounts.vault.key() != ctx.accounts.user_token_account.key(),
+        LendingError::InvalidAccountInput
+    );
+    
+    require!(ctx.accounts.reserve.is_active(), LendingError::ReserveObsolete);
+    require!(ctx.accounts.reserve.is_current_version(), LendingError::ReserveDeprecated);
+    
+    ctx.accounts.reserve.check_deposit_cap(amount)?;
+
+    let vault_balance_before = ctx.accounts.vault.amount;
+
+    let clock = Clock::get()?;
+    ctx.accounts.reserve.accrue_interest(clock.slot);
+
+    // Calculate collateral shares based on exchange rate
+    let collateral_amount = ctx.accounts.reserve.liquidity_to_collateral(amount);
+    require!(collateral_amount > 0, LendingError::InvalidAmount);
+
+    // Transfer tokens to vault
+    token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.user_token_account.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+                authority: ctx.accounts.owner.to_account_info(),
+            },
+        ),
+        amount,
+    )?;
+
+    // Mint collateral tokens using reserve PDA as authority
+    let market_key = ctx.accounts.market.key();
+    let mint_key = ctx.accounts.reserve.mint;
+    let seeds = &[
+        RESERVE_SEED,
+        market_key.as_ref(),
+        mint_key.as_ref(),
+        &[ctx.accounts.reserve.bump],
+    ];
+    
+    token::mint_to(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.collateral_mint.to_account_info(),
+                to: ctx.accounts.user_collateral_account.to_account_info(),
+                authority: ctx.accounts.reserve.to_account_info(),
+            },
+            &[seeds],
+        ),
+        collateral_amount,
+    )?;
+
+    // Update reserve state
+    let reserve = &mut ctx.accounts.reserve;
+    reserve.available_liquidity = reserve.available_liquidity.checked_add(amount).unwrap();
+    reserve.collateral_mint_supply = reserve.collateral_mint_supply.checked_add(collateral_amount).unwrap();
+
+    // Track deposit in obligation
+    ctx.accounts.obligation.add_deposit(reserve.key(), collateral_amount)?;
+
+    // Verify vault balance increased correctly
+    ctx.accounts.vault.reload()?;
+    require!(
+        ctx.accounts.vault.amount == vault_balance_before.checked_add(amount).unwrap(),
+        LendingError::VaultBalanceMismatch
+    );
+
+    msg!("Deposited {} tokens, received {} collateral", amount, collateral_amount);
+    Ok(())
+}
+```
+
+### Key Points
+
+**Interest Accrual**: We call `accrue_interest` before calculating shares. This ensures the exchange rate reflects all accumulated interest up to this moment.
+
+**Share Calculation**: The `liquidity_to_collateral` function converts tokens to shares:
+```rust
+shares = deposit_amount × total_shares / total_supply
+```
+
+For the first depositor when `total_shares == 0`, we mint 1:1.
+
+**Obligation Tracking**: We record the deposit in the user's obligation so it counts toward their borrowing capacity. The `add_deposit` method either increments an existing position or creates a new one:
+
+```rust
+pub fn add_deposit(&mut self, reserve: Pubkey, shares: u64) -> Result<()> {
+    // Try to find existing deposit for this reserve
+    for deposit in self.deposits.iter_mut() {
+        if deposit.reserve == reserve {
+            deposit.collateral_shares = deposit.collateral_shares.checked_add(shares).unwrap();
+            return Ok(());
+        }
+    }
+    
+    // Find empty slot for new deposit
+    for deposit in self.deposits.iter_mut() {
+        if deposit.reserve == Pubkey::default() {
+            deposit.reserve = reserve;
+            deposit.collateral_shares = shares;
+            return Ok(());
+        }
+    }
+    
+    err!(LendingError::NoDepositSlot)
+}
+```
+
+**Balance Verification**: The vault balance check at the end is a critical safety measure. It ensures the actual token transfer matched our accounting. If there's a mismatch (perhaps from a fee-on-transfer token or reentrancy), the transaction fails.

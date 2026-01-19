@@ -1,0 +1,542 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The Vault Inflation Attack
+
+You deploy a lending vault. Users deposit USDC, receive share tokens, earn yield. Simple math: shares represent proportional ownership of the vault's assets.
+
+Then someone deposits 1 wei, donates 1 million USDC directly to the vault, and watches as every subsequent depositor loses nearly everything to rounding errors.
+
+This is the vault inflation attack. It exploits the most fundamental operation in DeFi: converting between assets and shares.
+
+<ArticleSection name="The Vulnerable Code" id="vulnerable-code" level="h2" />
+
+Here's a standard vault implementation:
+
+```rust
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    let total_assets = vault.total_assets;
+    let total_shares = vault.total_shares;
+
+    // Calculate shares to mint
+    let shares = if total_shares == 0 {
+        amount // First depositor: 1:1 ratio
+    } else {
+        amount * total_shares / total_assets
+    };
+
+    // Transfer assets, mint shares
+    transfer_tokens(ctx.accounts.user_ata, ctx.accounts.vault_ata, amount)?;
+    mint_shares(ctx.accounts.share_mint, ctx.accounts.user_shares, shares)?;
+
+    vault.total_assets += amount;
+    vault.total_shares += shares;
+
+    Ok(())
+}
+
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    // Calculate assets to return
+    let assets = shares * vault.total_assets / vault.total_shares;
+
+    // Burn shares, transfer assets
+    burn_shares(ctx.accounts.share_mint, ctx.accounts.user_shares, shares)?;
+    transfer_tokens(ctx.accounts.vault_ata, ctx.accounts.user_ata, assets)?;
+
+    vault.total_assets -= assets;
+    vault.total_shares -= shares;
+
+    Ok(())
+}
+```
+
+This looks correct. The math is straightforward:
+
+```
+shares_to_mint = deposit_amount * total_shares / total_assets
+assets_to_return = shares_to_burn * total_assets / total_shares
+```
+
+But there's a critical flaw hiding in integer division.
+
+<ArticleSection name="The Attack" id="the-attack" level="h2" />
+
+### Step 1: Become First Depositor
+
+The attacker deposits the minimum amount - 1 token (or 1 wei in EVM terms):
+
+```
+State after attack deposit:
+  total_assets: 1
+  total_shares: 1
+  attacker_shares: 1
+```
+
+### Step 2: Donate Directly to Vault
+
+Here's the trick. The attacker doesn't use `deposit()`. They transfer tokens directly to the vault's token account:
+
+```rust
+// Attacker sends 1,000,000 USDC directly to vault_ata
+// This bypasses the deposit function entirely
+transfer_tokens(attacker_ata, vault_ata, 1_000_000_000_000); // 1M USDC (6 decimals)
+```
+
+The vault's token account now holds 1,000,000,000,001 tokens. But `vault.total_assets` still shows 1, because we never called `deposit()`.
+
+Wait - that's not quite right. Let's look at how vaults typically track assets:
+
+```rust
+// Option A: Track via state variable (vulnerable to desync)
+pub struct Vault {
+    pub total_assets: u64,  // Only updated through deposit/withdraw
+    pub total_shares: u64,
+}
+
+// Option B: Track via actual token balance (vulnerable to donation)
+pub fn get_total_assets(vault_ata: &Account<TokenAccount>) -> u64 {
+    vault_ata.amount  // Reads actual balance
+}
+```
+
+Most vaults use Option B because it's "more accurate" - it reflects reality. But this is exactly what enables the attack.
+
+After donation:
+
+```
+State after donation:
+  total_assets (from balance): 1,000,000,000,001
+  total_shares: 1
+  attacker_shares: 1
+
+Share price: 1,000,000,000,001 assets per share
+```
+
+### Step 3: Victim Deposits
+
+Alice wants to deposit 1,000 USDC (1,000,000,000 in 6-decimal precision):
+
+```
+shares = deposit_amount * total_shares / total_assets
+shares = 1,000,000,000 * 1 / 1,000,000,000,001
+shares = 0  (integer division rounds down)
+```
+
+Alice deposits 1,000 USDC and receives **zero shares**.
+
+Her tokens are now part of the vault. The attacker's single share now represents ownership of 1,001,000 USDC worth of assets.
+
+### Step 4: Attacker Withdraws
+
+```
+assets = shares * total_assets / total_shares
+assets = 1 * 2,000,000,000,001 / 1
+assets = 2,000,000,000,001  // All of it
+```
+
+The attacker walks away with Alice's entire deposit plus their original donation.
+
+<ArticleSection name="Why Integer Division Kills" id="integer-division" level="h2" />
+
+The core issue is that integer division rounds down:
+
+```
+1,000,000,000 / 1,000,000,000,001 = 0.999999999999...
+Rounded down = 0
+```
+
+For the victim to receive at least 1 share, they need:
+
+```
+deposit_amount * total_shares / total_assets >= 1
+deposit_amount >= total_assets / total_shares
+deposit_amount >= 1,000,000,000,001 / 1
+deposit_amount >= 1,000,000,000,001
+```
+
+The victim would need to deposit **more than the attacker's donation** to receive any shares at all.
+
+### The Economics
+
+Attack cost: 1,000,000 USDC (the donation)
+Attack profit: Everything deposited by victims before the attack is discovered
+
+If 10 users each deposit 100,000 USDC before anyone notices, the attacker profits 1,000,000 USDC - breaking even on the first victim and profiting on every subsequent one.
+
+<ArticleSection name="Real Incidents" id="real-incidents" level="h2" />
+
+### Yearn Finance (April 2023)
+
+A yUSDT vault was targeted using this exact technique. The attacker:
+
+1. Deposited minimal tokens to become first depositor
+2. Donated large amounts directly to vault
+3. Profited from subsequent depositors' rounding losses
+
+Loss: ~$11.6 million across affected vaults.
+
+### ERC-4626 Vaults
+
+The ERC-4626 standard (tokenized vaults) explicitly warns about this attack in its security considerations. Despite the warning, dozens of protocols launched vulnerable implementations.
+
+### Solana Vaults
+
+The attack applies identically to Solana. Any vault that:
+- Uses actual token balance as `total_assets`
+- Allows deposits when `total_shares` is very low
+- Uses integer division for share calculation
+
+...is vulnerable.
+
+<ArticleSection name="The Fix: Virtual Shares" id="fix-virtual-shares" level="h2" />
+
+The solution is to make share inflation economically impractical. We do this by adding "virtual" shares and assets that exist from the start:
+
+```rust
+const VIRTUAL_SHARES: u64 = 1_000_000_000; // 1 billion virtual shares
+const VIRTUAL_ASSETS: u64 = 1_000_000_000; // 1 billion virtual assets
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let total_assets = vault.total_assets + VIRTUAL_ASSETS;
+    let total_shares = vault.total_shares + VIRTUAL_SHARES;
+
+    // Now division is safe
+    let shares = amount * total_shares / total_assets;
+
+    require!(shares > 0, VaultError::ZeroShares);
+
+    // ... rest of deposit logic
+}
+
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let total_assets = vault.total_assets + VIRTUAL_ASSETS;
+    let total_shares = vault.total_shares + VIRTUAL_SHARES;
+
+    let assets = shares * total_assets / total_shares;
+
+    // ... rest of withdraw logic
+}
+```
+
+Now let's trace through the attack:
+
+### Attack Attempt with Virtual Shares
+
+```
+Initial state:
+  real_assets: 0
+  real_shares: 0
+  total_assets (with virtual): 1,000,000,000
+  total_shares (with virtual): 1,000,000,000
+
+Attacker deposits 1 token:
+  shares = 1 * 1,000,000,000 / 1,000,000,000 = 1
+
+State after attacker deposit:
+  real_assets: 1
+  real_shares: 1
+  total_assets (with virtual): 1,000,000,001
+  total_shares (with virtual): 1,000,000,001
+
+Attacker donates 1,000,000 USDC:
+  total_assets (with virtual): 1,001,000,000,001
+  total_shares (with virtual): 1,000,000,001
+
+Victim deposits 1,000 USDC:
+  shares = 1,000,000,000 * 1,000,000,001 / 1,001,000,000,001
+  shares = 999,000,999  // Almost 1 billion shares!
+```
+
+The victim receives roughly 999 million shares. The attacker only has 1 share. The donation is now split proportionally across 1 billion virtual shares - the attacker captured almost none of the victim's deposit.
+
+### Why This Works
+
+The virtual shares act as a permanent first depositor that can never withdraw. Any donation gets diluted across these virtual shares. To capture significant value through inflation, an attacker would need to donate more than the virtual asset amount - making the attack economically irrational.
+
+<ArticleSection name="The Fix: Minimum Deposit" id="fix-minimum-deposit" level="h2" />
+
+An alternative (or complementary) fix is enforcing a minimum first deposit that makes inflation impractical:
+
+```rust
+const MINIMUM_INITIAL_DEPOSIT: u64 = 1_000_000; // 1 USDC worth
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    if vault.total_shares == 0 {
+        require!(
+            amount >= MINIMUM_INITIAL_DEPOSIT,
+            VaultError::InitialDepositTooSmall
+        );
+    }
+
+    // ... rest of deposit logic
+}
+```
+
+This forces the first depositor to establish a reasonable share price, making inflation attacks expensive.
+
+### Combining Both
+
+Production vaults typically use both:
+
+```rust
+const VIRTUAL_SHARES: u64 = 1_000_000_000;
+const VIRTUAL_ASSETS: u64 = 1_000_000_000;
+const MINIMUM_SHARES: u64 = 1_000; // Minimum shares per deposit
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let total_assets = vault.total_assets + VIRTUAL_ASSETS;
+    let total_shares = vault.total_shares + VIRTUAL_SHARES;
+
+    let shares = amount * total_shares / total_assets;
+
+    // Require minimum shares to prevent dust deposits
+    require!(shares >= MINIMUM_SHARES, VaultError::DepositTooSmall);
+
+    // ... rest of deposit logic
+}
+```
+
+<ArticleSection name="The Fix: Track Assets Internally" id="fix-internal-tracking" level="h2" />
+
+The donation vector requires the vault to use actual token balance as the asset count. We can close this by tracking assets internally:
+
+```rust
+pub struct Vault {
+    pub tracked_assets: u64,  // Only updated through deposit/withdraw
+    pub total_shares: u64,
+}
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let shares = if vault.total_shares == 0 {
+        amount
+    } else {
+        amount * vault.total_shares / vault.tracked_assets  // Use tracked, not actual
+    };
+
+    vault.tracked_assets += amount;
+    vault.total_shares += shares;
+
+    // ... transfer logic
+}
+```
+
+Now donations don't affect share calculations - they just sit in the vault as untracked tokens.
+
+But wait - what if the vault needs to account for yield? Lending vaults earn interest. The actual balance *should* increase over time.
+
+The solution is explicit yield accounting:
+
+```rust
+pub fn accrue_yield(ctx: Context<AccrueYield>) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    let actual_balance = ctx.accounts.vault_ata.amount;
+
+    // Only count positive yield, ignore donations during vulnerable periods
+    if actual_balance > vault.tracked_assets {
+        let yield_amount = actual_balance - vault.tracked_assets;
+
+        // Optional: require yield to come from known sources
+        // This prevents donation attacks entirely
+
+        vault.tracked_assets = actual_balance;
+    }
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Complete Secure Implementation" id="secure-implementation" level="h2" />
+
+Here's a vault implementation that combines all defenses:
+
+```rust
+use anchor_lang::prelude::*;
+
+const VIRTUAL_SHARES: u64 = 1_000_000_000;
+const VIRTUAL_ASSETS: u64 = 1_000_000_000;
+const MINIMUM_SHARES: u64 = 1_000;
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub asset_mint: Pubkey,
+    pub share_mint: Pubkey,
+    pub tracked_assets: u64,  // Internal tracking
+    pub total_shares: u64,
+    pub bump: u8,
+}
+
+impl Vault {
+    // Effective totals include virtual amounts
+    pub fn effective_assets(&self) -> u64 {
+        self.tracked_assets.checked_add(VIRTUAL_ASSETS).unwrap()
+    }
+
+    pub fn effective_shares(&self) -> u64 {
+        self.total_shares.checked_add(VIRTUAL_SHARES).unwrap()
+    }
+
+    pub fn calculate_shares(&self, assets: u64) -> Result<u64> {
+        let shares = assets
+            .checked_mul(self.effective_shares())
+            .unwrap()
+            .checked_div(self.effective_assets())
+            .unwrap();
+
+        require!(shares >= MINIMUM_SHARES, VaultError::DepositTooSmall);
+        Ok(shares)
+    }
+
+    pub fn calculate_assets(&self, shares: u64) -> u64 {
+        shares
+            .checked_mul(self.effective_assets())
+            .unwrap()
+            .checked_div(self.effective_shares())
+            .unwrap()
+    }
+}
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let shares = vault.calculate_shares(amount)?;
+
+    // Transfer assets to vault
+    anchor_spl::token::transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::Transfer {
+                from: ctx.accounts.user_asset_ata.to_account_info(),
+                to: ctx.accounts.vault_asset_ata.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        amount,
+    )?;
+
+    // Mint shares to user
+    anchor_spl::token::mint_to(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::MintTo {
+                mint: ctx.accounts.share_mint.to_account_info(),
+                to: ctx.accounts.user_share_ata.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            &[&[b"vault", vault.asset_mint.as_ref(), &[vault.bump]]],
+        ),
+        shares,
+    )?;
+
+    // Update internal tracking
+    vault.tracked_assets = vault.tracked_assets.checked_add(amount).unwrap();
+    vault.total_shares = vault.total_shares.checked_add(shares).unwrap();
+
+    emit!(DepositEvent {
+        user: ctx.accounts.user.key(),
+        assets: amount,
+        shares,
+    });
+
+    Ok(())
+}
+
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    let assets = vault.calculate_assets(shares);
+
+    require!(assets > 0, VaultError::ZeroAssets);
+    require!(
+        assets <= vault.tracked_assets,
+        VaultError::InsufficientAssets
+    );
+
+    // Burn shares from user
+    anchor_spl::token::burn(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::Burn {
+                mint: ctx.accounts.share_mint.to_account_info(),
+                from: ctx.accounts.user_share_ata.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        shares,
+    )?;
+
+    // Transfer assets to user
+    anchor_spl::token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::Transfer {
+                from: ctx.accounts.vault_asset_ata.to_account_info(),
+                to: ctx.accounts.user_asset_ata.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            &[&[b"vault", vault.asset_mint.as_ref(), &[vault.bump]]],
+        ),
+        assets,
+    )?;
+
+    // Update internal tracking
+    vault.tracked_assets = vault.tracked_assets.checked_sub(assets).unwrap();
+    vault.total_shares = vault.total_shares.checked_sub(shares).unwrap();
+
+    emit!(WithdrawEvent {
+        user: ctx.accounts.user.key(),
+        shares,
+        assets,
+    });
+
+    Ok(())
+}
+
+#[error_code]
+pub enum VaultError {
+    #[msg("Deposit too small - minimum shares not met")]
+    DepositTooSmall,
+    #[msg("Cannot withdraw zero assets")]
+    ZeroAssets,
+    #[msg("Insufficient assets in vault")]
+    InsufficientAssets,
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+The vault inflation attack teaches several critical lessons:
+
+**1. Integer division is dangerous**
+
+Any time you divide in token calculations, ask: "What happens when the result rounds to zero?"
+
+**2. Don't trust external state**
+
+Reading actual token balances seems "more accurate" but creates attack surfaces. Track state internally when possible.
+
+**3. Empty states are vulnerable**
+
+The attack only works when `total_shares` is very small. Virtual shares eliminate the dangerous empty state.
+
+**4. First depositors have power**
+
+Whoever establishes the initial share price controls the precision of all future calculations. Minimum deposits limit this power.
+
+**5. Defense in depth**
+
+The secure implementation uses three independent protections: virtual shares, minimum shares per deposit, and internal asset tracking. An attacker would need to bypass all three.
+
+Every vault, pool, and share-based system you build will face this attack. The fixes are simple once you understand the math. The failures are catastrophic when you don't.

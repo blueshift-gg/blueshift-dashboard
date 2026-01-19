@@ -1,0 +1,709 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Liquidations
+
+March 12, 2020. Bitcoin drops from $8,000 to $3,800 in hours. BitMEX processes over $1 billion in liquidations. The exchange goes offline. When it returns, the carnage continues.
+
+This event, now called "Black Thursday," exposed the brutal reality of leveraged trading: when positions go bad, they can drag down entire markets.
+
+Liquidations are how perp protocols protect themselves from bad debt. Get liquidation design wrong, and one trader's losses become everyone's problem.
+
+<ArticleSection name="Why Liquidations Exist" id="why-liquidations" level="h2" />
+
+### The Bad Debt Problem
+
+Without liquidations, here's what happens:
+
+```
+Trader opens: 100x leverage
+  Margin: $100
+  Position: $10,000
+
+Price moves -1.5%:
+  PnL: -$150
+  Equity: $100 - $150 = -$50
+
+Position is underwater. Who pays the $50?
+```
+
+If the trader walks away, someone must absorb the loss:
+- The counterparty who took the opposite position
+- The liquidity providers
+- The protocol's insurance fund
+- All users (socialized loss)
+
+Liquidations exist to close positions before they go underwater, ensuring there's always enough margin to cover losses.
+
+### The Liquidation Threshold
+
+When equity falls below maintenance margin, liquidation becomes possible:
+
+```rust
+pub fn is_liquidatable(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> bool {
+    let equity = calculate_equity(position, market, current_price);
+
+    if equity <= 0 {
+        return true;
+    }
+
+    let notional = position.size.unsigned_abs() as u128
+        * current_price as u128
+        / PRICE_PRECISION;
+
+    // equity / notional < maintenance_margin_ratio
+    let equity_scaled = (equity as u128) * 10_000;
+    let required = notional * market.config.maintenance_margin_ratio as u128;
+
+    equity_scaled < required
+}
+```
+
+Example:
+```
+Maintenance margin: 5%
+Position: $10,000 notional
+Required equity: $500
+
+If equity < $500: liquidatable
+```
+
+<ArticleSection name="Liquidation Mechanics" id="liquidation-mechanics" level="h2" />
+
+### Who Liquidates?
+
+In DeFi, liquidations are permissionless. Anyone can liquidate an underwater position:
+
+```rust
+pub fn liquidate(
+    ctx: Context<Liquidate>,
+) -> Result<()> {
+    let position = &ctx.accounts.position;
+    let market = &ctx.accounts.market;
+    let price = get_mark_price(&ctx.accounts.oracle)?;
+
+    // Verify position is liquidatable
+    require!(
+        is_liquidatable(position, market, price),
+        ErrorCode::PositionNotLiquidatable
+    );
+
+    // Close the position
+    let pnl = calculate_total_pnl(position, market, price);
+    let remaining_equity = position.margin as i64 + pnl;
+
+    // ... liquidation logic
+
+    Ok(())
+}
+```
+
+**Liquidators** are typically bots that monitor the blockchain, identify underwater positions, and submit liquidation transactions. They're economically motivated by liquidation rewards.
+
+### The Liquidation Reward
+
+Liquidators don't work for free. They receive a bonus:
+
+```rust
+const LIQUIDATION_FEE_BPS: u64 = 250; // 2.5%
+
+pub fn calculate_liquidation_reward(
+    notional: u64,
+    fee_bps: u64,
+) -> u64 {
+    notional * fee_bps / 10_000
+}
+```
+
+Example:
+```
+Position: $10,000 notional
+Liquidation fee: 2.5%
+
+Liquidator reward: $250
+```
+
+This $250 comes from the remaining margin. If there's not enough margin, it comes from the insurance fund.
+
+### Full vs Partial Liquidation
+
+**Full liquidation**: Close the entire position at once.
+
+```rust
+pub fn full_liquidate(
+    ctx: Context<Liquidate>,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let market = &mut ctx.accounts.market;
+    let price = get_mark_price(&ctx.accounts.oracle)?;
+
+    require!(is_liquidatable(position, market, price), ErrorCode::NotLiquidatable);
+
+    // Calculate what remains
+    let pnl = calculate_total_pnl(position, market, price);
+    let remaining_equity = position.margin as i64 + pnl;
+
+    // Calculate liquidator reward
+    let notional = position.size.unsigned_abs() as u64 * price / PRICE_PRECISION;
+    let reward = calculate_liquidation_reward(notional, LIQUIDATION_FEE_BPS);
+
+    // Pay liquidator
+    let liquidator_payment = reward.min(remaining_equity.max(0) as u64);
+    transfer_tokens(ctx.accounts.vault, ctx.accounts.liquidator, liquidator_payment)?;
+
+    // Handle any remaining equity (or deficit)
+    let after_reward = remaining_equity - liquidator_payment as i64;
+
+    if after_reward > 0 {
+        // Return excess to position owner
+        transfer_tokens(ctx.accounts.vault, ctx.accounts.position_owner, after_reward as u64)?;
+    } else if after_reward < 0 {
+        // Bad debt - take from insurance fund
+        market.insurance_fund = market.insurance_fund.saturating_sub((-after_reward) as u64);
+    }
+
+    // Update market OI
+    if position.size > 0 {
+        market.long_open_interest -= notional;
+    } else {
+        market.short_open_interest -= notional;
+    }
+
+    // Close position account
+    close_account(position)?;
+
+    Ok(())
+}
+```
+
+**Partial liquidation**: Close only enough to restore margin ratio.
+
+```rust
+pub fn partial_liquidate(
+    ctx: Context<Liquidate>,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let market = &mut ctx.accounts.market;
+    let price = get_mark_price(&ctx.accounts.oracle)?;
+
+    require!(is_liquidatable(position, market, price), ErrorCode::NotLiquidatable);
+
+    // Calculate how much to close to restore margin ratio
+    let equity = calculate_equity(position, market, price);
+    let notional = position.size.unsigned_abs() as u128 * price as u128 / PRICE_PRECISION;
+
+    // Target: bring margin ratio back to initial margin (not just maintenance)
+    // This gives the position some buffer
+    let target_margin_ratio = market.config.initial_margin_ratio;
+
+    // How much notional needs to be closed?
+    // After close: equity / (notional - closed) = target_ratio
+    // closed = notional - equity / target_ratio
+    let target_notional = (equity as u128) * 10_000 / target_margin_ratio as u128;
+    let close_notional = notional.saturating_sub(target_notional);
+
+    // Cap at max liquidation ratio (e.g., 50% per liquidation)
+    let max_close = notional * market.config.max_liquidation_ratio as u128 / 10_000;
+    let actual_close = close_notional.min(max_close);
+
+    let close_ratio = actual_close * PRECISION / notional;
+
+    // Close that portion
+    let close_size = (position.size.unsigned_abs() as u128 * close_ratio / PRECISION) as u64;
+    let close_margin = (position.margin as u128 * close_ratio / PRECISION) as u64;
+
+    // Calculate liquidator reward on closed portion
+    let reward = calculate_liquidation_reward(actual_close as u64, LIQUIDATION_FEE_BPS);
+
+    // Update position
+    if position.size > 0 {
+        position.size -= close_size as i64;
+    } else {
+        position.size += close_size as i64;
+    }
+    position.margin -= close_margin + reward;
+
+    // Pay liquidator
+    transfer_tokens(ctx.accounts.vault, ctx.accounts.liquidator, reward)?;
+
+    Ok(())
+}
+```
+
+### Why Partial Liquidation?
+
+Full liquidation has problems:
+
+**Market impact**: Closing a $10M position instantly crashes the price, triggering more liquidations.
+
+**Fairness**: Trader loses everything even if a 50% close would have been enough.
+
+**Cascades**: Full liquidations create bigger price moves, causing more full liquidations.
+
+Partial liquidation is gentler:
+
+```
+Position: $100,000 at 5% equity (needs 5%, has 5%)
+Margin call: Close 25%
+
+After partial liquidation:
+  Position: $75,000
+  Remaining equity: ~$5,000
+  New margin ratio: 6.67% (above maintenance)
+
+Position survives with breathing room.
+```
+
+<ArticleSection name="The Liquidation Cascade" id="liquidation-cascade" level="h2" />
+
+### How Cascades Start
+
+One liquidation creates selling pressure. Selling pressure drops the price. Lower price liquidates more positions. More liquidations, more selling.
+
+```
+Price: $100
+Market:
+  Trader A: 10x long, liquidated at $95
+  Trader B: 15x long, liquidated at $97
+  Trader C: 20x long, liquidated at $98
+
+Price drops to $98:
+  Trader C liquidated → selling pressure
+  Price drops to $97
+
+Price at $97:
+  Trader B liquidated → more selling
+  Price drops to $95
+
+Price at $95:
+  Trader A liquidated → even more selling
+  Price might reach $90
+
+All traders liquidated, price overshoots significantly.
+```
+
+### Black Thursday: A Case Study
+
+March 12, 2020:
+- Bitcoin dropped 50% in 24 hours
+- BitMEX processed $1.6B in liquidations
+- Liquidation engine couldn't keep up
+- Exchange went "offline for maintenance" (saved them from worse losses)
+- Price recovered when trading resumed
+
+The cascade was so severe that the exchange halting may have prevented complete collapse.
+
+### Cascade Mitigation
+
+**1. Partial liquidation**
+
+```rust
+const MAX_LIQUIDATION_PER_CALL: u64 = 2500; // 25%
+
+pub fn partial_liquidate(position: &mut Position, ...) {
+    let max_close = position.size.unsigned_abs() * MAX_LIQUIDATION_PER_CALL / 10_000;
+    // Close at most 25% at a time
+}
+```
+
+**2. Liquidation delays**
+
+```rust
+#[account]
+pub struct Position {
+    pub last_liquidation_time: i64,
+}
+
+const MIN_LIQUIDATION_INTERVAL: i64 = 60; // 1 minute between liquidations
+
+pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let current_time = Clock::get()?.unix_timestamp;
+
+    require!(
+        current_time - position.last_liquidation_time >= MIN_LIQUIDATION_INTERVAL,
+        ErrorCode::LiquidationCooldown
+    );
+
+    position.last_liquidation_time = current_time;
+    // ... liquidate
+}
+```
+
+**3. Circuit breakers**
+
+```rust
+#[account]
+pub struct Market {
+    pub liquidations_this_period: u64,
+    pub liquidation_period_start: i64,
+    pub max_liquidations_per_period: u64,
+}
+
+pub fn check_liquidation_limit(market: &mut Market, current_time: i64) -> Result<()> {
+    // Reset period if needed
+    if current_time - market.liquidation_period_start > LIQUIDATION_PERIOD {
+        market.liquidations_this_period = 0;
+        market.liquidation_period_start = current_time;
+    }
+
+    require!(
+        market.liquidations_this_period < market.max_liquidations_per_period,
+        ErrorCode::LiquidationLimitReached
+    );
+
+    market.liquidations_this_period += 1;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Bad Debt and Insurance" id="bad-debt" level="h2" />
+
+### When Liquidations Are Too Late
+
+Sometimes positions go underwater before liquidators can act:
+
+```
+Block N: Position equity = $100 (healthy)
+Block N+1: Price gaps down 20%
+Block N+1: Position equity = -$500 (underwater)
+
+Liquidator submits tx in block N+1, but position is already negative.
+```
+
+This creates **bad debt**: losses that exceed the position's margin.
+
+### The Insurance Fund
+
+Bad debt gets absorbed by the insurance fund:
+
+```rust
+#[account]
+pub struct Market {
+    pub insurance_fund: u64,
+}
+
+pub fn handle_bad_debt(
+    market: &mut Market,
+    bad_debt: u64,
+) {
+    if market.insurance_fund >= bad_debt {
+        market.insurance_fund -= bad_debt;
+    } else {
+        // Insurance fund depleted
+        let remaining = bad_debt - market.insurance_fund;
+        market.insurance_fund = 0;
+
+        // Must socialize remaining losses
+        socialize_loss(market, remaining);
+    }
+}
+```
+
+The insurance fund is filled by:
+- Portion of trading fees
+- Portion of liquidation fees
+- Direct protocol contributions
+- Excess margin from successful liquidations
+
+### Socialized Loss
+
+When the insurance fund is depleted, losses spread to all users:
+
+**Auto-Deleveraging (ADL)**: Force-close profitable positions to cover losses.
+
+```rust
+pub fn auto_deleverage(
+    market: &mut Market,
+    bad_debt: u64,
+    profitable_positions: &mut [Position],
+) -> Result<()> {
+    // Sort by profitability × leverage (highest first)
+    profitable_positions.sort_by(|a, b| {
+        let a_priority = calculate_adl_priority(a);
+        let b_priority = calculate_adl_priority(b);
+        b_priority.cmp(&a_priority)
+    });
+
+    let mut remaining_debt = bad_debt;
+
+    for position in profitable_positions.iter_mut() {
+        if remaining_debt == 0 {
+            break;
+        }
+
+        let pnl = calculate_unrealized_pnl(position, market.mark_price);
+        if pnl <= 0 {
+            continue;
+        }
+
+        // Take from this position's profits
+        let take = (pnl as u64).min(remaining_debt);
+        position.margin -= take;
+        remaining_debt -= take;
+
+        // Partially close to realize the loss
+        // ...
+    }
+
+    Ok(())
+}
+
+pub fn calculate_adl_priority(position: &Position) -> u64 {
+    let pnl = calculate_unrealized_pnl(position, current_price);
+    if pnl <= 0 {
+        return 0;
+    }
+
+    // Priority = profit % × leverage
+    // Higher profit + higher leverage = first to be ADL'd
+    let profit_ratio = pnl as u64 * 10_000 / position.margin;
+    let leverage = get_leverage(position);
+
+    profit_ratio * leverage / 10_000
+}
+```
+
+ADL is unfair to the deleveraged traders, but it's better than protocol insolvency.
+
+<ArticleSection name="Liquidation Price Calculation" id="liquidation-price" level="h2" />
+
+### Finding the Liquidation Price
+
+Traders need to know when they'll be liquidated:
+
+```rust
+pub fn calculate_liquidation_price(
+    position: &Position,
+    market: &Market,
+) -> u64 {
+    let size_abs = position.size.unsigned_abs();
+    let maintenance_ratio = market.config.maintenance_margin_ratio;
+
+    // At liquidation: equity / notional = maintenance_ratio
+    // equity = margin + size × (price - entry)
+    // equity / (size × price) = maintenance_ratio
+
+    // Solving for price:
+    // For longs: price = (margin - size × entry × maintenance_ratio) /
+    //                    (size × (1 - maintenance_ratio))
+    // Simplified...
+
+    if position.size > 0 {
+        // Long: price drops trigger liquidation
+        let numerator = position.margin as u128 * 10_000
+            - size_abs as u128 * position.entry_price as u128 * maintenance_ratio as u128 / 10_000;
+        let denominator = size_abs as u128 * (10_000 - maintenance_ratio as u128) / 10_000;
+
+        (numerator / denominator) as u64
+    } else {
+        // Short: price rises trigger liquidation
+        let numerator = position.margin as u128 * 10_000
+            + size_abs as u128 * position.entry_price as u128 * maintenance_ratio as u128 / 10_000;
+        let denominator = size_abs as u128 * (10_000 + maintenance_ratio as u128) / 10_000;
+
+        (numerator / denominator) as u64
+    }
+}
+```
+
+Example:
+```
+Long 10 SOL at $100
+Margin: $100 (10x leverage)
+Maintenance margin: 5%
+
+Liquidation price calculation:
+  At liq: equity = 5% of notional
+  equity = $100 + 10 × (liq_price - $100)
+  notional = 10 × liq_price
+
+  $100 + 10 × (liq_price - $100) = 0.05 × 10 × liq_price
+  $100 + 10 × liq_price - $1000 = 0.5 × liq_price
+  -$900 + 10 × liq_price = 0.5 × liq_price
+  9.5 × liq_price = $900
+  liq_price = $94.74
+```
+
+So the position gets liquidated when SOL drops to ~$94.74 (5.26% down from entry).
+
+### Accounting for Funding
+
+Don't forget that funding affects equity:
+
+```rust
+pub fn calculate_liquidation_price_with_funding(
+    position: &Position,
+    market: &Market,
+) -> u64 {
+    let funding_pnl = calculate_funding_pnl(position, market);
+    let effective_margin = (position.margin as i64 + funding_pnl) as u64;
+
+    // Use effective_margin instead of position.margin
+    calculate_liquidation_price_for_margin(position, market, effective_margin)
+}
+```
+
+If funding is draining your margin, your liquidation price moves closer to current price.
+
+<ArticleSection name="Liquidation Incentives" id="liquidation-incentives" level="h2" />
+
+### Incentive Alignment
+
+Liquidation systems need proper incentives:
+
+**For liquidators:**
+- Fee must exceed gas costs
+- Fee must be competitive with other opportunities
+- Fee should scale with position size (bigger positions = bigger rewards)
+
+**For the protocol:**
+- Liquidations should happen quickly (minimize bad debt)
+- Liquidators shouldn't over-extract (leaves margin for trader)
+- Cascade risk should be managed
+
+### Dynamic Liquidation Fees
+
+Some protocols adjust fees based on conditions:
+
+```rust
+pub fn calculate_dynamic_liquidation_fee(
+    market: &Market,
+    position_notional: u64,
+) -> u64 {
+    let base_fee = market.config.base_liquidation_fee_bps;
+
+    // Increase fee during high liquidation volume (more competition)
+    let volume_multiplier = if market.recent_liquidation_volume > market.average_volume * 2 {
+        15000 // 1.5x
+    } else {
+        10000 // 1x
+    };
+
+    // Increase fee for larger positions (more risk)
+    let size_multiplier = if position_notional > market.large_position_threshold {
+        12000 // 1.2x
+    } else {
+        10000 // 1x
+    };
+
+    base_fee * volume_multiplier / 10000 * size_multiplier / 10000
+}
+```
+
+### Liquidation Priority
+
+When multiple positions are liquidatable, who gets liquidated first?
+
+```rust
+pub fn calculate_liquidation_priority(
+    position: &Position,
+    market: &Market,
+    price: u64,
+) -> u64 {
+    let margin_ratio = calculate_margin_ratio(position, market, price);
+
+    // Lower margin ratio = higher priority
+    // Positions closest to bankruptcy go first
+    10_000_u64.saturating_sub(margin_ratio)
+}
+```
+
+This ensures the riskiest positions get closed first.
+
+<ArticleSection name="Solana-Specific Considerations" id="solana-considerations" level="h2" />
+
+### Parallel Liquidations
+
+Solana can process multiple liquidations in parallel if they're different accounts:
+
+```rust
+// Each position is a separate account
+// Liquidators can submit multiple liquidations in one transaction
+// They process in parallel as long as they don't share mutable state
+
+pub fn batch_liquidate(
+    ctx: Context<BatchLiquidate>,
+    position_indices: Vec<u8>,
+) -> Result<()> {
+    for index in position_indices {
+        let position = &mut ctx.remaining_accounts[index * 2];
+        let owner = &ctx.remaining_accounts[index * 2 + 1];
+
+        // Liquidate each position
+        process_single_liquidation(position, owner, &ctx.accounts.market)?;
+    }
+
+    Ok(())
+}
+```
+
+### Compute Budget
+
+Large liquidations may exceed single-transaction compute limits:
+
+```rust
+// Split large liquidations across multiple transactions
+pub fn liquidate_chunk(
+    ctx: Context<Liquidate>,
+    chunk_size: u64,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+
+    // Only close chunk_size worth of position
+    let close_amount = chunk_size.min(position.size.unsigned_abs());
+
+    // ... process partial close
+
+    Ok(())
+}
+```
+
+### Oracle Latency
+
+Solana's 400ms blocks help, but oracle updates can still lag:
+
+```rust
+pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+    let price = get_mark_price(&ctx.accounts.oracle)?;
+
+    // Check oracle freshness
+    let oracle_time = get_oracle_timestamp(&ctx.accounts.oracle)?;
+    let current_time = Clock::get()?.unix_timestamp;
+
+    require!(
+        current_time - oracle_time <= MAX_ORACLE_STALENESS,
+        ErrorCode::StaleOracle
+    );
+
+    // Use pessimistic price for liquidation (protect against manipulation)
+    let confidence = get_oracle_confidence(&ctx.accounts.oracle)?;
+    let liquidation_price = if is_long(position) {
+        price - confidence // Use lower bound for longs
+    } else {
+        price + confidence // Use upper bound for shorts
+    };
+
+    // ... continue liquidation
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Liquidations are the immune system of perpetual protocols:
+
+1. **Maintenance margin** triggers liquidation before positions go underwater
+2. **Liquidators** are economically incentivized to close risky positions
+3. **Partial liquidation** reduces market impact and cascade risk
+4. **Insurance funds** absorb bad debt when liquidations are too late
+5. **ADL** (auto-deleveraging) is the last resort when insurance is depleted
+6. **Liquidation price** depends on margin, position size, and funding
+7. **Cascade mitigation** (cooldowns, circuit breakers) prevents death spirals
+
+With liquidations understood, we can explore the data that powers all of this: oracle integration.

@@ -1,0 +1,524 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Interest Rate Models
+
+Interest rates have one job: balance supply and demand.
+
+Too high, and no one borrows. The pool sits idle, earning nothing for depositors. Too low, and everyone borrows. Depositors can't withdraw because all their funds are lent out.
+
+DeFi lending protocols solved this with **utilization-based rates**: the more borrowed, the higher the rate. No governance vote needed. The math does it automatically.
+
+<ArticleSection name="The Utilization Problem" id="utilization-problem" level="h2" />
+
+### Why Rates Must Adjust
+
+Imagine a lending pool with a fixed 5% borrow rate:
+
+**Scenario A: ETH is pumping**
+Everyone wants leverage. Borrowing demand surges. The pool gets drained. Depositors can't withdraw. 5% doesn't attract new deposits fast enough.
+
+**Scenario B: Bear market**
+No one wants leverage. Borrowing demand collapses. Pool sits at 10% utilization. Depositors earn almost nothing. They leave for better yields elsewhere.
+
+Fixed rates fail in both directions. The solution: let utilization set the rate.
+
+### Utilization Defined
+
+```
+Utilization = Total Borrowed / Total Supplied
+
+Pool: 10M USDC deposited, 7M USDC borrowed
+Utilization = 7M / 10M = 70%
+```
+
+High utilization → high rates → attract deposits, discourage borrowing
+Low utilization → low rates → attract borrowing, depositors seek better yields
+
+The market balances itself.
+
+<ArticleSection name="Linear Rate Models" id="linear-model" level="h2" />
+
+### The Simplest Approach
+
+A linear model increases rates proportionally with utilization:
+
+```
+borrow_rate = base_rate + utilization × slope
+
+If base_rate = 2%, slope = 20%:
+  At 0% utilization: 2%
+  At 50% utilization: 12%
+  At 100% utilization: 22%
+```
+
+```rust
+pub fn calculate_borrow_rate_linear(
+    utilization: u64,  // in basis points (10000 = 100%)
+    base_rate: u64,    // in basis points
+    slope: u64,        // in basis points
+) -> u64 {
+    base_rate + (utilization * slope / 10_000)
+}
+```
+
+### The Problem: Liquidity Crisis
+
+Linear models have a fatal flaw: at high utilization, depositors can't withdraw.
+
+```
+Pool: 10M USDC deposited, 9.5M borrowed (95% utilization)
+Available for withdrawal: 500K USDC
+
+If you have 1M deposited, you can only withdraw 500K.
+The rest is locked until borrowers repay.
+```
+
+At 95% utilization with a linear model, the rate might be 21%. Is that enough to:
+1. Attract massive new deposits?
+2. Force borrowers to urgently repay?
+
+Usually not. You need a crisis response mechanism.
+
+<ArticleSection name="The Kinked Curve" id="kinked-curve" level="h2" />
+
+### Two Slopes, One Kink
+
+Compound introduced the "kinked" or "jump rate" model: gentle slope up to an optimal utilization, then a steep cliff.
+
+```
+             Rate
+              │
+         80%  │                    ╱
+              │                   ╱
+         40%  │                  ╱
+              │                 ╱
+         20%  │    ___________╱  ← Kink at 80% utilization
+              │   ╱
+          4%  │__╱
+              └─────────────────────────
+              0%   40%   80%   100%  Utilization
+```
+
+Below the kink (80%): gentle slope encourages borrowing
+Above the kink: steep slope creates urgency
+
+```rust
+pub const OPTIMAL_UTILIZATION: u64 = 8000;  // 80% in basis points
+pub const BASE_RATE: u64 = 200;              // 2%
+pub const SLOPE_1: u64 = 400;                // 4% at optimal
+pub const SLOPE_2: u64 = 7500;               // 75% additional at 100%
+
+pub fn calculate_borrow_rate(utilization: u64) -> u64 {
+    if utilization <= OPTIMAL_UTILIZATION {
+        // Below kink: gentle slope
+        BASE_RATE + (utilization * SLOPE_1 / OPTIMAL_UTILIZATION)
+    } else {
+        // Above kink: steep slope
+        let rate_at_kink = BASE_RATE + SLOPE_1;
+        let excess_utilization = utilization - OPTIMAL_UTILIZATION;
+        let max_excess = 10_000 - OPTIMAL_UTILIZATION;
+        
+        rate_at_kink + (excess_utilization * SLOPE_2 / max_excess)
+    }
+}
+```
+
+### Real Numbers
+
+With the parameters above:
+
+| Utilization | Borrow Rate | Behavior |
+|-------------|-------------|----------|
+| 0% | 2.0% | Baseline |
+| 40% | 4.0% | Normal borrowing |
+| 80% | 6.0% | At kink |
+| 90% | 43.5% | Urgency kicks in |
+| 95% | 62.3% | Strong pressure |
+| 100% | 81.0% | Maximum pressure |
+
+At 90%+ utilization, borrowers face 40%+ rates. They rush to repay. Meanwhile, depositors see attractive yields and deposit more. The pool self-corrects.
+
+<ArticleSection name="Supply vs Borrow Rates" id="supply-borrow" level="h2" />
+
+### The Spread
+
+Borrowers pay interest. Depositors earn interest. But these rates aren't equal.
+
+```
+Supply Rate = Borrow Rate × Utilization × (1 - Reserve Factor)
+```
+
+**Why the difference?**
+
+1. **Utilization**: Only borrowed funds generate interest. If 70% is borrowed, depositors earn on 70% of their deposit.
+
+2. **Reserve Factor**: Protocol takes a cut (typically 5-20%). This builds reserves for bad debt.
+
+```rust
+pub const RESERVE_FACTOR: u64 = 1000;  // 10% in basis points
+
+pub fn calculate_supply_rate(
+    borrow_rate: u64,
+    utilization: u64,
+) -> u64 {
+    let gross_rate = borrow_rate * utilization / 10_000;
+    gross_rate * (10_000 - RESERVE_FACTOR) / 10_000
+}
+
+// Example:
+// Borrow rate: 10%
+// Utilization: 70%
+// Reserve factor: 10%
+// Supply rate = 10% × 70% × 90% = 6.3%
+```
+
+### Why Depositors Accept Lower Rates
+
+The math seems unfair. Borrowers pay 10%, depositors earn 6.3%?
+
+Remember:
+- Depositors can withdraw anytime (at reasonable utilization)
+- No active management required
+- Principal is protected (in theory) by overcollateralization
+- Interest compounds automatically
+
+The spread compensates the protocol for risk and operational costs.
+
+<ArticleSection name="Aave's Variable Rate Model" id="aave-model" level="h2" />
+
+### Per-Asset Parameters
+
+Aave uses the kinked curve but with asset-specific parameters:
+
+| Asset | Optimal | Base | Slope 1 | Slope 2 |
+|-------|---------|------|---------|---------|
+| USDC | 90% | 0% | 4% | 60% |
+| ETH | 80% | 0% | 2.7% | 80% |
+| LINK | 45% | 0% | 7% | 300% |
+
+**Why different parameters?**
+
+- **Stablecoins (USDC)**: High optimal (90%) because stable value means lower liquidation risk. Gentle slopes.
+  
+- **Major assets (ETH)**: Moderate optimal (80%). Higher slope 2 because volatility requires faster rebalancing.
+  
+- **Volatile assets (LINK)**: Low optimal (45%) and extreme slope 2 (300%). Volatility means higher risk, need aggressive rate response.
+
+```rust
+#[account]
+pub struct InterestRateModel {
+    pub optimal_utilization: u64,
+    pub base_rate: u64,
+    pub slope_1: u64,
+    pub slope_2: u64,
+}
+
+impl InterestRateModel {
+    pub fn calculate_rate(&self, utilization: u64) -> u64 {
+        if utilization <= self.optimal_utilization {
+            self.base_rate + 
+                utilization * self.slope_1 / self.optimal_utilization
+        } else {
+            let rate_at_optimal = self.base_rate + self.slope_1;
+            let excess = utilization - self.optimal_utilization;
+            let max_excess = 10_000 - self.optimal_utilization;
+            
+            rate_at_optimal + excess * self.slope_2 / max_excess
+        }
+    }
+}
+```
+
+<ArticleSection name="Stable Borrow Rates" id="stable-rates" level="h2" />
+
+### Predictability for Borrowers
+
+Variable rates are great for the protocol but terrible for planning. If you borrow at 5% and wake up to 50%, your strategy is ruined.
+
+Aave offers **stable rates**: lock in a rate when you borrow. It only changes under extreme conditions.
+
+```
+Variable rate: 5% → 8% → 3% → 12% → 6%  (fluctuates constantly)
+Stable rate: 7% → 7% → 7% → 7% → 9%     (mostly fixed)
+```
+
+### How Stable Rates Work
+
+Stable rates aren't truly fixed. They're calculated as:
+
+```
+Stable Rate = Base Rate + (Optimal Rate × Ratio)
+
+Where:
+- Base Rate = current variable rate base
+- Optimal Rate = rate at optimal utilization
+- Ratio = configurable multiplier (typically 1-2x)
+```
+
+The rate you get is locked until:
+1. Market conditions become extreme
+2. Protocol rebalances stable rate positions
+3. You voluntarily switch to variable
+
+```rust
+pub fn calculate_stable_rate(
+    current_variable_rate: u64,
+    avg_stable_rate: u64,
+    utilization: u64,
+    optimal_utilization: u64,
+) -> u64 {
+    // Premium over variable rate
+    let base_premium = current_variable_rate / 10;  // 10% premium
+    
+    // Additional premium if utilization is high
+    let utilization_premium = if utilization > optimal_utilization {
+        (utilization - optimal_utilization) * 200 / 10_000
+    } else {
+        0
+    };
+    
+    current_variable_rate + base_premium + utilization_premium
+}
+```
+
+### The Rebalancing Problem
+
+What if everyone borrows stable at 5%, then variable rates spike to 30%?
+
+The protocol loses money: paying depositors based on 30% rates but receiving only 5% from borrowers.
+
+Solution: **rebalancing**. If your stable rate is significantly below market, the protocol can force you to the current stable rate.
+
+```rust
+pub fn can_rebalance_stable_rate(
+    user_stable_rate: u64,
+    current_stable_rate: u64,
+    utilization: u64,
+    rebalance_threshold: u64,
+) -> bool {
+    // Rebalance if user rate is too far below market
+    let rate_difference = current_stable_rate.saturating_sub(user_stable_rate);
+    
+    // More aggressive rebalancing at high utilization
+    let adjusted_threshold = if utilization > 9500 {
+        rebalance_threshold / 2
+    } else {
+        rebalance_threshold
+    };
+    
+    rate_difference > adjusted_threshold
+}
+```
+
+<ArticleSection name="Interest Accrual Mechanics" id="accrual" level="h2" />
+
+### Continuous Compounding
+
+Interest doesn't accrue once per year. It compounds continuously, every block (or more frequently).
+
+The formula:
+
+```
+accumulated = principal × (1 + rate/seconds_per_year)^elapsed_seconds
+```
+
+In practice, we use a **rate index** that tracks accumulated interest:
+
+```rust
+pub const PRECISION: u128 = 1_000_000_000_000;  // 10^12
+pub const SECONDS_PER_YEAR: u128 = 31_536_000;
+
+pub fn accrue_interest(pool: &mut LendingPool, current_timestamp: i64) {
+    let elapsed = (current_timestamp - pool.last_accrual_time) as u128;
+    if elapsed == 0 {
+        return;
+    }
+    
+    let utilization = calculate_utilization(pool);
+    let borrow_rate = pool.rate_model.calculate_rate(utilization);
+    
+    // Simple interest approximation (good enough for small time intervals)
+    let interest_factor = PRECISION + 
+        (borrow_rate as u128 * elapsed * PRECISION) / 
+        (10_000 * SECONDS_PER_YEAR);
+    
+    // Update borrow index
+    pool.borrow_index = pool.borrow_index * interest_factor / PRECISION;
+    
+    // Update total borrows
+    pool.total_borrows = (pool.total_borrows as u128 * interest_factor / PRECISION) as u64;
+    
+    // Calculate protocol revenue
+    let interest_earned = pool.total_borrows - previous_borrows;
+    let protocol_share = interest_earned * pool.reserve_factor / 10_000;
+    pool.reserves += protocol_share;
+    
+    pool.last_accrual_time = current_timestamp;
+}
+```
+
+### Why Index-Based Tracking?
+
+Without an index, you'd need to update every borrower's balance every time interest accrues. With millions of positions, this is impossible.
+
+The index approach:
+
+```
+User borrows 1000 USDC when index = 1.0
+User's "normalized debt" = 1000 / 1.0 = 1000
+
+One year later, index = 1.1
+User's actual debt = 1000 × 1.1 = 1100 USDC
+```
+
+One global index update serves all borrowers. When a user interacts with the protocol, their debt is calculated on the fly.
+
+```rust
+#[account]
+pub struct UserBorrowPosition {
+    pub normalized_debt: u64,  // Debt divided by index at borrow time
+}
+
+pub fn get_actual_debt(
+    position: &UserBorrowPosition,
+    current_index: u128,
+) -> u64 {
+    (position.normalized_debt as u128 * current_index / PRECISION) as u64
+}
+
+pub fn borrow(
+    ctx: Context<Borrow>,
+    amount: u64,
+) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let position = &mut ctx.accounts.position;
+    
+    // Accrue interest first
+    accrue_interest(pool, Clock::get()?.unix_timestamp);
+    
+    // Normalize the new borrow amount
+    let normalized = (amount as u128 * PRECISION / pool.borrow_index) as u64;
+    
+    position.normalized_debt += normalized;
+    pool.total_borrows += amount;
+    
+    // Transfer tokens...
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Edge Cases and Attacks" id="edge-cases" level="h2" />
+
+### Flash Utilization Manipulation
+
+Attack scenario:
+1. Flash borrow massive amount from pool
+2. Utilization spikes to 99%
+3. Interest rate spikes to 80%
+4. Someone's position (calculated at high rate) gets liquidated
+5. Repay flash loan, utilization normalizes
+
+Defense: Use time-weighted average utilization for critical calculations, not instantaneous.
+
+```rust
+pub fn get_twap_utilization(pool: &LendingPool) -> u64 {
+    let current = calculate_utilization(pool);
+    let time_elapsed = Clock::get()?.unix_timestamp - pool.twap_last_update;
+    
+    // Exponential moving average
+    let weight = std::cmp::min(time_elapsed as u64, 3600);  // Cap at 1 hour
+    
+    (pool.twap_utilization * (3600 - weight) + current * weight) / 3600
+}
+```
+
+### Rate Manipulation via Large Deposits/Withdrawals
+
+Attack scenario:
+1. Deposit massive amount
+2. Utilization drops, rates drop
+3. Borrow at low rate
+4. Withdraw deposit
+5. Your borrow is now at below-market rates
+
+Defense: Stable rates rebalance. Variable rates adjust immediately, so there's no lasting advantage.
+
+### Interest Rate Model Governance Risk
+
+If governance can change rate parameters instantly, attackers can:
+1. Propose malicious parameter change
+2. Pass it via flash loan governance attack
+3. Spike rates to liquidate specific positions
+
+Defense: Time-locks on parameter changes. Bounds on parameter values.
+
+```rust
+#[account]
+pub struct RateModelUpdateProposal {
+    pub new_slope_2: u64,
+    pub proposed_at: i64,
+    pub execution_delay: i64,  // e.g., 48 hours
+}
+
+pub fn execute_rate_update(ctx: Context<ExecuteUpdate>) -> Result<()> {
+    let proposal = &ctx.accounts.proposal;
+    let current_time = Clock::get()?.unix_timestamp;
+    
+    require!(
+        current_time >= proposal.proposed_at + proposal.execution_delay,
+        ErrorCode::TimelockNotExpired
+    );
+    
+    // Sanity bounds
+    require!(proposal.new_slope_2 <= 50_000, ErrorCode::SlopeTooHigh);  // Max 500%
+    
+    // Apply update...
+    Ok(())
+}
+```
+
+<ArticleSection name="Real-World Rate Dynamics" id="real-world" level="h2" />
+
+### Case Study: March 2023 USDC Depeg
+
+During the SVB collapse, USDC depegged to $0.87. What happened to rates?
+
+1. **Massive USDC borrowing**: People borrowed USDC to sell it, betting on further depeg
+2. **Utilization spiked**: USDC pools hit 99%+ utilization
+3. **Rates exploded**: Borrow rates exceeded 100% APY
+4. **Depositors locked**: Couldn't withdraw because everything was borrowed
+5. **Resolution**: When USDC repegged, borrowers repaid, utilization normalized
+
+The kinked curve worked as designed: extreme rates during crisis encouraged rapid rebalancing.
+
+### Why Rates Differ Across Protocols
+
+Same asset, different rates:
+
+| Protocol | USDC Supply | USDC Borrow |
+|----------|-------------|-------------|
+| Aave | 3.2% | 4.1% |
+| Compound | 2.8% | 3.9% |
+| MarginFi | 4.1% | 5.2% |
+
+Differences come from:
+- Rate model parameters
+- Reserve factors
+- Utilization differences
+- Risk premiums
+
+Higher rates often mean higher risk (newer protocol, riskier collateral accepted, etc.).
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+1. **Utilization-based rates** automatically balance supply and demand
+2. **Kinked curves** create urgency at high utilization, preventing liquidity crises
+3. **Supply rates < borrow rates** due to utilization and reserve factors
+4. **Stable rates** offer predictability but require rebalancing mechanisms
+5. **Index-based accounting** enables efficient interest tracking for millions of positions
+6. **Rate parameters vary by asset** based on volatility and liquidity characteristics
+
+Interest rates are the heartbeat of lending protocols. Get them wrong, and the protocol either dies from inactivity or implodes from illiquidity. Get them right, and markets balance themselves automatically.
+
+Next, we'll examine what happens when markets move against borrowers: collateral, risk parameters, and the math that keeps protocols solvent.

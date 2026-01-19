@@ -1,0 +1,326 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The StableSwap AMM
+
+A StableSwap AMM is specialized for trading assets that should maintain similar values, like stablecoins (USDC, USDT, DAI) or liquid staking derivatives (stSOL, mSOL, jitoSOL). While constant product AMMs work well for volatile pairs, they're inefficient for stable pairs because they create unnecessary slippage.
+
+<ArticleSection name="The StableSwap Curve" id="stableswap-curve" level="h2" />
+
+The key innovation of StableSwap is the **amplification coefficient (A)**. It creates a curve that behaves like a constant sum (`x + y = k`) when reserves are balanced, but transitions to a constant product (`x * y = k`) when they're imbalanced.
+
+### The Invariant
+
+The StableSwap invariant for n tokens is:
+
+```
+A * n^n * sum(x_i) + D = A * D * n^n + D^(n+1) / (n^n * prod(x_i))
+```
+
+Where:
+- `A` = amplification coefficient (typically 100-2000 for stablecoins)
+- `n` = number of tokens in the pool
+- `D` = the invariant (similar to `k` in constant product, but represents "virtual balance")
+- `x_i` = reserve of token i
+
+When `A` is high, the curve is nearly flat around equal reserves, meaning you can swap large amounts with minimal slippage. When reserves become imbalanced, the curve steepens to protect liquidity providers.
+
+### Why It Matters
+
+Consider swapping 10,000 USDC for USDT in a pool with 1M of each:
+
+**Constant Product AMM:**
+- Output: ~9,900 USDT (1% slippage)
+
+**StableSwap AMM (A=100):**
+- Output: ~9,996 USDT (0.04% slippage)
+
+That's 25x less slippage. For stablecoins that should be 1:1, this efficiency matters.
+
+<ArticleSection name="Multi-Token Pools" id="multi-token" level="h2" />
+
+Unlike simple 2-token AMMs, StableSwap pools can support 2-6 tokens. This is powerful because:
+- Users can swap between any pair in the pool in a single transaction
+- Liquidity is shared across all pairs, improving capital efficiency
+- Arbitrageurs keep all tokens pegged to each other
+
+### The Challenge
+
+In this challenge, you'll implement a StableSwap AMM with:
+- **Initialize Pool**: Create a pool with 2-6 tokens, setting the amplification and fee parameters
+- **Add Liquidity**: Deposit tokens (supporting imbalanced deposits) and receive LP tokens
+- **Remove Liquidity**: Burn LP tokens to withdraw proportional shares of all tokens
+- **Swap**: Exchange one token for another using the StableSwap curve
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Create a fresh Anchor workspace:
+
+```bash
+anchor init stableswap_amm
+cd stableswap_amm
+```
+
+Update your dependencies:
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+```
+
+Update `programs/stableswap_amm/Cargo.toml` to include `anchor-spl/idl-build`:
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+The folder structure will look like this:
+
+```
+src
+├── instructions
+│       ├── initialize_pool.rs
+│       ├── modify_liquidity.rs
+│       ├── swap.rs
+│       └── mod.rs
+├── constants.rs
+├── errors.rs
+├── lib.rs
+├── math.rs
+└── state.rs
+```
+
+The `lib.rs` will look roughly like this:
+
+```rust
+use anchor_lang::prelude::*;
+
+pub mod constants;
+pub mod errors;
+pub mod instructions;
+pub mod math;
+pub mod state;
+
+use constants::MAX_TOKENS;
+use instructions::*;
+
+declare_id!("YOUR_PROGRAM_ID");
+
+#[program]
+pub mod stableswap_amm {
+    use super::*;
+
+    pub fn initialize_pool(
+        ctx: Context<InitializePool>,
+        amplification: u64,
+        fee_bps: u16,
+    ) -> Result<()> {
+        instructions::initialize_pool::initialize_pool_handler(ctx, amplification, fee_bps)
+    }
+
+    pub fn add_liquidity<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ModifyLiquidity<'info>>,
+        lp_amount: u64,
+        max_amounts: [u64; MAX_TOKENS],
+    ) -> Result<()> {
+        instructions::modify_liquidity::add_liquidity_handler(ctx, lp_amount, max_amounts)
+    }
+
+    pub fn remove_liquidity<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ModifyLiquidity<'info>>,
+        lp_amount: u64,
+        min_amounts: [u64; MAX_TOKENS],
+    ) -> Result<()> {
+        instructions::modify_liquidity::remove_liquidity_handler(ctx, lp_amount, min_amounts)
+    }
+
+    pub fn swap<'info>(
+        ctx: Context<'_, '_, 'info, 'info, Swap<'info>>,
+        amount_in: u64,
+        min_amount_out: u64,
+        input_index: u8,
+        output_index: u8,
+    ) -> Result<()> {
+        instructions::swap::swap_handler(ctx, amount_in, min_amount_out, input_index, output_index)
+    }
+}
+```
+
+Notice we use `Context<'_, '_, 'info, 'info, ...>` for instructions that need remaining accounts. This allows us to pass a variable number of token accounts.
+
+<ArticleSection name="State" id="state" level="h2" />
+
+The Pool struct stores all configuration:
+
+```rust
+use anchor_lang::prelude::*;
+use crate::constants::MAX_TOKENS;
+
+#[account]
+pub struct Pool {
+    pub admin: Pubkey,
+    pub lp_mint: Pubkey,
+    pub amplification: u64,
+    pub fee_bps: u16,
+    pub n_tokens: u8,
+    pub token_mints: [Pubkey; MAX_TOKENS],
+    pub bump: u8,
+}
+
+impl Pool {
+    pub const LEN: usize = 8 +  // discriminator
+        32 +                    // admin
+        32 +                    // lp_mint
+        8 +                     // amplification
+        2 +                     // fee_bps
+        1 +                     // n_tokens
+        32 * MAX_TOKENS +       // token_mints
+        1;                      // bump
+
+    pub fn active_mints(&self) -> &[Pubkey] {
+        &self.token_mints[..self.n_tokens as usize]
+    }
+}
+```
+
+Key design decisions:
+- **token_mints array**: Fixed size for simpler account allocation. Unused slots are `Pubkey::default()`
+- **n_tokens**: Actual number of tokens (2-6)
+- **fee_bps**: Fee in basis points (1 bps = 0.01%, so 4 bps = 0.04%)
+- **amplification**: The A parameter that controls curve flatness
+
+<ArticleSection name="Constants" id="constants" level="h2" />
+
+```rust
+pub const MAX_TOKENS: usize = 6;
+pub const MIN_TOKENS: usize = 2;
+pub const MINIMUM_LIQUIDITY: u64 = 1_000;
+pub const MAX_AMP: u64 = 1_000_000;
+pub const MAX_FEE_BPS: u16 = 10000;
+```
+
+The `MINIMUM_LIQUIDITY` works the same as in constant product AMMs - we don't mint the first 1000 LP tokens to prevent inflation attacks.
+
+<ArticleSection name="Remaining Accounts Pattern" id="remaining-accounts" level="h2" />
+
+A key architectural decision in this program is using **remaining accounts** to handle variable numbers of tokens. Since pools can have 2-6 tokens, we can't hardcode vault accounts in the instruction struct.
+
+### The Problem
+
+In a 2-token pool, you need 2 vaults. In a 6-token pool, you need 6. Anchor's `#[derive(Accounts)]` requires a fixed number of accounts at compile time. How do we handle this?
+
+### The Solution
+
+We use `ctx.remaining_accounts` to pass a variable number of accounts:
+
+```rust
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    // Remaining accounts passed dynamically:
+    // - First n accounts: vault token accounts (one per token in pool)
+    // - Next: user's input token account
+    // - Last: user's output token account
+}
+```
+
+The instruction handler then extracts these accounts:
+
+```rust
+pub fn swap_handler<'info>(
+    ctx: Context<'_, '_, 'info, 'info, Swap<'info>>,
+    amount_in: u64,
+    min_amount_out: u64,
+    input_index: u8,
+    output_index: u8,
+) -> Result<()> {
+    let n = ctx.accounts.pool.n_tokens as usize;
+    let remaining = ctx.remaining_accounts;
+
+    // Validate we have the right number of accounts
+    require!(remaining.len() == n + 2, StableSwapError::InvalidRemainingAccounts);
+
+    let vaults = &remaining[0..n];
+    let user_input = &remaining[n];
+    let user_output = &remaining[n + 1];
+
+    // Validate each vault is the expected ATA for the pool
+    for (i, vault) in vaults.iter().enumerate() {
+        let expected = get_associated_token_address(
+            &ctx.accounts.pool.key(),
+            &ctx.accounts.pool.token_mints[i],
+        );
+        require!(vault.key() == expected, StableSwapError::InvalidVault);
+    }
+
+    // ... rest of swap logic
+}
+```
+
+### Why This Pattern?
+
+1. **Flexibility**: Same instruction works for 2-token and 6-token pools
+2. **Gas efficiency**: We only pass the accounts we need
+3. **Validation**: We still verify each account is correct (right mint, right owner)
+
+### Account Ordering Convention
+
+For consistency, we use this ordering throughout:
+
+**Add/Remove Liquidity:**
+- First `n` accounts: All vault accounts (in order of `token_mints`)
+- Remaining: User's token accounts (only for tokens with non-zero amounts)
+
+**Swap:**
+- First `n` accounts: All vault accounts
+- Next: User's input token account
+- Last: User's output token account
+
+This convention makes client-side code predictable and the program logic cleaner.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+```rust
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum StableSwapError {
+    #[msg("Invalid amplification parameter")]
+    InvalidAmplification,
+    #[msg("Invalid fee: exceeds maximum")]
+    InvalidFee,
+    #[msg("Invalid number of tokens: must be between 2 and 6")]
+    InvalidTokenCount,
+    #[msg("Invalid token index")]
+    InvalidTokenIndex,
+    #[msg("Invalid vault account")]
+    InvalidVault,
+    #[msg("Invalid mint account")]
+    InvalidMint,
+    #[msg("Slippage exceeded")]
+    SlippageExceeded,
+    #[msg("Insufficient liquidity")]
+    InsufficientLiquidity,
+    #[msg("Math overflow")]
+    MathOverflow,
+    #[msg("Zero amount not allowed")]
+    ZeroAmount,
+    #[msg("Duplicate token mints")]
+    DuplicateMint,
+    #[msg("Newton's method failed to converge")]
+    ConvergenceFailed,
+    #[msg("Invalid remaining accounts")]
+    InvalidRemainingAccounts,
+    #[msg("Cannot swap same token")]
+    SameTokenSwap,
+    #[msg("Pool is empty")]
+    EmptyPool,
+    #[msg("Initial liquidity too low")]
+    InsufficientInitialLiquidity,
+}
+```

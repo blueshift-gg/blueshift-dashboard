@@ -1,0 +1,640 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Funding Rates
+
+The SOL perp trades at $105 while spot is $100. There's no expiry date forcing convergence. What stops the gap from growing to $200? $500?
+
+Funding rates. The mechanism that makes perpetuals work.
+
+Without funding, perps are just gambling tokens with arbitrary prices. With funding, they become useful financial instruments that track real asset prices.
+
+<ArticleSection name="The Convergence Problem" id="convergence-problem" level="h2" />
+
+### Traditional Futures Have Expiry
+
+December SOL futures trading at $110 while spot is $100? By December 15th, both prices must match. Arbitrageurs enforce this:
+
+```
+Before expiry:
+  Future: $110
+  Spot: $100
+
+Arbitrage:
+  Short future at $110
+  Buy spot at $100
+
+At expiry:
+  Both settle at same price (let's say $105)
+  Future profit: $110 - $105 = $5
+  Spot profit: $105 - $100 = $5
+  Total: $10 per SOL (risk-free)
+```
+
+The profit opportunity attracts capital until the gap closes.
+
+### Perpetuals Have No Expiry
+
+Without expiry, there's no forced settlement. A perpetual SOL at $200 when spot is $100 could theoretically stay there forever if enough people wanted to pay that price.
+
+Funding rates create artificial convergence pressure by making it expensive to hold positions that push price away from spot.
+
+<ArticleSection name="How Funding Works" id="how-funding-works" level="h2" />
+
+### The Basic Rule
+
+When perp price diverges from spot:
+
+- **Perp > Spot (premium)**: Longs pay shorts
+- **Perp < Spot (discount)**: Shorts pay longs
+
+The payment is proportional to the gap and the position size.
+
+```rust
+pub fn calculate_funding_payment(
+    position_size: i64,
+    funding_rate: i64,  // Positive = longs pay
+) -> i64 {
+    // Longs (positive size) pay when rate is positive
+    // Shorts (negative size) pay when rate is negative
+    (position_size as i128 * funding_rate as i128 / PRECISION as i128) as i64
+}
+```
+
+Example:
+```
+Funding rate: +0.01% per hour (longs pay shorts)
+Position: Long 100 SOL at $100 = $10,000 notional
+
+Hourly payment: $10,000 × 0.0001 = $1 paid to shorts
+Daily (24h): $24 paid to shorts
+```
+
+### Why This Creates Convergence
+
+When perp trades above spot:
+
+**Existing longs** face a cost. Some close positions (selling pressure).
+
+**Potential shorts** see free money. They short (selling pressure).
+
+**Arbitrageurs** short perp and buy spot. They're delta-neutral but collect funding. When prices converge, they profit from convergence plus accumulated funding.
+
+All three forces push the perp price down toward spot.
+
+```
+SOL perp: $105 (+5% premium)
+SOL spot: $100
+
+Funding rate: ~0.05% per 8 hours
+
+Arbitrageur:
+  Short 1000 SOL perp at $105 ($105,000 notional)
+  Buy 1000 SOL spot at $100 ($100,000)
+
+  Daily funding income: $105,000 × 0.05% × 3 = $157.50
+  Position: Delta-neutral (no directional risk)
+
+  When prices converge:
+    Close perp short: +$5,000 (if converges to $100)
+    Sell spot: ~$0 (depending on final price)
+
+  Total profit: Funding + convergence gains
+```
+
+<ArticleSection name="Funding Rate Calculation" id="funding-calculation" level="h2" />
+
+### The Premium/Discount
+
+First, calculate how far the perp price has diverged:
+
+```rust
+pub fn calculate_premium(
+    mark_price: u64,   // Perp price
+    index_price: u64,  // Spot price (from oracle)
+) -> i64 {
+    // Premium = (mark - index) / index
+    // Positive = perp above spot
+    // Negative = perp below spot
+
+    let diff = mark_price as i64 - index_price as i64;
+    (diff as i128 * PRECISION as i128 / index_price as i128) as i64
+}
+```
+
+Example:
+```
+Mark price: $105
+Index price: $100
+
+Premium = ($105 - $100) / $100 = 5% = 0.05
+```
+
+### Simple Funding Rate
+
+The simplest model sets funding rate equal to the premium:
+
+```rust
+pub fn calculate_simple_funding_rate(
+    mark_price: u64,
+    index_price: u64,
+) -> i64 {
+    calculate_premium(mark_price, index_price)
+}
+```
+
+If perp is 5% above spot, longs pay 5% per funding period. This works but can be volatile.
+
+### Time-Weighted Funding Rate
+
+To smooth volatility, protocols use time-weighted average prices:
+
+```rust
+#[account]
+pub struct FundingState {
+    pub twap_mark: u64,           // Time-weighted mark price
+    pub twap_index: u64,          // Time-weighted index price
+    pub last_twap_update: i64,
+    pub accumulated_mark: u128,   // Sum of mark × time
+    pub accumulated_index: u128,  // Sum of index × time
+    pub twap_start: i64,
+}
+
+pub fn update_twap(
+    state: &mut FundingState,
+    current_mark: u64,
+    current_index: u64,
+    current_time: i64,
+) {
+    let elapsed = current_time - state.last_twap_update;
+
+    // Accumulate price × time
+    state.accumulated_mark += state.twap_mark as u128 * elapsed as u128;
+    state.accumulated_index += state.twap_index as u128 * elapsed as u128;
+
+    let total_time = current_time - state.twap_start;
+
+    // Update TWAP
+    state.twap_mark = (state.accumulated_mark / total_time as u128) as u64;
+    state.twap_index = (state.accumulated_index / total_time as u128) as u64;
+
+    state.last_twap_update = current_time;
+}
+
+pub fn calculate_twap_funding_rate(state: &FundingState) -> i64 {
+    calculate_premium(state.twap_mark, state.twap_index)
+}
+```
+
+TWAP smooths out short-term price spikes. A brief manipulation doesn't immediately create extreme funding.
+
+### Capped Funding Rate
+
+Extreme funding rates can liquidate positions just from funding alone. Protocols often cap the rate:
+
+```rust
+const MAX_FUNDING_RATE: i64 = 10_000; // 1% per period
+
+pub fn calculate_capped_funding_rate(
+    mark_price: u64,
+    index_price: u64,
+) -> i64 {
+    let raw_rate = calculate_premium(mark_price, index_price);
+
+    // Clamp to [-1%, +1%]
+    raw_rate.clamp(-MAX_FUNDING_RATE, MAX_FUNDING_RATE)
+}
+```
+
+<ArticleSection name="Funding Periods" id="funding-periods" level="h2" />
+
+### Discrete vs Continuous Funding
+
+**Discrete funding** (traditional): Funding settles at fixed intervals (every 8 hours for most CEXs).
+
+```rust
+#[account]
+pub struct Market {
+    pub funding_rate: i64,
+    pub next_funding_time: i64,
+    pub funding_interval: i64,  // e.g., 28800 seconds (8 hours)
+}
+
+pub fn settle_funding(market: &mut Market, current_time: i64) -> Result<()> {
+    require!(
+        current_time >= market.next_funding_time,
+        ErrorCode::FundingNotDue
+    );
+
+    // Calculate and apply funding rate
+    market.funding_rate = calculate_funding_rate(market)?;
+
+    // Schedule next funding
+    market.next_funding_time += market.funding_interval;
+
+    Ok(())
+}
+```
+
+**Continuous funding** (DeFi native): Funding accrues every second.
+
+```rust
+#[account]
+pub struct Market {
+    pub cumulative_funding_index: i128,  // Total accumulated funding
+    pub funding_rate_per_second: i64,    // Current rate
+    pub last_funding_update: i64,
+}
+
+pub fn accrue_funding(market: &mut Market, current_time: i64) {
+    let elapsed = current_time - market.last_funding_update;
+    if elapsed <= 0 {
+        return;
+    }
+
+    // Add funding to cumulative index
+    let funding_delta = market.funding_rate_per_second as i128 * elapsed as i128;
+    market.cumulative_funding_index += funding_delta;
+
+    market.last_funding_update = current_time;
+}
+```
+
+Continuous funding is smoother and harder to game (no funding rate sniping around settlement times).
+
+<ArticleSection name="Tracking Funding Per Position" id="tracking-funding" level="h2" />
+
+### The Index Approach
+
+Like lending protocols track interest, perp protocols track funding with an index:
+
+```rust
+#[account]
+pub struct Position {
+    pub size: i64,
+    pub margin: u64,
+    pub entry_funding_index: i128,  // Cumulative index at entry
+}
+
+pub fn calculate_funding_pnl(
+    position: &Position,
+    market: &Market,
+) -> i64 {
+    let index_delta = market.cumulative_funding_index - position.entry_funding_index;
+
+    // Positive index_delta means longs paid
+    // For longs (positive size): negative PnL
+    // For shorts (negative size): positive PnL
+    let funding = (position.size as i128 * index_delta / PRECISION as i128) as i64;
+
+    // Negate because if longs paid, longs lose money
+    -funding
+}
+```
+
+Example:
+```
+Position opened when cumulative_funding_index = 100
+Now cumulative_funding_index = 150
+Index delta = 50 (meaning longs paid 50 units total)
+
+Long 10 SOL:
+  funding = -(10 × 50) = -500 (paid to shorts)
+
+Short 10 SOL:
+  funding = -(-10 × 50) = +500 (received from longs)
+```
+
+### Updating Position Funding
+
+When positions change, update the funding index:
+
+```rust
+pub fn settle_position_funding(
+    position: &mut Position,
+    market: &Market,
+) {
+    // Calculate outstanding funding
+    let funding_pnl = calculate_funding_pnl(position, market);
+
+    // Add to margin (can be negative)
+    if funding_pnl >= 0 {
+        position.margin += funding_pnl as u64;
+    } else {
+        position.margin = position.margin.saturating_sub((-funding_pnl) as u64);
+    }
+
+    // Reset funding index to current
+    position.entry_funding_index = market.cumulative_funding_index;
+}
+```
+
+<ArticleSection name="Funding Rate Models" id="funding-models" level="h2" />
+
+### Premium-Based (Simple)
+
+Rate equals the price premium:
+
+```rust
+pub fn premium_based_rate(mark: u64, index: u64) -> i64 {
+    ((mark as i64 - index as i64) * PRECISION as i64 / index as i64)
+}
+```
+
+Problem: Doesn't account for position imbalance. If there are more longs than shorts, even zero premium should have positive funding to rebalance.
+
+### Open Interest-Based
+
+Factor in the long/short imbalance:
+
+```rust
+pub fn oi_based_rate(
+    market: &Market,
+    mark: u64,
+    index: u64,
+) -> i64 {
+    let premium_rate = premium_based_rate(mark, index);
+
+    // Calculate imbalance
+    let long_oi = market.long_open_interest as i128;
+    let short_oi = market.short_open_interest as i128;
+    let total_oi = long_oi + short_oi;
+
+    if total_oi == 0 {
+        return premium_rate;
+    }
+
+    // Skew from -1 to +1 (positive = more longs)
+    let skew = (long_oi - short_oi) * PRECISION as i128 / total_oi;
+
+    // Blend premium and skew
+    let skew_weight = 5000; // 50%
+    let premium_weight = 5000;
+
+    ((premium_rate as i128 * premium_weight as i128
+      + skew as i128 * skew_weight as i128)
+     / 10000) as i64
+}
+```
+
+This model pushes funding positive when there are more longs, even if prices are equal. It encourages balance.
+
+### Velocity-Based (Drift)
+
+Drift Protocol uses a "velocity" model that considers how fast the imbalance is changing:
+
+```rust
+#[account]
+pub struct FundingVelocity {
+    pub current_velocity: i64,  // Rate of change of funding rate
+    pub max_velocity: i64,
+}
+
+pub fn velocity_based_rate(
+    velocity: &mut FundingVelocity,
+    mark: u64,
+    index: u64,
+    elapsed: i64,
+) -> i64 {
+    let target = premium_based_rate(mark, index);
+
+    // Accelerate toward target
+    let diff = target - velocity.current_velocity;
+    let acceleration = diff.clamp(-velocity.max_velocity, velocity.max_velocity);
+
+    velocity.current_velocity += acceleration * elapsed / FUNDING_PERIOD;
+
+    velocity.current_velocity
+}
+```
+
+Velocity models are smoother and more resistant to manipulation. The rate moves gradually rather than jumping.
+
+<ArticleSection name="Funding Rate Economics" id="funding-economics" level="h2" />
+
+### Who Pays, Who Receives
+
+Funding is a zero-sum transfer between longs and shorts:
+
+```
+Total paid by longs = Total received by shorts
+
+If $1M in long positions at 0.01% funding:
+  Longs pay: $1M × 0.0001 = $100
+
+If $500K in short positions:
+  Each short receives: $100 / (shorts' notional) = 0.02%
+```
+
+Wait, that's not 0.01%. What's happening?
+
+### The Imbalance Problem
+
+If there are unequal long and short positions, funding becomes asymmetric:
+
+```
+$10M long OI, $5M short OI
+Funding rate: 0.01%
+
+Longs pay: $10M × 0.01% = $1,000
+Shorts receive: $1,000 total
+
+Per-dollar funding:
+  Longs pay: 0.01%
+  Shorts receive: $1,000 / $5M = 0.02%
+```
+
+This is intentional. It incentivizes the under-represented side. Shorts earn double the rate, attracting more shorts.
+
+### Protocol Handling of Imbalance
+
+Some protocols take a cut during imbalanced funding:
+
+```rust
+pub fn distribute_funding(
+    market: &mut Market,
+    funding_rate: i64,
+) {
+    let long_payment = market.long_open_interest as i128
+        * funding_rate as i128 / PRECISION as i128;
+    let short_payment = market.short_open_interest as i128
+        * funding_rate as i128 / PRECISION as i128;
+
+    if funding_rate > 0 {
+        // Longs pay
+        let to_shorts = long_payment.min(short_payment); // Cap at shorter side
+        let excess = long_payment - to_shorts;
+
+        // Excess goes to insurance fund
+        market.insurance_fund += excess as u64;
+    }
+}
+```
+
+The excess funding goes to the insurance fund rather than creating windfall profits for the minority side.
+
+<ArticleSection name="Funding Rate Attacks" id="funding-attacks" level="h2" />
+
+### Rate Manipulation
+
+An attacker with large capital could:
+
+1. Open huge position pushing funding extreme
+2. Open opposite position on another venue
+3. Collect funding payments
+4. Close both positions
+
+Defense:
+- Position limits
+- TWAP-based funding (can't spike instantly)
+- Open interest limits
+- Velocity-based rates (gradual changes)
+
+### Funding Rate Sniping
+
+With discrete funding periods:
+
+1. Wait until just before funding settlement
+2. Open position on receiving side
+3. Collect funding
+4. Close immediately after
+
+Defense:
+- Continuous funding (no discrete windows)
+- TWAP over entire period (opening late doesn't help)
+- Holding time requirements
+
+```rust
+pub fn check_anti_snipe(
+    position: &Position,
+    current_time: i64,
+    min_holding_period: i64,
+) -> Result<()> {
+    let held_for = current_time - position.opened_at;
+    require!(
+        held_for >= min_holding_period,
+        ErrorCode::PositionTooNew
+    );
+    Ok(())
+}
+```
+
+<ArticleSection name="Practical Funding Rates" id="practical-rates" level="h2" />
+
+### What Real Rates Look Like
+
+On major exchanges:
+```
+Normal market (balanced): ±0.01% per 8 hours
+Bull market (more longs): +0.05% to +0.1% per 8 hours
+Extreme bull: +0.5% per 8 hours (longs pay 1.5%/day)
+Bear capitulation: -0.5% per 8 hours (shorts pay)
+```
+
+Annualized:
+```
+0.01% × 3 × 365 = 10.95% APY
+0.1% × 3 × 365 = 109.5% APY
+```
+
+During extreme moves, holding the wrong side of funding can cost more than the price movement.
+
+### Funding as Yield
+
+Skilled traders treat funding as yield:
+
+```
+Strategy: Delta-neutral funding farming
+
+Long spot SOL: $100,000
+Short SOL perp: $100,000
+
+Price exposure: Zero (movements cancel)
+Funding income: If longs pay 0.1%/day = $100/day
+
+Annual yield: $36,500 / $200,000 = 18.25%
+```
+
+This is why funding rates eventually stabilize. Arbitrageurs provide infinite supply of the paying side at high enough rates.
+
+<ArticleSection name="Implementation Example" id="implementation" level="h2" />
+
+### Complete Funding System
+
+```rust
+#[account]
+pub struct Market {
+    // Funding state
+    pub cumulative_funding_long: i128,   // Per-long cumulative
+    pub cumulative_funding_short: i128,  // Per-short cumulative
+    pub last_funding_time: i64,
+    pub funding_rate_per_second: i64,
+
+    // For calculation
+    pub long_open_interest: u64,
+    pub short_open_interest: u64,
+}
+
+pub fn update_funding(
+    market: &mut Market,
+    mark_price: u64,
+    index_price: u64,
+    current_time: i64,
+) -> Result<()> {
+    let elapsed = current_time - market.last_funding_time;
+    if elapsed <= 0 {
+        return Ok(());
+    }
+
+    // Calculate funding rate
+    let premium = calculate_premium(mark_price, index_price);
+    let new_rate = calculate_capped_funding_rate(premium);
+
+    // Smooth rate change
+    let rate_change = (new_rate - market.funding_rate_per_second) / SMOOTHING_FACTOR;
+    market.funding_rate_per_second += rate_change;
+
+    // Calculate funding for this period
+    let funding_per_unit = market.funding_rate_per_second as i128 * elapsed as i128;
+
+    // Apply to cumulative indices
+    if funding_per_unit > 0 {
+        // Longs pay
+        market.cumulative_funding_long += funding_per_unit;
+        // Shorts receive (scaled by OI ratio)
+        if market.short_open_interest > 0 {
+            let short_receive = funding_per_unit
+                * market.long_open_interest as i128
+                / market.short_open_interest as i128;
+            market.cumulative_funding_short -= short_receive.min(funding_per_unit);
+        }
+    } else {
+        // Shorts pay
+        market.cumulative_funding_short += -funding_per_unit;
+        // Longs receive
+        if market.long_open_interest > 0 {
+            let long_receive = -funding_per_unit
+                * market.short_open_interest as i128
+                / market.long_open_interest as i128;
+            market.cumulative_funding_long -= long_receive.min(-funding_per_unit);
+        }
+    }
+
+    market.last_funding_time = current_time;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Funding rates are the heartbeat of perpetual markets:
+
+1. **Perp > Spot**: Longs pay shorts (creates selling pressure)
+2. **Perp < Spot**: Shorts pay longs (creates buying pressure)
+3. **TWAP smoothing** prevents manipulation from brief price spikes
+4. **Continuous funding** eliminates sniping around settlement times
+5. **Imbalanced OI** means the minority side earns more per dollar
+6. **Velocity models** make rates change gradually, improving stability
+7. **Funding is yield** for delta-neutral arbitrageurs, which keeps rates bounded
+
+With funding understood, we can explore what happens when positions go wrong: liquidations.

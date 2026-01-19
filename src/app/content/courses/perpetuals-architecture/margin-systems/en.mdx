@@ -1,0 +1,640 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Margin Systems
+
+You open a $10,000 position with $1,000 collateral. The next day, your collateral is worth $500. Where did the other $500 go?
+
+Margin is what stands between your position and liquidation. Understanding margin systems means understanding when you're safe, when you're at risk, and why protocols design their margin requirements the way they do.
+
+<ArticleSection name="Initial vs Maintenance Margin" id="initial-vs-maintenance" level="h2" />
+
+### Two Different Requirements
+
+Every perp protocol has two margin thresholds:
+
+**Initial margin**: The minimum collateral to open a position.
+
+**Maintenance margin**: The minimum collateral to keep a position open.
+
+Initial margin is always higher than maintenance margin. This gap exists for a reason.
+
+```rust
+#[account]
+pub struct MarketConfig {
+    pub initial_margin_ratio: u64,      // e.g., 1000 = 10%
+    pub maintenance_margin_ratio: u64,  // e.g., 500 = 5%
+}
+```
+
+### Why Two Thresholds?
+
+Imagine if initial and maintenance margin were the same at 10%:
+
+```
+Open position:
+  Margin: $1,000
+  Position: $10,000 (10x leverage)
+  Margin ratio: 10%
+
+Price moves -0.1%:
+  PnL: -$10
+  Equity: $990
+  Notional: $9,990
+  Margin ratio: 9.9%
+  Result: Immediately liquidatable!
+```
+
+With a single threshold, any adverse price move triggers liquidation. Traders couldn't hold positions through normal volatility.
+
+The gap between initial and maintenance creates a buffer:
+
+```
+Initial margin: 10% (max 10x leverage)
+Maintenance margin: 5%
+
+Open position:
+  Margin: $1,000
+  Position: $10,000
+
+Price moves -5%:
+  PnL: -$500
+  Equity: $500
+  Notional: $9,500
+  Margin ratio: 5.26%
+  Result: Still safe (above 5%)
+```
+
+The buffer lets traders survive volatility without immediate liquidation.
+
+<ArticleSection name="Calculating Margin Requirements" id="calculating-margin" level="h2" />
+
+### Initial Margin Check
+
+Before opening a position, verify sufficient collateral:
+
+```rust
+pub fn check_initial_margin(
+    margin: u64,
+    notional: u64,
+    config: &MarketConfig,
+) -> Result<()> {
+    // margin / notional >= initial_margin_ratio
+    // Rearranged to avoid division:
+    // margin * 10000 >= notional * initial_margin_ratio
+
+    let margin_scaled = (margin as u128) * 10_000;
+    let required = (notional as u128) * (config.initial_margin_ratio as u128);
+
+    require!(
+        margin_scaled >= required,
+        ErrorCode::InsufficientInitialMargin
+    );
+
+    Ok(())
+}
+```
+
+### Maintenance Margin Check
+
+For existing positions, check against the lower threshold:
+
+```rust
+pub fn check_maintenance_margin(
+    position: &Position,
+    market: &Market,
+    current_price: u64,
+) -> Result<bool> {
+    let equity = calculate_equity(position, market, current_price);
+
+    if equity <= 0 {
+        return Ok(false); // Liquidatable
+    }
+
+    let notional = position.size.unsigned_abs() as u128
+        * current_price as u128
+        / PRICE_PRECISION;
+
+    // equity / notional >= maintenance_margin_ratio
+    let equity_scaled = (equity as u128) * 10_000;
+    let required = notional * (market.config.maintenance_margin_ratio as u128);
+
+    Ok(equity_scaled >= required)
+}
+```
+
+### Margin Ratio to Leverage
+
+Margin ratio and leverage are inversely related:
+
+```
+Leverage = Notional / Equity = 1 / Margin Ratio
+
+10% margin ratio = 10x leverage
+5% margin ratio = 20x leverage
+2% margin ratio = 50x leverage
+1% margin ratio = 100x leverage
+```
+
+So if your protocol sets:
+- Initial margin: 10% → Max 10x leverage to open
+- Maintenance margin: 5% → Liquidatable below ~20x effective leverage
+
+<ArticleSection name="Cross Margin vs Isolated Margin" id="cross-vs-isolated" level="h2" />
+
+### The Two Models
+
+**Isolated margin**: Each position has its own collateral. One position's liquidation doesn't affect others.
+
+**Cross margin**: All positions share your account balance. More capital efficient, but one bad trade can wipe everything.
+
+### Isolated Margin
+
+Each position is independent:
+
+```rust
+#[account]
+pub struct IsolatedPosition {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+    pub size: i64,
+    pub entry_price: u64,
+    pub margin: u64,  // This position's dedicated collateral
+}
+
+// Each position has its own margin
+// Liquidation only affects this position
+```
+
+Pros:
+- Risk is contained to individual positions
+- Can run different leverage per position
+- Easier to reason about
+
+Cons:
+- Capital inefficient (margin locked per position)
+- Can't use profits from one position to prevent liquidation in another
+
+### Cross Margin
+
+All positions share a single margin account:
+
+```rust
+#[account]
+pub struct MarginAccount {
+    pub owner: Pubkey,
+    pub balance: u64,  // Shared collateral
+}
+
+#[account]
+pub struct CrossPosition {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+    pub margin_account: Pubkey,  // Reference to shared margin
+    pub size: i64,
+    pub entry_price: u64,
+    // No individual margin field
+}
+
+pub fn calculate_cross_margin_health(
+    margin_account: &MarginAccount,
+    positions: &[CrossPosition],
+    markets: &[Market],
+    prices: &[u64],
+) -> Result<bool> {
+    let mut total_equity = margin_account.balance as i128;
+    let mut total_maintenance_requirement: u128 = 0;
+
+    for (position, (market, price)) in positions.iter()
+        .zip(markets.iter().zip(prices.iter()))
+    {
+        // Add unrealized PnL to equity
+        let pnl = calculate_unrealized_pnl(position, *price);
+        total_equity += pnl as i128;
+
+        // Add maintenance requirement
+        let notional = position.size.unsigned_abs() as u128
+            * (*price as u128)
+            / PRICE_PRECISION;
+        total_maintenance_requirement +=
+            notional * market.config.maintenance_margin_ratio as u128 / 10_000;
+    }
+
+    // Account is healthy if equity > total requirements
+    Ok(total_equity >= total_maintenance_requirement as i128)
+}
+```
+
+Cross margin example:
+```
+Account balance: $1,000
+
+Position A: Long 10 SOL at $100, now $110
+  PnL: +$100
+  Maintenance: $1,100 × 5% = $55
+
+Position B: Short 5 ETH at $2000, now $2,100
+  PnL: -$500
+  Maintenance: $10,500 × 5% = $525
+
+Total equity: $1,000 + $100 - $500 = $600
+Total maintenance: $55 + $525 = $580
+
+Margin ratio: $600 / $580 = 103%
+Result: Still healthy
+```
+
+Without cross margin, Position B would be liquidatable (it lost $500 of its isolated margin).
+
+### The Cross Margin Danger
+
+Cross margin is more efficient, but creates systemic risk:
+
+```
+Account balance: $1,000
+
+Position A: Long 100 SOL at $100 (high leverage)
+  If SOL drops 10%: PnL = -$1,000
+  Entire account wiped
+
+Position B: Short 1 ETH at $2000 (conservative)
+  This profitable position gets liquidated too
+```
+
+One bad position drags down all others. This is why cross margin requires careful position management.
+
+<ArticleSection name="Adding and Removing Margin" id="adding-removing-margin" level="h2" />
+
+### Adding Margin
+
+Traders can add collateral to improve their margin ratio:
+
+```rust
+pub fn add_margin(
+    ctx: Context<AddMargin>,
+    amount: u64,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+
+    // Transfer from user to vault
+    transfer_tokens(
+        ctx.accounts.user_collateral,
+        ctx.accounts.vault,
+        amount,
+    )?;
+
+    // Increase position margin
+    position.margin = position.margin.checked_add(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    Ok(())
+}
+```
+
+Adding margin is always allowed. It only improves the position's health.
+
+### Removing Margin
+
+Withdrawing collateral is restricted:
+
+```rust
+pub fn remove_margin(
+    ctx: Context<RemoveMargin>,
+    amount: u64,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let market = &ctx.accounts.market;
+    let price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    // Calculate new margin after withdrawal
+    let new_margin = position.margin.checked_sub(amount)
+        .ok_or(ErrorCode::InsufficientMargin)?;
+
+    // Calculate new equity
+    let pnl = calculate_unrealized_pnl(position, price);
+    let funding = calculate_funding_pnl(position, market);
+    let new_equity = new_margin as i64 + pnl + funding;
+
+    // Must maintain initial margin (not just maintenance)
+    // This prevents gaming where you open, withdraw, then get liquidated
+    let notional = position.size.unsigned_abs() as u128
+        * price as u128
+        / PRICE_PRECISION;
+
+    let required = notional * market.config.initial_margin_ratio as u128 / 10_000;
+
+    require!(
+        new_equity >= required as i64,
+        ErrorCode::WithdrawalExceedsMargin
+    );
+
+    // Transfer from vault to user
+    transfer_tokens(
+        ctx.accounts.vault,
+        ctx.accounts.user_collateral,
+        amount,
+    )?;
+
+    position.margin = new_margin;
+
+    Ok(())
+}
+```
+
+Why require initial margin (not maintenance) for withdrawals?
+
+Without this restriction:
+1. Open at 10% initial margin (10x leverage)
+2. Withdraw to 5% (maintenance level)
+3. You've effectively opened at 20x leverage, bypassing the initial margin requirement
+
+<ArticleSection name="Multi-Asset Collateral" id="multi-asset-collateral" level="h2" />
+
+### Beyond Single Collateral
+
+Simple perp protocols accept one collateral type (usually USDC). Advanced protocols accept multiple:
+
+```rust
+#[account]
+pub struct CollateralAsset {
+    pub mint: Pubkey,
+    pub oracle: Pubkey,
+    pub weight: u64,        // 10000 = 100%, 9000 = 90% (haircut)
+    pub max_utilization: u64,
+    pub total_deposited: u64,
+}
+
+#[account]
+pub struct MarginAccount {
+    pub owner: Pubkey,
+    pub collateral_balances: Vec<CollateralBalance>,
+}
+
+pub struct CollateralBalance {
+    pub asset: Pubkey,
+    pub amount: u64,
+}
+```
+
+### Collateral Weights (Haircuts)
+
+Not all collateral is equal. A volatile asset is worth less as collateral:
+
+```
+USDC: 100% weight (stablecoin, highly liquid)
+SOL: 90% weight (volatile, but liquid)
+Random token: 70% weight (volatile, less liquid)
+```
+
+```rust
+pub fn calculate_collateral_value(
+    margin_account: &MarginAccount,
+    assets: &[CollateralAsset],
+    prices: &[u64],
+) -> u64 {
+    let mut total_value: u128 = 0;
+
+    for (balance, (asset, price)) in margin_account.collateral_balances.iter()
+        .zip(assets.iter().zip(prices.iter()))
+    {
+        let raw_value = balance.amount as u128 * (*price as u128) / PRICE_PRECISION;
+        let weighted_value = raw_value * asset.weight as u128 / 10_000;
+        total_value += weighted_value;
+    }
+
+    total_value as u64
+}
+```
+
+Example:
+```
+Deposited:
+  1000 USDC at $1 (100% weight): $1,000
+  10 SOL at $100 (90% weight): $900
+
+Total collateral value: $1,900
+```
+
+Even though you deposited $2,000, the SOL haircut reduces effective collateral.
+
+### Why Haircuts Exist
+
+Haircuts account for liquidation risk:
+
+1. Position goes underwater
+2. Liquidator seizes collateral
+3. Liquidator sells collateral on market
+4. During a crash, SOL might drop 10% before it can be sold
+
+The haircut ensures collateral value exceeds debt even after slippage.
+
+<ArticleSection name="Position Scaling" id="position-scaling" level="h2" />
+
+### Increasing Position Size
+
+When you add to a position, both margin and size increase:
+
+```rust
+pub fn increase_position(
+    ctx: Context<IncreasePosition>,
+    additional_size: i64,
+    additional_margin: u64,
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let market = &ctx.accounts.market;
+    let price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    // Calculate new weighted average entry
+    let old_notional = position.size.unsigned_abs() as u128 * position.entry_price as u128;
+    let new_notional = additional_size.unsigned_abs() as u128 * price as u128;
+
+    let total_size = position.size.unsigned_abs() + additional_size.unsigned_abs();
+    let new_entry = (old_notional + new_notional) / total_size as u128;
+
+    // Check initial margin requirement for new position
+    let total_margin = position.margin + additional_margin;
+    let total_notional = total_size as u128 * price as u128 / PRICE_PRECISION;
+
+    check_initial_margin(total_margin, total_notional as u64, &market.config)?;
+
+    // Update position
+    position.size += additional_size;
+    position.margin = total_margin;
+    position.entry_price = new_entry as u64;
+
+    // Transfer additional margin
+    transfer_tokens(
+        ctx.accounts.user_collateral,
+        ctx.accounts.vault,
+        additional_margin,
+    )?;
+
+    Ok(())
+}
+```
+
+### Decreasing Position Size
+
+Partial closes return proportional margin:
+
+```rust
+pub fn decrease_position(
+    ctx: Context<DecreasePosition>,
+    reduce_size: u64,  // Absolute value to reduce
+) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let market = &ctx.accounts.market;
+    let price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    let original_size = position.size.unsigned_abs();
+    require!(reduce_size <= original_size, ErrorCode::InvalidReduceSize);
+
+    // Calculate ratio being closed
+    let close_ratio = reduce_size as u128 * PRECISION / original_size as u128;
+
+    // Calculate PnL on the closed portion
+    let price_pnl = calculate_unrealized_pnl(position, price);
+    let funding_pnl = calculate_funding_pnl(position, market);
+    let total_pnl = price_pnl + funding_pnl;
+
+    let closed_pnl = (total_pnl as i128 * close_ratio as i128 / PRECISION as i128) as i64;
+
+    // Calculate margin to return
+    let margin_returned = (position.margin as u128 * close_ratio / PRECISION) as u64;
+
+    // Payout = margin + PnL
+    let payout = if closed_pnl >= 0 {
+        margin_returned + closed_pnl as u64
+    } else {
+        margin_returned.saturating_sub((-closed_pnl) as u64)
+    };
+
+    // Update position
+    if position.size > 0 {
+        position.size -= reduce_size as i64;
+    } else {
+        position.size += reduce_size as i64;
+    }
+    position.margin -= margin_returned;
+
+    // Transfer payout
+    transfer_tokens(ctx.accounts.vault, ctx.accounts.user_collateral, payout)?;
+
+    // Close position account if fully closed
+    if position.size == 0 {
+        close_account(position)?;
+    }
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Margin Fees" id="margin-fees" level="h2" />
+
+### Borrowing Cost
+
+Some protocols charge a fee based on position notional:
+
+```rust
+pub fn calculate_margin_fee(
+    notional: u64,
+    holding_period: i64,  // In seconds
+    fee_rate: u64,        // Annual rate in bps
+) -> u64 {
+    // fee = notional × rate × time / year
+    let fee = notional as u128
+        * fee_rate as u128
+        * holding_period as u128
+        / (SECONDS_PER_YEAR as u128 * 10_000);
+
+    fee as u64
+}
+```
+
+This fee represents the cost of leverage. Even if funding is zero, you pay to hold a leveraged position.
+
+### Fee Accrual
+
+Like lending protocols, margin fees can accrue via an index:
+
+```rust
+#[account]
+pub struct Market {
+    pub margin_fee_index: u128,    // Cumulative fee multiplier
+    pub margin_fee_rate: u64,      // Annual rate
+    pub last_fee_update: i64,
+}
+
+pub fn accrue_margin_fees(market: &mut Market, current_time: i64) {
+    let elapsed = current_time - market.last_fee_update;
+    if elapsed <= 0 {
+        return;
+    }
+
+    let fee_growth = PRECISION as u128
+        + (market.margin_fee_rate as u128 * elapsed as u128
+           / (SECONDS_PER_YEAR as u128 * 10_000));
+
+    market.margin_fee_index = market.margin_fee_index * fee_growth / PRECISION as u128;
+    market.last_fee_update = current_time;
+}
+```
+
+<ArticleSection name="Design Considerations" id="design-considerations" level="h2" />
+
+### Margin Ratio Trade-offs
+
+Higher initial margin (lower max leverage):
+- Fewer liquidations
+- Safer for LPs
+- Less capital efficient for traders
+- Lower volume
+
+Lower initial margin (higher max leverage):
+- More liquidations
+- Riskier for LPs
+- More capital efficient for traders
+- Higher volume
+
+Most Solana protocols settle around 5-10% initial margin (10-20x leverage). Ethereum protocols go higher because they can't process liquidations fast enough for lower margins.
+
+### Maintenance Buffer
+
+The gap between initial and maintenance margin should reflect:
+
+**Volatility**: High volatility assets need bigger buffers.
+
+**Liquidation speed**: Slower chains need bigger buffers.
+
+**Oracle latency**: If prices update slowly, positions can go underwater before liquidators act.
+
+```
+Low volatility (stablecoin pairs): 1-2% buffer
+Medium volatility (majors): 5% buffer
+High volatility (memecoins): 10%+ buffer
+```
+
+### The Insurance Fund Connection
+
+Maintenance margin isn't just about trader protection. It's about protocol solvency.
+
+If positions consistently go underwater before liquidation:
+1. Bad debt accumulates
+2. Insurance fund pays
+3. Insurance fund depletes
+4. Protocol becomes insolvent
+
+The maintenance margin must be high enough that liquidations close positions before they go negative, accounting for execution delay and slippage.
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Margin systems protect both traders and protocols:
+
+1. **Initial margin** sets max leverage at open; **maintenance margin** determines liquidation threshold
+2. **The buffer** between them lets traders survive volatility
+3. **Cross margin** is capital efficient but creates systemic risk
+4. **Isolated margin** contains risk but locks up capital
+5. **Collateral weights** (haircuts) account for asset volatility and liquidation risk
+6. **Margin fees** compensate for leverage costs
+7. **Buffer size** should match volatility, chain speed, and oracle latency
+
+With margin systems understood, we can explore the mechanism that keeps perp prices aligned with spot: funding rates.

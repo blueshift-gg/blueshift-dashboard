@@ -1,0 +1,579 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Advanced Designs
+
+Standard lending protocols share risk across all assets. Deposit ETH, and your funds back loans against SOL, LINK, and every other collateral type. If one asset implodes, everyone suffers.
+
+But what if you could isolate that risk? What if borrowers could access capital without upfront collateral? What if LP tokens and NFTs could serve as collateral?
+
+Advanced lending designs solve these problems, each with its own trade-offs.
+
+<ArticleSection name="Isolated Lending Markets" id="isolated-markets" level="h2" />
+
+### The Shared Risk Problem
+
+In traditional lending pools:
+
+```
+Pool assets: ETH, SOL, LINK, BONK, NEW_TOKEN
+Total deposits: $100M
+
+NEW_TOKEN gets exploited via oracle manipulation
+Bad debt: $5M
+All depositors share the loss: 5%
+```
+
+ETH depositors didn't choose exposure to NEW_TOKEN. They got it anyway.
+
+### The Silo Model
+
+Silo Finance pioneered isolated markets. Each asset pair exists in its own silo:
+
+```
+Silo 1: ETH ↔ USDC only
+Silo 2: SOL ↔ USDC only  
+Silo 3: LINK ↔ USDC only
+Silo 4: NEW_TOKEN ↔ USDC only
+
+NEW_TOKEN exploit → Only Silo 4 affected
+ETH depositors in Silo 1: Unaffected
+```
+
+```rust
+#[account]
+pub struct IsolatedSilo {
+    pub base_asset: Pubkey,        // e.g., ETH
+    pub quote_asset: Pubkey,       // e.g., USDC (bridge asset)
+    pub base_deposits: u64,
+    pub quote_deposits: u64,
+    pub base_borrows: u64,
+    pub quote_borrows: u64,
+    pub base_config: AssetConfig,
+    pub quote_config: AssetConfig,
+}
+
+// Users can only interact within one silo at a time
+pub fn deposit_to_silo(
+    ctx: Context<DepositSilo>,
+    amount: u64,
+    asset: SiloAsset,
+) -> Result<()> {
+    let silo = &mut ctx.accounts.silo;
+    
+    match asset {
+        SiloAsset::Base => {
+            silo.base_deposits += amount;
+            // Mint base shares...
+        }
+        SiloAsset::Quote => {
+            silo.quote_deposits += amount;
+            // Mint quote shares...
+        }
+    }
+    
+    Ok(())
+}
+```
+
+### Trade-offs
+
+**Advantages:**
+- Risk containment: Problems don't spread
+- Permissionless listing: Anyone can create a silo
+- Clear risk: Users choose their exposure
+
+**Disadvantages:**
+- Fragmented liquidity: Each silo has less depth
+- Higher rates: Less supply = higher borrow costs
+- Complexity: Users must navigate multiple silos
+
+### Euler V1's Approach
+
+Euler created asset tiers:
+
+| Tier | Can Be Collateral | Can Be Borrowed | Cross-collateral |
+|------|------------------|-----------------|------------------|
+| Collateral | Yes | Yes | Yes |
+| Cross | Yes | Yes | No |
+| Isolated | No | Yes | No |
+
+- **Collateral tier**: ETH, USDC, battle-tested assets
+- **Cross tier**: Decent assets, can borrow but not use as collateral
+- **Isolated tier**: Risky assets, can only borrow, no collateral function
+
+<ArticleSection name="Flash Loans" id="flash-loans" level="h2" />
+
+### Borrow Without Collateral
+
+Flash loans break the fundamental rule: borrow any amount, with zero collateral, as long as you repay in the same transaction.
+
+```
+Transaction:
+  1. Borrow $10M USDC (no collateral)
+  2. Use $10M for arbitrage/liquidation/whatever
+  3. Repay $10M + fee
+  4. Transaction completes
+
+If step 3 fails, entire transaction reverts.
+No risk to lenders.
+```
+
+```rust
+pub fn flash_loan(
+    ctx: Context<FlashLoan>,
+    amount: u64,
+) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    
+    // Record state before
+    let balance_before = pool.available_liquidity();
+    
+    // Transfer to borrower
+    transfer_to_borrower(ctx, amount)?;
+    
+    // Borrower does their thing via CPI...
+    // (arbitrage, liquidation, collateral swap, etc.)
+    
+    // Verify repayment
+    let balance_after = pool.available_liquidity();
+    let fee = amount * pool.flash_loan_fee_bps / 10_000;
+    
+    require!(
+        balance_after >= balance_before + fee,
+        ErrorCode::FlashLoanNotRepaid
+    );
+    
+    pool.reserves += fee;
+    
+    Ok(())
+}
+```
+
+### Use Cases
+
+**1. Arbitrage**
+```
+DEX A: ETH = $2,000
+DEX B: ETH = $2,020
+
+Flash loan 1000 ETH from lending pool
+Sell on B: Get $2,020,000
+Buy on A: Spend $2,000,000
+Repay flash loan + fee
+Profit: ~$19,000 (after fees)
+```
+
+**2. Liquidations**
+```
+Liquidate position requiring $500K USDC
+Don't have $500K? Flash loan it
+Liquidate, receive collateral
+Sell collateral for USDC
+Repay flash loan
+Keep liquidation bonus
+```
+
+**3. Collateral Swaps**
+```
+Have: SOL collateral, USDC debt
+Want: ETH collateral, same debt
+
+Flash loan USDC to repay debt
+Withdraw SOL collateral
+Sell SOL for ETH
+Deposit ETH as new collateral
+Borrow USDC again
+Repay flash loan
+
+One transaction, no market exposure during swap
+```
+
+**4. Self-Liquidation**
+```
+Position slightly underwater
+Don't want to pay liquidation bonus to strangers
+
+Flash loan to repay own debt
+Withdraw remaining collateral
+Sell enough to cover flash loan
+Keep the rest (saved liquidation bonus)
+```
+
+### Flash Loan Attacks
+
+Flash loans enable attacks by providing unlimited capital:
+
+```
+Without flash loans:
+  Attacker has $100K
+  Can manipulate small pools
+  
+With flash loans:
+  Attacker has $100K
+  Flash borrows $100M
+  Can manipulate almost anything
+```
+
+This is why oracle security is critical. Flash loans don't create new attacks, they make existing vulnerabilities exploitable at scale.
+
+<ArticleSection name="Variable vs Stable Rates" id="variable-stable" level="h2" />
+
+### Variable Rates (Default)
+
+Borrow rate floats with utilization:
+
+```
+Today: 5% borrow rate
+Tomorrow (high demand): 15% borrow rate
+Next week: 3% borrow rate
+```
+
+**Pros**: Rates always reflect market conditions
+**Cons**: Unpredictable costs, hard to plan
+
+### Stable Rates
+
+Lock in a rate at borrow time:
+
+```
+Borrow at 8% stable
+Regardless of utilization, you pay 8%
+(Unless extreme conditions trigger rebalancing)
+```
+
+```rust
+#[account]
+pub struct StableBorrowPosition {
+    pub principal: u64,
+    pub stable_rate: u64,           // Locked rate
+    pub last_update: i64,
+    pub accumulated_interest: u64,
+}
+
+pub fn accrue_stable_interest(
+    position: &mut StableBorrowPosition,
+    current_time: i64,
+) {
+    let elapsed = current_time - position.last_update;
+    let interest = position.principal * position.stable_rate * elapsed as u64 
+        / (10_000 * SECONDS_PER_YEAR);
+    
+    position.accumulated_interest += interest;
+    position.last_update = current_time;
+}
+```
+
+### The Rebalancing Problem
+
+If everyone borrows stable at 5%, then market rates spike to 30%:
+- Protocol pays depositors based on 30% rates
+- Protocol receives 5% from stable borrowers
+- Protocol loses money
+
+Solution: **Rebalancing**
+
+```rust
+pub fn can_rebalance(
+    user_stable_rate: u64,
+    current_stable_rate: u64,
+    utilization: u64,
+) -> bool {
+    // Rebalance if user rate is significantly below market
+    let rate_gap = current_stable_rate.saturating_sub(user_stable_rate);
+    
+    // More aggressive at high utilization
+    let threshold = if utilization > 9000 {
+        500   // 5% gap triggers rebalance
+    } else {
+        1500  // 15% gap normally
+    };
+    
+    rate_gap > threshold
+}
+
+pub fn rebalance_stable_rate(
+    ctx: Context<Rebalance>,
+) -> Result<()> {
+    let position = &mut ctx.accounts.stable_position;
+    let pool = &ctx.accounts.pool;
+    
+    require!(
+        can_rebalance(position.stable_rate, pool.current_stable_rate, pool.utilization),
+        ErrorCode::RebalanceNotNeeded
+    );
+    
+    // Accrue interest at old rate
+    accrue_stable_interest(position, Clock::get()?.unix_timestamp);
+    
+    // Switch to new rate
+    position.stable_rate = pool.current_stable_rate;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Credit Delegation" id="credit-delegation" level="h2" />
+
+### Undercollateralized Lending
+
+What if you trust someone to repay? You can delegate your borrowing power:
+
+```
+Alice has: $100K collateral, $0 debt, $75K borrow capacity
+Bob has: No collateral, needs $50K
+
+Alice delegates $50K borrow capacity to Bob
+Bob borrows $50K against Alice's collateral
+Alice is responsible if Bob defaults
+```
+
+```rust
+#[account]
+pub struct CreditDelegation {
+    pub delegator: Pubkey,          // Alice
+    pub delegatee: Pubkey,          // Bob
+    pub asset: Pubkey,              // What can be borrowed
+    pub amount: u64,                // Max delegated
+    pub used: u64,                  // Already borrowed
+    pub interest_rate_mode: RateMode,
+}
+
+pub fn delegate_credit(
+    ctx: Context<DelegateCredit>,
+    delegatee: Pubkey,
+    amount: u64,
+) -> Result<()> {
+    let delegation = &mut ctx.accounts.delegation;
+    let delegator_position = &ctx.accounts.delegator_position;
+    
+    // Verify delegator has capacity
+    let available = delegator_position.borrow_capacity - delegator_position.borrowed;
+    require!(amount <= available, ErrorCode::InsufficientCapacity);
+    
+    delegation.delegator = ctx.accounts.delegator.key();
+    delegation.delegatee = delegatee;
+    delegation.amount = amount;
+    delegation.used = 0;
+    
+    Ok(())
+}
+
+pub fn borrow_delegated(
+    ctx: Context<BorrowDelegated>,
+    amount: u64,
+) -> Result<()> {
+    let delegation = &mut ctx.accounts.delegation;
+    let delegator_position = &mut ctx.accounts.delegator_position;
+    
+    // Verify delegation exists and has capacity
+    require!(
+        delegation.delegatee == ctx.accounts.borrower.key(),
+        ErrorCode::NotDelegatee
+    );
+    require!(
+        delegation.used + amount <= delegation.amount,
+        ErrorCode::DelegationExceeded
+    );
+    
+    // Borrow against delegator's collateral
+    delegator_position.borrowed += amount;
+    delegation.used += amount;
+    
+    // Transfer to delegatee
+    transfer_to_borrower(ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+### Use Cases
+
+**1. Institutions lending to known counterparties**
+```
+Fund A has capital but no collateral on-chain
+Fund B has collateral, delegates to A
+A borrows, uses funds, repays
+If A defaults, B loses collateral
+Trust relationship + legal agreement
+```
+
+**2. Wallet-to-wallet lending**
+```
+You trust your friend
+Delegate credit
+They borrow for leverage
+They repay (hopefully)
+```
+
+**3. Protocol-to-protocol**
+```
+Protocol A needs liquidity
+Protocol B has idle collateral
+B delegates to A
+A uses funds productively
+Both benefit
+```
+
+### The Trust Problem
+
+Credit delegation reintroduces counterparty risk that DeFi was supposed to eliminate. It works for:
+- Institutional relationships with legal recourse
+- High-trust personal relationships
+- Protocols with reputation at stake
+
+It doesn't work for anonymous actors.
+
+<ArticleSection name="LP Token and NFT Collateral" id="exotic-collateral" level="h2" />
+
+### LP Tokens as Collateral
+
+Users have billions in AMM positions. Why not borrow against them?
+
+```
+LP position: 10 ETH + 10,000 USDC in Uniswap
+Value: ~$30,000
+Borrow: $20,000 USDC against it
+```
+
+Challenges:
+
+**1. Pricing**: How much is an LP position worth?
+```rust
+pub fn price_lp_token(
+    lp_supply: u64,
+    reserve_a: u64,
+    reserve_b: u64,
+    price_a: u64,
+    price_b: u64,
+    user_lp_balance: u64,
+) -> u64 {
+    let total_value = (reserve_a as u128 * price_a as u128 
+        + reserve_b as u128 * price_b as u128) / PRECISION;
+    
+    (total_value * user_lp_balance as u128 / lp_supply as u128) as u64
+}
+```
+
+**2. Impermanent Loss**: Position value changes with price movements
+```
+Price LTV should account for potential IL
+More volatile pair = lower LTV
+```
+
+**3. Liquidity to Liquidate**: Can liquidator sell LP tokens quickly?
+```
+Major pools (ETH/USDC): High liquidity
+Long-tail pools: Might be illiquid
+```
+
+### NFT Collateral
+
+NFTs as collateral is even more complex:
+
+**Pricing problems:**
+- No continuous price feed
+- Floor price ≠ specific NFT value
+- Traits affect value differently
+
+**Liquidity problems:**
+- Can't partially liquidate an NFT
+- Selling moves floor price
+- Might take days to sell
+
+**Solutions:**
+
+**Peer-to-peer lending**: Lender and borrower agree on terms
+```rust
+#[account]
+pub struct NFTLoanOffer {
+    pub nft_mint: Pubkey,
+    pub lender: Pubkey,
+    pub principal: u64,
+    pub interest_rate: u64,
+    pub duration: i64,
+    pub floor_price_at_offer: u64,  // For reference
+}
+
+// Borrower accepts offer, locks NFT, receives funds
+// If they don't repay, lender gets NFT
+```
+
+**Pooled lending with floor price**: Accept any NFT from collection at floor value
+```rust
+pub fn borrow_against_nft(
+    ctx: Context<BorrowNFT>,
+    amount: u64,
+) -> Result<()> {
+    let collection_config = &ctx.accounts.collection_config;
+    let floor_price = get_floor_price(&ctx.accounts.floor_oracle)?;
+    
+    // Only lend up to conservative % of floor
+    let max_borrow = floor_price * collection_config.ltv_bps / 10_000;
+    require!(amount <= max_borrow, ErrorCode::BorrowExceedsCollateral);
+    
+    // Lock NFT
+    transfer_nft_to_escrow(ctx)?;
+    
+    // Lend funds
+    transfer_to_borrower(ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Cross-Chain Lending" id="cross-chain" level="h2" />
+
+### The Fragmentation Problem
+
+Liquidity is fragmented across chains:
+- $10B on Ethereum
+- $2B on Solana  
+- $1B on Arbitrum
+- $500M on Base
+
+Users can't use Ethereum collateral to borrow on Solana.
+
+### Bridge-Based Solutions
+
+**Simple approach**: Bridge assets, use native lending
+```
+1. Bridge ETH from Ethereum to Solana (via Wormhole)
+2. Deposit wrapped ETH on Solana lending protocol
+3. Borrow SOL
+4. Use SOL on Solana
+```
+
+Problems:
+- Bridge risk (hacks, delays)
+- Wrapped asset risk
+- Capital inefficiency (locked on multiple chains)
+
+### Native Cross-Chain
+
+Emerging protocols attempt native cross-chain lending:
+
+```
+1. Lock ETH on Ethereum
+2. Message passes to Solana (via bridge messaging)
+3. Borrow USDC on Solana
+4. Collateral remains on Ethereum
+5. Liquidation involves cross-chain coordination
+```
+
+Challenges:
+- Messaging delays (minutes to hours)
+- Liquidation speed vs cross-chain latency
+- Which chain handles disputes?
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+1. **Isolated markets** contain risk but fragment liquidity
+2. **Flash loans** enable capital-free operations but amplify attack vectors
+3. **Stable rates** offer predictability but require rebalancing mechanisms
+4. **Credit delegation** reintroduces trust but enables undercollateralized lending
+5. **LP/NFT collateral** expands what's borrowable but adds pricing complexity
+6. **Cross-chain lending** unifies liquidity but inherits bridge risks
+
+Each advanced design solves real problems. None is universally better. Choose based on your specific needs and risk tolerance.
+
+The lending market design space is vast and still evolving. What works today may be obsolete tomorrow. What seems impossible today may be standard tomorrow. Build with flexibility.

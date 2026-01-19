@@ -1,0 +1,161 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Initialize Pool" id="initialize" level="h2" />
+
+The initialize instruction creates a new StableSwap pool. Unlike simple 2-token AMMs, this pool supports 2-6 tokens, requiring careful handling of variable-length account lists.
+
+<ArticleSection name="Accounts" id="accounts" level="h3" />
+
+```rust
+#[derive(Accounts)]
+pub struct InitializePool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        space = Pool::LEN,
+        seeds = [b"pool", lp_mint.key().as_ref()],
+        bump,
+    )]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        init,
+        payer = admin,
+        mint::decimals = 6,
+        mint::authority = pool,
+    )]
+    pub lp_mint: Account<'info, Mint>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
+}
+```
+
+The pool PDA is derived from the LP mint, creating a unique pool for each LP token. The LP mint's authority is the pool PDA itself, so only the pool can mint/burn LP tokens.
+
+### Remaining Accounts
+
+For each token (2-6), pass in pairs:
+1. The token mint
+2. The vault (pool's ATA for that mint)
+
+```
+remaining_accounts = [mint_0, vault_0, mint_1, vault_1, ...]
+```
+
+<ArticleSection name="Validation" id="validation" level="h3" />
+
+```rust
+impl<'info> InitializePool<'info> {
+    pub fn validate(
+        &self,
+        amplification: u64,
+        fee_bps: u16,
+        n_tokens: usize,
+    ) -> Result<()> {
+        require!(
+            amplification > 0 && amplification <= MAX_AMP,
+            StableSwapError::InvalidAmplification
+        );
+        require!(fee_bps <= MAX_FEE_BPS, StableSwapError::InvalidFee);
+        require!(
+            n_tokens >= MIN_TOKENS && n_tokens <= MAX_TOKENS,
+            StableSwapError::InvalidTokenCount
+        );
+        Ok(())
+    }
+}
+```
+
+Key validations:
+- **Amplification**: Must be 1 to 1,000,000. Higher values make the curve flatter (better for very stable pairs)
+- **Fee**: Must be ≤ 10000 bps (100%). Typical values are 1-10 bps for stablecoins
+- **Token count**: 2 to 6 tokens
+
+<ArticleSection name="Handler Logic" id="handler" level="h3" />
+
+```rust
+pub fn initialize_pool_handler(
+    ctx: Context<InitializePool>,
+    amplification: u64,
+    fee_bps: u16,
+) -> Result<()> {
+    let remaining = &ctx.remaining_accounts;
+    
+    // Each token needs: mint, vault (2 accounts per token)
+    require!(
+        remaining.len() >= MIN_TOKENS * 2 && remaining.len() <= MAX_TOKENS * 2,
+        StableSwapError::InvalidRemainingAccounts
+    );
+    require!(
+        remaining.len() % 2 == 0,
+        StableSwapError::InvalidRemainingAccounts
+    );
+
+    let n_tokens = remaining.len() / 2;
+    
+    ctx.accounts.validate(amplification, fee_bps, n_tokens)?;
+
+    // Extract and validate mints, check for duplicates
+    let mut token_mints = [Pubkey::default(); MAX_TOKENS];
+    
+    for i in 0..n_tokens {
+        let mint_info = &remaining[i * 2];
+        let vault_info = &remaining[i * 2 + 1];
+
+        // Validate mint is actually a mint account
+        let mint_data = mint_info.try_borrow_data()?;
+        require!(mint_data.len() == Mint::LEN, StableSwapError::InvalidMint);
+
+        // Check for duplicate mints
+        for j in 0..i {
+            require!(
+                token_mints[j] != mint_info.key(),
+                StableSwapError::DuplicateMint
+            );
+        }
+
+        // Validate vault is the expected ATA
+        let expected_vault = get_associated_token_address(
+            &ctx.accounts.pool.key(),
+            &mint_info.key(),
+        );
+        require!(
+            vault_info.key() == expected_vault,
+            StableSwapError::InvalidVault
+        );
+
+        token_mints[i] = mint_info.key();
+    }
+
+    ctx.accounts.pool.set_inner(Pool {
+        admin: ctx.accounts.admin.key(),
+        lp_mint: ctx.accounts.lp_mint.key(),
+        amplification,
+        fee_bps,
+        n_tokens: n_tokens as u8,
+        token_mints,
+        bump: ctx.bumps.pool,
+    });
+
+    msg!("Pool initialized with {} tokens, A={}, fee={}bps", 
+         n_tokens, amplification, fee_bps);
+
+    Ok(())
+}
+```
+
+### Why Check for Duplicates?
+
+If we allowed duplicate mints, an attacker could create a pool with [USDC, USDC] and manipulate it in unexpected ways. Each token in the pool must be unique.
+
+### Vault Creation
+
+Note that we don't create the vaults in this instruction - we only validate that the passed vault addresses are correct ATAs. The client is responsible for creating these ATAs before calling initialize.
+
+This is a design choice: creating ATAs requires CPI to the Associated Token Program, and doing it for 6 tokens in one instruction might hit compute limits. By requiring pre-created vaults, we keep the initialize instruction simple and predictable.

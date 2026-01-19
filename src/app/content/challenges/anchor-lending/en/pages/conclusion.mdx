@@ -1,0 +1,122 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="What You've Built" id="what-youve-built" level="h2" />
+
+Congratulations! You've implemented a complete lending protocol with:
+
+- **Share-based deposits** that automatically accrue interest
+- **Kinked interest rate curves** that balance supply and demand
+- **Multi-collateral LTV checks** supporting complex positions
+- **Liquidation with close factors** protecting borrowers and protocol
+- **Refresh patterns** preventing price manipulation attacks
+
+<ArticleSection name="Security Considerations" id="security" level="h2" />
+
+Before deploying any lending protocol, ensure you've addressed:
+
+### Oracle Security
+- Use multiple price sources with fallbacks
+- Implement staleness checks on all price reads
+- Consider confidence intervals for conservative pricing
+- Set bounds on price changes between updates
+
+### Economic Security
+- Stress test liquidation cascades
+- Model bad debt scenarios
+- Size insurance fund appropriately
+- Consider circuit breakers for extreme volatility
+
+### Code Security
+- Audit by multiple independent parties
+- Formal verification of critical math
+- Extensive fuzzing of edge cases
+- Bug bounty program
+
+<ArticleSection name="Extensions" id="extensions" level="h2" />
+
+Ideas to extend this protocol:
+
+### Flash Loans
+Allow uncollateralized borrows that must be repaid in the same transaction:
+
+```rust
+pub fn flash_loan(ctx: Context<FlashLoan>, amount: u64) -> Result<()> {
+    let balance_before = ctx.accounts.vault.amount;
+    
+    // Transfer to borrower
+    transfer_out(amount)?;
+    
+    // Borrower does their thing via CPI...
+    
+    // Verify repayment with fee
+    ctx.accounts.vault.reload()?;
+    let fee = amount * FLASH_FEE_BPS / BPS_SCALE;
+    require!(
+        ctx.accounts.vault.amount >= balance_before + fee,
+        LendingError::FlashLoanNotRepaid
+    );
+    
+    Ok(())
+}
+```
+
+### E-Mode
+Higher LTV for correlated assets:
+
+```rust
+pub struct EMode {
+    pub assets: Vec<Pubkey>,
+    pub ltv_bps: u16,           // e.g., 93% for stETH/ETH
+    pub liq_threshold_bps: u16, // e.g., 95%
+}
+```
+
+### Isolated Markets
+Per-asset risk isolation:
+
+```rust
+pub struct IsolatedConfig {
+    pub debt_ceiling: u64,
+    pub current_debt: u64,
+    pub allowed_borrows: Vec<Pubkey>,
+}
+```
+
+### Stable Borrow Rates
+Lock in a rate at borrow time:
+
+```rust
+pub struct StableBorrow {
+    pub principal: u64,
+    pub stable_rate: u64,
+    pub last_update: i64,
+}
+```
+
+<ArticleSection name="Testing" id="testing" level="h2" />
+
+Key scenarios to test:
+
+1. **Happy path**: Deposit → Borrow → Repay → Withdraw
+2. **Liquidation flow**: Price drop → Refresh → Liquidate
+3. **Interest accrual**: Verify rates and compounding
+4. **Multi-position**: Multiple collaterals and borrows
+5. **Edge cases**: Zero amounts, max values, empty positions
+6. **Attack vectors**: Stale data, reentrancy, oracle manipulation
+
+<ArticleSection name="Verification" id="verification" level="h2" />
+
+Submit your program to earn your Lending Protocol NFT! The verification server will test:
+
+- ✓ `init_market` creates market correctly
+- ✓ `init_reserve` sets up reserves with parameters
+- ✓ `init_obligation` creates user positions
+- ✓ `deposit` transfers tokens and mints shares
+- ✓ `withdraw` burns shares and returns tokens
+- ✓ `borrow` enforces LTV limits
+- ✓ `repay` reduces debt correctly
+- ✓ `liquidate` only works on underwater positions
+- ✓ Interest accrual works correctly
+- ✓ Staleness checks prevent stale data usage
+
+Good luck!

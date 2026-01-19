@@ -1,0 +1,354 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor Lending Challenge](/graphics/challenge-banners/anchor-lending.png)
+
+# The Lending Protocol
+
+A lending protocol is one of the most important primitives in decentralized finance, enabling users to deposit assets to earn yield and borrow assets by providing collateral, all without intermediaries.
+
+<ArticleSection name="Overcollateralized Lending" id="overcollateralized-lending" level="h2" />
+
+In DeFi, we can't verify identity or enforce repayment through courts. The solution is **overcollateralization**: borrowers must deposit collateral worth more than their loan. If they don't repay, the protocol liquidates their collateral.
+
+### The Core Mechanics
+
+A lending protocol tracks:
+- **Deposits**: Users supply assets and receive shares representing their portion of the pool
+- **Borrows**: Users lock collateral and borrow other assets up to their Loan-to-Value (LTV) limit
+- **Interest**: Borrowers pay interest that accrues to depositors
+- **Liquidations**: When collateral value drops below the liquidation threshold, anyone can repay the debt and seize collateral at a discount
+
+> We cover these concepts in depth in our [Lending Markets Architecture course](/en/courses/lending-markets-architecture/); make sure to start there before this challenge.
+
+### The Challenge
+
+In this challenge, you'll implement a lending protocol with these core instructions:
+- **init_market**: Create the lending market that holds global configuration
+- **init_reserve**: Set up a reserve for a specific token with risk parameters
+- **init_obligation**: Create a user's position account to track deposits and borrows
+- **deposit**: Supply tokens to earn interest and use as collateral
+- **withdraw**: Redeem collateral shares for underlying tokens
+- **borrow**: Take a loan against deposited collateral
+- **repay**: Pay back borrowed tokens plus interest
+- **liquidate**: Close underwater positions for a bonus
+
+**Note**: If you're not familiar with Anchor, you should start by reading the [Anchor for Dummies](/en/courses/anchor-for-dummies) course to familiarize yourself with the core concepts.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Let's start by creating a fresh Anchor workspace:
+
+```bash
+anchor init anchor_lending
+cd anchor_lending
+```
+
+Enable `init-if-needed` on the `anchor-lang` crate and add required dependencies:
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+```
+
+Update `programs/anchor_lending/Cargo.toml` to include `anchor-spl/idl-build`:
+
+```toml
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+<ArticleSection name="Architecture" id="architecture" level="h2" />
+
+The program is split into focused modules:
+
+```
+src
+├── instructions
+│       ├── init_market.rs
+│       ├── init_reserve.rs
+│       ├── init_obligation.rs
+│       ├── refresh_reserve.rs
+│       ├── refresh_obligation.rs
+│       ├── deposit.rs
+│       ├── withdraw.rs
+│       ├── borrow.rs
+│       ├── repay.rs
+│       ├── liquidate.rs
+│       └── mod.rs
+├── math
+│       ├── interest.rs
+│       ├── health.rs
+│       └── mod.rs
+├── state
+│       ├── lending_market.rs
+│       ├── reserve.rs
+│       ├── obligation.rs
+│       └── mod.rs
+├── constants.rs
+├── errors.rs
+└── lib.rs
+```
+
+<ArticleSection name="State" id="state" level="h2" />
+
+### LendingMarket
+
+The market is the top-level account that groups reserves together:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct LendingMarket {
+    pub bump: u8,
+}
+```
+
+### Reserve
+
+Each reserve represents a single asset that can be deposited and borrowed:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Reserve {
+    pub market: Pubkey,
+    pub mint: Pubkey,
+    pub decimals: u8,
+    pub version: u8,
+    pub status: ReserveStatus,
+    
+    // Liquidity tracking
+    pub available_liquidity: u64,
+    pub borrowed_liquidity: u64,
+    pub collateral_mint_supply: u64,
+    
+    // Interest
+    pub cumulative_borrow_rate: u128,
+    pub last_update_slot: u64,
+    
+    // Oracle
+    pub oracle: Pubkey,
+    pub cached_price: u64,
+    pub price_exponent: i32,
+    pub last_refresh_slot: u64,
+    
+    // Risk parameters
+    pub ltv_bps: u16,                    // Max borrow ratio
+    pub liquidation_threshold_bps: u16,  // When liquidation triggers
+    pub liquidation_bonus_bps: u16,      // Liquidator incentive
+    
+    // Interest rate model (kinked curve)
+    pub optimal_utilization_bps: u16,
+    pub base_rate_bps: u16,
+    pub slope1_bps: u16,
+    pub slope2_bps: u16,
+    
+    // Protocol fees
+    pub reserve_factor_bps: u16,
+    pub accumulated_protocol_fees: u64,
+    
+    // Caps
+    pub deposit_cap: u64,
+    pub borrow_cap: u64,
+    
+    // PDA bumps
+    pub bump: u8,
+    pub vault_bump: u8,
+    pub collateral_mint_bump: u8,
+}
+```
+
+Key concepts:
+- **available_liquidity**: Tokens sitting in the vault (not borrowed)
+- **borrowed_liquidity**: Tokens lent out (grows with interest)
+- **cumulative_borrow_rate**: Tracks compound interest for all borrows
+- **ltv_bps**: Loan-to-Value in basis points (7500 = 75%)
+- **liquidation_threshold_bps**: Health factor threshold for liquidation
+
+### Obligation
+
+An obligation tracks a user's deposits and borrows across multiple reserves:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Obligation {
+    pub market: Pubkey,
+    pub owner: Pubkey,
+    
+    pub deposits: [DepositPosition; MAX_DEPOSITS],
+    pub borrows: [BorrowPosition; MAX_BORROWS],
+    
+    pub last_health_factor: u128,
+    pub last_refresh_slot: u64,
+    
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
+pub struct DepositPosition {
+    pub reserve: Pubkey,
+    pub collateral_shares: u64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
+pub struct BorrowPosition {
+    pub reserve: Pubkey,
+    pub borrowed_amount_sf: u128,  // Scaled by cumulative rate
+}
+```
+
+The `borrowed_amount_sf` is a "scale factor" representation. When you borrow, we divide by the current cumulative rate. To get actual debt later, multiply by the new cumulative rate. This lets us track interest without updating every position.
+
+<ArticleSection name="Constants" id="constants" level="h2" />
+
+```rust
+pub const PRECISION: u128 = 1_000_000_000_000;  // 10^12 for rate calculations
+pub const BPS_SCALE: u64 = 10_000;              // Basis points
+pub const SLOTS_PER_YEAR: u128 = 63_072_000;    // ~400ms slots
+pub const STALE_AFTER_SLOTS: u64 = 150;         // ~1 minute
+pub const CLOSE_FACTOR_BPS: u16 = 5000;         // 50% max liquidation
+pub const MAX_DEPOSITS: usize = 4;
+pub const MAX_BORROWS: usize = 4;
+```
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+```rust
+#[error_code]
+pub enum LendingError {
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Invalid account input")]
+    InvalidAccountInput,
+    #[msg("Reserve is obsolete")]
+    ReserveObsolete,
+    #[msg("Reserve is deprecated")]
+    ReserveDeprecated,
+    #[msg("Reserve is stale - refresh required")]
+    ReserveStale,
+    #[msg("Obligation is stale - refresh required")]
+    ObligationStale,
+    #[msg("Deposit cap exceeded")]
+    DepositCapExceeded,
+    #[msg("Borrow cap exceeded")]
+    BorrowCapExceeded,
+    #[msg("Insufficient liquidity")]
+    InsufficientLiquidity,
+    #[msg("Insufficient collateral")]
+    InsufficientCollateral,
+    #[msg("Borrow exceeds LTV")]
+    BorrowExceedsLtv,
+    #[msg("Position is healthy")]
+    PositionHealthy,
+    #[msg("Reserve not found in obligation")]
+    ReserveNotFound,
+    #[msg("No deposit slot available")]
+    NoDepositSlot,
+    #[msg("No borrow slot available")]
+    NoBorrowSlot,
+    #[msg("Obligation has borrows")]
+    ObligationHasBorrows,
+    #[msg("Invalid oracle price")]
+    InvalidOraclePrice,
+    #[msg("Vault balance mismatch")]
+    VaultBalanceMismatch,
+}
+```
+
+<ArticleSection name="Interest Rate Model" id="interest-rate-model" level="h2" />
+
+The kinked curve balances supply and demand automatically:
+
+```rust
+impl Reserve {
+    pub fn utilization_bps(&self) -> u64 {
+        let total = self.total_supply();
+        if total == 0 { return 0; }
+        (self.borrowed_liquidity as u128 * BPS_SCALE as u128 / total as u128) as u64
+    }
+
+    pub fn borrow_rate_bps(&self) -> u64 {
+        let utilization = self.utilization_bps();
+        
+        if utilization <= self.optimal_utilization_bps as u64 {
+            // Below kink: gentle slope
+            self.base_rate_bps as u64 
+                + utilization * self.slope1_bps as u64 / self.optimal_utilization_bps as u64
+        } else {
+            // Above kink: steep slope (urgency)
+            let rate_at_kink = self.base_rate_bps as u64 + self.slope1_bps as u64;
+            let excess = utilization - self.optimal_utilization_bps as u64;
+            let max_excess = BPS_SCALE - self.optimal_utilization_bps as u64;
+            rate_at_kink + excess * self.slope2_bps as u64 / max_excess
+        }
+    }
+}
+```
+
+<ArticleSection name="Share-Based Accounting" id="share-accounting" level="h2" />
+
+Depositors receive collateral shares instead of tracking balances directly:
+
+```rust
+impl Reserve {
+    pub fn total_supply(&self) -> u64 {
+        (self.available_liquidity + self.borrowed_liquidity)
+            .saturating_sub(self.accumulated_protocol_fees)
+    }
+
+    pub fn liquidity_to_collateral(&self, liquidity: u64) -> u64 {
+        let total = self.total_supply();
+        if total == 0 || self.collateral_mint_supply == 0 {
+            return liquidity;  // 1:1 for first deposit
+        }
+        (liquidity as u128 * self.collateral_mint_supply as u128 / total as u128) as u64
+    }
+
+    pub fn collateral_to_liquidity(&self, collateral: u64) -> u64 {
+        if self.collateral_mint_supply == 0 { return collateral; }
+        (collateral as u128 * self.total_supply() as u128 / self.collateral_mint_supply as u128) as u64
+    }
+}
+```
+
+As interest accrues, `borrowed_liquidity` grows, but `collateral_mint_supply` stays constant. Each share becomes worth more underlying tokens.
+
+<ArticleSection name="Health Factor" id="health-factor" level="h2" />
+
+The health factor determines if a position can be liquidated:
+
+```
+health = (collateral_value × liquidation_threshold) / debt_value
+```
+
+- Health > 1.0: Safe
+- Health < 1.0: Liquidatable
+
+```rust
+pub fn calculate_health_factor(
+    weighted_collateral: u128,  // Sum of (collateral_usd × threshold_bps)
+    total_debt: u128,           // Sum of debt in USD
+) -> u128 {
+    if total_debt == 0 { return u128::MAX; }
+    weighted_collateral * PRECISION / total_debt / BPS_SCALE as u128
+}
+```
+
+<ArticleSection name="Refresh Pattern" id="refresh-pattern" level="h2" />
+
+A critical security pattern: reserves and obligations must be **refreshed** before any action that depends on prices or interest:
+
+1. `refresh_reserve`: Updates oracle price and accrues interest
+2. `refresh_obligation`: Recalculates health factor using fresh reserve data
+
+Liquidations require the obligation to be refreshed **in the same slot** to prevent price manipulation between refresh and liquidation.
+
+```rust
+// In liquidate instruction
+require!(
+    obligation.last_refresh_slot == clock.slot,
+    LendingError::ObligationStale
+);
+```
+
+This pattern ensures all calculations use consistent, fresh data.

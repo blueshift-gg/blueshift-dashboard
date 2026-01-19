@@ -1,0 +1,200 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Borrow" id="borrow" level="h2" />
+
+The borrow instruction allows users to take loans against their deposited collateral. The key challenge is calculating whether the user has enough collateral to support the new borrow.
+
+### Accounts
+
+- `market`: The lending market PDA
+- `borrow_reserve`: Reserve to borrow from
+- `borrow_reserve_vault`: Vault holding the borrow reserve's liquidity
+- `deposit_reserve`: Primary collateral reserve (for LTV lookup)
+- `obligation`: User's obligation tracking deposits and borrows
+- `user_token_account`: Where borrowed tokens are sent
+- `owner`: Signer authorizing the borrow
+- `token_program`: SPL Token program
+- `remaining_accounts`: Additional reserves if user has multiple deposits/borrows
+
+### The LTV Check
+
+The core of borrow safety is the LTV (Loan-to-Value) check. We must verify:
+
+```
+total_debt_value + new_borrow_value <= sum(collateral_value × ltv_bps) / BPS_SCALE
+```
+
+This is Kamino-style multi-collateral LTV: we sum ALL collateral contributions and ALL debt, not just the primary pair.
+
+```rust
+fn check_ltv(
+    obligation: &Obligation,
+    deposit_reserve: &Reserve,
+    deposit_reserve_key: Pubkey,
+    borrow_reserve: &Reserve,
+    borrow_reserve_key: Pubkey,
+    remaining_accounts: &[AccountInfo],
+    new_borrow_value: u128,
+    current_slot: u64,
+) -> Result<()> {
+    // Find positions needing additional reserves from remaining_accounts
+    let extra_deposits: Vec<_> = obligation.deposits.iter()
+        .filter(|d| d.reserve != Pubkey::default() && d.reserve != deposit_reserve_key)
+        .collect();
+    let extra_borrows: Vec<_> = obligation.borrows.iter()
+        .filter(|b| b.reserve != Pubkey::default() && b.reserve != borrow_reserve_key)
+        .collect();
+    
+    require!(
+        remaining_accounts.len() >= extra_deposits.len() + extra_borrows.len(),
+        LendingError::InvalidAmount
+    );
+
+    // Sum weighted collateral: collateral_value × ltv_bps / BPS_SCALE
+    let mut max_borrow_value: u128 = 0;
+    
+    // Primary deposit reserve
+    if let Some(deposit) = obligation.deposits.iter().find(|d| d.reserve == deposit_reserve_key) {
+        let collateral_value = deposit_reserve.get_collateral_value(deposit.collateral_shares);
+        max_borrow_value += collateral_value * deposit_reserve.ltv_bps as u128 / BPS_SCALE as u128;
+    }
+    
+    // Additional deposit reserves from remaining_accounts
+    for (i, deposit) in extra_deposits.iter().enumerate() {
+        let reserve_info = &remaining_accounts[i];
+        require!(reserve_info.key() == deposit.reserve, LendingError::ReserveNotFound);
+        
+        let reserve_data = reserve_info.try_borrow_data()?;
+        let reserve: Reserve = Reserve::try_deserialize(&mut &reserve_data[8..])?;
+        
+        require!(!reserve.is_stale(current_slot), LendingError::ReserveStale);
+
+        let collateral_value = reserve.get_collateral_value(deposit.collateral_shares);
+        max_borrow_value += collateral_value * reserve.ltv_bps as u128 / BPS_SCALE as u128;
+    }
+    
+    require!(max_borrow_value > 0, LendingError::InsufficientCollateral);
+
+    // Sum current borrows
+    let mut current_borrow_value: u128 = 0;
+    
+    if let Some(borrow) = obligation.borrows.iter().find(|b| b.reserve == borrow_reserve_key) {
+        current_borrow_value += borrow_reserve.get_debt_value(borrow.borrowed_amount_sf);
+    }
+    
+    for (i, borrow) in extra_borrows.iter().enumerate() {
+        let reserve_info = &remaining_accounts[extra_deposits.len() + i];
+        require!(reserve_info.key() == borrow.reserve, LendingError::ReserveNotFound);
+        
+        let reserve_data = reserve_info.try_borrow_data()?;
+        let reserve: Reserve = Reserve::try_deserialize(&mut &reserve_data[8..])?;
+        
+        require!(!reserve.is_stale(current_slot), LendingError::ReserveStale);
+
+        current_borrow_value += reserve.get_debt_value(borrow.borrowed_amount_sf);
+    }
+
+    // Final check
+    require!(
+        current_borrow_value + new_borrow_value <= max_borrow_value,
+        LendingError::BorrowExceedsLtv
+    );
+
+    Ok(())
+}
+```
+
+### Logic
+
+```rust
+pub fn borrow_handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+    require!(amount > 0, LendingError::InvalidAmount);
+    
+    require!(
+        ctx.accounts.borrow_reserve_vault.key() != ctx.accounts.user_token_account.key(),
+        LendingError::InvalidAccountInput
+    );
+    
+    require!(ctx.accounts.borrow_reserve.is_active(), LendingError::ReserveObsolete);
+    require!(ctx.accounts.deposit_reserve.is_active(), LendingError::ReserveObsolete);
+    
+    let clock = Clock::get()?;
+    
+    // Reserves must be fresh
+    require!(!ctx.accounts.borrow_reserve.is_stale(clock.slot), LendingError::ReserveStale);
+    require!(!ctx.accounts.deposit_reserve.is_stale(clock.slot), LendingError::ReserveStale);
+    require!(!ctx.accounts.obligation.is_stale(clock.slot), LendingError::ObligationStale);
+    
+    ctx.accounts.borrow_reserve.check_borrow_cap(amount)?;
+    
+    require!(
+        amount <= ctx.accounts.borrow_reserve.available_liquidity,
+        LendingError::InsufficientLiquidity
+    );
+
+    let vault_balance_before = ctx.accounts.borrow_reserve_vault.amount;
+
+    // Calculate scaled borrow amount
+    let cumulative_rate = ctx.accounts.borrow_reserve.cumulative_borrow_rate;
+    let borrowed_sf = (amount as u128) * PRECISION / cumulative_rate;
+    let new_borrow_value = ctx.accounts.borrow_reserve.get_debt_value(borrowed_sf);
+    
+    // Check LTV across all positions
+    check_ltv(
+        &ctx.accounts.obligation,
+        &ctx.accounts.deposit_reserve,
+        ctx.accounts.deposit_reserve.key(),
+        &ctx.accounts.borrow_reserve,
+        ctx.accounts.borrow_reserve.key(),
+        ctx.remaining_accounts,
+        new_borrow_value,
+        clock.slot,
+    )?;
+
+    // Transfer to user
+    let market_key = ctx.accounts.market.key();
+    let mint_key = ctx.accounts.borrow_reserve.mint;
+    let bump = ctx.accounts.borrow_reserve.bump;
+    let seeds = &[RESERVE_SEED, market_key.as_ref(), mint_key.as_ref(), &[bump]];
+
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.borrow_reserve_vault.to_account_info(),
+                to: ctx.accounts.user_token_account.to_account_info(),
+                authority: ctx.accounts.borrow_reserve.to_account_info(),
+            },
+            &[seeds],
+        ),
+        amount,
+    )?;
+
+    // Update reserve
+    ctx.accounts.borrow_reserve.available_liquidity -= amount;
+    ctx.accounts.borrow_reserve.borrowed_liquidity += amount;
+
+    // Update obligation
+    ctx.accounts.obligation.add_borrow(ctx.accounts.borrow_reserve.key(), borrowed_sf)?;
+
+    // Verify
+    ctx.accounts.borrow_reserve_vault.reload()?;
+    require!(
+        ctx.accounts.borrow_reserve_vault.amount == vault_balance_before - amount,
+        LendingError::VaultBalanceMismatch
+    );
+
+    msg!("Borrowed {} tokens", amount);
+    Ok(())
+}
+```
+
+### Key Points
+
+**Scaled Borrow Tracking**: We store `borrowed_amount_sf = amount × PRECISION / cumulative_rate`. Later, actual debt = `borrowed_amount_sf × current_rate / PRECISION`. This elegantly tracks compound interest without updating every position.
+
+**Staleness Checks**: Both reserves AND the obligation must be refreshed recently. This prevents borrowing against stale prices.
+
+**Remaining Accounts**: If a user has multiple collateral types or existing borrows, we need those reserve accounts to calculate total position value. The remaining_accounts pattern lets us support arbitrary position complexity.
+
+**Liquidity Check**: We verify `amount <= available_liquidity` before attempting the transfer. The vault might have slightly more (from accumulated fees), but we only allow borrowing deposited liquidity.

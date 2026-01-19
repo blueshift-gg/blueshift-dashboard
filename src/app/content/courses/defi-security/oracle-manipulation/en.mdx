@@ -1,0 +1,743 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Oracle Manipulation: The Mango Markets Exploit
+
+October 11, 2022. A trader named Avraham Eisenberg opens a massive perpetual position on Mango Markets. Over the next few minutes, he uses $5 million to extract $117 million from the protocol.
+
+He doesn't exploit a bug. He doesn't hack anything. He uses the protocol exactly as designed - and that's the problem.
+
+The Mango exploit is the most instructive DeFi attack ever. It shows what happens when oracle design meets economic incentives meets thin liquidity.
+
+<ArticleSection name="How Mango Markets Worked" id="how-mango-worked" level="h2" />
+
+Mango Markets was a Solana-native margin trading platform. Users could:
+
+1. Deposit collateral (SOL, USDC, MNGO, etc.)
+2. Trade perpetual futures with leverage
+3. Borrow against their collateral
+
+The protocol used an oracle to price both perp positions and collateral. This is where it gets interesting.
+
+### The MNGO Token
+
+Mango had its own governance token: MNGO. The protocol accepted MNGO as collateral. To price MNGO, they used a TWAP (time-weighted average price) oracle derived from on-chain trading.
+
+```rust
+// Simplified Mango oracle logic
+pub fn get_mngo_price(market: &PerpMarket) -> u64 {
+    // Oracle price from recent trading activity
+    let oracle_price = market.oracle_price;
+
+    // Used for:
+    // 1. Valuing MNGO collateral
+    // 2. Calculating perp position PnL
+    // 3. Determining borrowing limits
+
+    oracle_price
+}
+```
+
+The critical detail: MNGO traded with very thin liquidity. Daily volume was often under $1 million.
+
+<ArticleSection name="The Attack Setup" id="attack-setup" level="h2" />
+
+Eisenberg identified three key facts:
+
+**1. MNGO was accepted as collateral**
+
+Users could deposit MNGO and borrow against it at the oracle price.
+
+**2. MNGO had thin liquidity**
+
+With a few million dollars, you could move the price dramatically.
+
+**3. The oracle followed the manipulated price**
+
+Mango's oracle would eventually reflect the new price, allowing borrowing at the inflated valuation.
+
+### The Position
+
+Eisenberg used two accounts:
+
+**Account A**: Opened a massive LONG position on MNGO-PERP (betting price goes up)
+
+**Account B**: Opened an equal SHORT position on MNGO-PERP (betting price goes down)
+
+These positions were against each other. On paper, this looks like a wash - one wins what the other loses. But Mango allowed users to borrow against unrealized profits.
+
+<ArticleSection name="The Execution" id="execution" level="h2" />
+
+### Step 1: Establish Positions
+
+```
+Account A: Long 488 million MNGO-PERP contracts
+Account B: Short 488 million MNGO-PERP contracts
+
+MNGO price: $0.038
+Each account has ~$5M in collateral
+```
+
+### Step 2: Pump the Price
+
+Eisenberg (or accomplices) bought MNGO on spot markets - Serum, Raydium, wherever MNGO traded. The thin liquidity meant prices moved fast.
+
+```
+MNGO spot price: $0.038 → $0.54 (14x increase)
+Time elapsed: ~20 minutes
+Cost of pumping: ~$5 million in spot purchases
+```
+
+### Step 3: Oracle Updates
+
+Mango's oracle saw the new trading prices. The TWAP mechanism meant there was some delay, but within minutes:
+
+```
+MNGO oracle price: $0.038 → $0.54
+Account A's position: 488M contracts × ($0.54 - $0.038) = $244M unrealized profit
+Account B's position: 488M contracts × ($0.038 - $0.54) = -$244M unrealized loss
+```
+
+### Step 4: Borrow Against Unrealized Profit
+
+Here's the key. Account A now showed $244 million in unrealized profit. Mango's risk engine saw this as valid equity. Account A could borrow against it.
+
+```rust
+// Mango's equity calculation (simplified)
+pub fn calculate_equity(account: &MangoAccount) -> i64 {
+    let spot_value = account.deposits.iter()
+        .map(|d| d.amount * get_oracle_price(d.token))
+        .sum();
+
+    let perp_pnl = account.perp_positions.iter()
+        .map(|p| p.calculate_unrealized_pnl())
+        .sum();
+
+    spot_value + perp_pnl  // Unrealized PnL counts as equity!
+}
+```
+
+Eisenberg borrowed everything he could: SOL, USDC, MSOL, and more tokens. He withdrew all of it.
+
+```
+Borrowed:
+  - 4.2M SOL (~$150M at the time)
+  - Millions in USDC, MSOL, and other tokens
+
+Total extracted: ~$117 million
+```
+
+### Step 5: The Aftermath
+
+Account B was underwater - massively so. But it had no assets left to seize. Eisenberg had already withdrawn everything.
+
+The MNGO price crashed back down. Account A's "profit" evaporated. But the borrowed funds were already gone.
+
+Mango's insurance fund and user deposits covered the loss. The protocol was effectively drained.
+
+<ArticleSection name="Why It Worked" id="why-it-worked" level="h2" />
+
+### Problem 1: Thin Oracle Markets
+
+MNGO's spot liquidity was tiny. Moving the price 14x cost ~$5 million. Compare this to SOL or ETH where moving price 14x would cost billions.
+
+```
+Manipulation cost: $5 million
+Profit extracted: $117 million
+ROI: 23x
+```
+
+The oracle followed the manipulated price because that *was* the market price. You can't distinguish "manipulation" from "genuine buying" when both result in real trades at real prices.
+
+### Problem 2: Unrealized PnL as Equity
+
+Mango treated unrealized perpetual profits as borrowable equity. This creates a circular dependency:
+
+```
+1. Position value depends on oracle price
+2. Oracle price can be manipulated
+3. Manipulated position value enables borrowing
+4. Borrowed funds can fund more manipulation
+```
+
+### Problem 3: No Manipulation-Resistant Pricing
+
+The oracle had no defense against price spikes:
+
+```rust
+// What Mango did
+pub fn get_price() -> u64 {
+    twap_price  // Follows market, even if manipulated
+}
+
+// What might have helped
+pub fn get_safe_price(oracle_price: u64, reference_price: u64) -> u64 {
+    // Cap deviation from reference
+    let max_deviation = reference_price * 50 / 100;  // 50% max
+
+    if oracle_price > reference_price + max_deviation {
+        reference_price + max_deviation
+    } else if oracle_price < reference_price - max_deviation {
+        reference_price - max_deviation
+    } else {
+        oracle_price
+    }
+}
+```
+
+### Problem 4: Asset-Liability Mismatch
+
+The protocol's liabilities (user deposits) were denominated in stable assets (USDC, SOL). But it accepted collateral (MNGO) that could be manipulated. When MNGO's price collapsed, the collateral couldn't cover the borrowing.
+
+<ArticleSection name="The Vulnerable Code Pattern" id="vulnerable-code" level="h2" />
+
+Here's the pattern that made Mango exploitable:
+
+```rust
+#[account]
+pub struct UserAccount {
+    pub owner: Pubkey,
+    pub deposits: Vec<TokenDeposit>,
+    pub perp_positions: Vec<PerpPosition>,
+}
+
+impl UserAccount {
+    // VULNERABLE: Includes unrealized PnL in equity
+    pub fn calculate_equity(&self, oracles: &OracleSet) -> i64 {
+        let deposit_value: i64 = self.deposits.iter()
+            .map(|d| {
+                let price = oracles.get_price(&d.token);
+                (d.amount as i64) * (price as i64)
+            })
+            .sum();
+
+        let perp_pnl: i64 = self.perp_positions.iter()
+            .map(|p| {
+                let oracle_price = oracles.get_price(&p.market);
+                p.calculate_pnl(oracle_price)
+            })
+            .sum();
+
+        deposit_value + perp_pnl  // PnL is counted!
+    }
+
+    pub fn calculate_borrow_limit(&self, oracles: &OracleSet) -> u64 {
+        let equity = self.calculate_equity(oracles);
+        if equity <= 0 {
+            return 0;
+        }
+
+        // Can borrow up to 80% of equity
+        (equity as u64) * 80 / 100
+    }
+}
+
+// VULNERABLE: No price deviation check
+pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+    let account = &mut ctx.accounts.user_account;
+    let oracles = &ctx.accounts.oracles;
+
+    let borrow_limit = account.calculate_borrow_limit(oracles);
+    let current_borrows = account.total_borrowed();
+
+    require!(
+        current_borrows + amount <= borrow_limit,
+        ErrorCode::ExceedsBorrowLimit
+    );
+
+    // Transfer borrowed tokens to user
+    // ...
+
+    Ok(())
+}
+```
+
+The vulnerability chain:
+
+1. `get_price()` returns manipulated oracle price
+2. `calculate_pnl()` uses manipulated price → inflated PnL
+3. `calculate_equity()` includes inflated PnL → inflated equity
+4. `calculate_borrow_limit()` allows borrowing against inflated equity
+5. User borrows real assets against fake equity
+
+<ArticleSection name="The Fix: Multi-Layer Defense" id="fix-defense" level="h2" />
+
+### Layer 1: Price Bands
+
+Limit how much the oracle price can deviate from a reference:
+
+```rust
+pub struct PriceBand {
+    pub reference_price: u64,    // Long-term average or external oracle
+    pub last_update: i64,
+    pub max_deviation_bps: u16,  // e.g., 1000 = 10%
+}
+
+impl PriceBand {
+    pub fn get_safe_price(&self, oracle_price: u64) -> u64 {
+        let max_deviation = self.reference_price as u128
+            * self.max_deviation_bps as u128
+            / 10000;
+
+        let lower_bound = self.reference_price.saturating_sub(max_deviation as u64);
+        let upper_bound = self.reference_price.saturating_add(max_deviation as u64);
+
+        oracle_price.clamp(lower_bound, upper_bound)
+    }
+
+    pub fn update_reference(&mut self, oracle_price: u64, clock: &Clock) {
+        // Only update reference gradually (e.g., 1% per hour)
+        let elapsed = clock.unix_timestamp - self.last_update;
+        let max_change = self.reference_price * elapsed as u64 / 360000; // 1% per hour
+
+        if oracle_price > self.reference_price {
+            self.reference_price = std::cmp::min(
+                oracle_price,
+                self.reference_price.saturating_add(max_change)
+            );
+        } else {
+            self.reference_price = std::cmp::max(
+                oracle_price,
+                self.reference_price.saturating_sub(max_change)
+            );
+        }
+
+        self.last_update = clock.unix_timestamp;
+    }
+}
+```
+
+### Layer 2: Separate Collateral and Trading Prices
+
+Don't use the same price for trading and borrowing:
+
+```rust
+pub struct DualPricing {
+    pub trading_price: u64,      // Current oracle - used for perp trading
+    pub collateral_price: u64,   // Conservative price - used for borrowing
+}
+
+impl DualPricing {
+    pub fn update(&mut self, oracle_price: u64) {
+        // Trading price follows oracle immediately
+        self.trading_price = oracle_price;
+
+        // Collateral price moves slowly and conservatively
+        let diff = if oracle_price > self.collateral_price {
+            oracle_price - self.collateral_price
+        } else {
+            self.collateral_price - oracle_price
+        };
+
+        // Move collateral price by at most 1% per update
+        let max_move = self.collateral_price / 100;
+        let actual_move = std::cmp::min(diff, max_move);
+
+        if oracle_price > self.collateral_price {
+            self.collateral_price += actual_move;
+        } else {
+            self.collateral_price -= actual_move;
+        }
+    }
+}
+```
+
+### Layer 3: Delay on Large Withdrawals
+
+Don't allow immediate withdrawal of borrowed funds:
+
+```rust
+pub struct WithdrawalRequest {
+    pub amount: u64,
+    pub token: Pubkey,
+    pub requested_at: i64,
+    pub available_at: i64,  // Must wait
+}
+
+pub fn request_withdrawal(
+    ctx: Context<RequestWithdraw>,
+    amount: u64,
+) -> Result<()> {
+    let clock = Clock::get()?;
+    let account = &ctx.accounts.user_account;
+
+    // Large withdrawals require delay
+    let delay = if amount > account.equity() / 2 {
+        3600  // 1 hour for large withdrawals
+    } else {
+        0     // Instant for small withdrawals
+    };
+
+    let request = WithdrawalRequest {
+        amount,
+        token: ctx.accounts.token.key(),
+        requested_at: clock.unix_timestamp,
+        available_at: clock.unix_timestamp + delay,
+    };
+
+    // Store request...
+
+    Ok(())
+}
+
+pub fn execute_withdrawal(ctx: Context<ExecuteWithdraw>) -> Result<()> {
+    let clock = Clock::get()?;
+    let request = &ctx.accounts.withdrawal_request;
+
+    require!(
+        clock.unix_timestamp >= request.available_at,
+        ErrorCode::WithdrawalNotReady
+    );
+
+    // Re-check equity at current prices
+    // If manipulation reversed, this will fail
+    let account = &ctx.accounts.user_account;
+    require!(
+        account.equity() >= 0,
+        ErrorCode::InsufficientEquity
+    );
+
+    // Execute withdrawal...
+
+    Ok(())
+}
+```
+
+### Layer 4: Don't Count Unrealized PnL for Borrowing
+
+The most direct fix: don't let users borrow against unrealized perpetual profits.
+
+```rust
+impl UserAccount {
+    // SAFE: Only count realized value for borrowing
+    pub fn calculate_borrow_equity(&self, oracles: &OracleSet) -> i64 {
+        // Only deposits count for borrowing, not perp PnL
+        self.deposits.iter()
+            .map(|d| {
+                let price = oracles.get_safe_price(&d.token);  // Use safe price
+                (d.amount as i64) * (price as i64)
+            })
+            .sum()
+    }
+
+    // Full equity still used for margin/liquidation
+    pub fn calculate_margin_equity(&self, oracles: &OracleSet) -> i64 {
+        let deposit_value = self.calculate_borrow_equity(oracles);
+        let perp_pnl = self.calculate_perp_pnl(oracles);
+        deposit_value + perp_pnl
+    }
+}
+```
+
+### Layer 5: Liquidity-Adjusted Collateral
+
+Weight collateral by the liquidity of its market:
+
+```rust
+pub struct CollateralWeight {
+    pub token: Pubkey,
+    pub base_weight: u16,         // e.g., 8000 = 80%
+    pub liquidity_factor: u64,    // Required liquidity for full weight
+}
+
+impl CollateralWeight {
+    pub fn effective_weight(&self, market_liquidity: u64) -> u16 {
+        if market_liquidity >= self.liquidity_factor {
+            return self.base_weight;
+        }
+
+        // Scale down weight for thin markets
+        let ratio = market_liquidity * 10000 / self.liquidity_factor;
+        (self.base_weight as u64 * ratio / 10000) as u16
+    }
+}
+
+// MNGO with $1M liquidity vs required $100M
+// effective_weight = 8000 * (1M / 100M) = 80 (0.8%)
+// Almost worthless as collateral
+```
+
+<ArticleSection name="Complete Secure Implementation" id="secure-implementation" level="h2" />
+
+```rust
+use anchor_lang::prelude::*;
+
+/// Oracle with manipulation resistance
+#[account]
+pub struct SecureOracle {
+    pub token: Pubkey,
+    pub spot_price: u64,           // Current market price
+    pub twap_price: u64,           // Time-weighted average
+    pub reference_price: u64,      // Slow-moving reference
+    pub last_update: i64,
+    pub confidence: u64,           // Price confidence interval
+}
+
+impl SecureOracle {
+    /// Get price for trading (can be more volatile)
+    pub fn get_trading_price(&self) -> u64 {
+        self.spot_price
+    }
+
+    /// Get price for collateral valuation (conservative)
+    pub fn get_collateral_price(&self) -> u64 {
+        // Use minimum of spot, TWAP, and reference
+        // This prevents inflation attacks
+        let min_price = self.spot_price
+            .min(self.twap_price)
+            .min(self.reference_price);
+
+        // Apply confidence discount
+        let confidence_discount = min_price
+            .saturating_sub(self.confidence);
+
+        confidence_discount
+    }
+
+    /// Check if price is within acceptable bounds
+    pub fn is_price_valid(&self) -> bool {
+        // Price shouldn't deviate more than 20% from reference
+        let max_deviation = self.reference_price / 5;
+        let lower = self.reference_price.saturating_sub(max_deviation);
+        let upper = self.reference_price.saturating_add(max_deviation);
+
+        self.spot_price >= lower && self.spot_price <= upper
+    }
+
+    /// Update prices with manipulation resistance
+    pub fn update(&mut self, new_price: u64, clock: &Clock) {
+        let elapsed = (clock.unix_timestamp - self.last_update) as u64;
+
+        // Spot price updates immediately
+        self.spot_price = new_price;
+
+        // TWAP updates with time weighting
+        let twap_weight = elapsed.min(3600);  // Max 1 hour weight
+        self.twap_price = (self.twap_price * (3600 - twap_weight)
+            + new_price * twap_weight) / 3600;
+
+        // Reference price moves very slowly (max 0.1% per minute)
+        let max_ref_change = self.reference_price * elapsed / 60000;
+        if new_price > self.reference_price {
+            self.reference_price = self.reference_price
+                .saturating_add(max_ref_change.min(new_price - self.reference_price));
+        } else {
+            self.reference_price = self.reference_price
+                .saturating_sub(max_ref_change.min(self.reference_price - new_price));
+        }
+
+        self.last_update = clock.unix_timestamp;
+    }
+}
+
+/// Collateral configuration with liquidity requirements
+#[account]
+pub struct CollateralConfig {
+    pub token: Pubkey,
+    pub max_weight_bps: u16,           // Maximum collateral weight (e.g., 8000 = 80%)
+    pub min_liquidity: u64,            // Required liquidity for full weight
+    pub borrow_enabled: bool,          // Can this be borrowed?
+    pub collateral_enabled: bool,      // Can this be used as collateral?
+}
+
+impl CollateralConfig {
+    pub fn effective_weight(&self, current_liquidity: u64) -> u16 {
+        if current_liquidity >= self.min_liquidity {
+            return self.max_weight_bps;
+        }
+
+        // Linear scaling based on liquidity
+        let ratio = current_liquidity * 10000 / self.min_liquidity;
+        ((self.max_weight_bps as u64) * ratio / 10000) as u16
+    }
+}
+
+/// User account with secure equity calculation
+#[account]
+pub struct SecureUserAccount {
+    pub owner: Pubkey,
+    pub deposits: Vec<Deposit>,
+    pub borrows: Vec<Borrow>,
+    pub perp_positions: Vec<PerpPosition>,
+    pub pending_withdrawals: Vec<PendingWithdrawal>,
+}
+
+impl SecureUserAccount {
+    /// Calculate equity available for borrowing
+    /// Does NOT include unrealized perp PnL
+    pub fn borrow_equity(
+        &self,
+        oracles: &[SecureOracle],
+        configs: &[CollateralConfig],
+        liquidities: &[u64],
+    ) -> i64 {
+        let deposit_value: i64 = self.deposits.iter()
+            .map(|d| {
+                let oracle = oracles.iter().find(|o| o.token == d.token).unwrap();
+                let config = configs.iter().find(|c| c.token == d.token).unwrap();
+                let liquidity = *liquidities.iter()
+                    .zip(configs.iter())
+                    .find(|(_, c)| c.token == d.token)
+                    .map(|(l, _)| l)
+                    .unwrap();
+
+                // Use conservative collateral price
+                let price = oracle.get_collateral_price();
+
+                // Apply liquidity-adjusted weight
+                let weight = config.effective_weight(liquidity);
+
+                (d.amount as i64) * (price as i64) * (weight as i64) / 10000
+            })
+            .sum();
+
+        let borrow_value: i64 = self.borrows.iter()
+            .map(|b| {
+                let oracle = oracles.iter().find(|o| o.token == b.token).unwrap();
+                // Use spot price for borrows (no discount)
+                (b.amount as i64) * (oracle.get_trading_price() as i64)
+            })
+            .sum();
+
+        deposit_value - borrow_value
+    }
+
+    /// Calculate margin equity (includes perp PnL)
+    /// Used for liquidation checks
+    pub fn margin_equity(
+        &self,
+        oracles: &[SecureOracle],
+        configs: &[CollateralConfig],
+        liquidities: &[u64],
+    ) -> i64 {
+        let borrow_eq = self.borrow_equity(oracles, configs, liquidities);
+
+        let perp_pnl: i64 = self.perp_positions.iter()
+            .map(|p| {
+                let oracle = oracles.iter().find(|o| o.token == p.market).unwrap();
+
+                // Only count PnL if oracle is valid
+                if !oracle.is_price_valid() {
+                    return 0;
+                }
+
+                p.unrealized_pnl(oracle.get_trading_price())
+            })
+            .sum();
+
+        borrow_eq + perp_pnl
+    }
+}
+
+/// Secure borrow instruction
+pub fn secure_borrow(
+    ctx: Context<SecureBorrow>,
+    amount: u64,
+) -> Result<()> {
+    let account = &ctx.accounts.user_account;
+    let oracle = &ctx.accounts.oracle;
+    let config = &ctx.accounts.collateral_config;
+    let clock = Clock::get()?;
+
+    // 1. Verify oracle is valid (not manipulated)
+    require!(
+        oracle.is_price_valid(),
+        ErrorCode::OraclePriceInvalid
+    );
+
+    // 2. Calculate borrow equity (no perp PnL)
+    let borrow_equity = account.borrow_equity(
+        &[oracle.clone()],
+        &[config.clone()],
+        &[ctx.accounts.market_liquidity.amount],
+    );
+
+    // 3. Check borrow limit
+    let current_borrows = account.total_borrow_value(&[oracle.clone()]);
+    let max_borrow = (borrow_equity as u64) * 80 / 100;
+
+    require!(
+        current_borrows + (amount * oracle.get_trading_price()) <= max_borrow,
+        ErrorCode::ExceedsBorrowLimit
+    );
+
+    // 4. Large borrows require time delay
+    let borrow_value = amount * oracle.get_trading_price();
+    if borrow_value > max_borrow / 2 {
+        // Create pending withdrawal instead of immediate transfer
+        let pending = PendingWithdrawal {
+            amount,
+            token: ctx.accounts.token.key(),
+            requested_at: clock.unix_timestamp,
+            available_at: clock.unix_timestamp + 3600, // 1 hour delay
+        };
+        // Store pending...
+        return Ok(());
+    }
+
+    // 5. Execute small borrow immediately
+    // Transfer tokens...
+
+    Ok(())
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Oracle price outside valid bounds - possible manipulation")]
+    OraclePriceInvalid,
+    #[msg("Borrow amount exceeds limit")]
+    ExceedsBorrowLimit,
+}
+```
+
+<ArticleSection name="Lessons from Mango" id="lessons" level="h2" />
+
+### The Fundamental Issue
+
+Mango's design assumed market prices were trustworthy. For liquid assets like SOL or ETH, this is reasonable. For illiquid assets like MNGO, it created a $117 million vulnerability.
+
+**Takeaway**: Oracle trust must be proportional to market liquidity.
+
+### The Self-Referential Trap
+
+MNGO was both a collateral asset and a tradeable asset. Users could:
+1. Hold MNGO as collateral
+2. Trade MNGO-PERP
+3. Profit on MNGO-PERP → increase equity → borrow more
+
+This created a feedback loop that Eisenberg exploited.
+
+**Takeaway**: Be extremely careful with self-referential token economics.
+
+### Legal Aftermath
+
+Interestingly, Eisenberg wasn't shy about what he did. He claimed it was a "highly profitable trading strategy" and negotiated to return $67 million of the stolen funds. He was later arrested and charged with market manipulation.
+
+The case raises a philosophical question: If you use a protocol exactly as designed, and it loses money, who's at fault? The courts are still deciding.
+
+**Takeaway**: "Code is law" doesn't mean "code is safe."
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+Oracle manipulation exploits reveal critical design flaws:
+
+**1. Liquidity is security**
+
+Thin markets can be manipulated. Weight collateral by the liquidity of its oracle market.
+
+**2. Separate trading and borrowing valuations**
+
+Use aggressive prices for trading (responsive), conservative prices for borrowing (resistant).
+
+**3. Don't let users borrow against unrealized PnL**
+
+Perpetual profits exist only on paper until realized. Treat them accordingly.
+
+**4. Implement circuit breakers**
+
+Price bands, withdrawal delays, and deviation checks all slow down attacks.
+
+**5. Assume manipulation will be attempted**
+
+Design for adversarial users. The question isn't whether someone will try to exploit your oracle - it's whether they'll succeed.
+
+Every protocol that accepts collateral is making a statement about oracle trust. Make sure your code reflects the actual trustworthiness of your price feeds.

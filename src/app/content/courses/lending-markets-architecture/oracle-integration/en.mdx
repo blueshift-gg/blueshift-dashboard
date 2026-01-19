@@ -1,0 +1,571 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Oracle Integration
+
+Every number in a lending protocol depends on prices. Health factors, liquidation triggers, borrowing limits, all calculated from oracle data.
+
+Get prices wrong, and nothing works:
+- Inflated prices → borrow more than collateral is worth
+- Stale prices → liquidate healthy positions or miss underwater ones
+- Manipulated prices → drain the protocol in minutes
+
+Oracles are the foundation. Everything else is just math on top.
+
+<ArticleSection name="Why Oracles Matter" id="why-oracles" level="h2" />
+
+### The Price Problem
+
+Smart contracts can't access external data. They don't know ETH is $2,000 or SOL is $100. Someone must bring that information on-chain.
+
+**Option 1: Trust a single source**
+```
+ETH price from Coinbase API: $2,000
+Problem: Coinbase could be wrong, manipulated, or down
+```
+
+**Option 2: Aggregate multiple sources**
+```
+Coinbase: $2,000
+Binance: $2,001
+Kraken: $1,999
+Median: $2,000
+Better, but who aggregates? How often?
+```
+
+**Option 3: Decentralized oracle networks**
+```
+Chainlink: 21 nodes report, aggregate
+Pyth: Publishers stream prices, network aggregates
+Switchboard: Customizable oracle queues
+```
+
+### What Can Go Wrong
+
+**Stale data**: Oracle hasn't updated in 5 minutes. Market moved 10%.
+
+**Flash crashes**: Oracle reports accurate but anomalous price (flash crash on one exchange).
+
+**Manipulation**: Attacker moves price on low-liquidity venue that oracle samples.
+
+**Downtime**: Oracle network fails. Protocol has no prices.
+
+Each failure mode enables exploits.
+
+<ArticleSection name="Pyth Network" id="pyth" level="h2" />
+
+### How Pyth Works
+
+Pyth aggregates prices from first-party sources (exchanges, market makers) and publishes them on-chain:
+
+1. **Publishers** (exchanges, trading firms) stream prices
+2. **Pyth network** aggregates into a single price + confidence interval
+3. **On-chain accounts** store latest prices
+4. **Consumers** read prices from these accounts
+
+```rust
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+
+pub fn get_pyth_price(price_account: &AccountInfo) -> Result<(i64, u64, i64)> {
+    let price_update = PriceUpdateV2::try_deserialize(
+        &mut &price_account.data.borrow()[..]
+    )?;
+    
+    let price_data = price_update.get_price_no_older_than(
+        &Clock::get()?,
+        60,  // Max age in seconds
+    )?;
+    
+    Ok((
+        price_data.price,           // Price as i64 (with exponent)
+        price_data.conf,            // Confidence interval
+        price_data.publish_time,    // Timestamp
+    ))
+}
+```
+
+### The Confidence Interval
+
+Pyth doesn't just give a price. It gives a price with uncertainty bounds:
+
+```
+SOL price: $100.00 ± $0.15
+Meaning: "We're confident the true price is between $99.85 and $100.15"
+```
+
+During volatility, confidence widens:
+```
+Normal: $100.00 ± $0.15
+High volatility: $100.00 ± $2.50
+Extreme: $100.00 ± $10.00
+```
+
+Smart protocols use confidence:
+
+```rust
+pub fn get_conservative_price(
+    price: i64,
+    confidence: u64,
+    direction: PriceDirection,
+) -> i64 {
+    match direction {
+        // For collateral valuation, use lower bound
+        PriceDirection::Collateral => price - confidence as i64,
+        // For debt valuation, use upper bound  
+        PriceDirection::Debt => price + confidence as i64,
+    }
+}
+
+pub fn calculate_health_with_confidence(
+    collateral_price: i64,
+    collateral_conf: u64,
+    debt_price: i64,
+    debt_conf: u64,
+    collateral_amount: u64,
+    debt_amount: u64,
+    threshold_bps: u16,
+) -> u128 {
+    // Conservative: assume worst case for protocol
+    let conservative_collateral = collateral_price - collateral_conf as i64;
+    let conservative_debt = debt_price + debt_conf as i64;
+    
+    let collateral_value = collateral_amount as i128 * conservative_collateral as i128;
+    let debt_value = debt_amount as i128 * conservative_debt as i128;
+    
+    if debt_value == 0 {
+        return u128::MAX;
+    }
+    
+    (collateral_value * threshold_bps as i128 / 10_000 / debt_value) as u128
+}
+```
+
+<ArticleSection name="Switchboard" id="switchboard" level="h2" />
+
+### Customizable Oracles
+
+Switchboard lets protocols define custom oracle logic:
+
+1. Create an **aggregator** (oracle feed)
+2. Define **jobs** (data sources: APIs, on-chain data, computation)
+3. **Oracles** execute jobs and report results
+4. Aggregator combines reports
+
+```rust
+use switchboard_solana::AggregatorAccountData;
+
+pub fn get_switchboard_price(
+    aggregator: &AccountInfo,
+) -> Result<(f64, i64)> {
+    let aggregator_data = AggregatorAccountData::new(aggregator)?;
+    
+    let result = aggregator_data.get_result()?;
+    let timestamp = aggregator_data.latest_confirmed_round.round_open_timestamp;
+    
+    Ok((result.try_into()?, timestamp))
+}
+```
+
+### Custom Data Sources
+
+Switchboard can fetch more than exchange prices:
+
+```javascript
+// Example Switchboard job: Get TVL from DeFi protocol
+{
+  "tasks": [
+    {
+      "httpTask": {
+        "url": "https://api.llama.fi/tvl/solend"
+      }
+    },
+    {
+      "jsonParseTask": {
+        "path": "$.tvl"
+      }
+    }
+  ]
+}
+```
+
+Use cases beyond price:
+- TVL metrics
+- APY rates
+- Liquidity depth
+- Cross-chain data
+
+<ArticleSection name="TWAP Oracles" id="twap" level="h2" />
+
+### Time-Weighted Average Prices
+
+Spot prices are volatile and manipulable. TWAPs smooth over time:
+
+```
+Spot prices over 30 minutes:
+  0 min: $100
+  10 min: $105
+  20 min: $95
+  30 min: $102
+
+Simple average: ($100 + $105 + $95 + $102) / 4 = $100.50
+
+Time-weighted (if sampled every minute):
+  Sum of (price × time) / total time
+```
+
+### On-Chain TWAP
+
+Protocols can compute TWAP from AMM data:
+
+```rust
+#[account]
+pub struct TwapOracle {
+    pub cumulative_price: u128,    // Sum of (price × time)
+    pub last_update_time: i64,
+    pub last_price: u64,
+}
+
+impl TwapOracle {
+    pub fn update(&mut self, new_price: u64, current_time: i64) {
+        let time_elapsed = current_time - self.last_update_time;
+        
+        // Add to cumulative: last_price × time_elapsed
+        self.cumulative_price += self.last_price as u128 * time_elapsed as u128;
+        
+        self.last_price = new_price;
+        self.last_update_time = current_time;
+    }
+    
+    pub fn get_twap(&self, start_cumulative: u128, time_period: i64) -> u64 {
+        let cumulative_diff = self.cumulative_price - start_cumulative;
+        (cumulative_diff / time_period as u128) as u64
+    }
+}
+```
+
+### TWAP Trade-offs
+
+**Advantages:**
+- Resistant to flash manipulation
+- Smooths volatility
+- No external dependency (if using on-chain AMM data)
+
+**Disadvantages:**
+- Lags real price (bad during fast moves)
+- Can be manipulated over time (sustained attack)
+- Requires active market (illiquid pairs have bad TWAPs)
+
+<ArticleSection name="Staleness and Freshness" id="staleness" level="h2" />
+
+### The Freshness Problem
+
+Oracles don't update every block. Updates cost money (on Ethereum) or have network delays.
+
+```
+Oracle last updated: 60 seconds ago
+Current market: Price moved 5%
+Protocol using stale price: Making decisions on wrong data
+```
+
+### Staleness Checks
+
+Always validate price freshness:
+
+```rust
+pub const MAX_PRICE_AGE_SECONDS: i64 = 60;
+
+pub fn get_validated_price(
+    price_account: &AccountInfo,
+    current_time: i64,
+) -> Result<u64> {
+    let price_data = parse_price_account(price_account)?;
+    
+    let age = current_time - price_data.publish_time;
+    
+    require!(
+        age <= MAX_PRICE_AGE_SECONDS,
+        ErrorCode::PriceTooStale
+    );
+    
+    require!(
+        price_data.price > 0,
+        ErrorCode::InvalidPrice
+    );
+    
+    Ok(price_data.price as u64)
+}
+```
+
+### Different Staleness for Different Actions
+
+Not all actions need the same freshness:
+
+| Action | Max Staleness | Why |
+|--------|---------------|-----|
+| Liquidation | 30s | Must react quickly to underwater positions |
+| Borrow | 60s | User action, moderate urgency |
+| View health | 300s | Informational, can be slightly stale |
+| Interest accrual | 3600s | Doesn't depend on real-time prices |
+
+```rust
+pub enum ActionType {
+    Liquidation,
+    Borrow,
+    ViewOnly,
+}
+
+impl ActionType {
+    pub fn max_staleness(&self) -> i64 {
+        match self {
+            ActionType::Liquidation => 30,
+            ActionType::Borrow => 60,
+            ActionType::ViewOnly => 300,
+        }
+    }
+}
+```
+
+<ArticleSection name="Price Manipulation Attacks" id="manipulation" level="h2" />
+
+### The Classic Attack
+
+1. Flash loan large amount
+2. Trade on thin DEX to spike price
+3. Use manipulated price as oracle input
+4. Borrow against inflated collateral
+5. Don't repay, keep borrowed funds
+6. Repay flash loan
+
+```
+DEX pool: 1000 ETH / 2,000,000 USDC
+Oracle samples this DEX
+
+Attack:
+  Flash loan 5000 ETH
+  Sell into pool → price spikes to $10,000/ETH
+  Oracle reports $10,000
+  Deposit 100 ETH ($1M at real price, $10M at manipulated)
+  Borrow $7.5M USDC
+  Let position get "liquidated" later
+  Profit: ~$6.5M
+```
+
+### Mango Markets Attack (October 2022)
+
+Avraham Eisenberg manipulated MNGO perpetual price:
+
+1. Built large MNGO-PERP position across two accounts
+2. One account long, one short (hedged)
+3. Bought spot MNGO to pump price
+4. Perp price followed (oracle used spot as reference)
+5. Long account showed $400M+ profit
+6. Withdrew $116M in various tokens against "profits"
+7. Short account was liquidated (absorbed by insurance)
+
+The attack exploited thin liquidity in MNGO markets. A few million in spot buying moved prices dramatically.
+
+### Defenses
+
+**1. Use multiple sources**
+```rust
+pub fn get_aggregated_price(
+    source_a: u64,
+    source_b: u64,
+    source_c: u64,
+    max_deviation_bps: u16,
+) -> Result<u64> {
+    let median = get_median([source_a, source_b, source_c]);
+    
+    // Check all sources are within bounds of median
+    for source in [source_a, source_b, source_c] {
+        let deviation = if source > median {
+            (source - median) * 10_000 / median
+        } else {
+            (median - source) * 10_000 / median
+        };
+        
+        require!(
+            deviation <= max_deviation_bps as u64,
+            ErrorCode::PriceSourceDeviation
+        );
+    }
+    
+    Ok(median)
+}
+```
+
+**2. Use TWAP, not spot**
+```rust
+pub fn get_manipulation_resistant_price(
+    spot_price: u64,
+    twap_30m: u64,
+    max_deviation_bps: u16,
+) -> Result<u64> {
+    let deviation = if spot_price > twap_30m {
+        (spot_price - twap_30m) * 10_000 / twap_30m
+    } else {
+        (twap_30m - spot_price) * 10_000 / twap_30m
+    };
+    
+    if deviation > max_deviation_bps as u64 {
+        // Spot diverged too much from TWAP, use TWAP
+        return Ok(twap_30m);
+    }
+    
+    // Spot is reasonable, use it for freshness
+    Ok(spot_price)
+}
+```
+
+**3. Confidence-based limits**
+```rust
+pub fn apply_confidence_limits(
+    price: u64,
+    confidence: u64,
+    max_confidence_bps: u16,
+) -> Result<u64> {
+    let conf_ratio = confidence * 10_000 / price;
+    
+    if conf_ratio > max_confidence_bps as u64 {
+        // Confidence too wide, price is unreliable
+        return Err(ErrorCode::PriceConfidenceTooWide.into());
+    }
+    
+    Ok(price)
+}
+```
+
+**4. Borrow caps per asset**
+```rust
+// Even if price is manipulated, damage is limited
+pub const MAX_BORROW_USD: u64 = 1_000_000;
+
+pub fn check_borrow_cap(
+    new_borrow_value: u64,
+    existing_borrows: u64,
+) -> Result<()> {
+    require!(
+        existing_borrows + new_borrow_value <= MAX_BORROW_USD,
+        ErrorCode::BorrowCapExceeded
+    );
+    Ok(())
+}
+```
+
+<ArticleSection name="Oracle Architecture Decisions" id="architecture" level="h2" />
+
+### Push vs Pull
+
+**Push (Chainlink-style)**:
+- Oracle network pushes updates on-chain
+- Protocol reads latest stored value
+- Simple for consumers
+- Updates happen regardless of usage (waste)
+
+**Pull (Pyth-style on Solana)**:
+- Protocol requests update when needed
+- User transaction includes fresh price data
+- More efficient (only update when used)
+- Requires consumer to include correct accounts
+
+```rust
+// Pull model: user provides price update in transaction
+#[derive(Accounts)]
+pub struct BorrowWithPrice<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, LendingPool>,
+    
+    #[account(mut)]
+    pub user_position: Account<'info, UserPosition>,
+    
+    /// User must provide fresh price data
+    pub collateral_price_feed: Account<'info, PriceUpdateV2>,
+    pub debt_price_feed: Account<'info, PriceUpdateV2>,
+    
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+```
+
+### Multiple Oracle Fallback
+
+What if primary oracle fails?
+
+```rust
+pub fn get_price_with_fallback(
+    primary: &AccountInfo,
+    secondary: Option<&AccountInfo>,
+    tertiary: Option<&AccountInfo>,
+) -> Result<u64> {
+    // Try primary
+    if let Ok(price) = get_pyth_price(primary) {
+        if is_valid_price(&price) {
+            return Ok(price.0 as u64);
+        }
+    }
+    
+    // Fallback to secondary
+    if let Some(secondary) = secondary {
+        if let Ok(price) = get_switchboard_price(secondary) {
+            if is_valid_price_sb(&price) {
+                return Ok(price.0 as u64);
+            }
+        }
+    }
+    
+    // Final fallback or fail
+    if let Some(tertiary) = tertiary {
+        return get_twap_price(tertiary);
+    }
+    
+    Err(ErrorCode::NoPriceAvailable.into())
+}
+```
+
+### Price Bounds
+
+Sanity check that prices are reasonable:
+
+```rust
+#[account]
+pub struct PriceBounds {
+    pub asset: Pubkey,
+    pub min_price: u64,    // Absolute floor
+    pub max_price: u64,    // Absolute ceiling
+    pub max_change_bps: u16,  // Max change from last known price
+    pub last_valid_price: u64,
+}
+
+pub fn validate_price_bounds(
+    price: u64,
+    bounds: &PriceBounds,
+) -> Result<()> {
+    require!(price >= bounds.min_price, ErrorCode::PriceBelowMin);
+    require!(price <= bounds.max_price, ErrorCode::PriceAboveMax);
+    
+    let change = if price > bounds.last_valid_price {
+        (price - bounds.last_valid_price) * 10_000 / bounds.last_valid_price
+    } else {
+        (bounds.last_valid_price - price) * 10_000 / bounds.last_valid_price
+    };
+    
+    require!(
+        change <= bounds.max_change_bps as u64,
+        ErrorCode::PriceChangeTooLarge
+    );
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+1. **Oracles are the foundation**: Every lending calculation depends on accurate prices
+2. **Pyth provides confidence intervals**: Use them for conservative valuations
+3. **TWAP resists manipulation**: But lags during fast moves
+4. **Staleness checks are mandatory**: Old prices enable exploits
+5. **Multiple sources increase resilience**: Fallbacks, aggregation, bounds checking
+6. **Manipulation is profitable**: Design assuming attackers will try
+
+Oracles are the weakest link in lending protocols. The best interest rate model and liquidation mechanism mean nothing if prices can be manipulated. Build with paranoia.
+
+Next, we'll explore advanced lending designs: isolated markets, flash loans, and undercollateralized lending through credit delegation.

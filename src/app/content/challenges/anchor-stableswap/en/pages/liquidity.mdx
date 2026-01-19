@@ -1,0 +1,246 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Add & Remove Liquidity" id="liquidity" level="h2" />
+
+Liquidity management in StableSwap is more complex than constant product AMMs because we support imbalanced deposits and use the D invariant for LP token calculations.
+
+<ArticleSection name="Accounts" id="accounts" level="h3" />
+
+Both add and remove liquidity use the same account structure:
+
+```rust
+#[derive(Accounts)]
+pub struct ModifyLiquidity<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        constraint = lp_mint.key() == pool.lp_mint @ StableSwapError::InvalidMint
+    )]
+    pub lp_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = user_lp_account.mint == pool.lp_mint @ StableSwapError::InvalidMint
+    )]
+    pub user_lp_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+### Remaining Accounts
+
+For liquidity operations:
+- First `n` accounts: All vault token accounts (in order)
+- Remaining: User's token accounts for tokens being deposited/withdrawn
+
+<ArticleSection name="Add Liquidity" id="add-liquidity" level="h3" />
+
+The add liquidity handler supports both first deposits and subsequent deposits:
+
+```rust
+pub fn add_liquidity_handler<'info>(
+    ctx: Context<'_, '_, 'info, 'info, ModifyLiquidity<'info>>,
+    lp_amount: u64,
+    max_amounts: [u64; MAX_TOKENS],
+) -> Result<()> {
+    require!(lp_amount > 0, StableSwapError::ZeroAmount);
+
+    let pool = &ctx.accounts.pool;
+    let n = pool.n_tokens as usize;
+    let amp = pool.amplification as u128;
+    let lp_supply = ctx.accounts.lp_mint.supply as u128;
+    let remaining = ctx.remaining_accounts;
+
+    // Count non-zero deposits
+    let deposit_count = max_amounts[..n].iter().filter(|&&x| x > 0).count();
+    require!(deposit_count > 0, StableSwapError::ZeroAmount);
+    
+    // Validate remaining accounts: n vaults + deposit_count user ATAs
+    require!(
+        remaining.len() == n + deposit_count,
+        StableSwapError::InvalidRemainingAccounts
+    );
+
+    let vaults = &remaining[0..n];
+    let user_atas = &remaining[n..];
+
+    // Read current reserves
+    let reserves = ctx.accounts.read_reserves(vaults)?;
+
+    let (deposits, lp_to_mint) = if lp_supply == 0 {
+        // First deposit: use max_amounts directly, mint D - MINIMUM_LIQUIDITY
+        let deposits: Vec<u128> = max_amounts[..n].iter().map(|&x| x as u128).collect();
+        let d = compute_d(&deposits, amp)?;
+        
+        require!(d > MINIMUM_LIQUIDITY as u128, 
+                 StableSwapError::InsufficientInitialLiquidity);
+        
+        let lp_to_mint = (d - MINIMUM_LIQUIDITY as u128) as u64;
+        (deposits, lp_to_mint)
+    } else {
+        // Subsequent deposit: calculate proportionally
+        let adjusted_supply = lp_supply + MINIMUM_LIQUIDITY as u128;
+        let d_before = compute_d(&reserves, amp)?;
+        
+        // Calculate target D based on requested LP amount
+        let target_d = d_before * (adjusted_supply + lp_amount as u128) / adjusted_supply;
+        
+        // Calculate deposits proportionally
+        let d_increase = target_d - d_before;
+        let total_max: u128 = max_amounts[..n].iter().map(|&x| x as u128).sum();
+        
+        let deposits: Vec<u128> = max_amounts[..n].iter().map(|&max| {
+            if max == 0 { 0 } else {
+                ((max as u128) * d_increase / total_max).min(max as u128)
+            }
+        }).collect();
+
+        // Calculate actual LP from deposits
+        let reserves_after: Vec<u128> = reserves.iter()
+            .zip(deposits.iter())
+            .map(|(r, d)| r + d)
+            .collect();
+        let d_after = compute_d(&reserves_after, amp)?;
+        let actual_lp = adjusted_supply * (d_after - d_before) / d_before;
+        
+        (deposits, actual_lp as u64)
+    };
+
+    // Verify slippage (deposits don't exceed max_amounts)
+    for (&deposit, &max) in deposits.iter().zip(max_amounts[..n].iter()) {
+        if max > 0 {
+            require!(deposit <= max as u128, StableSwapError::SlippageExceeded);
+        }
+    }
+
+    // Execute transfers and mint LP
+    ctx.accounts.transfer_to_vaults(vaults, user_atas, &deposits, &max_amounts)?;
+    ctx.accounts.mint_lp_tokens(lp_to_mint)?;
+
+    Ok(())
+}
+```
+
+### First vs Subsequent Deposits
+
+**First deposit**: The user defines the initial ratio. LP tokens = D - MINIMUM_LIQUIDITY.
+
+**Subsequent deposits**: LP tokens are proportional to the D increase. The `max_amounts` act as slippage protection - you specify the maximum of each token you're willing to deposit.
+
+<ArticleSection name="Remove Liquidity" id="remove-liquidity" level="h3" />
+
+Withdrawals are always proportional - you get your share of each token:
+
+```rust
+pub fn remove_liquidity_handler<'info>(
+    ctx: Context<'_, '_, 'info, 'info, ModifyLiquidity<'info>>,
+    lp_amount: u64,
+    min_amounts: [u64; MAX_TOKENS],
+) -> Result<()> {
+    require!(lp_amount > 0, StableSwapError::ZeroAmount);
+
+    let pool = &ctx.accounts.pool;
+    let n = pool.n_tokens as usize;
+    let lp_supply = ctx.accounts.lp_mint.supply as u128;
+    let remaining = ctx.remaining_accounts;
+
+    require!(lp_supply > 0, StableSwapError::EmptyPool);
+    require!(lp_amount as u128 <= lp_supply, StableSwapError::InsufficientLiquidity);
+
+    // For proportional withdrawal, we need user ATAs for all tokens
+    require!(remaining.len() == n * 2, StableSwapError::InvalidRemainingAccounts);
+
+    let vaults = &remaining[0..n];
+    let user_atas = &remaining[n..];
+
+    let reserves = ctx.accounts.read_reserves(vaults)?;
+
+    // Calculate proportional withdrawal
+    // Use adjusted supply (includes virtual MINIMUM_LIQUIDITY)
+    let adjusted_supply = lp_supply + MINIMUM_LIQUIDITY as u128;
+    
+    let withdraw_amounts: Vec<u128> = reserves.iter().map(|&reserve| {
+        reserve * lp_amount as u128 / adjusted_supply
+    }).collect();
+
+    // Verify slippage
+    for (&amount, &min) in withdraw_amounts.iter().zip(min_amounts[..n].iter()) {
+        if min > 0 {
+            require!(amount >= min as u128, StableSwapError::SlippageExceeded);
+        }
+    }
+
+    // Burn LP and transfer tokens to user
+    ctx.accounts.burn_lp_tokens(lp_amount)?;
+    ctx.accounts.transfer_from_vaults(vaults, user_atas, &withdraw_amounts)?;
+
+    Ok(())
+}
+```
+
+### Why Adjusted Supply?
+
+We use `lp_supply + MINIMUM_LIQUIDITY` because:
+
+1. On first deposit, we minted `D - MINIMUM_LIQUIDITY` LP tokens
+2. But the pool has `D` worth of assets
+3. Using adjusted supply means withdrawals are proportional to actual pool value
+4. This dilutes any inflation attack attempt
+
+<ArticleSection name="Helper Methods" id="helpers" level="h3" />
+
+```rust
+impl<'info> ModifyLiquidity<'info> {
+    pub fn read_reserves(&self, vaults: &[AccountInfo<'info>]) -> Result<Vec<u128>> {
+        let mut reserves = Vec::with_capacity(vaults.len());
+        for vault in vaults {
+            let data = TokenAccount::try_deserialize(&mut &**vault.try_borrow_data()?)?;
+            reserves.push(data.amount as u128);
+        }
+        Ok(reserves)
+    }
+
+    pub fn mint_lp_tokens(&self, amount: u64) -> Result<()> {
+        let seeds: &[&[u8]] = &[
+            b"pool", 
+            self.pool.lp_mint.as_ref(), 
+            &[self.pool.bump]
+        ];
+        
+        token::mint_to(
+            CpiContext::new_with_signer(
+                self.token_program.to_account_info(),
+                MintTo {
+                    mint: self.lp_mint.to_account_info(),
+                    to: self.user_lp_account.to_account_info(),
+                    authority: self.pool.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )
+    }
+
+    pub fn burn_lp_tokens(&self, amount: u64) -> Result<()> {
+        token::burn(
+            CpiContext::new(
+                self.token_program.to_account_info(),
+                Burn {
+                    mint: self.lp_mint.to_account_info(),
+                    from: self.user_lp_account.to_account_info(),
+                    authority: self.user.to_account_info(),
+                },
+            ),
+            amount,
+        )
+    }
+}
+```
+
+The pool PDA signs for minting (it's the mint authority), but the user signs for burning (they own the LP tokens).

@@ -1,0 +1,658 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Oracle Integration
+
+November 2022. A trader deposits $5 million of MNGO tokens as collateral on Mango Markets. They then use that collateral to open massive perpetual positions. But they're not betting on the market. They're manipulating the oracle.
+
+By simultaneously buying MNGO on thin spot markets and using inflated collateral values to borrow, they extract $114 million from the protocol. The oracle reported accurate prices. The protocol's trust in those prices was the vulnerability.
+
+Oracles are the eyes of a perpetual protocol. They tell you what assets are worth. Get oracle integration wrong, and you're not building a trading platform. You're building an ATM for attackers.
+
+<ArticleSection name="What Oracles Actually Do" id="what-oracles-do" level="h2" />
+
+### The Data Flow
+
+Oracles bridge off-chain price data to on-chain smart contracts:
+
+```
+Real world prices (Binance, Coinbase, etc.)
+    ↓
+Oracle network (Pyth, Switchboard, Chainlink)
+    ↓
+On-chain price account
+    ↓
+Your perpetual protocol
+```
+
+On Solana, Pyth dominates. Its architecture matters:
+
+```rust
+// Pyth price account structure (simplified)
+pub struct PriceAccount {
+    pub price: i64,              // Current price
+    pub conf: u64,               // Confidence interval
+    pub expo: i32,               // Price exponent (e.g., -8)
+    pub publish_time: i64,       // When this price was published
+    pub prev_price: i64,         // Previous price
+    pub prev_conf: u64,          // Previous confidence
+    pub prev_publish_time: i64,  // Previous publish time
+}
+```
+
+**Price** is the aggregate price from multiple data sources. If SOL trades at $100, and expo is -8, the price value is 10,000,000,000 (100 * 10^8).
+
+**Confidence** is the uncertainty range. A confidence of 50,000,000 with expo -8 means ±$0.50. The oracle is saying "the price is $100, give or take 50 cents."
+
+**Publish time** is when this price was last updated. Stale prices kill protocols.
+
+### Reading Prices on Solana
+
+```rust
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+
+pub fn get_price(
+    price_update: &PriceUpdateV2,
+    max_age_seconds: u64,
+) -> Result<(i64, u64)> {
+    let clock = Clock::get()?;
+
+    let price = price_update.get_price_no_older_than(
+        &clock,
+        max_age_seconds,
+        &FEED_ID,
+    )?;
+
+    // Convert to our internal precision
+    let price_value = normalize_price(price.price, price.exponent)?;
+    let confidence = normalize_price(price.conf as i64, price.exponent)?;
+
+    Ok((price_value, confidence as u64))
+}
+
+fn normalize_price(value: i64, exponent: i32) -> Result<i64> {
+    // Convert to internal precision (e.g., 6 decimals)
+    const TARGET_DECIMALS: i32 = 6;
+    let adjustment = TARGET_DECIMALS + exponent;
+
+    if adjustment >= 0 {
+        Ok(value * 10_i64.pow(adjustment as u32))
+    } else {
+        Ok(value / 10_i64.pow((-adjustment) as u32))
+    }
+}
+```
+
+<ArticleSection name="Mark Price vs Index Price" id="mark-vs-index" level="h2" />
+
+### Two Prices, Two Purposes
+
+Perpetual protocols track two different prices:
+
+**Index Price**: The "true" spot price from the oracle. This is what SOL actually trades for on spot markets.
+
+**Mark Price**: The price used for PnL and liquidations. This incorporates the perpetual's own trading activity.
+
+Why two prices? Because using only index price creates problems:
+
+```
+Scenario: SOL index = $100
+         SOL perp trading at $105 (heavy long demand)
+
+If we use index price for liquidations:
+  - Shorts show $5 unrealized loss against index
+  - But they couldn't actually close at $100
+  - The perp market price is $105
+
+If we use perp price for liquidations:
+  - Attacker manipulates perp price with one large trade
+  - Triggers mass liquidations
+  - Profits from the cascade
+```
+
+Mark price solves this by combining both:
+
+```rust
+pub fn calculate_mark_price(
+    index_price: u64,
+    perp_premium: i64,  // Perp price - index price
+    premium_weight: u64, // How much to weight the premium (e.g., 50%)
+) -> u64 {
+    // Mark = Index + weighted premium
+    // This smooths out perp price manipulation
+    let weighted_premium = perp_premium * premium_weight as i64 / 10_000;
+
+    if weighted_premium >= 0 {
+        index_price + weighted_premium as u64
+    } else {
+        index_price.saturating_sub((-weighted_premium) as u64)
+    }
+}
+```
+
+### TWAP Mark Price
+
+Most protocols use a time-weighted average for the premium:
+
+```rust
+#[account]
+pub struct Market {
+    // Premium tracking
+    pub premium_cumulative: i128,
+    pub premium_last_update: i64,
+    pub premium_samples: u64,
+
+    // TWAP window
+    pub twap_window_seconds: u64,
+}
+
+pub fn update_premium_twap(
+    market: &mut Market,
+    current_premium: i64,
+) -> Result<i64> {
+    let clock = Clock::get()?;
+    let time_elapsed = clock.unix_timestamp - market.premium_last_update;
+
+    if time_elapsed <= 0 {
+        return Ok(get_current_twap(market));
+    }
+
+    // Add time-weighted premium to cumulative
+    market.premium_cumulative += current_premium as i128 * time_elapsed as i128;
+    market.premium_samples += time_elapsed as u64;
+    market.premium_last_update = clock.unix_timestamp;
+
+    // Keep only samples within window
+    if market.premium_samples > market.twap_window_seconds {
+        let excess = market.premium_samples - market.twap_window_seconds;
+        // Approximate: remove oldest samples proportionally
+        let removal_ratio = excess as i128 * PRECISION as i128
+            / market.premium_samples as i128;
+        market.premium_cumulative -= market.premium_cumulative
+            * removal_ratio / PRECISION as i128;
+        market.premium_samples = market.twap_window_seconds;
+    }
+
+    Ok(get_current_twap(market))
+}
+
+fn get_current_twap(market: &Market) -> i64 {
+    if market.premium_samples == 0 {
+        return 0;
+    }
+    (market.premium_cumulative / market.premium_samples as i128) as i64
+}
+```
+
+A 5-minute TWAP means an attacker would need to maintain price manipulation for 5 minutes to fully affect mark price. This is expensive and risky.
+
+<ArticleSection name="Staleness Protection" id="staleness" level="h2" />
+
+### Why Stale Prices Kill
+
+Oracles update periodically, not continuously. Between updates, the real price moves while the oracle price stays frozen:
+
+```
+t=0: Oracle reports $100, real price $100
+t=1: Real price moves to $95
+t=2: Real price moves to $90
+t=3: Oracle updates to $90
+
+During t=1 to t=3:
+  - Oracle says $100
+  - Real price is $90-95
+  - Traders can exploit this 5-10% gap
+```
+
+An attacker who sees the real price drop can:
+1. Open a short at oracle price ($100)
+2. Wait for oracle to update
+3. Close at new oracle price ($90)
+4. Risk-free $10 profit per unit
+
+### Implementing Staleness Checks
+
+```rust
+pub fn validate_oracle_freshness(
+    price_update: &PriceUpdateV2,
+    max_age_seconds: u64,
+) -> Result<()> {
+    let clock = Clock::get()?;
+    let price = price_update.get_price_unchecked(&FEED_ID)?;
+
+    let age = clock.unix_timestamp - price.publish_time;
+
+    require!(
+        age <= max_age_seconds as i64,
+        ErrorCode::OraclePriceStale
+    );
+
+    require!(
+        age >= 0,
+        ErrorCode::OraclePriceInFuture  // Clock manipulation check
+    );
+
+    Ok(())
+}
+```
+
+How fresh is fresh enough? It depends:
+
+| Operation | Max Age | Reasoning |
+|-----------|---------|-----------|
+| Opening positions | 30-60s | User initiated, some lag acceptable |
+| Liquidations | 10-30s | Time sensitive, but not instant |
+| Large positions | 5-10s | Higher risk requires fresher data |
+| High volatility | 5s | Fast markets need fast data |
+
+### Graceful Degradation
+
+What if the oracle is stale? You have options:
+
+```rust
+pub fn handle_stale_oracle(
+    market: &mut Market,
+    oracle_age_seconds: i64,
+) -> Result<OracleStatus> {
+    if oracle_age_seconds <= market.max_oracle_age {
+        return Ok(OracleStatus::Fresh);
+    }
+
+    // Stale but not ancient: allow closes only
+    if oracle_age_seconds <= market.max_oracle_age * 3 {
+        return Ok(OracleStatus::StaleReduceOnly);
+    }
+
+    // Very stale: freeze market
+    market.status = MarketStatus::Frozen;
+    Ok(OracleStatus::Frozen)
+}
+
+pub enum OracleStatus {
+    Fresh,
+    StaleReduceOnly,  // Can close, can't open
+    Frozen,           // No operations
+}
+```
+
+Reduce-only mode lets traders exit but not enter. This prevents exploitation while allowing risk reduction.
+
+<ArticleSection name="Confidence Intervals" id="confidence" level="h2" />
+
+### What Confidence Means
+
+Pyth doesn't just report a price. It reports uncertainty:
+
+```
+Price: $100.00
+Confidence: $0.25
+
+Interpretation: "We're confident the true price is between $99.75 and $100.25"
+```
+
+Wide confidence means disagreement among data sources. This happens during:
+- High volatility
+- Low liquidity
+- Exchange outages
+- Market manipulation
+
+### Using Confidence for Protection
+
+```rust
+pub fn validate_oracle_confidence(
+    price: i64,
+    confidence: u64,
+    max_confidence_ratio: u64, // e.g., 100 = 1%
+) -> Result<()> {
+    // Confidence as percentage of price
+    let confidence_ratio = confidence as u128 * 10_000 / price.unsigned_abs() as u128;
+
+    require!(
+        confidence_ratio <= max_confidence_ratio as u128,
+        ErrorCode::OracleConfidenceTooWide
+    );
+
+    Ok(())
+}
+
+// Conservative: use worst price for the protocol
+pub fn get_conservative_price(
+    price: i64,
+    confidence: u64,
+    is_buying: bool,  // Is the protocol effectively buying?
+) -> i64 {
+    if is_buying {
+        // Protocol buys high (user sells)
+        price + confidence as i64
+    } else {
+        // Protocol sells low (user buys)
+        price - confidence as i64
+    }
+}
+```
+
+For liquidations, use the price that's worst for the protocol:
+
+```rust
+pub fn get_liquidation_price(
+    price: i64,
+    confidence: u64,
+    position_size: i64,
+) -> i64 {
+    // For longs, use low price (worse for the long holder)
+    // For shorts, use high price (worse for the short holder)
+    if position_size > 0 {
+        price - confidence as i64
+    } else {
+        price + confidence as i64
+    }
+}
+```
+
+This means wide confidence makes liquidations more aggressive. That's intentional: uncertainty should trigger risk reduction.
+
+<ArticleSection name="Multi-Oracle Strategies" id="multi-oracle" level="h2" />
+
+### Why Multiple Oracles?
+
+No single oracle is perfect. Each has failure modes:
+
+**Pyth**: Fast updates, but fewer data sources per feed
+**Switchboard**: More customizable, but more complex
+**Chainlink**: Most battle-tested, but historically slower on Solana
+
+Using multiple oracles provides redundancy:
+
+```rust
+pub fn get_price_multi_oracle(
+    pyth_price: Option<OraclePrice>,
+    switchboard_price: Option<OraclePrice>,
+    max_deviation: u64, // e.g., 100 = 1%
+) -> Result<u64> {
+    match (pyth_price, switchboard_price) {
+        (Some(p), Some(s)) => {
+            // Both available: check they agree
+            let deviation = if p.price > s.price {
+                (p.price - s.price) * 10_000 / p.price
+            } else {
+                (s.price - p.price) * 10_000 / s.price
+            };
+
+            require!(
+                deviation <= max_deviation,
+                ErrorCode::OracleDeviation
+            );
+
+            // Use the more conservative (lower) price
+            Ok(p.price.min(s.price))
+        }
+        (Some(p), None) => {
+            // Only Pyth: use with higher confidence requirement
+            require!(
+                p.confidence_ratio <= max_deviation / 2,
+                ErrorCode::SingleOracleHighConfidence
+            );
+            Ok(p.price)
+        }
+        (None, Some(s)) => {
+            // Only Switchboard
+            require!(
+                s.confidence_ratio <= max_deviation / 2,
+                ErrorCode::SingleOracleHighConfidence
+            );
+            Ok(s.price)
+        }
+        (None, None) => {
+            err!(ErrorCode::NoOracleAvailable)
+        }
+    }
+}
+```
+
+### Median Price Aggregation
+
+With three or more oracles, use the median:
+
+```rust
+pub fn get_median_price(prices: &mut [u64]) -> u64 {
+    prices.sort();
+
+    let len = prices.len();
+    if len % 2 == 0 {
+        (prices[len/2 - 1] + prices[len/2]) / 2
+    } else {
+        prices[len/2]
+    }
+}
+```
+
+The median is manipulation-resistant: an attacker must compromise more than half the oracles to move the price.
+
+<ArticleSection name="Manipulation Prevention" id="manipulation" level="h2" />
+
+### Attack Vectors
+
+**Oracle front-running**: Seeing price updates before they land on-chain and trading ahead.
+
+**Spot manipulation**: Moving spot prices to affect oracle feeds, then profiting on perps.
+
+**Confidence manipulation**: Creating conditions that widen confidence intervals.
+
+### Price Bands
+
+Limit how far the oracle price can move in one update:
+
+```rust
+pub fn apply_price_band(
+    new_price: u64,
+    last_price: u64,
+    max_change_bps: u64, // e.g., 1000 = 10%
+) -> u64 {
+    let max_change = last_price * max_change_bps / 10_000;
+
+    if new_price > last_price + max_change {
+        last_price + max_change
+    } else if new_price < last_price.saturating_sub(max_change) {
+        last_price.saturating_sub(max_change)
+    } else {
+        new_price
+    }
+}
+```
+
+If the oracle reports a 20% move but the band is 10%, the protocol only accepts 10%. The next update can move another 10%.
+
+This slows down legitimate large moves, but prevents flash manipulation.
+
+### Rate Limiting by Size
+
+Large positions face stricter oracle requirements:
+
+```rust
+pub fn get_oracle_requirements(
+    position_notional: u64,
+    market: &Market,
+) -> OracleRequirements {
+    let position_ratio = position_notional * 10_000 / market.total_open_interest;
+
+    if position_ratio > 1000 {  // >10% of OI
+        OracleRequirements {
+            max_age_seconds: 5,
+            max_confidence_bps: 25,
+            require_multi_oracle: true,
+        }
+    } else if position_ratio > 100 {  // >1% of OI
+        OracleRequirements {
+            max_age_seconds: 15,
+            max_confidence_bps: 50,
+            require_multi_oracle: false,
+        }
+    } else {
+        OracleRequirements {
+            max_age_seconds: 30,
+            max_confidence_bps: 100,
+            require_multi_oracle: false,
+        }
+    }
+}
+```
+
+This makes large-scale manipulation expensive: you can't use stale prices for big positions.
+
+<ArticleSection name="Oracle Architecture on Solana" id="architecture" level="h2" />
+
+### Pull vs Push Oracles
+
+**Push oracles** (traditional): Oracle updates price on a schedule. Protocol reads latest.
+
+**Pull oracles** (Pyth): User includes fresh price data in transaction. Protocol verifies.
+
+Pyth on Solana uses pull:
+
+```rust
+#[derive(Accounts)]
+pub struct TradeWithOracle<'info> {
+    #[account(mut)]
+    pub position: Account<'info, Position>,
+
+    #[account(mut)]
+    pub market: Account<'info, Market>,
+
+    // User must provide fresh price update
+    pub price_update: Account<'info, PriceUpdateV2>,
+
+    pub user: Signer<'info>,
+}
+```
+
+Pull oracles are cheaper (no scheduled updates) but require users to fetch fresh prices off-chain before transacting.
+
+### Caching Prices
+
+For operations within the same transaction, cache the validated price:
+
+```rust
+pub fn execute_trade_batch(
+    ctx: Context<TradeBatch>,
+    trades: Vec<TradeParams>,
+) -> Result<()> {
+    // Validate oracle once
+    let price = validate_and_get_price(&ctx.accounts.price_update)?;
+
+    // Use cached price for all trades
+    for trade in trades {
+        execute_single_trade(&mut ctx.accounts, &trade, price)?;
+    }
+
+    Ok(())
+}
+```
+
+This saves compute and ensures consistency across a batch.
+
+### Oracle Account Validation
+
+Always verify you're reading from the correct oracle:
+
+```rust
+pub fn validate_oracle_account(
+    oracle: &AccountInfo,
+    expected_feed_id: &[u8; 32],
+) -> Result<()> {
+    // Verify program owner
+    require!(
+        oracle.owner == &pyth_solana_receiver_sdk::ID,
+        ErrorCode::InvalidOracleProgram
+    );
+
+    // Verify feed ID matches
+    let price_update = PriceUpdateV2::try_deserialize(
+        &mut oracle.data.borrow().as_ref()
+    )?;
+
+    require!(
+        price_update.price_message.feed_id == *expected_feed_id,
+        ErrorCode::WrongOracleFeed
+    );
+
+    Ok(())
+}
+```
+
+An attacker could pass a valid oracle account for the wrong asset. Always check the feed ID.
+
+<ArticleSection name="Emergency Procedures" id="emergency" level="h2" />
+
+### Circuit Breakers
+
+When oracle data looks suspicious, pause operations:
+
+```rust
+pub fn check_circuit_breaker(
+    market: &Market,
+    new_price: u64,
+) -> Result<()> {
+    // Price moved too far too fast
+    let price_change = if new_price > market.last_oracle_price {
+        (new_price - market.last_oracle_price) * 10_000 / market.last_oracle_price
+    } else {
+        (market.last_oracle_price - new_price) * 10_000 / market.last_oracle_price
+    };
+
+    if price_change > market.circuit_breaker_threshold {
+        return err!(ErrorCode::CircuitBreakerTriggered);
+    }
+
+    Ok(())
+}
+```
+
+Circuit breakers fire during:
+- Flash crashes
+- Oracle exploits
+- Extreme volatility
+
+Manual intervention can then assess and resume.
+
+### Fallback Prices
+
+When oracles fail, some protocols use fallback mechanisms:
+
+```rust
+pub fn get_price_with_fallback(
+    primary_oracle: Option<OraclePrice>,
+    market: &Market,
+) -> Result<u64> {
+    if let Some(price) = primary_oracle {
+        if price.age_seconds <= market.max_oracle_age {
+            return Ok(price.price);
+        }
+    }
+
+    // Fallback: use last known price with restrictions
+    require!(
+        market.status == MarketStatus::ReduceOnly,
+        ErrorCode::NoFreshOracle
+    );
+
+    // Return last price but only for closes
+    Ok(market.last_valid_price)
+}
+```
+
+Fallback prices are dangerous. They should only be used for risk reduction, not new trades.
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Oracle integration is where perpetual protocols are most vulnerable:
+
+1. **Mark price** combines index and perp prices to resist manipulation
+2. **Staleness checks** prevent trading on outdated information
+3. **Confidence intervals** quantify uncertainty and enable conservative pricing
+4. **Multi-oracle strategies** provide redundancy against single points of failure
+5. **Price bands** limit how fast prices can move, slowing manipulation
+6. **Large positions** face stricter oracle requirements
+7. **Circuit breakers** pause operations when data looks suspicious
+
+The Mango exploit wasn't a smart contract bug. It was a failure to consider how oracle data could be weaponized. Every perpetual protocol must assume its oracle is under attack.
+
+With solid oracle integration, we can explore advanced protocol designs: order books, virtual AMMs, and hybrid approaches.

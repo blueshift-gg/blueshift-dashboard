@@ -1,0 +1,617 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Advanced Protocol Designs
+
+You understand positions, margin, funding, liquidations, and oracles. Now the real question: how do you put them together?
+
+The architecture you choose determines everything. Order books need market makers. Virtual AMMs create synthetic liquidity. Oracle-based models turn LPs into counterparties. Each design makes different trade-offs between capital efficiency, decentralization, and user experience.
+
+There's no perfect answer. Only trade-offs.
+
+<ArticleSection name="Order Book Perpetuals" id="order-book" level="h2" />
+
+### How Order Books Work
+
+An order book matches buyers with sellers at specific prices:
+
+```
+SOL-PERP Order Book:
+Asks (sellers):
+  $100.50  |  10 SOL   | Trader A
+  $100.60  |  25 SOL   | Trader B
+  $100.75  |  50 SOL   | Trader C
+
+Bids (buyers):
+  $100.40  |  15 SOL   | Trader D
+  $100.30  |  30 SOL   | Trader E
+  $100.20  |  40 SOL   | Trader F
+
+Spread: $0.10 ($100.40 to $100.50)
+```
+
+You want to long 20 SOL at market? You buy 10 from A at $100.50, then 10 from B at $100.60. Average price: $100.55.
+
+### On-Chain Order Book Challenges
+
+Order books on-chain face fundamental problems:
+
+**Compute costs**: Every order placement, cancellation, and modification costs gas. Market makers adjust orders constantly. On Ethereum, this is prohibitively expensive.
+
+**Latency**: Solana's 400ms blocks are fast for a blockchain, but slow compared to centralized exchanges (microseconds). Front-running and latency arbitrage are real.
+
+**State size**: An active order book has thousands of orders. Storing and updating this state is expensive.
+
+```rust
+// Simplified order book structure
+#[account]
+pub struct OrderBook {
+    pub market: Pubkey,
+    pub bids: Vec<Order>,  // Sorted by price descending
+    pub asks: Vec<Order>,  // Sorted by price ascending
+    pub sequence_number: u64,
+}
+
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct Order {
+    pub owner: Pubkey,
+    pub price: u64,
+    pub size: u64,
+    pub side: Side,
+    pub order_id: u128,
+}
+```
+
+### Hybrid Approaches
+
+Most "on-chain" order books actually run the matching engine off-chain:
+
+**dYdX v3**: Orders submitted off-chain, matched by centralized sequencer, settled on StarkEx (Ethereum L2).
+
+**dYdX v4**: Runs its own cosmos chain with validators running the order book.
+
+**Hyperliquid**: Custom L1 optimized for order book operations.
+
+The pattern: move speed-sensitive operations off-chain, settle on-chain for security.
+
+### Market Maker Dependencies
+
+Order books need liquidity providers who continuously quote both sides:
+
+```rust
+// Market maker keeps orders on both sides
+pub fn update_quotes(
+    market_maker: &MarketMaker,
+    mid_price: u64,
+    spread_bps: u64,
+    size: u64,
+) -> (Order, Order) {
+    let half_spread = mid_price * spread_bps / 20_000;
+
+    let bid = Order {
+        price: mid_price - half_spread,
+        size,
+        side: Side::Bid,
+        ..
+    };
+
+    let ask = Order {
+        price: mid_price + half_spread,
+        size,
+        side: Side::Ask,
+        ..
+    };
+
+    (bid, ask)
+}
+```
+
+Without market makers, the book is empty. Users can't trade. This creates a chicken-and-egg problem for new protocols.
+
+<ArticleSection name="Virtual AMM Perpetuals" id="virtual-amm" level="h2" />
+
+### The vAMM Concept
+
+What if we simulated an AMM without real liquidity?
+
+A virtual AMM uses the constant product formula, but with imaginary reserves:
+
+```rust
+#[account]
+pub struct VirtualAmm {
+    pub base_reserve: u128,   // Virtual SOL
+    pub quote_reserve: u128,  // Virtual USDC
+    pub k: u128,              // base * quote = k
+
+    pub peg_multiplier: u128, // Anchors to oracle
+}
+
+// Virtual price = quote_reserve / base_reserve * peg_multiplier
+pub fn get_vamm_price(vamm: &VirtualAmm) -> u64 {
+    (vamm.quote_reserve * vamm.peg_multiplier / vamm.base_reserve) as u64
+}
+```
+
+When you long 10 SOL, the vAMM moves as if you traded against it:
+
+```rust
+pub fn simulate_long(
+    vamm: &mut VirtualAmm,
+    quote_amount: u64,  // USDC to spend
+) -> Result<u64> {
+    // How much base do we get out?
+    // quote_reserve increases, base_reserve decreases
+    // Maintaining k = base * quote
+
+    let new_quote = vamm.quote_reserve + quote_amount as u128;
+    let new_base = vamm.k / new_quote;
+    let base_out = vamm.base_reserve - new_base;
+
+    vamm.quote_reserve = new_quote;
+    vamm.base_reserve = new_base;
+
+    Ok(base_out as u64)
+}
+```
+
+There's no actual swap. No real liquidity. The reserves are just numbers that track the net position flow.
+
+### Why vAMMs Exist
+
+**No LPs needed**: The protocol creates synthetic liquidity. Anyone can trade immediately.
+
+**Permissionless listing**: No need to bootstrap a liquidity pool. Just set virtual reserves.
+
+**Predictable slippage**: The AMM curve determines price impact. No order book gaps.
+
+### vAMM Problems
+
+**Price divergence**: If longs dominate, the vAMM price rises above oracle. The gap can become extreme.
+
+```
+Oracle: $100
+vAMM: $115 (heavy long flow)
+Funding rate: +15% (longs pay shorts)
+
+But shorts won't enter at $115 when spot is $100.
+The gap persists. Funding compounds.
+```
+
+**Re-pegging necessity**: Protocols must periodically adjust the peg multiplier to bring vAMM price back to oracle:
+
+```rust
+pub fn adjust_peg(
+    vamm: &mut VirtualAmm,
+    oracle_price: u64,
+) -> Result<()> {
+    let current_price = get_vamm_price(vamm);
+    let target_ratio = oracle_price as u128 * PRECISION / current_price as u128;
+
+    // Gradually adjust peg toward oracle
+    let adjustment = (target_ratio - PRECISION) / 10; // 10% of gap
+    vamm.peg_multiplier = vamm.peg_multiplier * (PRECISION as u128 + adjustment) / PRECISION as u128;
+
+    Ok(())
+}
+```
+
+Re-pegging transfers wealth between positions. This is controversial.
+
+**Funding can't fully converge**: Unlike real order books where arbitrageurs trade, vAMM funding just transfers money. The price mechanism is weaker.
+
+### Drift's vAMM Evolution
+
+Drift Protocol started with pure vAMM but evolved to hybrid. They added:
+
+**Just-in-time liquidity**: Market makers can fill orders before they hit the vAMM.
+
+**Auction mechanism**: Orders go through a brief auction where makers can compete.
+
+**Oracle backstop**: If vAMM price diverges too far, oracle price is used.
+
+```rust
+pub fn get_execution_price(
+    vamm_price: u64,
+    oracle_price: u64,
+    max_divergence_bps: u64,
+) -> u64 {
+    let divergence = if vamm_price > oracle_price {
+        (vamm_price - oracle_price) * 10_000 / oracle_price
+    } else {
+        (oracle_price - vamm_price) * 10_000 / oracle_price
+    };
+
+    if divergence > max_divergence_bps {
+        // Cap at max divergence from oracle
+        if vamm_price > oracle_price {
+            oracle_price * (10_000 + max_divergence_bps) / 10_000
+        } else {
+            oracle_price * (10_000 - max_divergence_bps) / 10_000
+        }
+    } else {
+        vamm_price
+    }
+}
+```
+
+<ArticleSection name="Oracle-Based Perpetuals" id="oracle-based" level="h2" />
+
+### Pure Oracle Pricing
+
+The simplest model: price comes directly from the oracle. No order book. No AMM curve.
+
+```rust
+pub fn open_position_oracle(
+    ctx: Context<OpenPosition>,
+    size: i64,
+) -> Result<()> {
+    let oracle_price = get_oracle_price(&ctx.accounts.oracle)?;
+
+    // You get exactly the oracle price
+    // No slippage, no spread
+    ctx.accounts.position.entry_price = oracle_price;
+    ctx.accounts.position.size = size;
+
+    // Protocol pool takes the other side
+    update_pool_exposure(&mut ctx.accounts.pool, -size)?;
+
+    Ok(())
+}
+```
+
+GMX and Jupiter Perps use this model. You long SOL, you get exactly the Pyth price.
+
+### The Counterparty Problem
+
+If you get oracle price, someone takes the other side. In oracle-based protocols, that's the liquidity pool:
+
+```rust
+#[account]
+pub struct LiquidityPool {
+    pub total_value: u64,
+    pub lp_token_supply: u64,
+
+    // Pool's net exposure
+    pub long_exposure: u64,   // $ value of longs against pool
+    pub short_exposure: u64,  // $ value of shorts against pool
+
+    // Pool assets
+    pub assets: Vec<PoolAsset>,
+}
+
+// When trader longs $10,000 SOL:
+// - Trader has $10,000 long
+// - Pool is effectively $10,000 short SOL
+//
+// If SOL goes up 10%:
+// - Trader profits $1,000
+// - Pool loses $1,000
+```
+
+### LP Economics
+
+LPs deposit assets and receive LP tokens representing their share:
+
+```rust
+pub fn deposit_to_pool(
+    ctx: Context<Deposit>,
+    amount: u64,
+) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+
+    // Calculate LP tokens to mint
+    let pool_value = calculate_pool_value(pool)?;
+    let lp_tokens = if pool.lp_token_supply == 0 {
+        amount
+    } else {
+        amount * pool.lp_token_supply / pool_value
+    };
+
+    // Transfer assets, mint LP tokens
+    transfer_to_pool(&ctx.accounts, amount)?;
+    mint_lp_tokens(&ctx.accounts, lp_tokens)?;
+
+    pool.total_value += amount;
+    pool.lp_token_supply += lp_tokens;
+
+    Ok(())
+}
+```
+
+LPs earn:
+- **Trading fees**: Percentage of every open/close
+- **Funding payments**: When funding is in their favor
+- **Trader losses**: Statistically, traders lose over time
+
+LPs lose when:
+- **Traders profit**: Every winning trade comes from LP value
+- **Adverse selection**: Informed traders extract value
+- **Black swan events**: Large directional moves hurt the pool
+
+### GMX Model: GLP
+
+GMX's GLP pool is a basket of assets (ETH, BTC, stablecoins). The pool composition determines:
+
+```rust
+pub fn calculate_glp_price(pool: &GlpPool) -> u64 {
+    let mut total_value = 0u128;
+
+    for asset in &pool.assets {
+        let oracle_price = get_oracle_price(&asset.oracle)?;
+        let asset_value = asset.amount as u128 * oracle_price as u128 / asset.decimals as u128;
+        total_value += asset_value;
+    }
+
+    // Subtract unrealized trader PnL
+    let trader_pnl = calculate_total_trader_pnl(pool)?;
+    let adjusted_value = if trader_pnl >= 0 {
+        total_value - trader_pnl as u128
+    } else {
+        total_value + (-trader_pnl) as u128
+    };
+
+    (adjusted_value / pool.glp_supply as u128) as u64
+}
+```
+
+The GLP price moves with:
+1. Asset prices (the basket appreciates/depreciates)
+2. Trader PnL (wins subtract, losses add)
+3. Fees earned (accumulate to pool)
+
+### Jupiter Perps: JLP
+
+Jupiter's JLP follows similar principles but focuses on the SOL ecosystem:
+
+```rust
+// JLP pool composition (simplified)
+pub struct JlpPool {
+    pub sol_amount: u64,
+    pub eth_amount: u64,
+    pub btc_amount: u64,
+    pub usdc_amount: u64,
+    pub usdt_amount: u64,
+
+    pub target_weights: [u64; 5],  // Desired allocation
+    pub jlp_supply: u64,
+}
+```
+
+Jupiter leverages its DEX aggregator for deposits: users can deposit any token, Jupiter swaps to the appropriate pool asset.
+
+### Open Interest Caps
+
+Oracle-based protocols must limit exposure:
+
+```rust
+pub fn check_oi_limits(
+    pool: &LiquidityPool,
+    new_position_value: u64,
+    is_long: bool,
+) -> Result<()> {
+    let pool_value = calculate_pool_value(pool)?;
+
+    // Max OI as percentage of pool
+    let max_oi = pool_value * pool.max_oi_percentage / 100;
+
+    let current_oi = if is_long {
+        pool.long_exposure
+    } else {
+        pool.short_exposure
+    };
+
+    require!(
+        current_oi + new_position_value <= max_oi,
+        ErrorCode::OpenInterestExceeded
+    );
+
+    Ok(())
+}
+```
+
+If the pool is $100M and max OI is 50%, traders can have at most $50M long and $50M short. This caps LP risk.
+
+<ArticleSection name="Hybrid Designs" id="hybrid" level="h2" />
+
+### Combining Approaches
+
+Modern protocols mix multiple mechanisms:
+
+**Drift**: vAMM + JIT liquidity + oracle backstop
+
+**GMX v2**: Oracle pricing + impact fees + funding rates
+
+**dYdX v4**: Order book + insurance fund + decentralized sequencing
+
+### Price Impact Fees
+
+Even oracle-based protocols need to discourage large positions:
+
+```rust
+pub fn calculate_price_impact(
+    position_size: u64,
+    market: &Market,
+) -> u64 {
+    // Larger positions relative to OI pay more
+    let oi_ratio = position_size * 10_000 / market.total_open_interest;
+
+    // Quadratic impact: doubling size quadruples impact
+    let impact_bps = oi_ratio * oi_ratio / 10_000;
+
+    // Cap at max impact
+    impact_bps.min(market.max_price_impact_bps)
+}
+```
+
+A $1M position in a $100M market might pay 0.01% impact. A $10M position might pay 1%. This protects the pool from large directional bets.
+
+### Borrowing Fees
+
+When one side dominates, protocols charge borrowing fees:
+
+```rust
+pub fn calculate_borrow_fee(
+    position: &Position,
+    market: &Market,
+) -> u64 {
+    let utilization = if position.size > 0 {
+        market.long_exposure * 10_000 / market.max_long_oi
+    } else {
+        market.short_exposure * 10_000 / market.max_short_oi
+    };
+
+    // Higher utilization = higher borrow rate
+    let hourly_rate = market.base_borrow_rate
+        + (utilization * market.borrow_rate_multiplier / 10_000);
+
+    let hours_held = (Clock::get()?.unix_timestamp - position.last_fee_update) / 3600;
+
+    position.size.unsigned_abs() * hourly_rate * hours_held as u64 / 10_000 / 8760
+}
+```
+
+Borrowing fees supplement funding rates. They go to LPs regardless of funding direction.
+
+<ArticleSection name="Risk Management Systems" id="risk-management" level="h2" />
+
+### Insurance Funds
+
+Every design needs a backstop for bad debt:
+
+```rust
+#[account]
+pub struct InsuranceFund {
+    pub balance: u64,
+    pub min_balance: u64,  // Threshold for ADL
+
+    // Revenue sources
+    pub liquidation_fee_share: u64,  // % of liquidation penalties
+    pub trading_fee_share: u64,      // % of trading fees
+}
+
+pub fn handle_bad_debt(
+    insurance_fund: &mut InsuranceFund,
+    bad_debt_amount: u64,
+) -> Result<BadDebtResolution> {
+    if insurance_fund.balance >= bad_debt_amount {
+        insurance_fund.balance -= bad_debt_amount;
+        return Ok(BadDebtResolution::CoveredByInsurance);
+    }
+
+    // Insurance insufficient
+    let covered = insurance_fund.balance;
+    let remaining = bad_debt_amount - covered;
+    insurance_fund.balance = 0;
+
+    Ok(BadDebtResolution::RequiresAdl { remaining })
+}
+```
+
+### Position Limits
+
+Advanced protocols adjust limits dynamically:
+
+```rust
+pub fn get_dynamic_max_leverage(
+    market: &Market,
+    position_size: u64,
+) -> u64 {
+    let base_leverage = market.max_leverage;  // e.g., 50x
+
+    // Reduce leverage for larger positions
+    let size_ratio = position_size * 10_000 / market.max_position_size;
+
+    if size_ratio > 5000 {  // >50% of max
+        base_leverage * 5000 / size_ratio
+    } else {
+        base_leverage
+    }
+}
+```
+
+Small positions get 50x. Large positions might only get 25x. This reduces the impact of big liquidations.
+
+### Market Freezing
+
+When conditions become dangerous:
+
+```rust
+pub fn evaluate_market_health(market: &Market) -> MarketStatus {
+    // Check oracle health
+    if market.oracle_age > market.max_oracle_age * 2 {
+        return MarketStatus::Frozen;
+    }
+
+    // Check funding extremity
+    if market.current_funding_rate.abs() > market.max_funding_rate {
+        return MarketStatus::ReduceOnly;
+    }
+
+    // Check insurance fund health
+    if market.insurance_fund_ratio < market.min_insurance_ratio {
+        return MarketStatus::ReduceOnly;
+    }
+
+    MarketStatus::Active
+}
+```
+
+Freezing is the nuclear option. Reduce-only mode lets positions close but prevents new exposure.
+
+<ArticleSection name="Choosing Your Architecture" id="choosing" level="h2" />
+
+### Decision Framework
+
+| Factor | Order Book | vAMM | Oracle-Based |
+|--------|------------|------|--------------|
+| Needs market makers | Yes | No | No (needs LPs) |
+| Price discovery | True | Synthetic | Oracle-dependent |
+| Slippage | Varies | Predictable | Zero (+ impact fee) |
+| Capital efficiency | High | Medium | Medium |
+| Implementation complexity | High | Medium | Low |
+| Manipulation resistance | Medium | Low | High |
+
+### When to Use What
+
+**Order book** if:
+- You can attract market makers
+- You need true price discovery
+- You're building for professional traders
+- You can handle the infrastructure complexity
+
+**vAMM** if:
+- You need permissionless listing
+- You want to avoid LP risk
+- You can manage re-pegging and funding complexity
+- Your markets have moderate volume
+
+**Oracle-based** if:
+- You prioritize simplicity
+- You can attract LP capital
+- You want zero-slippage user experience
+- You're comfortable with oracle dependency
+
+### The Trend
+
+The industry is converging on hybrid models:
+- Oracle pricing for execution
+- Impact fees for size-based slippage
+- Funding rates for premium convergence
+- Insurance funds for bad debt
+- Dynamic limits based on risk
+
+No pure model survives contact with reality.
+
+<ArticleSection name="Key Takeaways" id="takeaways" level="h2" />
+
+Protocol design determines everything:
+
+1. **Order books** offer true price discovery but need market makers and infrastructure
+2. **vAMMs** create synthetic liquidity but struggle with price divergence
+3. **Oracle-based** protocols are simple but turn LPs into counterparties
+4. **Hybrid designs** combine mechanisms to mitigate weaknesses
+5. **Risk management** (insurance, limits, freezing) applies to all architectures
+6. **Trade-offs are unavoidable**: there's no perfect design, only appropriate ones
+
+The best protocols understand their trade-offs and build systems to manage them. The worst pretend trade-offs don't exist.
+
+With all components understood, let's bring everything together and see where perpetuals are heading.

@@ -1,0 +1,747 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Toxic Liquidation Spirals
+
+November 2022. FTX collapses. Crypto markets crater. On AAVE, a single whale position - $40 million in CRV tokens used as collateral for borrowed stablecoins - becomes the center of a week-long crisis.
+
+The position can't be liquidated profitably. The CRV market is too thin. Every attempt to sell the seized collateral crashes the price further, making the position even more underwater. AAVE's bad debt grows from $1.5 million to over $1.7 million as the protocol bleeds value.
+
+This is a toxic liquidation spiral. When liquidations break the market they're supposed to protect.
+
+<ArticleSection name="How Liquidations Should Work" id="how-liquidations-work" level="h2" />
+
+Lending protocols work on a simple premise: if collateral falls below a threshold, liquidators step in to repay the debt and seize the collateral at a discount.
+
+```rust
+pub fn liquidate(ctx: Context<Liquidate>, repay_amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let oracle = &ctx.accounts.oracle;
+
+    // Check health factor
+    let collateral_value = position.collateral * oracle.price;
+    let health = collateral_value * 100 / position.debt;
+
+    require!(health < 110, LendingError::PositionHealthy);
+
+    // Liquidator repays debt
+    transfer_from_liquidator(repay_amount)?;
+
+    // Liquidator receives collateral + bonus
+    let collateral_to_seize = repay_amount * 105 / 100 / oracle.price; // 5% bonus
+    transfer_to_liquidator(collateral_to_seize)?;
+
+    position.debt -= repay_amount;
+    position.collateral -= collateral_to_seize;
+
+    Ok(())
+}
+```
+
+The 5% bonus incentivizes liquidators. They profit by:
+1. Repaying debt in stablecoins
+2. Receiving collateral worth 105% of what they paid
+3. Selling the collateral for profit
+
+This works when liquidators can sell the collateral without moving the market. But what happens when they can't?
+
+<ArticleSection name="When Liquidations Become Toxic" id="toxic-liquidations" level="h2" />
+
+### The Death Spiral
+
+A toxic liquidation spiral occurs when:
+
+1. **Position becomes liquidatable** - Collateral value drops below threshold
+2. **Liquidator seizes collateral** - Receives tokens at discount
+3. **Liquidator sells collateral** - This pushes price down further
+4. **Lower price = worse health** - Original position is even more underwater
+5. **More liquidations needed** - Repeat until position is exhausted or bad debt occurs
+
+```
+Initial state:
+  Collateral: 1,000,000 CRV @ $1.00 = $1,000,000
+  Debt: $800,000 USDC
+  Health: 125%
+
+Price drops to $0.90:
+  Collateral value: $900,000
+  Health: 112.5%
+
+Price drops to $0.82:
+  Collateral value: $820,000
+  Health: 102.5% - LIQUIDATABLE
+
+Liquidator seizes 100,000 CRV, sells on market:
+  Selling pressure pushes price to $0.75
+  Remaining collateral value: 900,000 × $0.75 = $675,000
+  Remaining debt: $720,000
+  Health: 93.75% - DEEPLY UNDERWATER
+
+More liquidations needed, but each one makes it worse...
+```
+
+### Why Liquidators Stop
+
+At some point, liquidation becomes unprofitable:
+
+```
+Liquidation economics:
+  Repay: $10,000 USDC
+  Receive: 12,500 CRV ($10,500 at oracle price)
+  Expected profit: $500
+
+But selling 12,500 CRV:
+  Market depth: Only $5,000 of bids within 2%
+  Actual sale price: $0.72 average (10% slippage)
+  Actual revenue: $9,000
+  Actual profit: -$1,000 (LOSS)
+```
+
+When selling collateral costs more than the liquidation bonus, liquidators stop. The position sits underwater, accumulating bad debt.
+
+<ArticleSection name="Real Incidents" id="real-incidents" level="h2" />
+
+### AAVE CRV Crisis (November 2022)
+
+A whale had borrowed ~$40M in stablecoins against ~$50M in CRV. When CRV price dropped:
+
+- Position became liquidatable
+- CRV's thin liquidity meant no liquidator could profitably clear it
+- The position sat underwater for days
+- AAVE accumulated $1.7M in bad debt
+- Community had to coordinate manual liquidations at a loss
+
+### Venus Protocol XVS Crisis (May 2021)
+
+Venus had similar issues with their native XVS token:
+
+- Large positions used XVS as collateral
+- XVS price crashed 50%
+- Liquidators couldn't sell XVS fast enough
+- $200M in bad debt was created
+- Protocol nearly collapsed
+
+### Solend SOL Crisis (June 2022)
+
+A single whale had 95% of Solend's SOL deposits ($170M). When the protocol tried to enable liquidations:
+
+- Dumping that much SOL would crash Solana's price
+- No liquidator could absorb that much
+- Solend proposed (controversially) taking over the wallet
+- Eventually the whale self-liquidated gradually
+
+<ArticleSection name="The Vulnerable Pattern" id="vulnerable-pattern" level="h2" />
+
+The core vulnerability is treating all collateral equally regardless of liquidity:
+
+```rust
+// VULNERABLE: No liquidity consideration
+#[account]
+pub struct CollateralConfig {
+    pub token: Pubkey,
+    pub ltv: u16,              // e.g., 80%
+    pub liquidation_threshold: u16,  // e.g., 85%
+    pub liquidation_bonus: u16,      // e.g., 5%
+}
+
+pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let config = &ctx.accounts.collateral_config;
+    let oracle = &ctx.accounts.oracle;
+
+    let collateral_value = position.collateral * oracle.price;
+    let max_borrow = collateral_value * config.ltv / 100;
+
+    require!(
+        position.debt + amount <= max_borrow,
+        LendingError::ExceedsBorrowLimit
+    );
+
+    // No check for: Can this collateral actually be liquidated?
+
+    position.debt += amount;
+    transfer_to_borrower(amount)?;
+
+    Ok(())
+}
+```
+
+The problems:
+
+1. **No position size limits** - A single user can borrow against more collateral than the market can absorb
+2. **No liquidity adjustment** - Thin markets get the same LTV as liquid markets
+3. **No concentration limits** - One whale can dominate an entire collateral type
+
+<ArticleSection name="The Fix: Liquidity-Adjusted Parameters" id="fix-liquidity" level="h2" />
+
+### Scale Parameters by Liquidity
+
+```rust
+#[account]
+pub struct DynamicCollateralConfig {
+    pub token: Pubkey,
+    pub base_ltv: u16,                  // Maximum LTV for small positions
+    pub liquidity_depth: u64,           // Market liquidity (updated by oracle/keeper)
+    pub concentration_limit: u64,       // Max single-user collateral
+    pub global_cap: u64,                // Max total collateral of this type
+    pub current_total: u64,             // Current total deposited
+}
+
+impl DynamicCollateralConfig {
+    /// Calculate effective LTV based on position size
+    pub fn effective_ltv(&self, position_size: u64) -> u16 {
+        // If position is larger than liquidity, reduce LTV
+        if position_size <= self.liquidity_depth {
+            return self.base_ltv;
+        }
+
+        // Linear reduction: larger positions get lower LTV
+        // At 10x liquidity, LTV drops to 0
+        let excess_ratio = position_size / self.liquidity_depth;
+        let reduction = std::cmp::min(excess_ratio * 10, 100) as u16;
+
+        self.base_ltv.saturating_sub(reduction * self.base_ltv / 100)
+    }
+
+    /// Check if position would exceed concentration limits
+    pub fn check_concentration(&self, position_size: u64) -> Result<()> {
+        require!(
+            position_size <= self.concentration_limit,
+            LendingError::ConcentrationExceeded
+        );
+        Ok(())
+    }
+
+    /// Check if deposit would exceed global cap
+    pub fn check_global_cap(&self, deposit_amount: u64) -> Result<()> {
+        require!(
+            self.current_total + deposit_amount <= self.global_cap,
+            LendingError::GlobalCapExceeded
+        );
+        Ok(())
+    }
+}
+```
+
+### Example
+
+```
+CRV collateral config:
+  base_ltv: 65%
+  liquidity_depth: $5,000,000 (daily volume)
+  concentration_limit: $2,500,000 (50% of liquidity)
+  global_cap: $10,000,000
+
+User wants to deposit $10M CRV:
+  - Exceeds concentration_limit ✗
+  - Would exceed global_cap ✗
+  - Rejected
+
+User deposits $2M CRV:
+  - Within concentration_limit ✓
+  - Within global_cap ✓
+  - effective_ltv: 65% (position < liquidity_depth)
+  - Max borrow: $1.3M
+
+User deposits $5M CRV:
+  - Exceeds concentration_limit ✗
+  - Rejected
+```
+
+<ArticleSection name="The Fix: Gradual Liquidations" id="fix-gradual" level="h2" />
+
+Instead of allowing instant full liquidation, spread it over time:
+
+```rust
+#[account]
+pub struct GradualLiquidation {
+    pub position: Pubkey,
+    pub total_to_liquidate: u64,
+    pub liquidated_so_far: u64,
+    pub started_at: i64,
+    pub min_duration: i64,          // Minimum time to complete liquidation
+    pub chunks: u8,                 // Number of chunks
+}
+
+pub fn start_gradual_liquidation(ctx: Context<StartGradualLiq>) -> Result<()> {
+    let position = &ctx.accounts.position;
+    let clock = Clock::get()?;
+
+    require!(
+        position.health_factor() < LIQUIDATION_THRESHOLD,
+        LendingError::PositionHealthy
+    );
+
+    let gradual = &mut ctx.accounts.gradual_liquidation;
+
+    // Calculate how much needs liquidating to restore health
+    let debt_to_repay = calculate_debt_to_repay_for_health(position, TARGET_HEALTH);
+
+    gradual.position = position.key();
+    gradual.total_to_liquidate = debt_to_repay;
+    gradual.liquidated_so_far = 0;
+    gradual.started_at = clock.unix_timestamp;
+    gradual.min_duration = 3600; // 1 hour minimum
+    gradual.chunks = 10;         // 10 chunks
+
+    Ok(())
+}
+
+pub fn execute_liquidation_chunk(ctx: Context<ExecuteChunk>) -> Result<()> {
+    let gradual = &mut ctx.accounts.gradual_liquidation;
+    let clock = Clock::get()?;
+
+    // Calculate how many chunks should be done by now
+    let elapsed = clock.unix_timestamp - gradual.started_at;
+    let chunks_elapsed = (elapsed * gradual.chunks as i64 / gradual.min_duration) as u64;
+    let chunks_done = gradual.liquidated_so_far * gradual.chunks as u64
+        / gradual.total_to_liquidate;
+
+    require!(
+        chunks_elapsed > chunks_done,
+        LendingError::ChunkNotReady
+    );
+
+    // Execute one chunk
+    let chunk_size = gradual.total_to_liquidate / gradual.chunks as u64;
+
+    // ... perform liquidation of chunk_size
+
+    gradual.liquidated_so_far += chunk_size;
+
+    Ok(())
+}
+```
+
+This gives the market time to absorb liquidation pressure.
+
+<ArticleSection name="The Fix: Dynamic Liquidation Incentives" id="fix-dynamic-incentives" level="h2" />
+
+Increase liquidation bonus for difficult-to-liquidate positions:
+
+```rust
+pub fn calculate_liquidation_bonus(
+    position: &Position,
+    market_liquidity: u64,
+    config: &CollateralConfig,
+) -> u16 {
+    let position_value = position.collateral_value();
+
+    // Base bonus
+    let mut bonus = config.base_liquidation_bonus;
+
+    // Increase bonus for large positions relative to liquidity
+    if position_value > market_liquidity {
+        let size_multiplier = position_value / market_liquidity;
+        bonus += std::cmp::min(size_multiplier * 100, 1000) as u16; // Up to +10%
+    }
+
+    // Increase bonus for deeply underwater positions
+    let health = position.health_factor();
+    if health < 100 {
+        let underwater_multiplier = (100 - health) / 10;
+        bonus += underwater_multiplier * 50; // +0.5% per 10% underwater
+    }
+
+    // Cap at reasonable maximum
+    std::cmp::min(bonus, 2000) // Max 20% bonus
+}
+```
+
+Higher bonuses attract specialized liquidators who can handle large positions.
+
+<ArticleSection name="The Fix: Insurance and Backstops" id="fix-insurance" level="h2" />
+
+Accept that some liquidations will create bad debt, and plan for it:
+
+```rust
+#[account]
+pub struct InsuranceFund {
+    pub balance: u64,
+    pub bad_debt_covered: u64,
+}
+
+#[account]
+pub struct Position {
+    // ...existing fields...
+    pub insurance_premium_paid: u64,  // User pays for insurance
+}
+
+pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let insurance = &mut ctx.accounts.insurance_fund;
+
+    // Calculate insurance premium based on risk
+    let premium = calculate_premium(
+        amount,
+        position.collateral_value(),
+        ctx.accounts.collateral_config.liquidity_depth,
+    );
+
+    // Collect premium
+    transfer_to_insurance(premium)?;
+    insurance.balance += premium;
+    position.insurance_premium_paid += premium;
+
+    // ... rest of borrow logic
+}
+
+pub fn cover_bad_debt(ctx: Context<CoverBadDebt>) -> Result<()> {
+    let position = &ctx.accounts.position;
+    let insurance = &mut ctx.accounts.insurance_fund;
+
+    // Position must be fully liquidated with remaining debt
+    require!(position.collateral == 0, LendingError::HasCollateral);
+    require!(position.debt > 0, LendingError::NoBadDebt);
+
+    // Cover bad debt from insurance
+    let bad_debt = position.debt;
+
+    require!(
+        insurance.balance >= bad_debt,
+        LendingError::InsufficientInsurance
+    );
+
+    insurance.balance -= bad_debt;
+    insurance.bad_debt_covered += bad_debt;
+
+    // Write off the debt
+    // ... update protocol accounting
+
+    Ok(())
+}
+
+fn calculate_premium(
+    borrow_amount: u64,
+    collateral_value: u64,
+    liquidity_depth: u64,
+) -> u64 {
+    let base_rate = 50; // 0.5% base
+
+    // Higher premium for less liquid collateral
+    let liquidity_multiplier = if collateral_value > liquidity_depth {
+        collateral_value * 100 / liquidity_depth
+    } else {
+        100
+    };
+
+    borrow_amount * base_rate * liquidity_multiplier / 1_000_000
+}
+```
+
+<ArticleSection name="The Fix: Circuit Breakers" id="fix-circuit-breakers" level="h2" />
+
+Pause liquidations when market conditions are extreme:
+
+```rust
+#[account]
+pub struct CircuitBreaker {
+    pub last_price: u64,
+    pub last_check: i64,
+    pub max_drop_per_hour: u16,     // e.g., 1000 = 10%
+    pub is_triggered: bool,
+    pub triggered_at: i64,
+    pub cooldown: i64,              // How long to wait after trigger
+}
+
+impl CircuitBreaker {
+    pub fn check_and_update(&mut self, current_price: u64, clock: &Clock) -> Result<bool> {
+        // Already triggered - check if cooldown passed
+        if self.is_triggered {
+            if clock.unix_timestamp > self.triggered_at + self.cooldown {
+                self.is_triggered = false;
+            }
+            return Ok(self.is_triggered);
+        }
+
+        // Check price drop
+        let elapsed_hours = (clock.unix_timestamp - self.last_check) as u64 / 3600;
+        if elapsed_hours > 0 && current_price < self.last_price {
+            let drop_percent = (self.last_price - current_price) * 10000 / self.last_price;
+            let drop_per_hour = drop_percent / elapsed_hours;
+
+            if drop_per_hour > self.max_drop_per_hour as u64 {
+                self.is_triggered = true;
+                self.triggered_at = clock.unix_timestamp;
+                return Ok(true);
+            }
+        }
+
+        // Update tracking
+        self.last_price = current_price;
+        self.last_check = clock.unix_timestamp;
+
+        Ok(false)
+    }
+}
+
+pub fn liquidate(ctx: Context<Liquidate>, repay_amount: u64) -> Result<()> {
+    let circuit_breaker = &mut ctx.accounts.circuit_breaker;
+    let oracle = &ctx.accounts.oracle;
+    let clock = Clock::get()?;
+
+    // Check circuit breaker
+    let is_triggered = circuit_breaker.check_and_update(oracle.price, &clock)?;
+
+    if is_triggered {
+        // During circuit breaker, only allow small liquidations
+        let max_liquidation = ctx.accounts.position.debt / 10; // Max 10% at a time
+        require!(
+            repay_amount <= max_liquidation,
+            LendingError::CircuitBreakerActive
+        );
+    }
+
+    // ... rest of liquidation logic
+}
+```
+
+<ArticleSection name="Complete Protection System" id="complete-system" level="h2" />
+
+```rust
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct ProtectedLendingMarket {
+    pub authority: Pubkey,
+    pub collateral_configs: Vec<DynamicCollateralConfig>,
+    pub insurance_fund: u64,
+    pub circuit_breaker: CircuitBreaker,
+    pub total_bad_debt: u64,
+}
+
+#[account]
+pub struct DynamicCollateralConfig {
+    pub token: Pubkey,
+    pub base_ltv: u16,
+    pub base_liquidation_threshold: u16,
+    pub base_liquidation_bonus: u16,
+    pub liquidity_depth: u64,           // Updated by keeper
+    pub concentration_limit_percent: u8, // % of liquidity depth
+    pub global_cap: u64,
+    pub current_total: u64,
+    pub liquidation_velocity_limit: u64, // Max liquidation per hour
+    pub liquidated_this_hour: u64,
+    pub last_liquidation_hour: i64,
+}
+
+impl DynamicCollateralConfig {
+    pub fn effective_ltv(&self, position_value: u64) -> u16 {
+        let utilization = position_value * 100 / self.liquidity_depth.max(1);
+
+        if utilization <= 100 {
+            self.base_ltv
+        } else {
+            // Reduce LTV for positions larger than liquidity
+            let reduction = std::cmp::min((utilization - 100) * self.base_ltv / 200, self.base_ltv);
+            self.base_ltv - reduction
+        }
+    }
+
+    pub fn concentration_limit(&self) -> u64 {
+        self.liquidity_depth * self.concentration_limit_percent as u64 / 100
+    }
+
+    pub fn liquidation_bonus(&self, position_value: u64, health: u16) -> u16 {
+        let mut bonus = self.base_liquidation_bonus;
+
+        // Size premium
+        if position_value > self.liquidity_depth {
+            let multiplier = position_value / self.liquidity_depth;
+            bonus += std::cmp::min(multiplier * 50, 500) as u16;
+        }
+
+        // Urgency premium
+        if health < 105 {
+            bonus += (105 - health) * 20;
+        }
+
+        std::cmp::min(bonus, 2000)
+    }
+
+    pub fn check_liquidation_velocity(&mut self, amount: u64, clock: &Clock) -> Result<()> {
+        let current_hour = clock.unix_timestamp / 3600;
+
+        if current_hour != self.last_liquidation_hour {
+            self.liquidated_this_hour = 0;
+            self.last_liquidation_hour = current_hour;
+        }
+
+        require!(
+            self.liquidated_this_hour + amount <= self.liquidation_velocity_limit,
+            ErrorCode::LiquidationVelocityExceeded
+        );
+
+        self.liquidated_this_hour += amount;
+        Ok(())
+    }
+}
+
+pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
+    let config = &mut ctx.accounts.collateral_config;
+    let position = &mut ctx.accounts.position;
+
+    // Check concentration limit
+    let new_position_value = (position.collateral + amount)
+        * ctx.accounts.oracle.price / 1_000_000_000;
+
+    require!(
+        new_position_value <= config.concentration_limit(),
+        ErrorCode::ConcentrationExceeded
+    );
+
+    // Check global cap
+    require!(
+        config.current_total + amount <= config.global_cap,
+        ErrorCode::GlobalCapExceeded
+    );
+
+    // Update state
+    config.current_total += amount;
+    position.collateral += amount;
+
+    // Transfer tokens
+    anchor_spl::token::transfer(...)?;
+
+    Ok(())
+}
+
+pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+    let config = &ctx.accounts.collateral_config;
+    let position = &mut ctx.accounts.position;
+    let insurance = &mut ctx.accounts.market.insurance_fund;
+    let oracle = &ctx.accounts.oracle;
+
+    let collateral_value = position.collateral * oracle.price / 1_000_000_000;
+
+    // Use effective LTV based on position size
+    let effective_ltv = config.effective_ltv(collateral_value);
+    let max_borrow = collateral_value * effective_ltv as u64 / 100;
+
+    require!(
+        position.debt + amount <= max_borrow,
+        ErrorCode::ExceedsBorrowLimit
+    );
+
+    // Calculate and collect insurance premium
+    let premium = amount * 50 / 10000; // 0.5%
+    transfer_to_insurance(premium)?;
+    *insurance += premium;
+
+    position.debt += amount;
+
+    // Transfer borrowed funds
+    anchor_spl::token::transfer(...)?;
+
+    Ok(())
+}
+
+pub fn liquidate(ctx: Context<Liquidate>, repay_amount: u64) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let config = &mut ctx.accounts.collateral_config;
+    let position = &mut ctx.accounts.position;
+    let oracle = &ctx.accounts.oracle;
+    let clock = Clock::get()?;
+
+    // Check circuit breaker
+    let circuit_triggered = market.circuit_breaker
+        .check_and_update(oracle.price, &clock)?;
+
+    // Calculate health
+    let collateral_value = position.collateral * oracle.price / 1_000_000_000;
+    let health = (collateral_value * 100 / position.debt) as u16;
+
+    require!(
+        health < config.base_liquidation_threshold,
+        ErrorCode::PositionHealthy
+    );
+
+    // Apply liquidation velocity limit
+    config.check_liquidation_velocity(repay_amount, &clock)?;
+
+    // Circuit breaker limits max liquidation
+    let max_repay = if circuit_triggered {
+        position.debt / 10  // Max 10% during circuit breaker
+    } else {
+        position.debt / 2   // Max 50% normally (allows gradual liquidation)
+    };
+
+    let actual_repay = std::cmp::min(repay_amount, max_repay);
+
+    // Calculate bonus
+    let bonus = config.liquidation_bonus(collateral_value, health);
+    let collateral_to_seize = actual_repay * (10000 + bonus) as u64 / 10000
+        / oracle.price * 1_000_000_000;
+
+    // Ensure we don't seize more than available
+    let actual_seize = std::cmp::min(collateral_to_seize, position.collateral);
+
+    // Execute transfers
+    transfer_from_liquidator(actual_repay)?;
+    transfer_to_liquidator(actual_seize)?;
+
+    position.debt -= actual_repay;
+    position.collateral -= actual_seize;
+
+    // Check for bad debt
+    if position.collateral == 0 && position.debt > 0 {
+        // Cover from insurance if possible
+        if market.insurance_fund >= position.debt {
+            market.insurance_fund -= position.debt;
+        } else {
+            market.total_bad_debt += position.debt - market.insurance_fund;
+            market.insurance_fund = 0;
+        }
+        position.debt = 0;
+    }
+
+    emit!(LiquidationEvent {
+        position: position.key(),
+        repaid: actual_repay,
+        seized: actual_seize,
+        bonus,
+        remaining_health: position.health_factor(),
+    });
+
+    Ok(())
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Position is healthy")]
+    PositionHealthy,
+    #[msg("Exceeds borrow limit")]
+    ExceedsBorrowLimit,
+    #[msg("Position concentration limit exceeded")]
+    ConcentrationExceeded,
+    #[msg("Global collateral cap exceeded")]
+    GlobalCapExceeded,
+    #[msg("Liquidation velocity limit exceeded - try again later")]
+    LiquidationVelocityExceeded,
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+Toxic liquidation spirals reveal the gap between theory and reality:
+
+**1. Liquidity is not infinite**
+
+Your protocol might allow a $100M position, but if the market can only absorb $5M of selling, you have a problem.
+
+**2. Size matters**
+
+Large positions need different parameters than small ones. One-size-fits-all LTV is dangerous.
+
+**3. Speed kills**
+
+Allowing instant full liquidation creates market impact. Gradual liquidation gives markets time to absorb selling.
+
+**4. Plan for failure**
+
+Insurance funds, bad debt mechanisms, and circuit breakers accept that some liquidations will fail. Better to plan for it than pretend it won't happen.
+
+**5. Incentives must scale**
+
+A 5% bonus might work for small liquidations. Large, risky liquidations need larger incentives.
+
+When you design a liquidation system, don't just model the math. Model the market. Ask: "What happens when someone tries to sell this much collateral this fast?" If the answer is "the market breaks," your protocol will too.
