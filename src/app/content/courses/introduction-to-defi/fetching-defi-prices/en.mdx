@@ -1,0 +1,634 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Fetching DeFi Prices
+
+You've built a liquidation bot. It monitors lending positions, calculates health factors, and executes liquidations when profitable. But there's a problem: you need current token prices to calculate profitability, and querying on-chain oracles for every token you track costs compute units and increases latency.
+
+A single DEX pool shows you one price in one liquidity pool. SOL/USDC on Raydium might be $138.50, while the same pair on Orca is $138.45. Jupiter aggregates to find the best swap route, but that's execution routing, not market-wide price discovery. You need the fair market price across all liquidity sources to make informed decisions.
+
+Price aggregation services solve this by monitoring hundreds of DEXs and CEXs across multiple chains, processing millions of on-chain transactions to build market-wide price consensus. [Birdeye](https://birdeye.so/) aggregates from 200+ sources with sub-second latency. Your bot queries the API for monitoring, then uses on-chain oracles when executing transactions where cryptographic verification matters.
+
+This lesson covers how price aggregation works, when to use aggregated data versus on-chain oracles, and how to build production systems that use both.
+
+<ArticleSection name="How Birdeye Works" id="how-birdeye-works" level="h2" />
+
+### The Aggregation Problem
+
+Every DEX reports a different price. On Solana alone, SOL trades on Raydium, Orca, Meteora, Phoenix, Lifinity, and dozens of others. Each pool has different liquidity depth, different fee structures, and different trading activity. A token might be $10 on one pool and $10.15 on another.
+
+Which price is "correct"? Neither. And both. The fair market price is the liquidity-weighted consensus across all venues.
+
+Birdeye monitors [200+ DEXs and AMMs](https://bds.birdeye.so/) across Solana, Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, BSC, and zkSync. Their infrastructure processes millions of on-chain transactions daily, extracting trade data from DEX programs to build a real-time view of every token's market.
+
+### Multi-Source Data Collection
+
+Birdeye's aggregation starts with comprehensive data collection:
+
+**DEX Monitoring**: Birdeye indexes transaction logs from every major DEX program. When a swap executes on Raydium, Birdeye's indexers see the transaction, parse the swap instruction, extract the amounts exchanged, and update their internal price model. This happens for every swap on every monitored DEX across all supported chains.
+
+**CEX Integration**: Beyond DEXs, Birdeye integrates with 9 centralized exchanges: [Binance, Binance US, Coinbase, Toobit, Gate.io, Bybit, OKX, MEXC, and BingX](https://docs.birdeye.so/docs/market-data). CEX prices provide a cross-check against on-chain activity and help detect arbitrage opportunities or price manipulation.
+
+**Liquidity Pool Tracking**: For each token pair, Birdeye tracks total liquidity across all pools. A pool with $50 million in liquidity has more pricing authority than a pool with $50,000. The aggregation weights prices by liquidity depth to reflect where real volume can execute.
+
+### The Ranking Pool Mechanism
+
+Not every transaction changes Birdeye's reported price. They use an [internal ranking pool mechanism](https://solanacompass.com/projects/birdeye) to filter noise and prevent manipulation.
+
+Small trades on thin pools don't move the aggregated price. A $100 trade on a pool with $10,000 liquidity might shift that pool's price by 1%, but it doesn't affect the market-wide price because larger pools with millions in liquidity haven't moved.
+
+The ranking system weights four factors:
+
+**Liquidity depth**: Pools with $50M TVL influence prices more than pools with $50,000.
+
+**Trade volume**: Active pools with consistent 24-hour volume rank higher than stale pools seeing one trade per day.
+
+**Price consistency**: If Raydium shows $138 and Orca shows $138.50, both rank higher than a thin pool showing $150.
+
+**Source reputation**: Raydium and Orca, with years of operation and billions in volume, rank higher than new or unverified DEXs.
+
+The aggregated price reflects where significant volume can execute, not the outlier from a manipulated pool.
+
+### Real-Time Updates with Sub-Second Latency
+
+Birdeye's API returns prices with update timestamps. A typical response shows updates within 1-5 seconds of the most recent on-chain trade. How do they achieve this?
+
+**Distributed Indexing**: Birdeye runs indexers on multiple blockchain nodes across different geographic regions. When a block is confirmed on Solana (every 400ms), their indexers parse it immediately, extract relevant swap transactions, and update their price database.
+
+**In-Memory Price Cache**: The aggregated prices are cached in memory with extremely fast read access. When you query the API, you're reading from this cache, not triggering a blockchain scan. The cache updates continuously as new trades are indexed.
+
+**WebSocket Streaming**: For real-time applications, [WebSocket subscriptions](https://docs.birdeye.so/docs/subscribe-price) push price changes instantly. Instead of polling the REST API every second, your bot subscribes to a token and receives updates when prices move.
+
+### Data Validation and Reliability
+
+How do you know the price data is correct? Birdeye uses three validation mechanisms:
+
+**Cross-Source Verification**: When prices diverge significantly, the outlier gets flagged. If Raydium shows SOL at $140 but Orca, Meteora, and all CEXs show $138, Birdeye reduces Raydium's weight or excludes it entirely.
+
+**Infrastructure Redundancy**: Birdeye runs [distributed indexers across multiple regions](https://www.ainvest.com/news/solana-news-today-birdeye-empowers-solana-traders-real-time-data-liquidity-analysis-2507/). If one region goes down, others continue processing.
+
+**Manipulation Detection**: The ranking pool mechanism resists manipulation. An attacker buying tokens on a thin pool spikes that pool's price 10%, but the aggregated price barely moves because that pool carries minimal weight.
+
+### Multi-Chain Architecture
+
+Birdeye's infrastructure spans 9 blockchain networks. Each chain has different indexing requirements:
+
+**Solana**: 400ms block times mean blocks arrive every 0.4 seconds. Indexers must process transactions at this speed. Solana has hundreds of DEXs, requiring monitoring of dozens of different program interfaces.
+
+**Ethereum**: 12-second blocks provide more processing time per block, but gas costs mean fewer on-chain swaps. The major DEXs (Uniswap, Curve) handle most volume.
+
+**L2s (Arbitrum, Optimism, Base)**: Block times between 1-2 seconds. Lower fees mean more trading activity than Ethereum L1, but fewer DEXs than Solana.
+
+**Alternative L1s (Avalanche, BSC, Polygon)**: Each uses different consensus mechanisms with different block production rates. BSC has 3-second blocks, Polygon has 2-second blocks, Avalanche uses subnet-based consensus.
+
+Each chain requires indexers tuned to its block rate and transaction format. Birdeye maintains separate indexer clusters for each chain to provide unified price data wherever a token trades.
+
+For cross-chain tokens like USDC or WETH, Birdeye tracks prices on each chain separately. USDC on Solana is different from USDC on Ethereum, even though they represent the same dollar. During congestion or bridging issues, cross-chain prices can diverge significantly.
+
+### Comparing Price Data Approaches
+
+Four approaches exist for getting token prices off-chain:
+
+**Direct DEX Queries**: Query Raydium's SOL/USDC pool via RPC. You get that pool's spot price immediately. But if you need prices from 10 DEXs, you make 10 RPC calls. Each call returns one pool's view, not market consensus. You'd implement your own weighting logic to combine them.
+
+**Swap Aggregators (Jupiter API)**: Jupiter's price API returns the execution price for a specific trade size. If you query for a $1,000 swap, Jupiter calculates the optimal route and returns the effective price you'd get. This is execution-focused, not market-focused. The price changes based on trade size because routing changes.
+
+**On-Chain Oracles (Pyth/Switchboard)**: Reading oracle accounts via RPC gives you the oracle's current price. Pyth aggregates from CEX sources, Switchboard from various publishers. Both store only current price—no historical data. If you need to query 100 tokens every second, you're making 100 RPC calls per second to oracle accounts.
+
+**Price Aggregators (Birdeye, CoinGecko)**: These run indexers that monitor all DEXs continuously. When you query their API, you get a pre-aggregated price weighted across all venues. One API call returns market consensus for any token. Historical data is stored and queryable.
+
+The trade-off is infrastructure cost versus control. Running your own indexers gives you full control over aggregation logic and data freshness, but requires maintaining infrastructure across all chains you support. Using an aggregator API reduces infrastructure to zero, but you depend on their aggregation methodology and availability.
+
+<ArticleSection name="The Off-Chain vs On-Chain Tradeoff" id="offchain-vs-onchain" level="h2" />
+
+### When On-Chain Oracles Aren't Enough
+
+On-chain oracles like Pyth and Switchboard are authoritative. When your program reads a Pyth price account, that price is cryptographically signed and verified. If the price is wrong, you can prove it. This makes oracles perfect for transactions that move real value.
+
+But oracles have limitations for off-chain monitoring:
+
+**Compute cost**: Reading and validating an oracle account in a transaction consumes compute units. For on-chain programs, this is unavoidable and necessary. For off-chain monitoring that queries prices every second, this cost would be prohibitive even if you weren't making transactions.
+
+**Coverage gaps**: Not every token has an on-chain oracle feed. Pyth and Switchboard prioritize major tokens with sufficient trading volume to justify oracle maintenance. Long-tail tokens, new launches, and niche pairs often lack oracle support entirely. Birdeye aggregates price data from any token with on-chain liquidity, covering thousands of tokens that oracles don't track.
+
+**Single-source pricing**: An oracle provides one price from one methodology. Pyth aggregates CEX prices and publishes them on-chain. But what about tokens that only trade on DEXs? What if you need the DEX-specific price to compare against oracle feeds for arbitrage? Birdeye gives you the multi-venue aggregated price that reflects actual on-chain trading activity.
+
+**Off-chain monitoring efficiency**: Your liquidation bot runs off-chain, monitoring hundreds or thousands of positions. Querying on-chain data for every token every second means constant RPC calls, which hit rate limits quickly. Aggregation APIs are optimized for high-frequency polling with dedicated infrastructure separate from blockchain RPC nodes.
+
+**Historical analysis**: Oracle accounts store current price only. If you need to analyze 24-hour price movements, volatility metrics, or trading volume trends, you'd need to continuously record oracle prices yourself. Birdeye maintains historical data and provides [OHLCV (Open, High, Low, Close, Volume) endpoints](https://docs.birdeye.so/docs/subscribe-price) for any time range.
+
+### The Trust Boundary
+
+Here's the critical distinction:
+
+**Off-chain prices are for monitoring. On-chain oracles are for execution.**
+
+Your bot uses Birdeye to scan thousands of positions and identify liquidation opportunities. When it finds one, it submits a transaction that reads Pyth or Switchboard to verify the price on-chain before executing. The off-chain price gets you close; the on-chain price keeps you honest.
+
+Never execute value transfers based on off-chain prices alone. An API can be wrong, slow, or manipulated. On-chain oracles have cryptographic guarantees that HTTP endpoints don't.
+
+### Why Aggregated Prices Matter
+
+A single DEX pool shows local price discovery in that specific pool. This creates problems:
+
+**Fragmented liquidity**: SOL might have $50M liquidity on Raydium, $30M on Orca, $20M on Meteora. Each pool has slightly different prices based on recent trades. Which one represents "the market price"? None individually—the market price is the liquidity-weighted average across all venues.
+
+**Manipulation resistance**: A thin pool with $10,000 liquidity can be manipulated with a few thousand dollars. Buy aggressively, spike the price 10%, then point your application at that pool's price. If your system uses single-pool prices, it can be fooled. Multi-source aggregation prevents this: manipulating one pool doesn't affect the weighted average when that pool represents 0.1% of total liquidity.
+
+**Arbitrage visibility**: When prices diverge across venues, arbitrage opportunities exist. If Birdeye shows SOL at $138.50 (aggregated) but you see Raydium at $138.00 and Orca at $139.00, that $1 spread represents arbitrage profit. Aggregated data reveals these opportunities that single-source prices obscure.
+
+**Market depth understanding**: The aggregated liquidity field tells you how much capital trades across all venues. A token showing $500 across all DEXs combined is fundamentally different from one with $50M in aggregate liquidity, even if both report similar prices. The latter is tradeable at scale; the former is not.
+
+<ArticleSection name="API Infrastructure and Pricing" id="api-infrastructure" level="h2" />
+
+### Compute Unit Model
+
+Unlike traditional APIs that charge per request, Birdeye uses a [compute unit (CU) system](https://docs.birdeye.so/docs/compute-unit-cost) based on the computational resources each endpoint consumes.
+
+Simple queries like fetching a single token price cost fewer compute units. Complex queries that aggregate historical data across multiple tokens cost more. This aligns pricing with actual infrastructure cost rather than arbitrary per-call fees.
+
+```
+Basic price query:      1 CU
+Historical OHLCV:      10 CU
+Multi-token portfolio: 50 CU
+```
+
+Free tier accounts receive an allocation of compute units per month. Production applications typically need paid tiers with higher CU limits to support continuous monitoring of hundreds or thousands of tokens.
+
+### API Key Management
+
+Birdeye requires an API key for authentication. Get yours from [bds.birdeye.so](https://bds.birdeye.so/) after creating an account.
+
+Rate limits apply per API key. Free tier typically allows 50-100 requests per minute. Paid tiers increase this to thousands of requests per minute. For high-frequency applications like liquidation bots, the rate limit matters more than the CU cost—you need both sufficient CUs and high request throughput.
+
+### REST vs WebSocket
+
+Birdeye offers two access patterns:
+
+**REST API**: Request-response model. Your application polls endpoints to fetch current prices. Use this for periodic monitoring or when you control the update frequency.
+
+**WebSocket API**: Push-based streaming. Subscribe to tokens and receive updates the moment prices change. Use this for real-time applications where latency matters and you want to minimize polling overhead.
+
+The WebSocket approach is more efficient for monitoring many tokens. Instead of polling 100 tokens every second (6,000 requests/minute), you open 100 WebSocket subscriptions and receive updates only when prices move. This reduces request volume by 10-100x depending on market activity.
+
+<ArticleSection name="Birdeye Price API" id="birdeye-api" level="h2" />
+
+### Request Structure
+
+Birdeye's price endpoint accepts a token address and returns current price data:
+
+```typescript
+const BIRDEYE_API = "https://public-api.birdeye.so/defi/price";
+
+async function getTokenPrice(tokenAddress: string): Promise<number> {
+  const response = await fetch(
+    `${BIRDEYE_API}?address=${tokenAddress}`,
+    {
+      headers: {
+        "X-API-KEY": process.env.BIRDEYE_API_KEY!,
+        "x-chain": "solana"
+      }
+    }
+  );
+
+  const data = await response.json();
+  return data.data.value;
+}
+```
+
+The `address` parameter takes a token mint address. For SOL, use the wrapped SOL mint: `So11111111111111111111111111111111111111112`. For SPL tokens, use their mint address.
+
+The `x-chain` header specifies which blockchain. Birdeye supports Solana, Ethereum, Arbitrum, Avalanche, BSC, Optimism, Polygon, Base, and zkSync. Default is Solana.
+
+### Response Fields
+
+The API returns structured price data with metadata:
+
+```typescript
+interface BirdeyePrice {
+  success: boolean;
+  data: {
+    value: number;              // Current price in USD
+    updateUnixTime: number;     // Last update timestamp
+    updateHumanTime: string;    // Human-readable timestamp
+    priceChange24h: number;     // 24-hour % change
+    liquidity?: number;         // Available liquidity
+  };
+}
+```
+
+The `value` field is the price in USD. SOL at $138.50 returns `138.5`.
+
+The `updateUnixTime` tells you when this price was last updated. Unlike on-chain oracles where you read a timestamp from an account, this timestamp comes from Birdeye's aggregation system. Check it against your current time to detect stale data:
+
+```typescript
+async function getValidatedPrice(
+  tokenAddress: string,
+  maxAgeSeconds: number = 60
+): Promise<number | null> {
+  const response = await fetch(
+    `${BIRDEYE_API}?address=${tokenAddress}`,
+    {
+      headers: {
+        "X-API-KEY": process.env.BIRDEYE_API_KEY!,
+        "x-chain": "solana"
+      }
+    }
+  );
+
+  const data: BirdeyePrice = await response.json();
+
+  if (!data.success) {
+    return null;  // Price unavailable
+  }
+
+  // Validate staleness
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - data.data.updateUnixTime;
+
+  if (age > maxAgeSeconds) {
+    console.warn(`Price for ${tokenAddress} is ${age}s old, rejecting`);
+    return null;
+  }
+
+  return data.data.value;
+}
+```
+
+The `priceChange24h` field shows 24-hour percentage change. A value of `5.2` means the price increased 5.2% in the last 24 hours. Use this to detect volatility or filter for trending tokens.
+
+The optional `liquidity` field reports available liquidity in USD. This is critical for smaller tokens where thin liquidity means prices can be manipulated or unreliable.
+
+<ArticleSection name="Handling Errors and Edge Cases" id="error-handling" level="h2" />
+
+### When Prices Aren't Available
+
+The API returns `null` for `data` when no price exists for a token:
+
+```json
+{
+  "success": true,
+  "data": null
+}
+```
+
+This happens for newly launched tokens before liquidity exists, or tokens with no active markets. Never assume `data` exists. Always check:
+
+```typescript
+const response = await fetch(/* ... */);
+const json: BirdeyePrice = await response.json();
+
+if (!json.success || !json.data) {
+  throw new Error(`No price data for token ${tokenAddress}`);
+}
+
+const price = json.data.value;
+```
+
+### Rate Limits
+
+Birdeye enforces rate limits. Exceeding them returns HTTP 429. The free tier typically allows 50-100 requests per minute. Paid tiers increase this to thousands.
+
+For liquidation bots scanning hundreds of tokens, batch your requests and cache results:
+
+```typescript
+interface PriceCache {
+  price: number;
+  timestamp: number;
+}
+
+const cache = new Map<string, PriceCache>();
+const CACHE_TTL_MS = 5000;  // 5 seconds
+
+async function getCachedPrice(tokenAddress: string): Promise<number | null> {
+  const cached = cache.get(tokenAddress);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return cached.price;
+  }
+
+  const price = await getValidatedPrice(tokenAddress);
+
+  if (price !== null) {
+    cache.set(tokenAddress, { price, timestamp: now });
+  }
+
+  return price;
+}
+```
+
+This reduces API calls by 10-20x while keeping prices fresh enough for monitoring.
+
+### Multi-Chain Tokens
+
+Some tokens exist on multiple chains. USDC on Solana is different from USDC on Ethereum, even though they represent the same dollar. Always specify the chain:
+
+```typescript
+// Solana USDC
+const solanaUSDC = await fetch(
+  `${BIRDEYE_API}?address=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`,
+  { headers: { "x-chain": "solana", "X-API-KEY": apiKey } }
+);
+
+// Ethereum USDC (different address, different chain)
+const ethUSDC = await fetch(
+  `${BIRDEYE_API}?address=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`,
+  { headers: { "x-chain": "ethereum", "X-API-KEY": apiKey } }
+);
+```
+
+Don't assume cross-chain price parity. During congestion or depegging events, the same token can trade at different prices on different chains.
+
+<ArticleSection name="Production Patterns" id="production-patterns" level="h2" />
+
+### Liquidation Bot Architecture
+
+A production liquidation bot uses off-chain prices for scanning and on-chain oracles for execution:
+
+```typescript
+async function scanForLiquidations() {
+  // 1. Fetch positions from RPC
+  const positions = await fetchAllPositions();
+
+  // 2. Get current prices off-chain (fast, cheap)
+  const prices = await Promise.all(
+    positions.map(p => getCachedPrice(p.collateralMint))
+  );
+
+  // 3. Calculate health factors with off-chain prices
+  const liquidatable = positions.filter((pos, i) => {
+    const price = prices[i];
+    if (!price) return false;
+
+    const health = calculateHealthFactor(
+      pos.collateral,
+      pos.debt,
+      price,
+      pos.liquidationThreshold
+    );
+
+    return health < 1.0;
+  });
+
+  // 4. Submit liquidation transactions (uses on-chain oracles)
+  for (const pos of liquidatable) {
+    await submitLiquidation(pos);  // This reads Pyth/Switchboard
+  }
+}
+```
+
+The off-chain prices are for filtering. The transaction itself uses on-chain oracles to ensure the liquidation is valid when it executes. If prices moved between your scan and execution, the on-chain oracle prevents you from liquidating a healthy position.
+
+### Monitoring Price Divergence
+
+When off-chain and on-chain prices diverge significantly, something is wrong. Either the API is stale, or the on-chain oracle is manipulated, or markets are fragmented.
+
+Track divergence to catch problems:
+
+```typescript
+async function checkPriceDivergence(
+  tokenMint: string,
+  pythAccount: PublicKey
+) {
+  const [offchainPrice, onchainPrice] = await Promise.all([
+    getCachedPrice(tokenMint),
+    readPythPrice(pythAccount)
+  ]);
+
+  if (!offchainPrice || !onchainPrice) return;
+
+  const divergencePct = Math.abs(
+    (offchainPrice - onchainPrice) / onchainPrice * 100
+  );
+
+  if (divergencePct > 5) {
+    console.error(
+      `Price divergence: ${divergencePct.toFixed(2)}% ` +
+      `(off-chain: $${offchainPrice}, on-chain: $${onchainPrice})`
+    );
+    // Alert, pause operations, investigate
+  }
+}
+```
+
+A 5% divergence is suspicious. A 10% divergence means you should stop operating until you understand why.
+
+### Fallback Strategies
+
+Production systems need fallbacks. If Birdeye is down, your bot shouldn't stop. Have multiple price sources:
+
+```typescript
+async function getRobustPrice(tokenMint: string): Promise<number | null> {
+  // Try Birdeye first
+  try {
+    const price = await getCachedPrice(tokenMint);
+    if (price) return price;
+  } catch (e) {
+    console.warn("Birdeye failed, trying fallback");
+  }
+
+  // Fallback to another aggregator (CoinGecko, Jupiter, etc.)
+  try {
+    const price = await getJupiterPrice(tokenMint);
+    if (price) return price;
+  } catch (e) {
+    console.warn("Jupiter failed");
+  }
+
+  // Last resort: read on-chain oracle directly (slower but reliable)
+  return await readOnChainOracle(tokenMint);
+}
+```
+
+Redundancy prevents single points of failure. If one API degrades, your system continues operating.
+
+### Beyond Basic Prices
+
+Aggregation APIs provide data that single DEX queries cannot:
+
+**Historical OHLCV Data**: The [SUBSCRIBE_PRICE WebSocket](https://docs.birdeye.so/docs/subscribe-price) streams candlestick data (Open, High, Low, Close, Volume) for any time interval. Use this to implement technical analysis, volatility calculations, or backtesting strategies:
+
+```typescript
+// Subscribe to 1-minute OHLCV candles
+const ws = new WebSocket('wss://public-api.birdeye.so/socket');
+
+ws.send(JSON.stringify({
+  type: 'SUBSCRIBE_PRICE',
+  data: {
+    chartType: '1m',
+    address: 'So11111111111111111111111111111111111111112',
+    currency: 'usd'
+  }
+}));
+
+ws.onmessage = (event) => {
+  const candle = JSON.parse(event.data);
+  // candle contains: open, high, low, close, volume, timestamp
+  updateChart(candle);
+};
+```
+
+**Aggregate Liquidity**: The `include_liquidity` parameter returns total liquidity across all pools, not just one venue. This tells you market depth at the aggregated level:
+
+```typescript
+const response = await fetch(
+  `${BIRDEYE_API}?address=${tokenMint}&include_liquidity=true`,
+  { headers }
+);
+
+const { liquidity } = response.data;
+// liquidity is total USD value across all DEXs
+```
+
+**Multi-Token Batch Queries**: Instead of querying tokens one by one, Birdeye supports batch endpoints that return prices for multiple tokens in a single request. This reduces request count and improves throughput for portfolio applications.
+
+**Trade Data**: Beyond prices, Birdeye tracks individual trades with buyer/seller wallet addresses, transaction signatures, and swap amounts. Use this for MEV analysis, whale tracking, and front-running detection.
+
+<ArticleSection name="When to Use Off-Chain vs On-Chain" id="when-to-use" level="h2" />
+
+### Off-Chain Price APIs (Birdeye, CoinGecko, Jupiter)
+
+**Use for:**
+- Monitoring positions off-chain
+- Displaying prices in UIs
+- Historical price analysis
+- Filtering opportunities before submitting transactions
+- Tokens without on-chain oracles
+
+**Don't use for:**
+- Determining liquidation eligibility in a transaction
+- Calculating collateral value for borrows
+- Any value transfer decision
+
+**Why:** HTTP APIs can be slow, wrong, or unavailable. An attacker can't manipulate them to steal from your protocol, but you can't prove they were correct either.
+
+### On-Chain Oracles (Pyth, Switchboard)
+
+**Use for:**
+- All value-moving decisions in smart contracts
+- Liquidation execution
+- Collateral valuation for borrows
+- Swap price verification
+- Settlement of perpetual positions
+
+**Don't use for:**
+- Off-chain monitoring (too expensive to query thousands of times)
+- Tokens without oracle feeds
+- Historical analysis (oracles only store current price)
+
+**Why:** On-chain oracles are cryptographically verifiable. If a transaction executes based on an oracle price, that price is provably what the oracle said at that slot. This makes them suitable for moving value.
+
+The pattern is simple: **off-chain for monitoring, on-chain for execution**. Never reverse this.
+
+<ArticleSection name="Security Considerations" id="security" level="h2" />
+
+### API Keys and Rate Limits
+
+Birdeye requires an API key in the `X-API-KEY` header. Never hardcode this in client-side JavaScript or commit it to public repositories. Use environment variables:
+
+```typescript
+const apiKey = process.env.BIRDEYE_API_KEY;
+if (!apiKey) {
+  throw new Error("BIRDEYE_API_KEY environment variable not set");
+}
+```
+
+Store keys in `.env` files locally and secret management services in production (AWS Secrets Manager, Vault, etc.).
+
+Rate limits are per API key. If you need higher throughput, upgrade your tier or distribute requests across multiple keys. Don't bypass rate limits by creating multiple free accounts; this violates terms of service and risks getting banned.
+
+### Validate Everything
+
+APIs can return garbage. Always validate:
+
+```typescript
+function validatePriceResponse(data: any): number {
+  if (!data || typeof data !== 'object') {
+    throw new Error("Invalid response structure");
+  }
+
+  if (!data.success || !data.data) {
+    throw new Error("Price not available");
+  }
+
+  const price = data.data.value;
+
+  // Sanity checks
+  if (typeof price !== 'number' || price <= 0) {
+    throw new Error(`Invalid price: ${price}`);
+  }
+
+  if (price > 1_000_000) {
+    throw new Error(`Suspiciously high price: ${price}`);
+  }
+
+  return price;
+}
+```
+
+Set bounds based on what you're querying. SOL won't be $10 million. A memecoin might not be worth $1. Sanity checks catch data corruption or API errors before they corrupt your system.
+
+### Liquidity as a Signal
+
+The optional `liquidity` field tells you how deep the market is. A token with $50 liquidity can be manipulated trivially. A token with $50 million liquidity cannot.
+
+Filter low-liquidity tokens when making decisions:
+
+```typescript
+const MIN_LIQUIDITY_USD = 100_000;
+
+async function getPriceIfLiquid(tokenAddress: string): Promise<number | null> {
+  const response = await fetch(
+    `${BIRDEYE_API}?address=${tokenAddress}&include_liquidity=true`,
+    { headers: { "X-API-KEY": apiKey, "x-chain": "solana" } }
+  );
+
+  const data: BirdeyePrice = await response.json();
+
+  if (!data.success || !data.data) {
+    return null;
+  }
+
+  if (data.data.liquidity && data.data.liquidity < MIN_LIQUIDITY_USD) {
+    console.warn(`Token ${tokenAddress} liquidity too low: $${data.data.liquidity}`);
+    return null;
+  }
+
+  return data.data.value;
+}
+```
+
+This prevents your bot from acting on unreliable prices for illiquid tokens where a small trade moves the price 10%.
+
+<ArticleSection name="The Bigger Picture" id="bigger-picture" level="h2" />
+
+Price aggregators sit between raw blockchain data and your application. The problem they solve: determining fair market price when liquidity is fragmented across hundreds of DEXs and CEXs.
+
+The architecture has five layers, each with a specific role:
+
+**Layer 1 - Liquidity Venues**: DEXs (Raydium, Orca, Uniswap, etc.) and CEXs (Binance, Coinbase, etc.) provide raw trade data. Each venue shows local price discovery based on its own order flow.
+
+**Layer 2 - Aggregation Infrastructure**: Distributed indexers monitor multiple venues across chains, processing transactions continuously. Ranking algorithms weight prices by liquidity and source reputation to produce market consensus. This layer transforms fragmented local prices into aggregated market prices.
+
+**Layer 3 - Application Layer**: Your liquidation bot, trading interface, or analytics platform queries the aggregation API for monitoring, filtering opportunities, and displaying prices to users. This layer uses the aggregated data for off-chain decision-making before submitting transactions.
+
+**Layer 4 - Execution Layer**: When your application decides to execute a trade, borrow, or liquidation, it submits a transaction that reads on-chain oracles (Pyth, Switchboard). These oracles provide cryptographically verifiable prices that smart contracts trust for value-moving decisions.
+
+**Layer 5 - Settlement Layer**: Smart contracts execute based on oracle prices, moving real value with on-chain security guarantees.
+
+Before aggregators existed, building Layer 2 meant running indexers across every chain, maintaining historical price databases, implementing weighting algorithms, and handling infrastructure complexity. [Aggregation-as-a-service](https://getblock.io/marketplace/projects/birdeye/) moved this infrastructure to specialized providers.
+
+The design pattern is clear: **aggregate off-chain for discovery, verify on-chain for execution**. Monitor with Birdeye to find opportunities across all markets. Execute with on-chain oracles to ensure cryptographic correctness. This separation of concerns is how production DeFi systems operate at scale.
+
+When building DeFi applications, you need both. Birdeye tells you where the opportunities are. On-chain oracles ensure you execute them correctly. Neither replaces the other—they solve different problems in the price discovery and execution pipeline.
+
+---
+
+**Sources:**
+- [Birdeye Data Services](https://bds.birdeye.so/)
+- [Birdeye Market Data Documentation](https://docs.birdeye.so/docs/market-data)
+- [Birdeye WebSocket Price Streaming](https://docs.birdeye.so/docs/subscribe-price)
+- [Birdeye Compute Unit Pricing](https://docs.birdeye.so/docs/compute-unit-cost)
+- [Birdeye on Solana Compass](https://solanacompass.com/projects/birdeye)
+- [Birdeye Infrastructure Overview](https://www.ainvest.com/news/solana-news-today-birdeye-empowers-solana-traders-real-time-data-liquidity-analysis-2507/)
+- [Birdeye Technical Overview](https://getblock.io/marketplace/projects/birdeye/)

@@ -137,4 +137,34 @@ export const paths: PathMetadata[] = [
       { type: "course", slug: "solana-pay" },
     ],
   },
+  {
+    slug: "defi-for-dummies",
+    language: "General",
+    color: BRAND_COLOURS.general,
+    difficulty: 3,
+    isFeatured: true,
+    estimatedHours: 45,
+    steps: [
+      // Foundation: Math & Conceptual Overview (10h)
+      { type: "course", slug: "introduction-to-defi" },
+      { type: "course", slug: "oracles-on-solana" },
+
+      // AMM Track: Theory → Implementation (12h)
+      { type: "course", slug: "amm-architectures" },
+      { type: "challenge", slug: "anchor-amm" },
+      { type: "challenge", slug: "anchor-stableswap" },
+      { type: "challenge", slug: "anchor-clamm" },
+
+      // Lending Track: Theory → Implementation (10h)
+      { type: "course", slug: "lending-markets-architecture" },
+      { type: "challenge", slug: "anchor-lending" },
+
+      // Perpetuals: Architecture Deep Dive (6h)
+      { type: "course", slug: "perpetuals-architecture" },
+
+      // Security: Attack Patterns & Defensive Implementation (7h)
+      { type: "course", slug: "defi-security" },
+      { type: "challenge", slug: "anchor-flash-loan" },
+    ],
+  },
 ];

@@ -1,0 +1,232 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Open Position" id="open-position" level="h2" />
+
+The open_position instruction lets users deposit collateral and mint stablecoins. The collateral amount is determined by the current Pyth oracle price and the protocol's collateralization ratio.
+
+### Accounts
+
+- `user`: Signer opening the position
+- `config`: Protocol configuration (validates price_update matches)
+- `position`: The Position PDA being created
+- `price_update`: The `PriceUpdateV2` account (must match config.price_update)
+- `stablecoin_mint`: Mint for stablecoins (config is authority)
+- `collateral_mint`: Mint for collateral (needed for decimal info)
+- `user_stablecoin_ta`: User's token account for receiving stablecoins
+- `user_collateral_ta`: User's token account for depositing collateral
+- `vault`: Protocol vault receiving the collateral
+- `token_program`: SPL Token program
+- `system_program`: System program
+
+### Validating the Price Update Account
+
+The config stores which `PriceUpdateV2` account to use. Validate it in the accounts struct:
+
+```rust
+#[derive(Accounts)]
+#[instruction(seed: u64)]
+pub struct OpenPosition<'info> {
+    #[account(
+        has_one = stablecoin_mint,
+        has_one = collateral_mint,
+        has_one = price_update  // Ensures correct Pyth account
+    )]
+    config: Account<'info, Config>,
+
+    price_update: Account<'info, PriceUpdateV2>,
+
+    // ... other accounts
+}
+```
+
+The `has_one = price_update` constraint ensures the passed account matches the one stored during initialization. This prevents attackers from passing a different price feed.
+
+### Fetching the Price
+
+The core Pyth integration:
+
+```rust
+use crate::constants::MAXIMUM_AGE;
+
+impl<'info> OpenPosition<'info> {
+    fn get_price(&self, clock: &Clock) -> Result<(u64, u8)> {
+        let price_update = &self.price_update;
+
+        // Fetch price, validating feed_id and staleness
+        let feed = price_update.get_price_no_older_than(
+            clock,
+            MAXIMUM_AGE,           // 120 seconds
+            &self.config.feed_id,  // Must match expected feed
+        )?;
+
+        // Convert i64 price to u64 (reject negative prices)
+        let price = u64::try_from(feed.price)
+            .map_err(|_| StablecoinError::InvalidPrice)?;
+
+        require_gt!(price, 0, StablecoinError::InvalidPrice);
+
+        // Store absolute exponent (Pyth uses negative exponents)
+        let exponent = u8::try_from(feed.exponent.abs())
+            .map_err(|_| StablecoinError::InvalidPrice)?;
+
+        Ok((price, exponent))
+    }
+}
+```
+
+This method:
+1. Calls `get_price_no_older_than` with max age and expected feed ID
+2. Pyth returns an error if the price is stale or feed ID doesn't match
+3. Converts the signed price to unsigned (rejecting negatives)
+4. Extracts the exponent for decimal conversion
+
+### Calculating Collateral Required
+
+Given a stablecoin amount, calculate how much collateral is needed:
+
+```rust
+fn get_collateral(
+    &self,
+    clock: &Clock,
+    amount: u64,          // Stablecoins to mint
+    max_amount_out: u64,  // Slippage protection
+) -> Result<u64> {
+    let (price, price_exponent) = self.get_price(clock)?;
+
+    // Apply collateralization ratio (e.g., 150%)
+    let collateralized_amount = self.config.collateralization_amount(amount)?;
+
+    // Decimal adjustment for cross-token conversion
+    let decimal_adjustment = (self.collateral_mint.decimals as i32)
+        .checked_add(price_exponent as i32)?
+        .checked_sub(self.stablecoin_mint.decimals as i32)?;
+
+    let scale_factor = if decimal_adjustment >= 0 {
+        10u128.pow(decimal_adjustment as u32)
+    } else {
+        1u128
+    };
+
+    let numerator = (collateralized_amount as u128)
+        .checked_mul(scale_factor)?;
+
+    let collateral = if decimal_adjustment >= 0 {
+        numerator.checked_div(price as u128)?
+    } else {
+        numerator
+            .checked_div(price as u128)?
+            .checked_div(10u128.pow(decimal_adjustment.abs() as u32))?
+    };
+
+    let collateral: u64 = collateral.try_into()?;
+
+    // Slippage protection
+    require!(
+        collateral <= max_amount_out,
+        StablecoinError::CollateralizationLimitExceeded
+    );
+
+    Ok(collateral)
+}
+```
+
+### The Full Flow
+
+```rust
+pub fn open_position(
+    &mut self,
+    seed: u64,
+    amount: u64,
+    max_amount_out: u64,
+    bump: u8,
+) -> Result<()> {
+    let clock = Clock::get()?;
+
+    // Calculate collateral based on current price
+    let collateral = self.get_collateral(&clock, amount, max_amount_out)?;
+
+    // Create position state
+    self.position.set_inner(Position {
+        seed,
+        user: self.user.key(),
+        config: self.config.key(),
+        collateral,
+        amount,
+        timestamp: clock.unix_timestamp,  // For interest calculation
+        interest_rate: self.config.interest_rate,
+        liquidation_rate: self.config.liquidation_ratio,
+        bump,
+    });
+
+    Ok(())
+}
+
+pub fn deposit(&mut self) -> Result<()> {
+    // Transfer collateral from user to vault
+    let accounts = Transfer {
+        from: self.user_collateral_ta.to_account_info(),
+        to: self.vault.to_account_info(),
+        authority: self.user.to_account_info(),
+    };
+
+    let ctx = CpiContext::new(
+        self.token_program.to_account_info(),
+        accounts,
+    );
+
+    transfer(ctx, self.position.collateral)
+}
+
+pub fn mint(&mut self) -> Result<()> {
+    // Mint stablecoins to user
+    let accounts = MintTo {
+        mint: self.stablecoin_mint.to_account_info(),
+        to: self.user_stablecoin_ta.to_account_info(),
+        authority: self.config.to_account_info(),
+    };
+
+    let seeds: [&[&[u8]]; 1] = [&[
+        CONFIG_SEED,
+        self.config.stablecoin_mint.as_ref(),
+        &[self.config.bump],
+    ]];
+
+    let ctx = CpiContext::new_with_signer(
+        self.token_program.to_account_info(),
+        accounts,
+        &seeds,
+    );
+
+    mint_to(ctx, self.position.amount)
+}
+```
+
+### Position PDA Seeds
+
+Each position is uniquely identified by user, config, and a user-provided seed:
+
+```rust
+#[account(
+    init,
+    space = Position::DISCRIMINATOR.len() + Position::INIT_SPACE,
+    payer = user,
+    seeds = [
+        POSITION_SEED,
+        user.key().as_ref(),
+        config.key().as_ref(),
+        seed.to_le_bytes().as_ref()
+    ],
+    bump
+)]
+position: Account<'info, Position>,
+```
+
+The seed allows users to have multiple positions. Without it, a user could only have one position per protocol.
+
+### Key Points
+
+**Snapshot interest rate**: The position stores `interest_rate` from the config at creation time. This locks in the rate—future admin updates won't affect existing positions.
+
+**Slippage protection**: The `max_amount_out` parameter protects users from price movements between transaction submission and execution. If the price moves unfavorably, the transaction reverts instead of taking more collateral than expected.
+
+**Timestamp for interest**: The position records the current timestamp. Interest is calculated as simple interest from this point forward: `I = P × r × t`.

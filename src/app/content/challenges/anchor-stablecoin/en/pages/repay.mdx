@@ -1,0 +1,214 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Repay Position" id="repay" level="h2" />
+
+The repay instruction allows users to burn stablecoins and reclaim their collateral. Interest accrued since position opening is paid in collateral and sent to the protocol's fee vault.
+
+### Accounts
+
+- `user`: Signer who owns the position
+- `config`: Protocol configuration
+- `position`: The Position PDA being repaid (must have `has_one = user`)
+- `price_update`: The `PriceUpdateV2` account for current price
+- `stablecoin_mint`: Mint for burning stablecoins
+- `collateral_mint`: Mint for collateral (decimal info)
+- `user_stablecoin_ta`: User's stablecoin account (tokens burned from here)
+- `user_collateral_ta`: User's collateral account (receives returned collateral)
+- `vault`: Protocol vault holding collateral
+- `fee_vault`: Protocol fee vault receiving interest payments
+- `token_program`: SPL Token program
+
+### Interest Calculation
+
+Interest is calculated as simple interest in stablecoin terms, then converted to collateral:
+
+```rust
+impl Position {
+    pub fn interest_in_stablecoin(&self, current_timestamp: i64) -> Result<u64> {
+        let time_elapsed = current_timestamp
+            .checked_sub(self.timestamp)?
+            .max(0) as u128;
+
+        // I = P × r × t / (seconds_per_year × basis_points)
+        let interest = (self.amount as u128)
+            .checked_mul(self.interest_rate as u128)?
+            .checked_mul(time_elapsed)?
+            .checked_div(SECONDS_PER_YEAR)?
+            .checked_div(10_000)?;
+
+        Ok(interest.try_into()?)
+    }
+
+    pub fn interest_in_collateral(
+        &self,
+        current_timestamp: i64,
+        price: u64,
+        price_exponent: u8,
+        collateral_decimals: u8,
+        stablecoin_decimals: u8,
+    ) -> Result<u64> {
+        let interest_stablecoin = self.interest_in_stablecoin(current_timestamp)?;
+
+        // Convert stablecoin interest to collateral using same decimal logic
+        let decimal_adjustment = (collateral_decimals as i32)
+            .checked_add(price_exponent as i32)?
+            .checked_sub(stablecoin_decimals as i32)?;
+
+        // ... same conversion as open_position
+    }
+}
+```
+
+Example: Position with 1000 stablecoin debt at 5% APR for 1 year:
+- Interest in stablecoins: 1000 × 0.05 × 1 = 50 stablecoins
+- At $180/SOL: ~0.278 SOL interest owed
+
+### Flash Loan Protection
+
+Before allowing repayment, enforce minimum position duration:
+
+```rust
+let current_time = Clock::get()?.unix_timestamp;
+let time_elapsed = current_time.checked_sub(self.position.timestamp)?;
+
+require!(
+    time_elapsed >= MINIMUM_POSITION_DURATION,  // 10 seconds
+    StablecoinError::RepaymentLimitExceeded
+);
+```
+
+This prevents atomic exploitation where an attacker:
+1. Flash borrows collateral
+2. Opens position
+3. Manipulates price
+4. Repays immediately
+5. Extracts profit
+
+### The Repay Flow
+
+```rust
+pub fn repay_position(&mut self, repay_amount: u64, max_amount_in: u64) -> Result<()> {
+    let principal_debt = self.position.repayment_amount()?;
+
+    // Special case: zero debt (post-liquidation cleanup)
+    if principal_debt == 0 {
+        return self.withdraw_remaining_and_close();
+    }
+
+    // Flash loan protection
+    let clock = Clock::get()?;
+    let time_elapsed = clock.unix_timestamp.checked_sub(self.position.timestamp)?;
+    require!(
+        time_elapsed >= MINIMUM_POSITION_DURATION,
+        StablecoinError::RepaymentLimitExceeded
+    );
+
+    // Get current price for interest conversion
+    let (price, price_exponent) = self.get_price(&clock)?;
+
+    // Calculate interest owed in collateral
+    let interest_collateral = self.position.interest_in_collateral(
+        clock.unix_timestamp,
+        price,
+        price_exponent,
+        self.collateral_mint.decimals,
+        self.stablecoin_mint.decimals,
+    )?;
+
+    // Validate repayment amount
+    require!(repay_amount <= principal_debt, StablecoinError::RepaymentLimitExceeded);
+    require!(repay_amount <= max_amount_in, StablecoinError::RepaymentLimitExceeded);
+
+    let is_full_repayment = repay_amount == principal_debt;
+
+    // Calculate proportional amounts
+    let repay_proportion = (repay_amount as u128)
+        .checked_mul(10_000)?
+        .checked_div(principal_debt as u128)?;
+
+    // Proportional interest to pay
+    let interest_to_pay: u64 = (interest_collateral as u128)
+        .checked_mul(repay_proportion)?
+        .checked_div(10_000)?
+        .try_into()?;
+
+    // Proportional collateral being released
+    let collateral_backing: u64 = (self.position.collateral as u128)
+        .checked_mul(repay_proportion)?
+        .checked_div(10_000)?
+        .try_into()?;
+
+    // Collateral returned = collateral backing - interest
+    let collateral_to_return = collateral_backing
+        .checked_sub(interest_to_pay)
+        .ok_or(StablecoinError::InsufficientCollateral)?;
+
+    // Execute the repayment
+    self.burn_stablecoins(repay_amount)?;
+
+    if interest_to_pay > 0 {
+        self.transfer_to_fee_vault(interest_to_pay)?;
+    }
+
+    self.withdraw_collateral(collateral_to_return)?;
+
+    if is_full_repayment {
+        self.close_position()?;
+    } else {
+        // Update position for partial repayment
+        self.position.amount = self.position.amount.checked_sub(repay_amount)?;
+        self.position.collateral = self.position.collateral.checked_sub(collateral_backing)?;
+        // Note: timestamp NOT reset—remaining debt continues accruing
+    }
+
+    Ok(())
+}
+```
+
+### Closing a Position
+
+When fully repaid, close the position account and refund rent:
+
+```rust
+fn close_position(&mut self) -> Result<()> {
+    let position_info = self.position.to_account_info();
+
+    // Transfer all lamports to user
+    let position_lamports = position_info.lamports();
+    **position_info.lamports.borrow_mut() = 0;
+    **self.user.lamports.borrow_mut() = self.user.lamports()
+        .checked_add(position_lamports)?;
+
+    // Set owner to system program and resize to 0
+    position_info.assign(&anchor_lang::system_program::ID);
+    position_info.resize(0)?;
+
+    Ok(())
+}
+```
+
+### Post-Liquidation Cleanup
+
+If a position was liquidated, `amount` is 0 but `collateral` might have remaining dust. Allow the user to claim it:
+
+```rust
+if principal_debt == 0 {
+    require!(repay_amount == 0, StablecoinError::RepaymentLimitExceeded);
+
+    let remaining = self.position.collateral;
+    if remaining > 0 {
+        self.withdraw_collateral(remaining)?;
+    }
+
+    self.close_position()?;
+    return Ok(());
+}
+```
+
+### Key Points
+
+**Partial repayment**: Users can repay any amount up to the full debt. Proportional interest is charged, and the timestamp is NOT reset—remaining debt continues accruing from the original open time.
+
+**Interest in collateral**: This design simplifies accounting. Stablecoin debt is always the exact principal. Interest is deducted from collateral at the current exchange rate. This means interest cost varies with collateral price.
+
+**Slippage on repayment**: The `max_amount_in` parameter isn't strictly slippage protection here—it bounds the stablecoin burn amount. More relevant is that the returned collateral depends on current price, so users might receive less collateral if the price moved unfavorably.

@@ -80,6 +80,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
       { slug: "lending-and-borrowing" },
       { slug: "perpetuals-and-leverage" },
       { slug: "oracles" },
+      { slug: "fetching-defi-prices" },
       { slug: "circuit-breakers" },
       { slug: "conclusion" },
     ],

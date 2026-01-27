@@ -1,0 +1,156 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Initialize" id="initialize" level="h2" />
+
+The initialize instruction creates the protocol's global configuration, including the Pyth price feed reference that all price-dependent operations will use.
+
+### Accounts
+
+- `admin`: Signer who becomes the protocol admin
+- `payer`: Signer who pays for account creation
+- `config`: The Config PDA being initialized
+- `price_update`: A `PriceUpdateV2` account from Pyth
+- `stablecoin_mint`: The mint for the stablecoin (protocol must be authority)
+- `collateral_mint`: The mint for accepted collateral (e.g., wrapped SOL)
+- `vault`: Token account to hold deposited collateral
+- `fee_vault`: Token account to collect interest fees
+- `token_program`: SPL Token program
+- `system_program`: System program
+
+### The PriceUpdateV2 Account
+
+The `price_update` account is a Pyth Solana Receiver account. Import it from the SDK:
+
+```rust
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    // ...
+    pub price_update: Account<'info, PriceUpdateV2>,
+    // ...
+}
+```
+
+This account type is already an Anchor `Account` wrapper—no manual deserialization needed. The SDK handles all the parsing internally.
+
+### Logic
+
+The initialize flow:
+
+1. Validate all ratios are within acceptable bounds
+2. Store the Pyth `price_update` account address in config
+3. Store the `feed_id` that identifies which price feed to use
+4. Initialize the vault and fee vault token accounts
+5. Store all bumps for PDA signing
+
+```rust
+impl<'info> Initialize<'info> {
+    pub fn initialize(
+        &mut self,
+        feed_id: [u8; 32],
+        collateralization_ratio: u16,
+        liquidation_ratio: u16,
+        interest_rate: u16,
+        discount_rate: u16,
+        bumps: &InitializeBumps,
+    ) -> Result<()> {
+        // Collateralization must be >= 100%
+        let collateralization_ratio = Config::verify_ratio(collateralization_ratio)?;
+
+        // Liquidation must be >= 100% and <= collateralization
+        let liquidation_ratio = Config::verify_ratio(liquidation_ratio)?;
+        require_gte!(
+            collateralization_ratio,
+            liquidation_ratio,
+            StablecoinError::InvalidRatio
+        );
+
+        // Interest rate: 0-50% annually (0-5000 bps)
+        require_gte!(5000, interest_rate, StablecoinError::InvalidRatio);
+
+        // Discount rate: 0-20% (0-2000 bps)
+        require_gte!(2000, discount_rate, StablecoinError::InvalidRatio);
+
+        self.config.set_inner(Config {
+            admin: self.admin.key(),
+            collateral_mint: self.collateral_mint.key(),
+            stablecoin_mint: self.stablecoin_mint.key(),
+            vault: self.vault.key(),
+            fee_vault: self.fee_vault.key(),
+            price_update: self.price_update.key(),  // Store Pyth account
+            feed_id,                                 // Store feed identifier
+            collateralization_ratio,
+            liquidation_ratio,
+            interest_rate,
+            discount_rate,
+            vault_bump: bumps.vault,
+            fee_vault_bump: bumps.fee_vault,
+            bump: bumps.config,
+        });
+
+        Ok(())
+    }
+}
+```
+
+### Account Constraints
+
+The config PDA is seeded by the stablecoin mint, ensuring one config per stablecoin:
+
+```rust
+#[account(
+    init,
+    payer = payer,
+    space = Config::DISCRIMINATOR.len() + Config::INIT_SPACE,
+    seeds = [CONFIG_SEED, stablecoin_mint.key().as_ref()],
+    bump
+)]
+config: Account<'info, Config>,
+```
+
+The stablecoin mint must have the config as its mint authority:
+
+```rust
+#[account(
+    mint::authority = config,
+    mint::decimals = 6
+)]
+stablecoin_mint: Account<'info, Mint>,
+```
+
+This constraint means the mint must already exist with config as authority. In practice, you'd create the mint in a separate transaction or use a two-phase initialization.
+
+### Vault Initialization
+
+Both vaults are PDAs owned by the config:
+
+```rust
+#[account(
+    init,
+    payer = payer,
+    token::mint = collateral_mint,
+    token::authority = config,
+    seeds = [VAULT_SEED, config.key().as_ref()],
+    bump
+)]
+vault: Account<'info, TokenAccount>,
+
+#[account(
+    init,
+    payer = payer,
+    token::mint = collateral_mint,
+    token::authority = config,
+    seeds = [FEE_VAULT_SEED, config.key().as_ref()],
+    bump
+)]
+fee_vault: Account<'info, TokenAccount>,
+```
+
+### Key Points
+
+**feed_id vs price_update**: The `price_update` account holds actual price data. The `feed_id` is a 32-byte identifier specifying which price feed the data should come from. When fetching prices later, both are needed—the account for data, the ID for validation.
+
+**Ratio validation**: All ratios are in basis points (10000 = 100%). Collateralization ratio must exceed liquidation ratio, otherwise positions would be liquidatable immediately upon opening.
+
+**Discount rate**: This is the liquidator's bonus. A 500 bps (5%) discount means liquidators receive collateral worth 105% of the debt they repay.

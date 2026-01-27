@@ -1,0 +1,381 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor Stablecoin Challenge](/graphics/challenge-banners/anchor-stablecoin.png)
+
+# The Collateralized Stablecoin
+
+A collateralized stablecoin is a synthetic asset backed by overcollateralized deposits. Users lock collateral to mint a dollar-pegged token. If the collateral value drops below a threshold, anyone can liquidate the position.
+
+This pattern powers protocols like MakerDAO (DAI), Liquity (LUSD), and countless derivatives across DeFi. The challenge: integrating real-time price data from Pyth Network to make collateral valuation and liquidation decisions.
+
+<ArticleSection name="Pyth Network Integration" id="pyth-integration" level="h2" />
+
+### Why Pyth?
+
+Traditional oracles push prices on-chain at fixed intervals. Pyth uses a pull model: prices are published off-chain, and consumers fetch the latest price when needed. This means:
+
+- **Fresher prices**: Sub-second updates instead of heartbeat intervals
+- **Lower costs**: Only pay for prices you use
+- **Confidence intervals**: Each price includes uncertainty bounds
+
+### The PriceUpdateV2 Account
+
+Pyth prices live in `PriceUpdateV2` accounts. To use them:
+
+```rust
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+
+#[derive(Accounts)]
+pub struct UsePrice<'info> {
+    pub price_update: Account<'info, PriceUpdateV2>,
+    // ... other accounts
+}
+```
+
+The `PriceUpdateV2` account contains a `PriceFeedMessage` with:
+- `price`: The price as an `i64`
+- `exponent`: Scale factor (typically negative, e.g., -8 means multiply by 10^-8)
+- `conf`: Confidence interval
+- `publish_time`: When the price was published
+
+### Fetching a Price
+
+The critical method is `get_price_no_older_than`:
+
+```rust
+let feed_id = price_update.get_price_no_older_than(
+    &clock,        // Current clock
+    max_age,       // Maximum staleness in seconds
+    &feed_id,      // 32-byte feed identifier
+)?;
+
+let price = u64::try_from(feed_id.price)?;
+let exponent = feed_id.exponent.abs() as u8;
+```
+
+This method:
+1. Verifies the price update matches your expected `feed_id`
+2. Checks the price is no older than `max_age` seconds
+3. Returns the price data or an error if stale/invalid
+
+### Feed IDs
+
+Each asset has a unique 32-byte feed ID. For SOL/USD on mainnet:
+```rust
+pub const SOL_USD_FEED_ID: [u8; 32] = [
+    0xef, 0x0d, 0x8b, 0x6f, 0xda, 0x2c, 0xeb, 0xa4,
+    0x1d, 0xa1, 0x5d, 0x40, 0x95, 0xd1, 0xda, 0x39,
+    0x2a, 0x0d, 0x2f, 0x8e, 0xd0, 0xc6, 0xc7, 0xbc,
+    0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d
+];
+```
+
+Find feed IDs at [pyth.network/price-feeds](https://pyth.network/price-feeds).
+
+<ArticleSection name="The Challenge" id="challenge" level="h2" />
+
+Build a collateralized stablecoin protocol with these instructions:
+
+- **initialize**: Create the protocol config with Pyth feed, collateralization ratio, liquidation ratio, interest rate, and discount rate
+- **open_position**: Lock collateral, mint stablecoins based on oracle price
+- **repay_position**: Burn stablecoins to reclaim collateral (with interest)
+- **liquidate**: Close underwater positions for a bonus
+
+> This challenge focuses on Pyth integration. For lending fundamentals, see the [Lending Markets Architecture](/courses/lending-markets-architecture) course.
+
+<ArticleSection name="Installation" id="installation" level="h2" />
+
+Create a fresh Anchor workspace:
+
+```bash
+anchor init collateralized_stablecoin
+cd collateralized_stablecoin
+```
+
+Add the Pyth SDK and other dependencies:
+
+```bash
+cargo add anchor-lang --features init-if-needed
+cargo add anchor-spl
+cargo add pyth-solana-receiver-sdk
+```
+
+Update `programs/collateralized_stablecoin/Cargo.toml` for IDL generation:
+
+```toml
+[features]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+```
+
+<ArticleSection name="Architecture" id="architecture" level="h2" />
+
+```
+src
+├── contexts
+│       ├── initialize.rs
+│       ├── open_position.rs
+│       ├── repay_position.rs
+│       ├── liquidate_position.rs
+│       ├── refinance.rs
+│       ├── admin_update.rs
+│       └── mod.rs
+├── state.rs
+├── constants.rs
+├── errors.rs
+└── lib.rs
+```
+
+<ArticleSection name="State" id="state" level="h2" />
+
+### Config
+
+Global protocol parameters:
+
+```rust
+#[account(discriminator = [1])]
+#[derive(InitSpace)]
+pub struct Config {
+    pub admin: Pubkey,
+    pub collateral_mint: Pubkey,
+    pub stablecoin_mint: Pubkey,
+    pub vault: Pubkey,
+    pub fee_vault: Pubkey,
+    pub price_update: Pubkey,          // The PriceUpdateV2 account
+    pub feed_id: [u8; 32],             // Pyth feed identifier
+    pub collateralization_ratio: u16,  // Basis points (15000 = 150%)
+    pub liquidation_ratio: u16,        // Basis points (12000 = 120%)
+    pub interest_rate: u16,            // Annual rate in basis points
+    pub discount_rate: u16,            // Liquidator bonus in basis points
+    pub vault_bump: u8,
+    pub fee_vault_bump: u8,
+    pub bump: u8,
+}
+```
+
+Key fields:
+- **collateralization_ratio**: Minimum collateral value as percentage of debt (150% means $150 collateral for $100 debt)
+- **liquidation_ratio**: Threshold for liquidation (120% means liquidatable when collateral value < 120% of debt)
+- **feed_id**: The 32-byte identifier linking to the Pyth price feed
+
+### Position
+
+Individual user positions:
+
+```rust
+#[account(discriminator = [2])]
+#[derive(InitSpace)]
+pub struct Position {
+    pub seed: u64,
+    pub user: Pubkey,
+    pub config: Pubkey,
+    pub collateral: u64,
+    pub amount: u64,           // Stablecoin debt
+    pub timestamp: i64,        // For interest calculation
+    pub interest_rate: u16,    // Locked at position creation
+    pub liquidation_rate: u16, // Locked at position creation
+    pub bump: u8,
+}
+```
+
+The position tracks:
+- **collateral**: Tokens locked in the vault
+- **amount**: Stablecoin debt (principal only)
+- **timestamp**: When position opened (for simple interest calculation)
+
+Interest accrues in collateral terms, not stablecoin. When repaying, users burn stablecoins and pay accrued interest from their collateral.
+
+<ArticleSection name="Constants" id="constants" level="h2" />
+
+```rust
+pub const CONFIG_SEED: &[u8] = b"config";
+pub const POSITION_SEED: &[u8] = b"position";
+pub const VAULT_SEED: &[u8] = b"vault";
+pub const FEE_VAULT_SEED: &[u8] = b"fee_vault";
+
+pub const MAXIMUM_AGE: u64 = 120;  // 2 minutes staleness limit
+
+pub const SECONDS_PER_YEAR: u128 = 31_557_600;  // 365.25 days
+pub const MINIMUM_POSITION_DURATION: i64 = 10;  // Flash loan protection
+```
+
+The `MAXIMUM_AGE` is critical: any price older than 120 seconds will be rejected. This prevents using stale prices during volatile markets.
+
+<ArticleSection name="Errors" id="errors" level="h2" />
+
+```rust
+#[error_code]
+pub enum StablecoinError {
+    InvalidRatio,
+    CollateralizationLimitExceeded,
+    RepaymentLimitExceeded,
+    PositionCannotBeLiquidated,
+    InsufficientCollateral,
+    LiquidationLimitExceeded,
+    WithdrawalLimitExceeded,
+    BorrowLimitExceeded,
+    StalePrice,
+    InvalidPrice,
+    Unauthorized,
+}
+```
+
+<ArticleSection name="Price Conversion Math" id="price-math" level="h2" />
+
+The trickiest part: converting between collateral and stablecoin amounts using Pyth prices.
+
+### The Problem
+
+Pyth gives you:
+- `price`: An integer (e.g., `18006634891` for ~$180.07)
+- `exponent`: A negative integer (e.g., `-8`)
+
+The actual price is `price × 10^exponent`. For SOL at $180.07: `18006634891 × 10^-8 = 180.06634891`
+
+Tokens have different decimals:
+- SOL (collateral): 9 decimals
+- USDC-like stablecoin: 6 decimals
+
+### The Formula
+
+To convert stablecoin amount to collateral:
+
+```
+collateral = (stablecoin_amount × 10^(collateral_decimals + price_exponent - stablecoin_decimals)) / price
+```
+
+Example: How much SOL needed for 1000 stablecoins at $180?
+
+```
+decimal_adjustment = 9 + 8 - 6 = 11
+scale_factor = 10^11 = 100,000,000,000
+
+collateral = (1000 × 100,000,000,000) / 18,006,634,891
+           ≈ 5,553,508 (in smallest units)
+           = 0.005553508 SOL (with 9 decimals)
+           ≈ $1.00 worth of SOL
+```
+
+### Implementation Pattern
+
+```rust
+fn get_collateral(&self, clock: &Clock, stablecoin_amount: u64) -> Result<u64> {
+    let (price, price_exponent) = self.get_price(clock)?;
+
+    let decimal_adjustment = (self.collateral_mint.decimals as i32)
+        .checked_add(price_exponent as i32)?
+        .checked_sub(self.stablecoin_mint.decimals as i32)?;
+
+    let scale_factor = if decimal_adjustment >= 0 {
+        10u128.pow(decimal_adjustment as u32)
+    } else {
+        1u128
+    };
+
+    let numerator = (stablecoin_amount as u128)
+        .checked_mul(scale_factor)?;
+
+    let collateral = if decimal_adjustment >= 0 {
+        numerator.checked_div(price as u128)?
+    } else {
+        numerator
+            .checked_div(price as u128)?
+            .checked_div(10u128.pow(decimal_adjustment.abs() as u32))?
+    };
+
+    Ok(collateral.try_into()?)
+}
+```
+
+This pattern appears in every instruction that needs price conversion.
+
+<ArticleSection name="Interest Model" id="interest-model" level="h2" />
+
+This protocol uses simple interest paid in collateral:
+
+```rust
+impl Position {
+    /// Interest in stablecoin terms: I = P × r × t
+    pub fn interest_in_stablecoin(&self, current_timestamp: i64) -> Result<u64> {
+        let time_elapsed = current_timestamp
+            .checked_sub(self.timestamp)?
+            .max(0) as u128;
+
+        let interest = (self.amount as u128)
+            .checked_mul(self.interest_rate as u128)?
+            .checked_mul(time_elapsed)?
+            .checked_div(SECONDS_PER_YEAR)?
+            .checked_div(10_000)?;
+
+        Ok(interest.try_into()?)
+    }
+
+    /// Convert interest to collateral using current price
+    pub fn interest_in_collateral(
+        &self,
+        current_timestamp: i64,
+        price: u64,
+        price_exponent: u8,
+        collateral_decimals: u8,
+        stablecoin_decimals: u8,
+    ) -> Result<u64> {
+        let interest_stablecoin = self.interest_in_stablecoin(current_timestamp)?;
+        // ... same decimal conversion as above
+    }
+}
+```
+
+Why pay interest in collateral? It simplifies accounting. The stablecoin debt stays fixed (principal only), and interest is deducted from collateral at repayment or liquidation.
+
+<ArticleSection name="Health Factor" id="health-factor" level="h2" />
+
+The health factor determines if a position can be liquidated:
+
+```rust
+health_factor = (effective_collateral_value / debt) × 10000
+```
+
+Where `effective_collateral` = collateral - interest_owed_in_collateral.
+
+```rust
+pub fn is_liquidatable(&self, ...) -> Result<bool> {
+    let interest_collateral = self.interest_in_collateral(...)?;
+    let effective_collateral = self.collateral.checked_sub(interest_collateral)?;
+
+    // Convert effective collateral to stablecoin value
+    let collateral_value = /* price conversion */;
+
+    // Liquidation threshold
+    let threshold = (self.amount as u128)
+        .checked_mul(self.liquidation_rate as u128)?
+        .checked_div(10_000)?;
+
+    Ok(collateral_value < threshold)
+}
+```
+
+A position with 120% liquidation ratio becomes liquidatable when effective collateral value drops below 120% of the debt.
+
+<ArticleSection name="Flash Loan Protection" id="flash-loan-protection" level="h2" />
+
+The protocol enforces a minimum position duration:
+
+```rust
+pub const MINIMUM_POSITION_DURATION: i64 = 10; // seconds
+
+// In repay instruction
+let time_elapsed = current_time.checked_sub(position.timestamp)?;
+require!(
+    time_elapsed >= MINIMUM_POSITION_DURATION,
+    StablecoinError::RepaymentLimitExceeded
+);
+```
+
+This prevents flash loan attacks where someone:
+1. Flash borrows collateral
+2. Opens a position
+3. Manipulates price
+4. Extracts value
+5. Closes position
+6. Repays flash loan
+
+The 10-second minimum breaks atomic exploitation.

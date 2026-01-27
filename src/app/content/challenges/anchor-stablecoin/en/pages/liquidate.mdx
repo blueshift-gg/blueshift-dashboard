@@ -1,0 +1,233 @@
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Liquidate" id="liquidate" level="h2" />
+
+Liquidation is the enforcement mechanism. When a position's health factor drops below the liquidation threshold, anyone can repay the debt and receive collateral at a discount.
+
+### Accounts
+
+- `liquidator`: Signer executing the liquidation
+- `config`: Protocol configuration
+- `position`: The underwater Position PDA
+- `price_update`: The `PriceUpdateV2` account for current price
+- `stablecoin_mint`: Mint for burning stablecoins
+- `collateral_mint`: Mint for collateral (decimal info)
+- `liquidator_stablecoin_ta`: Liquidator's stablecoins (burned)
+- `liquidator_collateral_ta`: Liquidator's collateral (receives reward)
+- `vault`: Protocol vault holding collateral
+- `fee_vault`: Protocol fee vault receiving interest
+- `token_program`: SPL Token program
+- `system_program`: System program
+
+### Checking Liquidatability
+
+A position is liquidatable when effective collateral value falls below the liquidation threshold:
+
+```rust
+impl Position {
+    pub fn is_liquidatable(
+        &self,
+        current_timestamp: i64,
+        price: u64,
+        price_exponent: u8,
+        collateral_decimals: u8,
+        stablecoin_decimals: u8,
+    ) -> Result<bool> {
+        // Interest reduces effective collateral
+        let interest_collateral = self.interest_in_collateral(
+            current_timestamp,
+            price,
+            price_exponent,
+            collateral_decimals,
+            stablecoin_decimals,
+        )?;
+
+        let effective_collateral = self.collateral
+            .checked_sub(interest_collateral)?;
+
+        // Convert effective collateral to stablecoin value
+        let price_adjusted = (effective_collateral as u128)
+            .checked_mul(price as u128)?;
+
+        let decimal_adjustment = (collateral_decimals as i32)
+            .checked_add(price_exponent as i32)?
+            .checked_sub(stablecoin_decimals as i32)?;
+
+        let collateral_value = if decimal_adjustment >= 0 {
+            price_adjusted.checked_div(10u128.pow(decimal_adjustment as u32))?
+        } else {
+            price_adjusted.checked_mul(10u128.pow(decimal_adjustment.abs() as u32))?
+        };
+
+        // Liquidation threshold = debt × liquidation_rate / 10000
+        let threshold = (self.amount as u128)
+            .checked_mul(self.liquidation_rate as u128)?
+            .checked_div(10_000)?;
+
+        // Liquidatable if collateral value < threshold
+        Ok(collateral_value < threshold)
+    }
+}
+```
+
+Example with 120% liquidation ratio:
+- Debt: 1000 stablecoins
+- Threshold: 1000 × 1.20 = 1200 stablecoins worth of effective collateral
+- If effective collateral value drops below 1200, position is liquidatable
+
+### Calculating Liquidator Reward
+
+The liquidator repays the full debt and receives collateral worth `debt × (1 + discount_rate)`:
+
+```rust
+fn calculate_liquidation_reward(
+    &self,
+    debt: u64,
+    price: u64,
+    price_exponent: u8,
+) -> Result<u64> {
+    // Apply discount (bonus for liquidator)
+    // discount_rate is in bps (e.g., 500 = 5%)
+    let debt_with_bonus = (debt as u128)
+        .checked_mul((10_000 + self.config.discount_rate) as u128)?
+        .checked_div(10_000)?;
+
+    // Convert bonus value to collateral amount
+    let decimal_adjustment = (self.collateral_mint.decimals as i32)
+        .checked_add(price_exponent as i32)?
+        .checked_sub(self.stablecoin_mint.decimals as i32)?;
+
+    let scale_factor = if decimal_adjustment >= 0 {
+        10u128.pow(decimal_adjustment as u32)
+    } else {
+        1u128
+    };
+
+    let numerator = debt_with_bonus.checked_mul(scale_factor)?;
+
+    let collateral_amount = if decimal_adjustment >= 0 {
+        numerator.checked_div(price as u128)?
+    } else {
+        numerator
+            .checked_div(price as u128)?
+            .checked_div(10u128.pow(decimal_adjustment.abs() as u32))?
+    };
+
+    Ok(collateral_amount.try_into()?)
+}
+```
+
+With a 5% discount rate, repaying 1000 stablecoins debt yields collateral worth 1050 stablecoins.
+
+### The Liquidation Flow
+
+```rust
+pub fn liquidate(&mut self) -> Result<()> {
+    let clock = Clock::get()?;
+    let (price, price_exponent) = self.get_price(&clock)?;
+
+    // Get principal debt (interest handled separately)
+    let principal_debt = self.position.repayment_amount()?;
+
+    // Verify position is underwater
+    let is_liquidatable = self.position.is_liquidatable(
+        clock.unix_timestamp,
+        price,
+        price_exponent,
+        self.collateral_mint.decimals,
+        self.stablecoin_mint.decimals,
+    )?;
+
+    require!(is_liquidatable, StablecoinError::PositionCannotBeLiquidated);
+
+    // Calculate interest owed (goes to fee vault)
+    let interest_collateral = self.position.interest_in_collateral(
+        clock.unix_timestamp,
+        price,
+        price_exponent,
+        self.collateral_mint.decimals,
+        self.stablecoin_mint.decimals,
+    )?;
+
+    // Calculate collateral for liquidator (debt + bonus)
+    let collateral_to_liquidator = self.calculate_liquidation_reward(
+        principal_debt,
+        price,
+        price_exponent,
+    )?;
+
+    // Total collateral needed
+    let total_needed = collateral_to_liquidator
+        .checked_add(interest_collateral)?;
+
+    require!(
+        total_needed <= self.position.collateral,
+        StablecoinError::InsufficientCollateral
+    );
+
+    // Execute liquidation
+    self.burn(principal_debt)?;  // Liquidator burns stablecoins
+
+    if interest_collateral > 0 {
+        self.transfer_to_fee_vault(interest_collateral)?;
+    }
+
+    self.withdraw(collateral_to_liquidator)?;  // Liquidator receives collateral
+
+    // Clear position debt, leave remaining collateral for user
+    self.position.amount = 0;
+    self.position.collateral = self.position.collateral
+        .checked_sub(total_needed)?;
+    self.position.timestamp = Clock::get()?.unix_timestamp;
+
+    Ok(())
+}
+```
+
+### What Happens After Liquidation
+
+The position isn't closed—it's cleared:
+- `amount` = 0 (no more debt)
+- `collateral` = remaining dust (if any)
+- User can call `repay_position(0, 0)` to claim remaining collateral and close the account
+
+This design ensures users don't lose everything in a liquidation. If there's excess collateral beyond what the liquidator took, the original owner can reclaim it.
+
+### The Price Check
+
+Every liquidation requires a fresh price:
+
+```rust
+fn get_price(&self, clock: &Clock) -> Result<(u64, u8)> {
+    let feed = self.price_update.get_price_no_older_than(
+        clock,
+        MAXIMUM_AGE,           // 120 seconds
+        &self.config.feed_id,
+    )?;
+
+    let price = u64::try_from(feed.price)
+        .map_err(|_| StablecoinError::InvalidPrice)?;
+
+    require_gt!(price, 0, StablecoinError::InvalidPrice);
+
+    let exponent = u8::try_from(feed.exponent.abs())
+        .map_err(|_| StablecoinError::InvalidPrice)?;
+
+    Ok((price, exponent))
+}
+```
+
+The staleness check is critical. Without it, a liquidator could:
+1. Wait for price to drop
+2. Use the old (higher) price to calculate a larger reward
+3. Drain more collateral than deserved
+
+### Key Points
+
+**No close factor**: Unlike the lending protocol, this stablecoin design liquidates the entire debt at once. There's no 50% limit. This simplifies the logic but means borrowers lose more in a single liquidation event.
+
+**Interest goes to protocol**: The accrued interest is transferred to the fee vault, not given to the liquidator. The liquidator's incentive is the discount on collateral, not the interest.
+
+**Remaining collateral**: Any collateral beyond `liquidator_reward + interest` stays in the position. Users should monitor positions and repay before liquidation if possible, but they don't lose absolutely everything if liquidated.
+
+**Race condition**: Multiple liquidators might race to liquidate the same position. Only the first succeeds—subsequent attempts fail because the position is no longer underwater (debt = 0).

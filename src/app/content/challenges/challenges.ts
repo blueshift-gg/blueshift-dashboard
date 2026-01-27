@@ -153,6 +153,29 @@ export const challenges: ChallengeMetadata[] = [
     ],
     collectionMintAddress: "",
   },
+  {
+    slug: "anchor-stablecoin",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 3,
+    isFeatured: true,
+    unitName: "Anchor Stablecoin",
+    apiPath: "/v1/verify/anchor/stablecoin",
+    tags: ["Anchor", "Stablecoin", "DeFi", "Pyth"],
+    pages: [
+      { slug: "initialize" },
+      { slug: "open_position" },
+      { slug: "repay" },
+      { slug: "liquidate" },
+    ],
+    requirements: [
+      { instructionKey: "initialize" },
+      { instructionKey: "open_position" },
+      { instructionKey: "repay_position" },
+      { instructionKey: "liquidate" },
+    ],
+    collectionMintAddress: "",
+  },
 
   /// Pinocchio Challenges
   {
