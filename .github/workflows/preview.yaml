@@ -61,6 +61,40 @@ jobs:
           echo "Draft PRs do not get previews. Skipping preview deployment."
           exit 0
 
+      - name: Resolve workers.dev subdomain
+        id: workers_dev
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # https://github.com/actions/github-script/releases/tag/v8.0.0
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+            const token = process.env.CLOUDFLARE_API_TOKEN;
+
+            if (!accountId || !token) {
+              core.info('Skipping workers.dev subdomain lookup (missing Cloudflare credentials).');
+              return;
+            }
+
+            const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+
+            const data = await res.json();
+            if (!data?.success) {
+              core.info(`workers.dev subdomain lookup failed: ${JSON.stringify(data?.errors || data)}`);
+              return;
+            }
+
+            if (data.result?.subdomain) {
+              core.setOutput('subdomain', data.result.subdomain);
+            }
+
       - name: Checkout
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # https://github.com/actions/checkout/releases/tag/v6.0.0
         with:
@@ -107,6 +141,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           PULL_REQUEST_HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          WORKERS_DEV_SUBDOMAIN: ${{ steps.workers_dev.outputs.subdomain }}
         run: |
           PR_NUMBER="${PR_NUMBER}"
           BRANCH_NAME="${PULL_REQUEST_HEAD_REF}"
@@ -116,8 +151,10 @@ jobs:
 
           echo "WORKER_NAME=blueshift-preview-pr-${PR_NUMBER}-${BRANCH_SLUG}" >> "$GITHUB_ENV"
           echo "CONTENT_PREFIX=compiled-mdx-preview/pr-${PR_NUMBER}-${BRANCH_SLUG}" >> "$GITHUB_ENV"
-          echo "PREVIEW_HOST=pr-${PR_NUMBER}-${BRANCH_SLUG}.preview.blueshift.gg" >> "$GITHUB_ENV"
-          echo "PREVIEW_URL=https://pr-${PR_NUMBER}-${BRANCH_SLUG}.preview.blueshift.gg" >> "$GITHUB_ENV"
+
+          if [ -n "${WORKERS_DEV_SUBDOMAIN}" ]; then
+            echo "PREVIEW_URL=https://blueshift-preview-pr-${PR_NUMBER}-${BRANCH_SLUG}.${WORKERS_DEV_SUBDOMAIN}.workers.dev" >> "$GITHUB_ENV"
+          fi
 
       - name: Upload Compiled MDX to R2 (preview)
         env:
@@ -166,7 +203,7 @@ jobs:
           NEXT_PUBLIC_DEVNET_RPC_ENDPOINT: ${{ secrets.NEXT_PUBLIC_DEVNET_RPC_ENDPOINT }}
         run: pnpm exec opennextjs-cloudflare build
 
-      - name: Deploy Preview
+      - name: Deploy Preview (workers.dev)
         uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # https://github.com/cloudflare/wrangler-action/releases/tag/v3.14.1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -175,18 +212,18 @@ jobs:
             deploy --env preview
             --name ${{ env.WORKER_NAME }}
             --var CONTENT_PREFIX:${{ env.CONTENT_PREFIX }}
-            --route ${{ env.PREVIEW_HOST }}/*
 
       - name: Comment preview URL
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # https://github.com/actions/github-script/releases/tag/v8.0.0
         env:
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           PREVIEW_URL: ${{ env.PREVIEW_URL }}
           WORKER_NAME: ${{ env.WORKER_NAME }}
           CONTENT_PREFIX: ${{ env.CONTENT_PREFIX }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = Number('${{ steps.pr.outputs.pr_number }}');
+            const prNumber = Number(process.env.PR_NUMBER);
             const marker = '<!-- preview-link -->';
             const body = `${marker}\n✅ Preview deployed: ${process.env.PREVIEW_URL}\nWorker: ${process.env.WORKER_NAME}\nContent prefix: ${process.env.CONTENT_PREFIX}`;
 
