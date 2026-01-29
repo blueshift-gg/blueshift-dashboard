@@ -1,0 +1,41 @@
+name: Preview Cleanup
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Derive preview identifiers
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          BRANCH_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//; s/-$//')
+          BRANCH_SLUG="${BRANCH_SLUG:-preview}"
+          BRANCH_SLUG="${BRANCH_SLUG:0:30}"
+
+          echo "WORKER_NAME=blueshift-preview-pr-${PR_NUMBER}-${BRANCH_SLUG}" >> "$GITHUB_ENV"
+          echo "CONTENT_PREFIX=compiled-mdx-preview/pr-${PR_NUMBER}-${BRANCH_SLUG}" >> "$GITHUB_ENV"
+
+      - name: Delete preview worker
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # https://github.com/cloudflare/wrangler-action/releases/tag/v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >
+            delete --name ${{ env.WORKER_NAME }} --env preview
+
+      - name: Delete preview content
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/${{ env.CONTENT_PREFIX }}"
+          aws s3 rm "$S3_PREFIX" --recursive --endpoint-url "$ENDPOINT" --no-progress
