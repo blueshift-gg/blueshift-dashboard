@@ -1,44 +1,292 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Metaplex Token Metadata Program
+# Token Extensions and Token-2022
 
-Imagine launching a token on Solana, only to have it appear in every wallet as a meaningless string of characters like "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU". 
+SPL Token launched in 2020. By 2024, developers needed features it couldn't provide: metadata embedded in mint accounts, transfer hooks that execute custom logic, interest-bearing tokens, confidential transfers. The answer wasn't deploying custom contracts—it was extending the standard.
 
-Users would have no idea what they're holding, and your carefully crafted project would be indistinguishable from the thousands of other anonymous tokens flooding the network.
+Token-2022 (also called Token Extensions program) adds 16 optional extensions to SPL Token while maintaining backward compatibility. Old programs work with new tokens. New features activate only when needed. No ecosystem fragmentation.
 
-The Metaplex Token Metadata Program solves this critical problem by transforming anonymous blockchain entries into branded, recognizable digital assets. 
+<ArticleSection name="Why Token Extensions Exist" id="why-extensions" level="h2" />
 
-While the SPL-Token program excels at the technical mechanics—tracking ownership, managing supply, and facilitating transfers—it leaves tokens as bare-bones data structures without any human-readable context.
+SPL Token is minimal by design. It handles minting, transferring, burning. Nothing else. Need metadata? Use Metaplex Token Metadata program. Need transfer restrictions? Write custom validation. Need interest? Build on top.
 
-This is where Metaplex works its magic, bridging the gap between raw blockchain functionality and user experience. Instead of cryptic addresses, users see "Solana (SOL)" with familiar logos, clear descriptions, and all the contextual information that makes tokens actually usable in the real world.
+This worked for years. But every added feature required external programs, creating complexity:
 
-<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+**Metadata required separate accounts:**
 
-The `Metadata` account functions as your token's digital identity card, storing all the information that transforms a mere mint address into a recognizable asset. 
+SPL Token mint account: 82 bytes. Metaplex metadata PDA: 679+ bytes. Two accounts, two rent deposits, two program interactions. For simple metadata (name, symbol, URI), this felt heavy.
 
-This isn't just about pretty names and pictures: it's about creating the foundation for how your token appears across the entire Solana ecosystem.
+**Transfer restrictions required wrapper programs:**
 
-Using Solana's Program Derived Address system, every token gets exactly one metadata account that's mathematically linked to its mint. This creates an unbreakable bond between the technical token and its descriptive information, ensuring consistency across all applications and preventing identity conflicts:
+Want tokens that only transfer during specific hours? Wrap SPL Token in custom program. Every restriction pattern needed new program deployment. No standardization.
+
+**Interest-bearing tokens needed constant rebase:**
+
+Lending protocols wanted tokens whose balance increases over time. SPL Token has fixed amounts. Protocols tracked balances externally and recalculated constantly. No native support.
+
+Token Extensions solve these by extending mint and token account structures with optional fields. Enable metadata extension? Mint account stores name/symbol/URI directly. Enable transfer hooks? Program executes on every transfer. Enable interest? Token calculates balance dynamically.
+
+<ArticleSection name="Available Extensions" id="available-extensions" level="h2" />
+
+Token-2022 offers 16 extensions. Key ones:
+
+**Metadata Extension:**
+
+Embed name, symbol, URI directly in mint account:
 
 ```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+pub struct TokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
+```
 
-const PREFIX: &str = "metadata";
+No external Metaplex account needed—metadata lives in the mint, making it cheaper, simpler, and requiring only a single account lookup.
 
-let (metadata, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-    ], 
-    &ID  
+**Transfer Hook:**
+
+Execute custom program logic on every transfer:
+
+```rust
+pub struct TransferHook {
+    pub authority: Pubkey,
+    pub program_id: Pubkey,
+}
+```
+
+Protocol can enforce transfer restrictions, royalties, logging, or any validation before transfers complete. Enables compliant tokens, gaming item logic, conditional transfers.
+
+**Permanent Delegate:**
+
+Mint authority sets an address with permanent spending rights over all token accounts:
+
+```rust
+pub struct PermanentDelegate {
+    pub delegate: Pubkey,
+}
+```
+
+Used for regulated tokens where issuer must be able to reclaim funds (sanctions, compliance). Different from temporary delegation—this is irrevocable authority over all accounts.
+
+**Transfer Fees:**
+
+Charge a fee on every transfer, sent to designated accounts:
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_basis_points: u16,
+    pub maximum_fee: u64,
+}
+```
+
+Enables economic models where transfers generate revenue. Gaming currencies, deflationary tokens, protocol fees built into token itself.
+
+**Interest-Bearing Tokens:**
+
+Token amounts grow over time based on interest rate:
+
+```rust
+pub struct InterestBearingConfig {
+    pub rate: i16,  // Basis points per year
+    pub last_update_timestamp: i64,
+}
+```
+
+Lending protocols issue tokens representing deposits. Balance increases automatically based on interest rate. No manual rebasing needed.
+
+**Confidential Transfers:**
+
+Encrypt transfer amounts using zero-knowledge proofs:
+
+```rust
+pub struct ConfidentialTransferMint {
+    pub authority: Pubkey,
+    pub auto_approve_new_accounts: bool,
+}
+```
+
+Transfers execute with hidden amounts. Only sender/receiver see balances. Compliance authorities (with special keys) can decrypt if needed. Privacy + auditability.
+
+**Non-Transferable Tokens:**
+
+Tokens that cannot be transferred after minting:
+
+```rust
+pub struct NonTransferable {}
+```
+
+Used for soulbound tokens, credentials, achievements. Once minted to an address, they stay there forever. No transfers, no selling.
+
+**Immutable Owner:**
+
+Token accounts whose owner cannot be changed:
+
+```rust
+pub struct ImmutableOwner {}
+```
+
+Prevents reassigning token account ownership. Security feature preventing certain exploit patterns.
+
+**Memo Required on Transfer:**
+
+Forces memo (message) on every transfer:
+
+```rust
+pub struct MemoTransfer {
+    pub require_incoming_transfer_memos: bool,
+}
+```
+
+Compliance feature. Exchanges can require transaction purpose in memo field. Used for regulated environments.
+
+**Default Account State:**
+
+Set whether new token accounts start frozen:
+
+```rust
+pub struct DefaultAccountState {
+    pub state: AccountState,
+}
+```
+
+Token issuer can require all new token accounts start frozen. Issuer must explicitly thaw them. Compliance control.
+
+Other extensions: **CPI Guard**, **Metadata Pointer**, **Group Pointer**, **Group Member Pointer**, **Close Authority**, **Reallocate**.
+
+<ArticleSection name="Backward Compatibility" id="backward-compatibility" level="h2" />
+
+Token-2022 tokens work with programs expecting SPL Token. The account structure extends SPL Token's layout without breaking existing fields.
+
+**What this means:**
+
+Programs reading mint supply, decimals, authorities? They work with Token-2022 tokens. The base fields are in the same locations.
+
+Programs transferring tokens? They work if they don't rely on account size assumptions. Transfer logic is identical.
+
+Extensions appear after the base data. Programs ignoring extensions see only SPL Token fields. Programs aware of extensions can read additional data.
+
+**Migration path:**
+
+No ecosystem split. Token-2022 doesn't fragment Solana like ERC-777 fragmented Ethereum. DEXs support both SPL Token and Token-2022. Wallets display both. Lending protocols accept both.
+
+New projects can use Token-2022 for advanced features while maintaining compatibility with the entire ecosystem.
+
+<ArticleSection name="When to Use Token-2022" id="when-to-use" level="h2" />
+
+**Use SPL Token when:**
+
+Basic fungible token. No special features needed. Maximum compatibility desired. Simpler is better.
+
+**Use Token-2022 when:**
+
+Need embedded metadata (avoids Metaplex account cost and complexity).
+
+Need transfer restrictions (gaming items, compliant tokens, conditional logic).
+
+Need transfer fees (deflationary mechanics, protocol revenue).
+
+Need interest-bearing balances (lending, staking receipts).
+
+Need privacy (confidential transfer amounts).
+
+Need soulbound tokens (credentials, achievements).
+
+**Trade-offs:**
+
+Token-2022 mints are larger (extensions add bytes, increase rent). More complex (extensions introduce configuration). Slightly newer (less battle-tested than SPL Token).
+
+But if you need any extension feature, Token-2022 is the standard way to get it. Don't build wrapper programs or external trackers—use extensions.
+
+<ArticleSection name="Practical Examples" id="practical-examples" level="h2" />
+
+**Gaming currency with transfer fees:**
+
+Create Token-2022 mint with transfer fee extension. Every trade/transfer automatically charges 1% fee. Fees accumulate in designated account. Game developers earn revenue from in-game economy activity.
+
+**Compliant stablecoin with transfer hooks:**
+
+Enable transfer hook extension. Hook program validates transfers against compliance rules (sanctions lists, KYC requirements). Non-compliant transfers fail automatically. Issuer maintains regulatory compliance without freezing entire accounts.
+
+**Lending receipt tokens with interest:**
+
+Issue Token-2022 tokens with interest-bearing extension. Users deposit USDC, receive receipt tokens. Receipt token balance grows based on lending APY. No manual rebase needed—balance calculation is dynamic.
+
+**Soulbound credentials:**
+
+Mint non-transferable tokens representing certifications, achievements, reputation. Once minted to user, they cannot sell or transfer. Creates verifiable on-chain credentials.
+
+**Private balance tokens:**
+
+Enable confidential transfer extension. Users can transfer tokens with encrypted amounts. Third parties see transfers happened but not amounts. Privacy for financial applications.
+
+<ArticleSection name="Checking Token Extensions" id="checking-extensions" level="h2" />
+
+**On Solana Explorer:**
+
+Search for mint address. If Token-2022, "Extensions" section shows enabled extensions with their configuration.
+
+**Programmatically:**
+
+```javascript
+const mint = await getMint(
+    connection,
+    mintAddress,
+    'confirmed',
+    TOKEN_2022_PROGRAM_ID
+);
+
+// Check for metadata extension
+const metadata = getMetadataPointerState(mint);
+
+// Check for transfer fee extension
+const transferFeeConfig = getTransferFeeConfig(mint);
+```
+
+Extensions are optional. Most mints enable 0-3 extensions. A mint with 10+ extensions is unusual—each adds complexity and rent cost.
+
+<ArticleSection name="Creating Token-2022 Mints" id="creating-token2022" level="h2" />
+
+Token-2022 mint creation similar to SPL Token but specifies extensions:
+
+```javascript
+const mint = await createMint(
+    connection,
+    payer,
+    mintAuthority,
+    freezeAuthority,
+    decimals,
+    keypair,
+    confirmOptions,
+    TOKEN_2022_PROGRAM_ID  // Use Token-2022 program
+);
+
+// Enable metadata extension
+await createInitializeMetadataPointerInstruction(
+    mint,
+    mintAuthority,
+    metadataAddress,
+    TOKEN_2022_PROGRAM_ID
 );
 ```
 
-The metadata account becomes your token's universal passport, containing everything applications need to display your asset properly. 
+Extensions must be enabled during mint creation (or shortly after, before first mint). Cannot add extensions to existing mints with supply. Design carefully upfront.
 
-Token names replace incomprehensible addresses, symbols provide instant recognition (think "SOL" instead of that long string above), and URI references point to rich media like logos and detailed descriptions.
+<ArticleSection name="Future Extensions" id="future-extensions" level="h2" />
 
-The result? Your token doesn't just exist on the blockchain—it thrives in wallets, appears professionally in explorers, and integrates seamlessly with applications across the Solana ecosystem.
+Token-2022 is extensible. New extensions can be added as needs emerge. Possible future extensions:
 
-> To learn more on how to use the `Token Metadata` program, refer to the [official documentation](https://developers.metaplex.com/token-metadata)
+**Time-locked transfers** - Tokens that unlock after specific dates.
+
+**Multi-signature requirements** - Transfers requiring M-of-N approvals.
+
+**Dividend distribution** - Automatic proportional payments to all holders.
+
+**Voting power modifiers** - Governance weight separate from balance.
+
+Extensions that don't break existing functionality can be added without forking. The program's design anticipates evolution.
+
+Token Extensions represent Solana's approach: don't fragment the ecosystem with new standards, extend the existing one. Token-2022 isn't a replacement—it's SPL Token with optional superpowers.
+
+Next: wrapping up what you've learned and where to go for implementation.
+

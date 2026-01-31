@@ -1,121 +1,321 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Metaplex Token Metadata Program
+# Metaplex Token Metadata Standard
 
-The Metaplex Token Metadata Program addresses a fundamental limitation in the SPL-Token program by enabling the attachment of rich descriptive data to both fungible and non-fungible tokens. 
+SPL Token mint accounts store decimals, supply, authorities. They don't store names, images, descriptions. USDC's mint is `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`. Your wallet displays "USDC" with a logo. That information comes from metadata.
 
-While the SPL-Token program efficiently handles core token mechanics like ownership and supply, tokens without metadata appear in wallets and explorers as anonymous public keys. 
+Metaplex Token Metadata is the standard that adds human-readable information to Solana tokens. A separate program creating metadata accounts linked to mint accounts. Every major NFT on Solana used this standard for years.
 
-Metaplex transforms these basic blockchain entries into meaningful digital assets by providing the contextual information that applications and users need.
+<ArticleSection name="How Token Metadata Works" id="how-it-works" level="h2" />
 
-<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+Token Metadata uses two accounts:
 
-The `Metadata` account serves as the descriptive layer that provides context and utility to blockchain tokens. This account structure uses Solana's Program Derived Address system to create a reliable relationship between each token and its associated information. 
+**1. Mint account (SPL Token):**
 
-The deterministic address generation ensures that every mint account has exactly one corresponding metadata account, establishing clear data ownership and preventing conflicts.
+Standard SPL Token mint. For NFTs: supply=1, decimals=0, mint authority=None.
 
-The `Metadata` account derives its address using a deterministic process that combines specific seed values with the mint account's public key:
+**2. Metadata PDA (Metaplex program):**
 
-```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+Program Derived Address owned by Metaplex Token Metadata program. Stores name, symbol, URI, creators, royalties, collection info.
 
-const PREFIX: &str = "metadata";
+Deterministically derived from mint address:
 
-let (metadata, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-    ], 
-    &ID  
-);
+```javascript
+const metadataPDA = PublicKey.findProgramAddressSync(
+    [
+        Buffer.from("metadata"),
+        METADATA_PROGRAM_ID.toBuffer(),
+        mintAddress.toBuffer(),
+    ],
+    METADATA_PROGRAM_ID
+)[0];
 ```
 
-The `Metadata` account stores comprehensive information that extends well beyond basic token identifiers. 
+Given any mint address, anyone can calculate the metadata PDA address. No need to store or communicate it separately. Wallets and explorers derive it automatically.
 
-The creator verification system maintains a list of token creators, each with a verified attribute that provides cryptographic proof of authentic creator authorization. This verification prevents impersonation and establishes reliable provenance tracking for digital assets.
+<ArticleSection name="Metadata Account Structure" id="metadata-structure" level="h2" />
 
-The integrated royalty system enables automated revenue distribution through share attributes assigned to each creator. Marketplaces can programmatically reference these percentages to distribute secondary sale proceeds according to predetermined agreements, eliminating manual calculations and trust dependencies. 
-
-This creates sustainable economic models where creators continue earning from their work beyond initial sales.
-
-The Token Metadata program successfully bridges the gap between raw blockchain data and user-accessible digital assets. By augmenting mint accounts with rich contextual information, the program enables applications to display, categorize, and interact with tokens in meaningful ways. 
-
-This metadata layer provides the foundation for the diverse digital asset ecosystem that exists on Solana today.
-
-<ArticleSection name="Master Edition Account" id="master-edition-account" level="h2" />
-
-While Metadata accounts effectively serve both fungible and non-fungible tokens, ensuring authentic NFT characteristics requires additional control mechanisms. 
-
-The `Master Edition` account addresses this need as a specialized PDA that governs token authority management. This account is created only after the Token Metadata program verifies that proper non-fungible token properties have been established.
-
-The Master Edition system uses a sophisticated approach to authority management. Rather than permanently destroying mint authority, the program transfers both mint and freeze authorities to the Master Edition PDA. This design provides enhanced security and functionality compared to permanently voided authorities while maintaining strict control over token creation and management. 
-
-> Read [the FAQ](https://developers.metaplex.com/token-metadata/faq#why-are-the-mint-and-freeze-authorities-transferred-to-the-edition-pda) to understand the reason behind this choice.
-
-The seeds of the `Master Edition` account are as following:
+The metadata account contains structured data:
 
 ```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-
-const PREFIX: &str = "metadata";
-const EDITION: &str = "edition";
-
-
-let (master_edition, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-        EDITION.as_bytes(),
-    ], 
-    &ID  
-);
+pub struct Metadata {
+    pub key: Key,                   // Account type discriminator
+    pub update_authority: Pubkey,   // Who can update metadata
+    pub mint: Pubkey,               // Associated token mint
+    pub data: Data,                 // Name, symbol, URI, creators, royalty
+    pub primary_sale_happened: bool,
+    pub is_mutable: bool,           // Can metadata be changed?
+    pub edition_nonce: Option<u8>,
+    pub token_standard: Option<TokenStandard>,
+    pub collection: Option<Collection>,
+    pub uses: Option<Uses>,
+    pub collection_details: Option<CollectionDetails>,
+    pub programmable_config: Option<ProgrammableConfig>,
+}
 ```
+
+**`update_authority`** - Who can modify metadata:
+- Typically the creator initially
+- Can be changed or revoked (set to None for immutable)
+- Independent from mint authority
+
+**`mint`** - Which token this metadata describes:
+- Links metadata to specific mint account
+- One metadata account per mint
+
+**`data`** - The actual metadata:
+
+```rust
+pub struct Data {
+    pub name: String,              // "Okay Bear #1234"
+    pub symbol: String,            // "OKAY"
+    pub uri: String,               // Link to off-chain JSON
+    pub seller_fee_basis_points: u16,  // Royalty %
+    pub creators: Option<Vec<Creator>>,
+}
+```
+
+**`primary_sale_happened`** - First sale tracking:
+- False initially
+- Set to true after first marketplace sale
+- Used for royalty logic (some creators waive royalties on primary sales)
+
+**`is_mutable`** - Can metadata change?:
+- True: Update authority can modify metadata
+- False: Metadata permanently frozen
+- Common to set false after mint for immutability guarantee
+
+**`collection`** - Collection membership:
+- Reference to collection NFT
+- Verified flag (collection authority signed)
+- Enables collection filtering and verification
+
+<ArticleSection name="Off-Chain Metadata (JSON)" id="offchain-metadata" level="h2" />
+
+The `uri` field in on-chain metadata points to off-chain JSON file containing detailed information.
+
+**Typical JSON structure:**
+
+```json
+{
+  "name": "Okay Bear #1234",
+  "symbol": "OKAY",
+  "description": "Okay Bear is a collection of 10,000 bears.",
+  "image": "https://arweave.net/...",
+  "attributes": [
+    { "trait_type": "Background", "value": "Blue" },
+    { "trait_type": "Fur", "value": "Brown" },
+    { "trait_type": "Eyes", "value": "Happy" },
+    { "trait_type": "Clothing", "value": "T-Shirt" }
+  ],
+  "properties": {
+    "files": [
+      { "uri": "https://arweave.net/...", "type": "image/png" }
+    ],
+    "category": "image"
+  }
+}
+```
+
+**Why split on-chain/off-chain?**
+
+On-chain storage is expensive. Storing a 2KB JSON file on-chain costs ~0.01 SOL per NFT. For 10,000 NFTs: 100 SOL = $15,000+ in rent.
+
+Off-chain storage (IPFS, Arweave, centralized) costs fraction of that. URI points to JSON. Wallets fetch and display.
+
+**Storage options:**
+
+**Arweave**: Permanent decentralized storage. Pay once, store forever. Most NFT projects use this. Cost: ~$0.01 per file.
+
+**IPFS**: Decentralized but not guaranteed permanent. Files can disappear if no one pins them. Cheaper but less reliable.
+
+**Centralized (AWS, Cloudflare)**: Cheapest and fastest. Creator controls. Risk: Creator can change or delete. Not truly decentralized.
+
+**On-chain (rare)**: Maximum permanence and decentralization. Very expensive. Some high-value NFTs do this via inscriptions.
+
+<ArticleSection name="Creators and Royalties" id="creators-royalties" level="h2" />
+
+Metadata includes creator list and royalty configuration:
+
+```rust
+pub struct Creator {
+    pub address: Pubkey,
+    pub verified: bool,    // Creator signed approval
+    pub share: u8,         // Percentage of royalties (0-100)
+}
+```
+
+**Creator verification:**
+
+Anyone can mint an NFT claiming arbitrary creators. Verification proves creators approved.
+
+Unverified: NFT lists creator, but creator didn't sign. Could be fake.
+
+Verified: Creator signed transaction proving they approve being listed. Authentic.
+
+Marketplaces show verification status. Verified creators add legitimacy.
+
+**Royalty distribution:**
+
+```rust
+seller_fee_basis_points: 500  // 5% royalty
+creators: [
+    { address: Artist, verified: true, share: 70 },   // Artist gets 3.5%
+    { address: Platform, verified: true, share: 30 },  // Platform gets 1.5%
+]
+```
+
+Secondary sales split: 95% to seller, 5% to creators (based on share percentages).
+
+Marketplaces honor royalties voluntarily. Protocol doesn't enforce. Most major marketplaces respect creator royalties by default, but some offer zero-royalty trading.
+
+<ArticleSection name="Collections and Verification" id="collections" level="h2" />
+
+Collections group related NFTs. Okay Bears is a collection. Mad Lads is a collection.
+
+**Collection structure:**
+
+Collection itself is an NFT (supply=1).
+
+Individual NFTs reference the collection:
+
+```rust
+pub struct Collection {
+    pub verified: bool,    // Collection authority signed
+    pub key: Pubkey,       // Collection NFT address
+}
+```
+
+**Verification process:**
+
+1. Mint collection NFT (supply=1)
+2. Mint individual NFTs with collection field pointing to collection NFT
+3. Collection update authority signs verification for each NFT
+4. `verified` flag set to true
+
+Unverified collection membership means NFT claims to belong but collection didn't verify. Likely fake. Marketplaces filter unverified NFTs or show warnings.
+
+**Why verification matters:**
+
+Anyone can create NFT claiming "Okay Bear #10001." Without verification, marketplaces can't distinguish real from fake. Verification proves collection authority approved this NFT.
+
+Fake NFTs can't get verified (they don't have collection authority signature). Real NFTs have verified flag. Simple fraud prevention.
+
+<ArticleSection name="Master Edition and Prints" id="master-edition" level="h2" />
+
+Metaplex supports edition mechanism: one master NFT, multiple prints.
+
+**Master Edition:**
+
+Original NFT marked as master. Supply=1. Has master edition PDA tracking how many prints exist and maximum allowed.
+
+**Edition Prints:**
+
+Limited or unlimited copies of master. Each print is separate NFT (supply=1) but marked as edition of master.
+
+Print #1, Print #2, etc. Numbered and traceable to master.
+
+**Use cases:**
+
+Digital art limited editions. Artist creates master, mints 100 prints. Print #37 of 100.
+
+Event photos with signed originals. Photographer holds master, sells numbered prints.
+
+**Trade-offs:**
+
+Adds complexity. Each print is separate NFT with separate accounts. More expensive than single NFT.
+
+Market value: Masters typically worth more than prints. Print numbers affect value (early prints more valuable).
+
+Not widely used compared to unique 1/1 NFTs. Adds friction for most NFT projects.
 
 <ArticleSection name="Programmable NFTs" id="programmable-nfts" level="h2" />
 
-Programmable NFTs (pNFTs) represent an advanced token standard that enforces customizable behaviors and restrictions at the protocol level.
+Recent addition to Token Metadata: Programmable NFTs (pNFTs).
 
-This asset class addresses the limitations of traditional NFTs by enabling creators to define specific lifecycle rules that automatically execute during token interactions, ensuring compliance for creators without relying on external enforcement mechanisms.
+**What they enable:**
 
-The enforcement architecture operates through a frozen token account system. When an NFT becomes programmable, its associated token account remains permanently frozen, requiring all operations to route through the Token Metadata program. 
+Enforced royalties at protocol level (transfers require royalty payment).
 
-This design creates a mandatory validation checkpoint where rules are verified before any action can proceed, making it impossible to bypass creator-defined restrictions.
+Transfer rules (restrictions on who can transfer, when, under what conditions).
 
-Creator-defined rules are stored within `RuleSet` accounts that connect to the `Token Record` account, a new account type associated with the mint that signals programmable NFT status. 
+Delegate management (advanced permission systems).
 
-The `Token Record` account derives its address using specific seeds that link it to both the mint and token accounts:
+**How they work:**
 
-```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+Mint includes programmable configuration. Transfers execute through rule validation. Programs can enforce logic Ethereum ERC-721 cannot.
 
-const PREFIX: &str = "metadata";
-const TOKEN_RECORD_SEED: &str = "token_record";
+**Trade-offs:**
 
+More complexity than standard NFTs. Higher transaction costs. Additional accounts.
 
-let (master_edition, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-        TOKEN_RECORD_SEED.as_bytes(),
-        token.as_ref(),
-    ], 
-    &ID  
-);
+Benefit: True royalty enforcement (not marketplace-dependent). Transfer control for gaming, compliance, conditional ownership.
+
+**Adoption:**
+
+Growing but still minority. Most NFTs remain standard Token Metadata. Use pNFTs when enforcement is critical (high-value art with royalties, gaming items with trade restrictions).
+
+<ArticleSection name="Creating Token Metadata NFTs" id="creating-nfts" level="h2" />
+
+**Steps:**
+
+1. Create mint account (supply=1, decimals=0)
+2. Mint 1 token to owner's token account
+3. Set mint authority to None (prevent additional minting)
+4. Create metadata PDA with name, symbol, URI, creators, royalties
+5. If part of collection: Set collection field and verify
+
+**Tools:**
+
+Metaplex JS SDK provides helpers:
+
+```javascript
+const { nft } = await metaplex.nfts().create({
+    uri: "https://arweave.net/metadata.json",
+    name: "My NFT",
+    sellerFeeBasisPoints: 500,
+    creators: [
+        {
+            address: creator.publicKey,
+            share: 100,
+        }
+    ],
+});
 ```
 
-These `RuleSets` enable sophisticated conditional logic including marketplace allowlists that honor royalty payments, multi-signature requirements for transfers, time-based restrictions on operations, or complex approval workflows. 
+Handles mint creation, token minting, metadata PDA creation automatically.
 
-The [Token Auth Rules](https://developers.metaplex.com/token-auth-rules) program manages these `RuleSet` accounts and handles their validation logic, providing a flexible framework for implementing custom governance mechanisms.
+**Cost:**
 
-Developer interaction with pNFTs occurs through Token Metadata's program rather than direct SPL-Token program. The program provides streamlined instructions like `Create` and `Update` that replace traditional operations such as `CreateMetadataAccount` and `UpdateMetadata`. 
+Mint account: 0.00144 SOL rent.
 
-Each instruction requires an `authorization_rules` account parameter that references the applicable `RuleSet`, which can be discovered through on-chain derivation or via the Metaplex Read API.
+Metadata account: ~0.012-0.02 SOL (varies by data size).
 
-This programmable framework enables creators to implement nuanced economic models and governance structures with guaranteed enforcement. 
+Total: ~0.015-0.025 SOL per NFT ≈ $0.02-0.03.
 
-Whether implementing conditional transfers, dynamic royalty structures, or complex ownership requirements, pNFTs ensure that all behaviors execute automatically at the protocol level without depending on marketplace cooperation or voluntary user compliance.
+<ArticleSection name="When to Use Token Metadata" id="when-to-use" level="h2" />
 
-> To learn more on how to use the `Token Metadata` program, refer to the [official documentation](https://developers.metaplex.com/token-metadata)
+**Use Token Metadata when:**
+
+Maximum compatibility desired. Every wallet, marketplace, tool supports it.
+
+Your project needs battle-tested standard. Years of production use.
+
+Collection already started with Token Metadata. Migration would be complex.
+
+Programmable NFTs needed. pNFTs require Token Metadata.
+
+**Consider alternatives when:**
+
+Lower cost matters (Metaplex Core is cheaper).
+
+Simpler structure preferred (Core uses single account).
+
+Massive scale needed (compressed NFTs dramatically cheaper).
+
+Starting fresh (Core is newer, cleaner standard for new projects).
+
+Token Metadata remains the most widely supported standard. If compatibility is priority, use it. If optimizing costs and starting fresh, consider Core or compressed NFTs.
+
+Next: Metaplex Core and compressed NFTs—the newer, more efficient approaches to Solana NFTs.
+

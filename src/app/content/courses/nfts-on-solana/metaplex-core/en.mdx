@@ -1,192 +1,308 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Metaplex Core Program
+# Metaplex Core and Compressed NFTs
 
-The Metaplex Core program addresses the complexity and cost issues inherent in the Token Metadata program's multi-account architecture. While Token Metadata relies on SPL-Token as its foundation, requiring multiple accounts for each NFT, this approach creates expensive and bulky implementations that burden both users and the network.
+Token Metadata uses two accounts per NFT: SPL Token mint + metadata PDA. Works, but expensive. Metaplex Core simplifies with one account containing everything. Compressed NFTs go further: millions of NFTs in one account using Merkle trees.
 
-Released in 2024, Metaplex Core represents an ultra-lightweight program designed specifically for NFT operations. Unlike its predecessor, Core operates independently without SPL-Token dependencies, handling minting, transfers, burns, and customizable behaviors through its own program logic. 
+Core provides cleaner architecture. Compressed NFTs enable massive scale. Both reduce costs dramatically.
 
-This next-generation standard employs a single account design that significantly reduces minting costs while improving overall network performance through its flexible plugin system.
+<ArticleSection name="Metaplex Core: Single Account NFTs" id="metaplex-core" level="h2" />
 
-<ArticleSection name="Assets" id="assets" level="h2" />
+Token Metadata NFTs require:
+- Mint account (82 bytes, 0.00144 SOL rent)
+- Metadata PDA (~700 bytes, 0.012-0.02 SOL rent)
+- Total: ~0.015 SOL per NFT
 
-The revolutionary aspect of Metaplex Core lies in its unified account structure that eliminates the traditional separation between mint and token accounts. 
+Metaplex Core NFTs require:
+- Single Core Asset account (~300-400 bytes, 0.006-0.008 SOL rent)
+- Total: ~0.007 SOL per NFT
 
-Since NFTs maintain unique ownership with a single holder, the program stores the relationship between wallet and asset directly within the asset account itself. 
+50% cheaper, simpler, no SPL Token dependency.
 
-This design makes intuitive sense when considering that the original Token Account system was created to manage thousands of owners per mint, a scenario that never applies to non-fungible tokens.
+**How Core works:**
 
-The Asset structure demonstrates this efficiency-focused approach through its minimal field requirements:
+Core Asset account contains everything:
 
 ```rust
-#[derive(Clone, BorshSerialize, BorshDeserialize, Debug, ShankAccount, Eq, PartialEq)]
-pub struct AssetV1 {
-    /// The account discriminator.
+pub struct Asset {
     pub key: Key,
-    /// The owner of the asset.
     pub owner: Pubkey,
-    /// The update authority of the asset.
-    pub update_authority: UpdateAuthority,
-    /// The name of the asset.
+    pub update_authority: Pubkey,
     pub name: String,
-    /// The URI of the asset that points to the off-chain data.
     pub uri: String,
-    /// The sequence number used for indexing with compression.
-    pub seq: Option<u64>,
+    pub seq: u64,  // Sequence number for updates
 }
 ```
 
-This structure represents the absolute minimum data required for functional NFT operations. 
+No separate mint account, token accounts, or SPL Token program involvement—pure NFT program handling everything.
 
-Traditional `Mint` account fields become redundant in this context since: supply always equals one, decimals always equal zero, mint authority should remain unset, and freeze authority can be consolidated with the update authority field. 
+**Transfers:**
 
-Similarly, most `Token` account functionality integrates directly into the asset structure.
+Token Metadata transfers involve SPL Token program (transfer token from one token account to another).
 
-The absence of an explicit freezing mechanism demonstrates Core's intelligent design philosophy. 
+Core transfers happen entirely within Core program (change owner field in Asset account).
 
-Rather than reserving space for features that many assets never utilize, Core implements freezing functionality through its plugin system, adding capabilities on demand rather than maintaining unused fields.
+Simpler validation. Fewer accounts. Lower compute costs.
 
-This approach optimizes storage costs while preserving full functionality for assets that require freezing capabilities.
+**Metadata:**
 
-Collection membership receives equally thoughtful treatment through the update authority enumeration system: since grouped assets typically share the same update authority, Core leverages this relationship to eliminate redundant field storage:
+Same off-chain JSON approach. URI points to Arweave/IPFS. On-chain account stores minimal data (name, URI, owner).
 
-```rust
-pub enum UpdateAuthority {
-    None,
-    Address(Pubkey),
-    Collection(Pubkey),
-}
-```
+Collections, royalties, attributes work similarly. Different program, same concepts.
 
-The update authority field serves triple duty by indicating immutable assets through `None`, independent assets through specific addresses, or collection members that inherit the update authority from their parent collection. 
+<ArticleSection name="Core Advantages" id="core-advantages" level="h2" />
 
-This elegant solution reduces storage requirements while maintaining clear authority relationships and collection membership verification.
+**Cost:**
 
-<ArticleSection name="Collections" id="collections" level="h2" />
+50% cheaper per NFT. 10,000 collection: save ~$75 in rent deposits.
 
-Collections in Metaplex Core represent grouped sets of assets that share thematic, creative, or functional relationships. 
+**Simplicity:**
 
-Unlike traditional NFT collections that rely on external verification systems, Core collections establish verifiable on-chain relationships between assets through their integrated authority structure.
+One account instead of two. Fewer PDAs to derive. Less complex transaction building.
 
-Creating a collection begins with establishing a Collection Asset that serves as the authoritative parent account for all member assets. 
+**Performance:**
 
-This Collection Asset functions as both the organizational hub and the metadata repository for collection-wide information including the collection name, description, and representative imagery. 
+Smaller accounts = less data to read/write. Faster transactions. Lower compute usage.
 
-The collection account also acts as a central control point for plugins that apply across all member assets, enabling creators to implement uniform behaviors throughout their entire collection.
+**Flexibility:**
 
-```rust
-pub struct CollectionV1 {
-    /// The account discriminator.
-    pub key: Key, //1
-    /// The update authority of the collection.
-    pub update_authority: Pubkey, //32
-    /// The name of the collection.
-    pub name: String, //4
-    /// The URI that links to what data to show for the collection.
-    pub uri: String, //4
-    /// The number of assets minted in the collection.
-    pub num_minted: u32, //4
-    /// The number of assets currently in the collection.
-    pub current_size: u32, //4
-}
-```
+Plugin system for custom behavior. Add royalty enforcement, transfer restrictions, custom logic without protocol changes.
 
-The Collection structure maintains critical statistics through its `num_minted` and `current_size` fields, which track the total number of assets ever created within the collection and the current number of assets that remain active. 
+<ArticleSection name="Core Disadvantages" id="core-disadvantages" level="h2" />
 
-These metrics enable accurate collection analytics and support features like limited edition releases or burn tracking without requiring external indexing services.
+**Newer standard:**
 
-When an asset sets its `update_authority` to `Collection(collection_pubkey)`, it automatically inherits the collection's authority structure while establishing verifiable membership. This design eliminates the need for separate verification accounts or external attestation systems, creating immutable collection relationships that can be validated entirely on-chain.
+Less battle-tested. Fewer years in production. Some tools/integrations still catching up.
 
-<ArticleSection name="Plugins" id="plugins" level="h2" />
+**Compatibility:**
 
-The plugin system represents Metaplex Core's most innovative feature, addressing the limitations of rigid, predefined behaviors that characterized earlier NFT standards. 
+Programs expecting Token Metadata SPL Tokens won't work with Core assets. Requires explicit Core support.
 
-While the legacy Token Metadata program required complex workarounds like programmable NFTs for custom functionality, Core's plugin architecture enables granular customization without sacrificing simplicity or performance.
+Marketplaces adding Core support but Token Metadata more universal.
 
-Core's revolutionary approach treats on-chain data fluidly rather than locking it into fixed structures. This design philosophy enables the flexible, plugin-based system that serves diverse use cases while maintaining efficient account management. 
+**Migration:**
 
-Each plugin defines its own permission model, specifying exactly who can perform particular actions, while Core's validation system prevents conflicts between different authorities and permissions.
+Existing Token Metadata collections can't easily migrate. Would require minting new Core versions.
 
-The account architecture divides into two distinct components: 
-- The core data section containing essential asset information with predictable field lengths
-- The optional plugin metadata section where additional functionalities and custom behaviors reside. 
+<ArticleSection name="Compressed NFTs: Merkle Tree Architecture" id="compressed-nfts" level="h2" />
 
-This separation ensures that basic assets remain lightweight while complex functionality scales on demand.
+Regular NFTs (Token Metadata or Core): One account per NFT. 1 million NFTs = 1-2 million accounts = $15,000-30,000 in rent.
 
-Plugin metadata organizes itself through a three-part structure: the header, individual plugins, and the registry that coordinates everything. 
+Compressed NFTs: Many NFTs in one Merkle tree account. 1 million NFTs in one tree = ~$500.
+
+**How compression works:**
+
+Merkle tree stores hashes of NFT data, not full data. Tree account contains root hash and proofs.
+
+NFT "exists" as proven membership in tree. No dedicated account per NFT.
+
+**Tree structure:**
 
 ```
-Header | Plugin1 | Plugin2 | Plugin3 | Registry
+Tree Account
+├─ Max depth (determines capacity)
+├─ Max buffer size
+├─ Root hash
+└─ Proofs for all NFTs
 ```
 
-The Plugin Header serves as the entry point, containing a `plugin_registry_offset` pointer that indicates the registry's location within the account:
+Depth 14 tree = 16,384 NFTs max. Depth 20 tree = 1,048,576 NFTs max. Depth 30 tree = 1,073,741,824 NFTs max (billion+).
 
-```rust
-pub struct PluginHeaderV1 {
-    /// The Discriminator of the header which doubles as a Plugin metadata version.
-    pub key: Key, // 1
-    /// The offset to the plugin registry stored at the end of the account.
-    pub plugin_registry_offset: usize, // 8
-}
+Tree account rent depends on depth, not number of NFTs actually minted. Pay once for capacity, fill gradually.
+
+<ArticleSection name="Compressed NFT Operations" id="compressed-operations" level="h2" />
+
+**Creating tree:**
+
+```javascript
+const tree = await createTree(umi, {
+    maxDepth: 14,         // 16,384 NFT capacity
+    maxBufferSize: 64,
+});
 ```
 
-The Plugin Registry functions as the coordination center, maintaining vectors of both internal `RegistryRecord` entries and `ExternalRegistryRecord` entries for third-party plugins. 
+Cost: ~$10-500 depending on depth. One-time payment for tree account.
 
-Each record contains the plugin type, governing authority, and offset location within the account:
+**Minting compressed NFT:**
 
-```rust
-pub struct PluginRegistryV1 {
-    /// The Discriminator of the header which doubles as a plugin metadata version.
-    pub key: Key, // 1
-    /// The registry of all plugins.
-    pub registry: Vec<RegistryRecord>, // 4
-    /// The registry of all adapter, third party, plugins.
-    pub external_registry: Vec<ExternalRegistryRecord>, // 4
-}
+Update tree with NFT proof. No new accounts created.
 
-pub struct RegistryRecord {
-    /// The type of plugin.
-    pub plugin_type: PluginType, // 2
-    /// The authority who has permission to utilize a plugin.
-    pub authority: Authority, // Variable
-    /// The offset to the plugin in the account.
-    pub offset: usize, // 8
-}
-
-pub struct ExternalRegistryRecord {
-    /// The adapter, third party plugin type.
-    pub plugin_type: ExternalPluginAdapterType,
-    /// The authority of the external plugin adapter.
-    pub authority: Authority,
-    /// The lifecycle events for which the external plugin adapter is active.
-    pub lifecycle_checks: Option<Vec<(HookableLifecycleEvent, ExternalCheckResult)>>,
-    /// The offset to the plugin in the account.
-    pub offset: usize, // 8
-    /// For plugins with data, the offset to the data in the account.
-    pub data_offset: Option<usize>,
-    /// For plugins with data, the length of the data in the account.
-    pub data_len: Option<usize>,
-}
+```javascript
+await mintToCollectionV1(umi, {
+    tree: tree.publicKey,
+    leafOwner: owner,
+    metadata: {
+        name: "My NFT #1",
+        uri: "https://arweave.net/...",
+    },
+});
 ```
 
-Plugin retrieval follows a systematic process that leverages this organized structure. 
+Cost: ~$0.0001 per mint (proof update cost).
 
-The system first loads the asset data to determine the plugin header location, then uses the header's offset to locate the registry, and finally iterates through registry records to compile the complete plugin list:
+**Transferring:**
 
-```rust
-pub fn list_plugins(account: &AccountInfo) -> Result<Vec<PluginType>, ProgramError> {
-    let asset = AssetV1::load(account, 0)?;
-    if asset.get_size() == account.data_len() {
-        return Err(MplCoreError::PluginNotFound.into());
-    }
-    let header = PluginHeaderV1::load(account, asset.get_size())?;
-    let PluginRegistryV1 { registry, .. } =
-        PluginRegistryV1::load(account, header.plugin_registry_offset)?;
-    Ok(registry
-        .iter()
-        .map(|registry_record| registry_record.plugin_type)
-        .collect())
-}
+Update tree proof, change owner. Requires proof of current ownership.
+
+```javascript
+await transfer(umi, {
+    tree: tree.publicKey,
+    leafOwner: currentOwner,
+    newLeafOwner: newOwner,
+    proof: ownershipProof,
+});
 ```
 
-> To learn more on how to use the `Core` program, refer to the [official documentation](https://developers.metaplex.com/core)
+Proof verification ensures only real owner transfers. Tree update changes ownership record.
+
+**Reading compressed NFT:**
+
+Can't read directly from tree (hashes only). Requires indexer.
+
+Indexers watch tree updates, maintain database of current state. DAS (Digital Asset Standard) API provides queries.
+
+Wallets query indexers, not tree directly. Indexers return NFT data, ownership, metadata.
+
+<ArticleSection name="Compressed NFT Trade-offs" id="compressed-tradeoffs" level="h2" />
+
+**Massive cost savings:**
+
+1 million NFTs:
+- Token Metadata: $28,800 rent
+- Core: $7,000 rent
+- Compressed: $500 tree + $100 minting = $600 total
+
+48x cheaper than Token Metadata, 12x cheaper than Core.
+
+**Requires indexers:**
+
+Can't query tree directly. Must use indexer (Helius, Triton, etc.).
+
+Indexers are centralized services. If indexer goes down, can't read NFT data.
+
+Solana Foundation runs public indexer (DAS API), but adding dependency.
+
+**More complex transfers:**
+
+Regular NFTs: Just sign transfer transaction.
+
+Compressed NFTs: Include proof of ownership. Proof must be current (from latest tree state).
+
+**Concurrent transfer limitations:**
+
+Multiple simultaneous transfers to same tree can conflict. Tree updates are sequential.
+
+High-throughput applications need careful coordination.
+
+<ArticleSection name="When to Use Each Standard" id="when-to-use-each" level="h2" />
+
+**Use Token Metadata when:**
+
+Maximum compatibility critical. Every tool supports it.
+
+Existing project already using it.
+
+Programmable NFTs needed (pNFTs require Token Metadata).
+
+Can't depend on indexers (want pure on-chain reads).
+
+**Use Core when:**
+
+Starting new project, want best practices.
+
+Lower costs matter (50% cheaper than Token Metadata).
+
+Simpler architecture preferred.
+
+Willing to verify marketplace/tool support.
+
+**Use Compressed NFTs when:**
+
+Scale matters (millions of NFTs).
+
+Cost optimization critical (100x cheaper than regular).
+
+Can depend on indexers (acceptable centralization).
+
+Use cases: gaming (millions of items), loyalty programs (millions of members), large collections, event tickets at scale.
+
+<ArticleSection name="Real World Examples" id="real-examples" level="h2" />
+
+**Mad Lads (Compressed NFTs):**
+
+10,000 NFT collection using compressed NFTs. Backpack team demonstration of scale.
+
+Chose compression for cost efficiency and technical showcase.
+
+**Drip Haus (Compressed NFTs):**
+
+Fashion NFTs. Thousands of digital fashion items.
+
+Compression enables affordable mass minting for fashion drops.
+
+**Tensor (Marketplace):**
+
+Supports Token Metadata, Core, and Compressed NFTs.
+
+Shows all three standards viable in production.
+
+**Star Atlas (Gaming):**
+
+Thousands of in-game items as NFTs.
+
+Uses compression for scale (ships, weapons, resources).
+
+**Most major collections (Token Metadata):**
+
+Okay Bears, DeGods, Famous Fox Federation all use Token Metadata.
+
+Standard remains most widely adopted for established projects.
+
+<ArticleSection name="Practical Comparison" id="practical-comparison" level="h2" />
+
+**10,000 NFT collection costs:**
+
+| Standard | Rent Deposits | Minting | Total | Per NFT |
+|----------|--------------|---------|-------|---------|
+| Token Metadata | $288 | $0 | ~$300 | $0.03 |
+| Core | $70 | $0 | ~$75 | $0.0075 |
+| Compressed | $50 (tree) | $1 | ~$55 | $0.0055 |
+
+**1,000,000 NFT collection costs:**
+
+| Standard | Rent Deposits | Minting | Total | Per NFT |
+|----------|--------------|---------|-------|---------|
+| Token Metadata | $28,800 | $0 | ~$29,000 | $0.029 |
+| Core | $7,000 | $0 | ~$7,000 | $0.007 |
+| Compressed | $500 (tree) | $100 | ~$600 | $0.0006 |
+
+The scale difference is dramatic. Compressed NFTs enable applications impossible at regular NFT costs.
+
+<ArticleSection name="Choosing Your Standard" id="choosing-standard" level="h2" />
+
+**Decision framework:**
+
+1. How many NFTs? (<10K: any standard. >100K: consider compressed)
+2. Need maximum compatibility? (Yes: Token Metadata. No: Core or Compressed)
+3. Can depend on indexers? (No: avoid compressed. Yes: compressed is option)
+4. Cost sensitivity? (High: Core or Compressed. Medium: Token Metadata fine)
+5. Existing project? (Yes: probably stick with current standard. No: evaluate all options)
+
+**Migration is hard:**
+
+Once you choose, switching is difficult. Token Metadata to Core requires minting new NFTs. Can't "convert" existing tokens.
+
+Plan for your scale. Starting with 10K but eventually want 1M? Consider compressed from start.
+
+**Recommendation for new projects:**
+
+Small collections (<10K), maximum compatibility desired: **Token Metadata**
+
+Small collections, cost-conscious, modern stack: **Core**
+
+Large collections (>100K), gaming, loyalty programs: **Compressed NFTs**
+
+All three are production-ready. Choose based on your requirements, not "newest is best."
+
+Next: Wrapping up what you learned and next steps for building NFT projects.
+

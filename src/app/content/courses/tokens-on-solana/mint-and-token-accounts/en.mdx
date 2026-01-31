@@ -1,102 +1,282 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Mint and Token Accounts
+# Mint Accounts and Supply Control
 
-As we said in the previous section, the building blocks of the `SPL Token` program are the accounts: the mint accounts that represent all information about the tokens and the token accounts that represent all information about the ownership of those specific tokens.
+USDC has $28 billion in circulating supply. Circle controls the mint authority. One organization decides how many USDC tokens exist. The mint account makes this explicit.
 
-For each unique mint, there are thousands of different token accounts that represent how many holders of that token are in the ledger.
+Every token on Solana has a mint account that defines the token's rules: total supply, decimals, who can create more tokens, who can freeze accounts. These aren't hidden in contract code—they're stored in a public account anyone can inspect.
 
-In this section we're going to talk more in depth about these different accounts:
+Mint accounts define who controls supply, what permissions exist, and how tokens enforce scarcity.
 
-<ArticleSection name="The Mint Account" id="the-mint-account" level="h2" />
+<ArticleSection name="The Mint Account Structure" id="mint-structure" level="h2" />
 
-Tokens on Solana are uniquely identified by the address of a Mint Account owned by the Token Program. This account acts as a global counter for a specific token and stores data such as:
-- Supply: Total supply of the token
-- Decimals: Decimal precision of the token
-- Mint authority: The account authorized to create new units of the token, increasing the supply
-- Freeze authority: The account authorized to freeze tokens in a Token Account, preventing them from being transferred or burned
-
-This is how that data looks onchain:
+Here's what a mint account contains:
 
 ```rust
 pub struct Mint {
-    /// Optional authority used to mint new tokens. The mint authority may only
-    /// be provided during mint creation. If no mint authority is present
-    /// then the mint has a fixed supply and no further tokens may be
-    /// minted.
     pub mint_authority: COption<Pubkey>,
-    /// Total supply of tokens.
     pub supply: u64,
-    /// Number of base 10 digits to the right of the decimal place.
     pub decimals: u8,
-    /// Is `true` if this structure has been initialized
     pub is_initialized: bool,
-    /// Optional authority to freeze token accounts.
     pub freeze_authority: COption<Pubkey>,
 }
 ```
 
-### Metadata
+**`mint_authority`** - Who can create new tokens:
+- Set to an address: That account can mint tokens, increasing supply
+- Set to `None`: No one can mint. Supply is permanently fixed
+- Can be changed once, then revoked
 
-On explorers and wallets, tokens usually appear recognizable and human-readable thanks to a specific name and image linked to them.
+**`supply`** - Total tokens in existence:
+- Increases when tokens are minted
+- Decreases when tokens are burned
+- Stored as raw base units (not accounting for decimals)
 
-We refer to that name, symbol and image as the `Metadata` of a token. Because in its native form a `Mint` account is just a 32 bytes long public key with no human-readable information attached.
+**`decimals`** - How many decimal places:
+- `0` decimals = indivisible (1 token = 1 base unit)
+- `6` decimals = divisible to millionths (1 token = 1,000,000 base units)
+- `9` decimals = SOL-like precision (1 token = 1,000,000,000 base units)
 
-Natively, in the original SPL Token program, it's not possible to set metadata directly on the token. For this reason, protocols like [Metaplex](https://www.metaplex.com/) developed the [MPL-token-metadata](https://github.com/metaplex-foundation/mpl-token-metadata) program to offer a way for every token to have associated metadata.
+**`freeze_authority`** - Who can freeze token accounts:
+- Set to an address: That account can prevent transfers from specific token accounts
+- Set to `None`: No freezing capability
+- Independent from mint authority
 
-> With Token Extensions and the [Token2022 program](/en/courses/token-2022-program), this changes completely. The Metadata extension allows you to embed metadata directly into the mint account itself, eliminating the need for external programs.
+**`is_initialized`** - Whether the mint account has been set up:
+- Prevents using uninitialized account data
+- Set to true when mint account is created
 
-### Non-fungible Tokens
+<ArticleSection name="Mint Authority and Supply Control" id="mint-authority" level="h2" />
 
-While the utility of tokens is specifically delegated to the creator, who can decide to make that specific token a governance token, a utility token or a community token, there are some characteristics that we can follow to distinguish between fungible and non-fungible tokens:
+Mint authority determines who controls token supply. This single field defines whether a token has fixed scarcity or unlimited inflation.
 
-Non-fungible tokens need to have:
-- A supply of 1 since they are unique
-- 0 decimals since they are indivisible
-- No mint authority since we don't want to add more tokens with that same characteristic, as it would "destroy" the uniqueness of a token
-
-Natively it's impossible to enforce these characteristics in the Token program. For this reason, programs like the `MPL-token-metadata` not only offer an implementation for the metadata but they also offer an implementation to enforce these constraints and easily create NFTs.
-
-<ArticleSection name="The Token Account" id="the-token-account" level="h2" />
-
-The Token Program creates Token Accounts to track individual ownership of each token unit. A Token Account stores data such as:
-- Mint: The token the Token Account holds units of
-- Owner: The account authorized to transfer tokens from the Token Account
-- Amount: Number of the tokens the Token Account currently holds
-
-This is how that data looks onchain:
+**Fixed supply tokens:**
 
 ```rust
-pub struct Account {
-    /// The mint associated with this account
-    pub mint: Pubkey,
-    /// The owner of this account.
-    pub owner: Pubkey,
-    /// The amount of tokens this account holds.
-    pub amount: u64,
-    /// If `delegate` is `Some` then `delegated_amount` represents
-    /// the amount authorized by the delegate
-    pub delegate: COption<Pubkey>,
-    /// The account's state
-    pub state: AccountState,
-    /// If is_native.is_some, this is a native token, and the value logs the
-    /// rent-exempt reserve. An Account is required to be rent-exempt, so
-    /// the value is used by the Processor to ensure that wrapped SOL
-    /// accounts do not drop below this threshold.
-    pub is_native: COption<u64>,
-    /// The amount delegated
-    pub delegated_amount: u64,
-    /// Optional authority to close the account.
-    pub close_authority: COption<Pubkey>,
-}
+mint_authority: None
 ```
 
-Each wallet needs to have a token account for each token (mint) it wants to hold, with the wallet address set as the token account owner. Each wallet can own multiple token accounts for the same token (mint), but a token account can only have one owner and hold units of one token (mint).
+No one can create more tokens. Supply is capped permanently. Examples:
+- NFTs (supply of 1, no mint authority)
+- Fixed-supply meme coins (total supply minted at launch, authority revoked)
+- Capped tokens (max supply minted, then authority renounced)
 
-<ArticleSection name="The Associated Token Account" id="the-associated-token-account" level="h2" />
+Once mint authority is set to `None`, it's irrevocable. You cannot restore minting capability. The token's maximum supply is whatever exists at that moment.
 
-Associated Token Accounts simplify the process of finding a token account's address for a specific mint and owner. Think of the Associated Token Account as the "default" token account for a specific mint and owner.
+**Unlimited supply tokens:**
 
-An Associated Token Account is created with an address derived from the owner's address and the mint account's address. It's important to understand that an Associated Token Account is just a token account with a specific address.
+```rust
+mint_authority: Some(authority_pubkey)
+```
 
-This introduces a key concept in Solana development: [Program Derived Address](https://solana.com/docs/core/pda) (PDA). A PDA derives an address deterministically using predefined inputs, making it easy to find the address of an account.
+One address can mint new tokens whenever they want. Examples:
+- USDC (Circle mints when users deposit USD)
+- Stablecoins (issuers mint against collateral)
+- Governance tokens with ongoing emissions
+
+The authority address could be a wallet (centralized control), a program-derived address (programmatic control), or a multisig (distributed control).
+
+**Governance-controlled minting:**
+
+Many protocols set mint authority to a governance program. Token holders vote on minting new supply. The governance program has mint authority and executes approved mint operations.
+
+This creates programmatic scarcity: supply can increase, but only through defined governance processes.
+
+<ArticleSection name="Freeze Authority" id="freeze-authority" level="h2" />
+
+Freeze authority is independent control over token account freezing. An account with freeze authority can prevent specific token accounts from transferring tokens.
+
+**Why freeze authority exists:**
+
+Compliance for regulated stablecoins. USDC's freeze authority allows Circle to freeze accounts linked to illegal activity or court orders. Your USDC token account can be frozen without your consent.
+
+Fraud prevention for centralized platforms. Exchanges can freeze token accounts if they detect suspicious activity.
+
+**How freezing works:**
+
+Freeze authority calls `FreezeAccount` instruction on specific token accounts. Frozen accounts cannot:
+- Transfer tokens out
+- Burn tokens
+- Close the account
+
+They can still:
+- Receive tokens
+- Exist as valid accounts
+
+Thawing reverses the freeze. Only freeze authority can thaw frozen accounts.
+
+**Tokens without freeze authority:**
+
+```rust
+freeze_authority: None
+```
+
+No one can freeze any token account. Transfers are always possible (assuming sufficient balance). Examples:
+- Decentralized tokens where freezing contradicts the mission
+- Fixed-supply tokens where control is fully renounced
+- Community tokens valuing censorship resistance
+
+Like mint authority, revoking freeze authority is permanent. Once set to `None`, freezing becomes impossible forever.
+
+<ArticleSection name="Decimals and Precision" id="decimals" level="h2" />
+
+Decimals define how tokens split into smaller units.
+
+**0 decimals - Indivisible tokens:**
+
+```rust
+decimals: 0
+```
+
+You can own 1 token or 5 tokens, but not 0.5 tokens. Used for:
+- NFTs (you own 1, not 0.3 of an NFT)
+- Tickets (1 ticket, not a partial ticket)
+- Voting shares (whole votes)
+
+**6 decimals - Stablecoin standard:**
+
+```rust
+decimals: 6
+```
+
+USDC and USDT use 6 decimals, matching USD cents with extra precision:
+- 1 USDC = 1,000,000 base units
+- 0.01 USDC (1 cent) = 10,000 base units
+- $0.000001 USDC = 1 base unit
+
+**9 decimals - SOL precision:**
+
+```rust
+decimals: 9
+```
+
+SOL uses 9 decimals. 1 SOL = 1,000,000,000 lamports. Many Solana tokens copy this precision for consistency.
+
+**Why this matters:**
+
+Decimals are set at mint creation and never change. Choose carefully:
+- Too few decimals = insufficient precision for small amounts
+- Too many decimals = unnecessarily large numbers in base units
+
+Programs work with base units internally, converting to decimal representation only for display. 1 USDC in your wallet is stored as 1,000,000 base units. Transfers specify base units. The decimal field tells wallets and explorers how to display the number.
+
+<ArticleSection name="Real Examples" id="real-examples" level="h2" />
+
+**USDC (EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v):**
+
+```
+mint_authority: Some(Circle's authority address)
+supply: 28,000,000,000,000,000 (28 billion with 6 decimals)
+decimals: 6
+freeze_authority: Some(Circle's freeze authority address)
+```
+
+Circle can mint new USDC when users deposit USD. Circle can freeze accounts for compliance. Supply fluctuates based on deposits/withdrawals.
+
+**BONK (DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263):**
+
+```
+mint_authority: None
+supply: 93,000,000,000,000,000,000 (93 trillion with 5 decimals)
+decimals: 5
+freeze_authority: None
+```
+
+Fixed supply. No one can mint more BONK. No one can freeze accounts. Total decentralization of supply control.
+
+**Typical NFT mint:**
+
+```
+mint_authority: None
+supply: 1
+decimals: 0
+freeze_authority: None
+```
+
+One indivisible token. No minting capability. No freeze authority. Pure scarcity and transfer freedom.
+
+<ArticleSection name="Viewing Mint Account Data" id="viewing-mint-data" level="h2" />
+
+Every mint account is public. Anyone can inspect any token's configuration.
+
+**On Solana Explorer:**
+
+Navigate to the mint address (e.g., USDC's mint). Under "Token" tab, see:
+- Current supply
+- Decimals
+- Mint authority (or "disabled" if None)
+- Freeze authority (or "disabled" if None)
+
+**On Solscan:**
+
+Search mint address. "Token Info" shows all mint account fields with human-readable formatting.
+
+**Programmatically:**
+
+Query the mint account data using Solana RPC:
+
+```javascript
+const mint = await getMint(connection, mintAddress);
+
+console.log("Supply:", mint.supply.toString());
+console.log("Decimals:", mint.decimals);
+console.log("Mint Authority:", mint.mintAuthority);
+console.log("Freeze Authority:", mint.freezeAuthority);
+```
+
+This transparency is architectural. Ethereum tokens hide authority in contract code. Solana tokens declare authority in public account fields. No code reading required—just inspect the account.
+
+<ArticleSection name="Creating and Managing Mint Accounts" id="creating-mints" level="h2" />
+
+Creating a mint account requires:
+1. Allocate space for the mint account (82 bytes)
+2. Transfer rent-exempt SOL to the account (currently ~0.00144 SOL)
+3. Assign ownership to SPL Token program
+4. Initialize the mint with decimals and authorities
+
+After creation, mint authority can:
+- Mint new tokens to any token account
+- Transfer mint authority to another address
+- Revoke mint authority (set to None)
+
+After creation, freeze authority can:
+- Freeze specific token accounts
+- Thaw frozen accounts
+- Transfer freeze authority to another address
+- Revoke freeze authority (set to None)
+
+Supply increases through minting, decreases through burning. The mint account automatically tracks total supply. Programs querying mint supply see real-time totals.
+
+<ArticleSection name="Security Implications" id="security-implications" level="h2" />
+
+Mint authority is trust. Holding a token with mint authority means trusting that authority won't inflate supply unpredictably.
+
+**Centralized mint authority risks:**
+- Authority can mint unlimited tokens, diluting holders
+- Single private key controls supply (theft or loss)
+- No transparency on minting decisions
+
+**Decentralized solutions:**
+- Set mint authority to None (fixed supply)
+- Use governance program as mint authority (token holder control)
+- Use multisig as mint authority (distributed control)
+- Publish minting schedule and enforce programmatically
+
+Freeze authority is power. Tokens with freeze authority can prevent you from transferring. Your wallet holds tokens you can't move.
+
+**When freeze authority is reasonable:**
+- Regulated stablecoins (legal compliance requirements)
+- Centralized platforms (fraud prevention)
+- Experimental tokens (emergency controls)
+
+**When to avoid it:**
+- Decentralized protocols (censorship resistance matters)
+- Store-of-value tokens (transfer freedom essential)
+- Community tokens (no single authority should control)
+
+Always check mint and freeze authority before holding significant value. A token with centralized control might be fine for trading but risky for long-term storage.
+
+Mint accounts reveal power structures. Who controls supply? Who can freeze accounts? The mint account answers these questions explicitly.
+
+Next: understanding token accounts and how balances are tracked per owner.
+

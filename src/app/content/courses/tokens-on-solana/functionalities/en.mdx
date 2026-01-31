@@ -1,72 +1,263 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Functionalities
+# Token Accounts and Ownership
 
-The Token Program operates through a set of instructions that allow you to create token mints, initialize token accounts, transfer tokens between accounts, and manage authorities. 
+Your wallet address holds SOL. It doesn't hold USDC, BONK, or any other SPL token. Those live in separate token accounts owned by your wallet but managed by SPL Token program.
 
-It also supports multisignature accounts for enhanced security and provides mechanisms for freezing accounts and delegating token authority.
+This separation is architectural. Solana accounts store typed data. Your wallet account stores SOL balance and basic account info. Token accounts store token-specific data: which token, how much, who owns it.
 
-<ArticleSection name="Initializing an Account" id="intializing-an-account" level="h2" />
+One wallet can own hundreds of token accounts—one per token type. Token accounts define how Solana tracks who owns what.
 
-The token program has different instructions and helpers that abstract away the complexities of intializing a new account. 
+<ArticleSection name="Token Account Structure" id="token-account-structure" level="h2" />
 
-There are different instructions if we want to initialize a `Mint` account or a `Token` account, in the case of the `Associated Token` account, the associated token program uses the `initializeAccount` instruction under the hood after having derived the correct program derived address.
+Here's what a token account contains:
 
-> This function just initializes the account, so we need to make sure that we use the `createAccount()` instruction from the System Program before, and set the correct owner (token program), space and lamports to make it rent exempt.
+```rust
+pub struct Account {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub delegate: COption<Pubkey>,
+    pub state: AccountState,
+    pub is_native: COption<u64>,
+    pub delegated_amount: u64,
+    pub close_authority: COption<Pubkey>,
+}
+```
 
-<ArticleSection name="Transfer" id="transfer" level="h2" />
+**`mint`** - Which token this account holds:
+- USDC mint address = USDC token account
+- BONK mint address = BONK token account
+- One token account = one token type only
 
-Moves tokens from one account to another. This is the basic operation for sending tokens between users.
+**`owner`** - Who controls this token account:
+- Typically your wallet address
+- Could be a program-derived address (vault, escrow)
+- Owner can transfer tokens out
 
-The owner of the token account needs to be a `Signer` of that transaction, and the destination of that transfer needs to be another token account. 
+**`amount`** - Current balance:
+- Stored in base units (accounting for decimals)
+- 1,000,000 amount in USDC account = 1 USDC (6 decimals)
+- Updated by mint, transfer, and burn operations
 
-> The amount that we decide to transfer is without decimals. So if we want to send 1 token that has 6 decimals we'll need to use the `1e6` notation.
+**`delegate`** - Optional: Someone who can spend tokens on owner's behalf:
+- Used by DEXs (you approve DEX to swap your tokens)
+- Used by escrows (program temporarily controls tokens)
+- Delegation is explicit and limited
 
-<ArticleSection name="Approve" id="approve" level="h2" />
+**`state`** - Account status:
+- `Initialized`: Normal account, can send/receive tokens
+- `Frozen`: Freeze authority has frozen this account, no transfers out
+- `Uninitialized`: Account exists but not set up yet
 
-Grants a delegate the authority to transfer a specific amount of tokens on behalf of the account owner. This enables programmatic token transfers without giving full account control.
+**`delegated_amount`** - How many tokens the delegate can spend:
+- If delegate exists, this sets their spending limit
+- Can't exceed account's amount
+- Revocable by owner
 
-> We set an "approved" amount, and the delegate can transfer only up to that amount
+**`close_authority`** - Optional: Who can close this account:
+- Normally the owner
+- Could be set to a program for special cases
+- Closing reclaims rent SOL
 
-<ArticleSection name="Revoke" id="revoke" level="h2" />
+<ArticleSection name="Why Separate Token Accounts" id="why-separate-accounts" level="h2" />
 
-Removes the current delegate's authority over the account, returning full control to the account owner.
+Every token you hold requires a distinct account. Hold 10 different tokens? You own 10 token accounts.
 
-> Immediately cancels any existing delegation and only the account owner can revoke delegation (not the delegate itself)
+**Typed data storage:**
 
-<ArticleSection name="Set Authority" id="set-authority" level="h2" />
+Solana accounts have owners (programs) and data. SPL Token program owns token accounts. Token account data follows the fixed structure above. Mixing multiple tokens in one account would break this structure.
 
-Changes the authority of a mint or account. This allows transferring ownership or updating specific authority types.
+**Program isolation:**
 
-> Can change mint authority, freeze authority, or account owner and setting authority to `None` is an irreversible action that permanently removes that capability
+SPL Token program validates token operations. It checks the token account owner, verifies the mint matches, confirms sufficient balance. Multiple tokens per account would require tracking individual balances per mint, complicating every validation.
 
-<ArticleSection name="Mint To" id="mint-to" level="h2" />
+**Rent and lifecycle:**
 
-Creates new tokens and deposits them into a specified account. Only the mint authority can perform this operation.
+Each account requires rent-exempt SOL deposit (currently 0.00203928 SOL per token account). This covers storage costs. When you close a token account with zero balance, you reclaim that SOL.
 
-> Increases the total supply of the token and the amount respects the mint's decimal configuration
+**Security boundary:**
 
-<ArticleSection name="Burn" id="burn" level="h2" />
+Separate accounts mean separate permissions. You can delegate authority over your USDC without affecting your BONK. Programs can validate permissions per-token without cross-token checks.
 
-Permanently destroys tokens by removing them from circulation. This reduces the total supply of the token.
+<ArticleSection name="Associated Token Accounts" id="associated-token-accounts" level="h2" />
 
-> Permanently reduces the token's total supply and this action can be performed by the account owner or delegate
+Without a standard, finding someone's token account requires asking them. "What's your USDC token account address?" Every wallet would need to communicate token account addresses separately.
 
-<ArticleSection name="Close Account" id="close-account" level="h2" />
+Associated Token Accounts (ATAs) solve this through deterministic address derivation. Your USDC ATA address is calculable from your wallet address + USDC mint address. Everyone knows it without asking.
 
-Closes a token account and transfers its remaining SOL rent to a destination account. The token account must have zero balance unless it's a native SOL account.
+**How ATAs work:**
 
-> From Token2022 it's possible to close a `Mint` account that has a supply of 0
+Program Derived Address (PDA) derives ATA from:
+- Your wallet address (owner)
+- USDC mint address (which token)
+- Associated Token Program address (constant)
 
-<ArticleSection name="Freeze Account" id="set-mint-to" level="h2" />
+```javascript
+const ata = getAssociatedTokenAddressSync(
+    mintAddress,   // USDC mint
+    ownerAddress   // Your wallet
+);
+```
 
-Prevents all token operations on an account until it's thawed. Only the mint's freeze authority can perform this operation.
+Same inputs always produce the same address. Your USDC ATA never changes. Send someone USDC? Derive their ATA from their wallet + USDC mint, send there.
 
-> Completely disables transfers, approvals, and burns and it only affects the specific frozen account
+**ATA constraints:**
 
-<ArticleSection name="Thaw Account" id="thaw-account" level="h2" />
+One ATA per owner per mint. You have exactly one USDC ATA. It's impossible to create a second USDC ATA for your wallet—the derivation produces the same address.
 
-Re-enables token operations on a previously frozen account. Only the mint's freeze authority can thaw accounts.
+ATA owner must match the derivation. If derived ATA should belong to Alice, only Alice can be the owner. This prevents account confusion attacks.
 
-> Restores full functionality to a frozen account and can only be performed by the mint's freeze authority
+**Non-ATA token accounts:**
+
+You can create token accounts at random addresses. Use cases:
+- Multiple token accounts for the same token (separate balances for separate purposes)
+- Program-controlled accounts (escrows, vaults)
+- Temporary accounts (close after use)
+
+Most applications use ATAs for simplicity. Non-ATA accounts are advanced use cases.
+
+<ArticleSection name="Token Account Lifecycle" id="lifecycle" level="h2" />
+
+**Creation:**
+
+Token accounts don't exist until explicitly created. First time you receive USDC? The sender (or you) must create your USDC token account first.
+
+Creating a token account requires:
+1. Allocate 165 bytes for account data
+2. Transfer 0.00203928 SOL (rent-exempt minimum)
+3. Assign ownership to SPL Token program
+4. Initialize with mint and owner
+
+Modern wallets and applications handle this automatically. You don't manually create token accounts—the first transfer creates it if needed.
+
+**Usage:**
+
+Initialized token accounts can:
+- Receive tokens (mint operations, transfers from others)
+- Send tokens (if owner signs)
+- Delegate spending authority
+- Get frozen (if freeze authority exists)
+
+Zero balance doesn't close the account. A token account with 0 tokens still exists and occupies space, holding 0.00203928 SOL.
+
+**Closure:**
+
+Close token accounts to reclaim rent SOL:
+- Balance must be exactly 0
+- No delegate can be set
+- Owner (or close authority) must sign
+
+Closing transfers the rent SOL to a specified destination (usually owner's wallet). The token account ceases to exist. Future operations requiring that account must recreate it.
+
+<ArticleSection name="Rent and Storage Costs" id="rent-costs" level="h2" />
+
+Solana charges rent for account storage. Token accounts require 0.00203928 SOL to remain rent-exempt (prevents garbage collection).
+
+**Rent-exempt minimum:**
+
+Token account size = 165 bytes. Rent-exempt calculation:
+- 165 bytes × rent rate (currently ~6,960 lamports per byte-epoch)
+- Minimum balance: 2,039,280 lamports = 0.00203928 SOL
+
+This SOL stays in the token account. It's not locked by SPL Token program—it's the account's lamport balance preventing rent collection.
+
+**Cost implications:**
+
+Hold 10 tokens = 10 token accounts = 0.0203928 SOL in rent deposits. Not expensive, but it adds up for wallets holding hundreds of tokens or programs managing thousands of user accounts.
+
+**Reclaiming rent:**
+
+Close unused token accounts to reclaim rent. Many wallets show "Close Account" options for tokens with zero balance. Execute the close instruction, get your 0.00203928 SOL back.
+
+Some tokens prevent closure through permanent delegates or special flags. Check if close is possible before attempting.
+
+<ArticleSection name="Delegation and Approval" id="delegation" level="h2" />
+
+Token account delegation grants temporary spending authority to another address without transferring ownership.
+
+**Common delegation uses:**
+
+DEX swaps: You approve the DEX program to spend X tokens from your token account. DEX executes swap, spends approved amount, your ownership remains.
+
+Escrow services: You delegate spending authority to an escrow program. Program holds spending rights, releases when conditions meet.
+
+Limit orders: Delegate authority to order program. Program spends tokens when price conditions trigger.
+
+**Delegation fields:**
+
+```rust
+delegate: Some(dex_program_address)
+delegated_amount: 1000000  // 1 USDC with 6 decimals
+```
+
+Delegate can spend up to `delegated_amount` from the token account. Cannot spend more. Cannot change owner. Cannot close account.
+
+**Revocation:**
+
+Owner can revoke delegation at any time:
+
+```rust
+delegate: None
+delegated_amount: 0
+```
+
+Revoke before tokens are spent? Delegate loses all authority. Common pattern: approve, wait for operation, revoke if it doesn't execute.
+
+<ArticleSection name="Freeze and Thaw" id="freeze-thaw" level="h2" />
+
+If mint has freeze authority, that authority can freeze individual token accounts.
+
+**Frozen token accounts:**
+
+```rust
+state: Frozen
+```
+
+Cannot transfer tokens out. Cannot burn tokens. Cannot close the account. Can still receive tokens.
+
+Use cases:
+- Compliance (stablecoins freezing sanctioned addresses)
+- Fraud prevention (platforms freezing suspicious accounts)
+- Game mechanics (freezing in-game assets temporarily)
+
+**Thawing:**
+
+Only freeze authority can thaw:
+
+```rust
+state: Initialized
+```
+
+Account returns to normal. Transfers resume. Common for temporary freezes during investigations.
+
+**Tokens without freeze authority:**
+
+Many tokens set freeze authority to None. These tokens can never freeze any account. Transfers always work (assuming balance). Maximum transfer freedom, no compliance controls.
+
+<ArticleSection name="Practical Examples" id="practical-examples" level="h2" />
+
+**Checking your token accounts:**
+
+Use Solana Explorer or wallet. See all token accounts owned by your wallet. Each shows:
+- Mint (which token)
+- Balance (amount you hold)
+- Status (initialized, frozen)
+- Delegate (if spending authority is granted)
+
+**Finding someone's ATA:**
+
+Given their wallet address and a mint address, calculate their ATA address. Send tokens there. Works for any SPL token.
+
+**Closing empty accounts:**
+
+Zero balance in a token you'll never use again? Close the account, reclaim 0.00203928 SOL. Do this for dozens of token accounts, reclaim meaningful SOL amounts.
+
+**Delegation management:**
+
+Approved a DEX to spend tokens but trade didn't execute? Revoke the approval. Prevents delegate from spending later. Good security practice: revoke approvals you no longer need.
+
+Token accounts are ownership records. The mint account defines the token. Token accounts define who holds it. SPL Token program enforces the rules. This architecture creates Solana's token system.
+
+Next: Token Extensions and how Token-2022 expands beyond basic SPL Token capabilities.
 
