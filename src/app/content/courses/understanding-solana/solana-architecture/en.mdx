@@ -1,18 +1,18 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Solana's Architecture
+# Solana Architecture: The Account Model and Stateless Programs
 
-To execute transactions in parallel, Solana needs to know which transactions can run simultaneously. This requires a fundamental design choice: everything is an account.
+To [execute transactions in parallel](/courses/understanding-solana/why-solana-built#ordering-to-parallelism), Solana needs to know which transactions can run simultaneously. This requires a fundamental design choice: everything is an account.
 
-Programs don't store data because separation enables parallelism. By declaring accounts upfront, Solana knows which transactions can run in parallel.
+Programs don't store data. The separation of code and data enables parallelism. Transactions [declare accounts upfront](/courses/understanding-solana/why-solana-built#parallelization-requirements), so the runtime knows which can run in parallel. This is how Solana achieves high throughput.
 
 <ArticleSection name="Everything Is an Account" id="everything-is-account" level="h2" />
 
-Solana's core architectural principle: everything is an account.
+Everything is an account.
 
-In Ethereum, you have contracts and accounts as distinct concepts. Contracts contain code and state. Accounts hold balances. The line between them is clear.
+Ethereum treats contracts and accounts as distinct concepts. Contracts contain code and state. Accounts hold balances.
 
-Solana unifies these concepts. Everything lives in accounts:
+Solana unifies this. Everything lives in accounts:
 - Your wallet is an account
 - A program (smart contract) is an account
 - A program's data is stored in separate accounts
@@ -20,13 +20,13 @@ Solana unifies these concepts. Everything lives in accounts:
 - NFT metadata is accounts
 - Everything
 
-An account is simply a container with:
+An account is a container with:
 - **Data:** Arbitrary bytes (up to 10 megabytes)
 - **Lamports:** Balance in Solana's smallest unit (1 SOL = 1,000,000,000 lamports)
 - **Owner:** The program that controls this account
 - **Executable flag:** Whether this account contains program code
 
-This uniformity simplifies the model. There's one fundamental primitive—accounts—rather than multiple interacting concepts.
+There's one primitive—accounts—rather than multiple interacting concepts.
 
 <ArticleSection name="Account Ownership" id="account-ownership" level="h2" />
 
@@ -38,7 +38,7 @@ Every account is owned by a program. Only the owning program can modify the acco
 
 **Your custom program:** When you build a Solana program, it can own accounts that store your application's data. Only your program can modify these accounts.
 
-Ownership is not about having a private key. Ownership means control. The owning program decides what happens to the account. This enables programs to manage assets and state without requiring private keys—they have native authority over their accounts.
+Ownership is not about having a private key. Ownership means control. The owning program decides what happens to the account. Programs can manage assets and state without requiring private keys—they have native authority over their accounts.
 
 <ArticleSection name="Stateless Programs" id="stateless-programs" level="h2" />
 
@@ -72,19 +72,17 @@ pub fn increment(accounts: &[AccountInfo]) -> ProgramResult {
 
 The program reads data from an account, processes it, and writes it back. The data lives in a separate account owned by the program.
 
-**Why separate code and data:**
+Separating code and data enables parallelism. Two transactions calling the same program with different data accounts can execute simultaneously. The program code is read-only. Only the data accounts change.
 
-- **Parallelism:** Two transactions calling the same program with different data accounts can execute simultaneously. The program code is read-only. Only the data accounts change.
+Programs can be upgraded without migrating data. Change the code account, but data accounts remain unchanged and compatible.
 
-- **Upgradability:** Programs can be upgraded without migrating data. Change the code account, but data accounts remain unchanged and compatible.
+Each data account has an explicit owner. Permissions are straightforward—the owner program controls the account.
 
-- **Clear ownership:** Each data account has an explicit owner. Permissions are straightforward—the owner program controls the account.
-
-- **State inspection:** Anyone can read account data directly without calling program code. This simplifies indexing and querying.
+Anyone can read account data directly without calling program code. This simplifies indexing and querying.
 
 <ArticleSection name="Transaction Structure" id="transaction-structure" level="h2" />
 
-Declaring accounts upfront enables parallelism. Every Solana transaction explicitly lists which accounts it will access.
+Every Solana transaction explicitly lists which accounts it will access. This upfront declaration enables parallelism.
 
 A transaction contains:
 - **Instructions:** Individual operations to perform
@@ -139,15 +137,15 @@ The scheduler executes:
 
 This parallelism is only possible because transactions declare their accounts upfront. Without declarations, the runtime would need to execute transactions sequentially to discover conflicts dynamically.
 
-The restriction—transactions must declare accounts before execution—enables the optimization that makes Solana fast.
+Transactions must declare accounts before execution. This restriction enables the optimization that makes Solana fast.
 
 <ArticleSection name="Rent and Account Economics" id="rent-account-economics" level="h2" />
 
-Accounts need a minimum balance to stay alive. Storing data on-chain costs resources. Validators must keep account data in memory or fast storage to process transactions quickly.
+Storing data on-chain costs resources. Validators must keep account data in memory or fast storage to process transactions quickly.
 
-Solana charges "rent" for account storage. The term is historical—rent used to be deducted periodically, but that mechanism is now disabled. Today, rent works more like a refundable deposit.
+Solana charges "rent" for account storage. The term is historical—rent used to be deducted periodically, but now it works more like a refundable deposit.
 
-**Rent-exempt balance:** Every account must maintain a minimum balance proportional to its data size. If the account has this balance, it remains rent-exempt and persists indefinitely.
+Every account must maintain a minimum balance proportional to its data size. Accounts with this balance are rent-exempt and persist indefinitely.
 
 The formula:
 ```
@@ -156,17 +154,17 @@ rent_exempt_minimum = (128 + account_data_size) * rent_per_byte * epochs_per_yea
 
 For a typical account storing 165 bytes, rent-exemption requires approximately 0.00114 SOL (about $0.11 at $100 per SOL).
 
-**Closing accounts:** When you no longer need an account, you can close it and recover the rent-exempt balance. The data is wiped, and the lamports return to you. This makes the deposit truly refundable.
+When you no longer need an account, you can close it and recover the rent-exempt balance. The data is wiped, and the lamports return to you.
 
-**Why this matters:** Developers must account for rent when creating accounts. Users pay rent deposits when minting NFTs or creating token accounts. These costs are small but not zero.
+Developers must account for rent when creating accounts. Users pay rent deposits when minting NFTs or creating token accounts. These costs are small but not zero.
 
 <ArticleSection name="Programs as Accounts" id="programs-as-accounts" level="h2" />
 
-Programs are executable accounts marked with a special flag. When you deploy a Solana program, the compiled bytecode is uploaded to an account. The account's executable flag is set to true, indicating it contains program code.
+Programs are executable accounts marked with a special flag. When you deploy a Solana program, the compiled bytecode is uploaded to an account. The account's executable flag is set to true.
 
-Programs are immutable by default after deployment. To allow updates, programs specify an upgrade authority when deployed. The upgrade authority can deploy new bytecode to the program account, effectively updating the program.
+Programs are immutable by default after deployment. To allow updates, programs specify an upgrade authority when deployed. The upgrade authority can deploy new bytecode to the program account.
 
-Developers can remove the upgrade authority, making the program permanently immutable. This provides users with guarantees that the code will never change—useful for security-critical programs where immutability builds trust.
+Developers can remove the upgrade authority, making the program permanently immutable. The code will never change—useful for security-critical programs.
 
 **Program accounts store:**
 - Compiled BPF bytecode (the actual executable code)
@@ -182,18 +180,18 @@ All program data lives in separate accounts owned by the program.
 
 <ArticleSection name="The Solana Virtual Machine" id="solana-virtual-machine" level="h2" />
 
-The Solana Virtual Machine (SVM) executes programs. It differs from the Ethereum Virtual Machine in several ways:
+The Solana Virtual Machine (SVM) executes programs. It differs from the Ethereum Virtual Machine in several ways.
 
-**Register-based vs. stack-based:** The EVM is stack-based—operations push and pop values on a stack. The SVM uses registers, which reduces the overhead of moving data around during computation.
+The EVM is stack-based—operations push and pop values on a stack. The SVM uses registers, which reduces the overhead of moving data around during computation.
 
-**Native compilation:** Solana programs compile to BPF (Berkeley Packet Filter) bytecode, which compiles further to native machine code. This eliminates interpretation overhead and runs faster than bytecode.
+Solana programs compile to BPF (Berkeley Packet Filter) bytecode, which compiles further to native machine code. This eliminates interpretation overhead and runs faster than bytecode.
 
-**Parallel execution:** The SVM is designed for parallelism from the ground up. It analyzes account dependencies and schedules transactions across multiple CPU cores.
+The SVM is designed for parallelism. It analyzes account dependencies and schedules transactions across multiple CPU cores.
 
-**Account-based permissions:** Instead of global state, the SVM enforces permissions per account. Programs can only access accounts explicitly passed to them, and can only modify accounts they own.
+Instead of global state, the SVM enforces permissions per account. Programs can only access accounts explicitly passed to them, and can only modify accounts they own.
 
-The SVM's design enables Solana's high throughput. By eliminating interpretation overhead, using efficient data structures, and parallelizing execution, the runtime maximizes transaction processing capacity.
+The SVM eliminates interpretation overhead, uses efficient data structures, and parallelizes execution. The runtime maximizes transaction processing capacity.
 
-Solana's architecture—Proof of History, stateless programs, account model—exists to solve one problem: blockchain at scale without sacrificing decentralization. Understanding these fundamentals reveals why Solana works the way it does.
+Solana's architecture—[Proof of History](/courses/understanding-solana/why-solana-built#proof-of-history), stateless programs, account model—solves one problem: blockchain at scale without sacrificing decentralization.
 
-To actually use Solana—whether building or transacting—you need to understand accounts in depth.
+To use Solana—whether building or transacting—you need to [understand accounts in depth](/courses/understanding-solana/accounts-ownership).

@@ -40,14 +40,22 @@ export async function generateMetadata({
     height: 630,
   };
 
-  const title = `${t("metadata.title")} | ${t(`courses.${courseName}.title`)} | ${t(`courses.${courseName}.lessons.${lessonName}`)}`;
+  // Get lesson-specific title and description
+  const lessonTitle = t(`courses.${courseName}.lessons.${lessonName}`);
+  const lessonValueProp = t(`courses.${courseName}.lessonValueProps.${lessonName}`, { default: "" });
+  const lessonDescription = t(`courses.${courseName}.lessonDescriptions.${lessonName}`, { default: t("metadata.description") });
+
+  // Optimized title pattern: Lesson Title: Value Prop | Blueshift
+  const title = lessonValueProp
+    ? `${lessonTitle}: ${lessonValueProp} | Blueshift`
+    : `${lessonTitle} | ${t(`courses.${courseName}.title`)} | Blueshift`;
 
   // Build the relative path without locale for alternates
   const basePath = `/courses/${courseName}/${lessonName}`;
 
   return {
     title: title,
-    description: t("metadata.description"),
+    description: lessonDescription,
     alternates: {
       canonical: `/${locale}${basePath}`,
       languages: {
@@ -64,7 +72,7 @@ export async function generateMetadata({
     openGraph: {
       title: title,
       type: "website",
-      description: t("metadata.description"),
+      description: lessonDescription,
       siteName: title,
       url: pathname,
       images: [

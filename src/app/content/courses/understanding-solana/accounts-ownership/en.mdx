@@ -1,10 +1,10 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Accounts and Ownership
+# Solana Accounts Explained: Structure, Ownership, and Rent
 
-Accounts are Solana's fundamental data structure. Understanding their structure, ownership rules, and rent mechanism is essential whether you're building programs or using applications.
+Accounts are Solana's fundamental data structure. [In Solana's architecture, everything is an account](/courses/understanding-solana/solana-architecture#everything-is-account). You need to understand account structure, ownership rules, and the rent mechanism to build programs or use applications.
 
-Every Solana account has the same basic structure, follows the same ownership rules, and requires the same minimum balance to persist.
+Every Solana account has the same basic structure, follows the same ownership rules, and requires the same minimum balance (rent) to persist on the blockchain.
 
 <ArticleSection name="Account Structure" id="account-structure" level="h2" />
 
@@ -39,7 +39,7 @@ Every account has a unique 32-byte address, displayed as a base58-encoded string
 
 <ArticleSection name="Account Types" id="account-types" level="h2" />
 
-While all accounts share the same structure, they serve different purposes based on their owner and executable flag.
+All accounts share the same structure but serve different purposes based on their owner and executable flag.
 
 **System Accounts:** Owned by the System Program. These are basic wallet accounts that users interact with directly for sending and receiving SOL. When you create a wallet, you're creating a System Account. The System Program allows the account holder (whoever has the private key) to transfer SOL and reallocate the account to other programs.
 
@@ -51,7 +51,7 @@ While all accounts share the same structure, they serve different purposes based
 
 <ArticleSection name="Rent and Rent-Exemption" id="rent-rent-exemption" level="h2" />
 
-Accounts require a minimum lamport balance to stay alive. The minimum balance depends on account size and is refundable when the account closes.
+Accounts require a minimum lamport balance to stay alive. This minimum depends on account size. You get it back when you close the account.
 
 The rent-exempt minimum depends on account size:
 
@@ -64,9 +64,9 @@ Specific numbers:
 - Cost per byte: approximately 0.00000348 SOL
 - A 165-byte account (common size): approximately 0.00114 SOL
 
-These values can change through governance, but they remain relatively stable.
+These values can change through governance but remain relatively stable.
 
-**Calculating rent for your account:**
+Example calculation:
 
 ```rust
 // Account with 1000 bytes of data
@@ -76,15 +76,15 @@ let minimum_balance = rent.minimum_balance(account_size);
 // minimum_balance ≈ 0.00437 SOL
 ```
 
-**Rent-exempt balance:** Once an account has the minimum balance for its size, it becomes "rent-exempt." No further rent will be charged. The account persists indefinitely as long as it maintains this minimum.
+**Rent-exempt balance:** Once an account has the minimum balance for its size, it is "rent-exempt." No further rent will be charged. The account persists indefinitely as long as it maintains this minimum.
 
 **Closing accounts:** When you no longer need an account, closing it recovers the rent deposit. The account's data is wiped, its lamports are transferred out (typically back to the creator), and the account ceases to exist. This makes rent a truly refundable deposit.
 
-**Why this matters:** Creating accounts costs SOL. When you mint an NFT, create a token account, or initialize program state, you pay the rent-exempt minimum. These costs are small but accumulate. Applications with thousands of accounts need to account for total rent costs.
+Creating accounts costs SOL. When you mint an NFT, create a token account, or initialize program state, you pay the rent-exempt minimum. These costs are small but accumulate. Applications with thousands of accounts need to budget for total rent costs.
 
 <ArticleSection name="Ownership Rules" id="ownership-rules" level="h2" />
 
-Only the owner can modify the account. Ownership defines what operations are possible on an account.
+Only the owner can modify an account. Ownership determines what operations are possible.
 
 The owning program can:
 - Modify the account's data
@@ -100,7 +100,7 @@ The account holder (whoever has the private key corresponding to the account's a
 - Sign transactions that include this account
 - If owned by System Program: transfer SOL, close the account, or reassign ownership
 
-**Important distinction:** Having the private key for an account's address is different from the program that owns it. If you create an account owned by System Program, you control it with your private key. If you then assign ownership to a custom program, that program gains control—your private key can no longer directly modify it. You can only interact through the owning program's instructions.
+Having the private key for an account's address is different from the program that owns it. If you create an account owned by System Program, you control it with your private key. If you then assign ownership to a custom program, that program gains control—your private key can no longer directly modify it. You can only interact through the owning program's instructions.
 
 **Example:**
 1. You create a token account for USDC
@@ -113,7 +113,7 @@ The account holder (whoever has the private key corresponding to the account's a
 
 <ArticleSection name="Creating Accounts" id="creating-accounts" level="h2" />
 
-Unlike databases where you insert records, Solana accounts must be explicitly created and funded before use.
+Solana accounts must be explicitly created and funded before use.
 
 **System Program creates accounts:**
 
@@ -135,7 +135,7 @@ This instruction:
 3. Sets the account's owner
 4. Marks the account as initialized
 
-**Typical creation flow:**
+Example:
 
 ```rust
 // 1. Generate a new keypair for the account address
@@ -160,7 +160,7 @@ let instruction = system_instruction::create_account(
 
 <ArticleSection name="Working with Account Data" id="working-with-account-data" level="h2" />
 
-Programs interact with accounts by reading and writing their data fields. Programs serialize and deserialize account data using this pattern:
+Programs read and write account data. They serialize and deserialize account data using this pattern:
 
 ```rust
 use borsh::{BorshSerialize, BorshDeserialize};
@@ -195,13 +195,13 @@ The program:
 4. Serializes the modified data back to bytes
 5. Writes bytes back to the account's data field
 
-This pattern enables programs to work with structured data while storing it as raw bytes on-chain.
+Programs work with structured data in memory but store it as raw bytes on-chain.
 
 <ArticleSection name="Associated Token Accounts" id="associated-token-accounts" level="h2" />
 
-Token accounts use a special pattern called Associated Token Accounts (ATAs). Each user can have multiple token accounts—one for USDC, one for BONK, one for each SPL token they hold.
+Each user can have multiple token accounts—one for USDC, one for BONK, one for each SPL token they hold.
 
-Finding a user's token account for a specific token mint could be difficult without a standard. Associated Token Accounts solve this with a deterministic address derivation:
+Without a standard, finding a user's token account for a specific token mint would require manual tracking. Associated Token Accounts (ATAs) solve this with deterministic address derivation:
 
 ```
 associated_token_address = derive_address(
@@ -210,31 +210,15 @@ associated_token_address = derive_address(
 )
 ```
 
-Given a wallet address and token mint address, there's exactly one associated token account address. Benefits:
-- Wallets automatically find your USDC account
-- Programs know where to send your tokens
-- No manual address management required
+Given a wallet address and token mint address, there's exactly one associated token account address. Wallets automatically find your USDC account, programs know where to send your tokens, and you don't need to manage addresses manually.
 
 When someone sends you tokens for the first time, the associated token account may not exist yet. The sender (or a helpful wallet) creates it as part of the transaction, paying the rent-exempt minimum on your behalf.
 
 <ArticleSection name="Viewing Accounts on Explorers" id="viewing-accounts-explorers" level="h2" />
 
-All account data is public. You can view any account using block explorers.
+All account data is public. You can view any account using block explorers like Solana Explorer (https://explorer.solana.com) or Solscan (https://solscan.io). Both let you view lamport balances, account owners, raw data, and transaction history. Solscan has better data visualization and is easier to use for non-technical users.
 
-**Solana Explorer** (https://explorer.solana.com):
-- Enter any account address
-- View lamport balance
-- See account owner
-- Inspect raw data (as bytes or decoded if format is known)
-- Track transaction history
-
-**Solscan** (https://solscan.io):
-- Enhanced UI with better data visualization
-- Token holdings listed clearly
-- NFT metadata displayed with images
-- More user-friendly for non-technical users
-
-Try viewing a well-known account like the USDC token mint: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+Try viewing the USDC token mint: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
 You'll see:
 - It's owned by the Token Program
@@ -242,6 +226,6 @@ You'll see:
 - It contains mint data (supply, decimals, authorities)
 - Its entire history of transactions
 
-This transparency is fundamental to blockchain. Anyone can verify any data at any time without requiring permission.
+Anyone can verify any data at any time without requiring permission.
 
-The next lesson covers programs and transactions.
+Accounts store data. [Programs operate on that data through transactions](/courses/understanding-solana/programs-transactions), processing instructions that read and modify account state.
