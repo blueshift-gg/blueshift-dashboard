@@ -3,17 +3,42 @@ import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
 
 export const courses: CourseMetadata[] = withCourseNumber([
   {
-    slug: "introduction-to-blockchain-and-solana",
+    slug: "blockchain-fundamentals",
     language: "General",
     color: BRAND_COLOURS.general,
     difficulty: 1,
     isFeatured: true,
     lessons: [
-      { slug: "introduction" },
-      { slug: "blockchain-fundamentals" },
-      { slug: "blockchain-evolution" },
-      { slug: "introduction-to-solana" },
-      { slug: "conclusion" },
+      { slug: "digital-trust-problem" },
+      { slug: "how-blockchains-work" },
+      { slug: "achieving-consensus" },
+      { slug: "bitcoin-first-blockchain" },
+    ],
+  },
+  {
+    slug: "evolution-programmable-blockchains",
+    language: "General",
+    color: BRAND_COLOURS.general,
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "ethereum-programmable-money" },
+      { slug: "scalability-challenge" },
+      { slug: "solutions-landscape" },
+    ],
+  },
+  {
+    slug: "understanding-solana",
+    language: "General",
+    color: BRAND_COLOURS.general,
+    difficulty: 1,
+    isFeatured: true,
+    lessons: [
+      { slug: "why-solana-built" },
+      { slug: "solana-architecture" },
+      { slug: "accounts-ownership" },
+      { slug: "programs-transactions" },
+      { slug: "using-solana" },
     ],
   },
   {

@@ -1,0 +1,158 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Why Solana Was Built
+
+Sequential execution is blockchain's bottleneck. Ethereum processes transactions one at a time because it does not know which will conflict. Solana's insight: what if you could order everything first, then execute non-conflicting transactions in parallel?
+
+Here's Solana's approach: order everything with Proof of History, then execute in parallel. This architectural choice enables 5,000+ transactions per second with sub-second finality while maintaining decentralization.
+
+<ArticleSection name="The Ordering Problem" id="ordering-problem" level="h2" />
+
+Blockchains face a fundamental challenge: agreeing on the order of events across thousands of nodes without a central timekeeper.
+
+In traditional distributed systems, timestamps solve ordering. When Transaction A arrives at 10:00:01.523 and Transaction B arrives at 10:00:01.891, process A first. Simple.
+
+This does not work in decentralized systems. Nodes cannot trust each other's clocks. An attacker could manipulate their clock to make their transaction appear earlier. Network latency means nodes see events in different orders.
+
+Without trusted timestamps, blockchains must use consensus to agree on order. In Ethereum:
+1. Proposer collects pending transactions
+2. Proposer orders them (often by fee)
+3. Network reaches consensus on this ordering
+4. Transactions execute sequentially in the agreed order
+
+This works, but consensus before execution creates the bottleneck. The network cannot begin executing until everyone agrees on the order.
+
+<ArticleSection name="Proof of History: A Cryptographic Clock" id="proof-of-history" level="h2" />
+
+Solana creates order before consensus using Proof of History—a cryptographic clock for the blockchain. Instead of waiting for consensus to establish order, Solana uses a verifiable delay function to create timestamps that no one can manipulate.
+
+**How Proof of History works:**
+
+Imagine a hash function applied repeatedly, where each output becomes the input for the next computation:
+
+```
+hash(data)             → output_1
+hash(output_1 + data)  → output_2
+hash(output_2 + data)  → output_3
+hash(output_3 + data)  → output_4
+```
+
+Each step requires actual computation time—you cannot skip ahead without doing the work. The sequence of hashes creates a verifiable chronological record.
+
+Solana uses SHA-256 in this pattern. The lead validator generates this sequence continuously, creating 160,000 hashes per second. Each hash proves time has passed since the previous hash.
+
+When transactions arrive, they get hashed into this sequence:
+
+```
+hash(output_42)                → output_43
+hash(output_43 + transaction_A) → output_44
+hash(output_44)                → output_45
+hash(output_45 + transaction_B) → output_46
+```
+
+Transaction A's hash appears at position 44. Transaction B's hash appears at position 46. Transaction A came before Transaction B—cryptographically provable because you cannot generate position 46 without first generating positions 43, 44, and 45.
+
+**Why this matters:**
+
+- No one can manipulate the order (you cannot skip hashes)
+- Everyone can verify the order (recompute the hashes)
+- Order is established immediately (no waiting for consensus)
+- Consensus only verifies the order is valid (not create the order)
+
+This separation of ordering and consensus is Solana's fundamental innovation.
+
+<ArticleSection name="From Ordering to Parallelism" id="ordering-to-parallelism" level="h2" />
+
+Knowing order enables parallelism. Once transactions have a cryptographically-proven order, the network can execute them intelligently.
+
+**Sequential execution (Ethereum):**
+1. Transaction A executes → updates state
+2. Transaction B executes → updates state
+3. Transaction C executes → updates state
+4. Transaction D executes → updates state
+
+Only one transaction runs at a time. Total time = sum of all transaction execution times.
+
+**Parallel execution (Solana):**
+
+Solana analyzes the ordered transactions:
+- Transaction A modifies accounts {1, 2, 3}
+- Transaction B modifies accounts {4, 5, 6}
+- Transaction C modifies accounts {2, 7, 8}
+- Transaction D modifies accounts {9, 10, 11}
+
+Transactions A and B touch no common accounts—they can execute simultaneously. Transaction C conflicts with A (both touch account 2), so it must wait. Transaction D conflicts with nothing and can execute immediately.
+
+The runtime schedules:
+- CPU Core 1: Transaction A, then Transaction C
+- CPU Core 2: Transaction B
+- CPU Core 3: Transaction D
+
+Three transactions execute in the time it would take to execute one. This is parallel execution enabled by Proof of History's ordering.
+
+<ArticleSection name="Transaction Parallelization Requirements" id="parallelization-requirements" level="h2" />
+
+Parallel execution requires knowing which accounts a transaction will touch before execution. Solana makes this explicit.
+
+Every Solana transaction declares upfront:
+- Which accounts it will read
+- Which accounts it will modify
+- Which programs it will call
+
+This declaration is mandatory. A transaction that accesses an undeclared account fails. This restriction enables parallelism.
+
+Consider two transactions:
+- Transaction 1: `[read: account_A, write: account_B]`
+- Transaction 2: `[read: account_C, write: account_D]`
+
+The runtime sees these declarations and knows instantly: no conflicts exist. Execute simultaneously.
+
+If Transaction 3 declares `[read: account_A, write: account_D]`, the runtime knows it conflicts with both previous transactions. Schedule it separately.
+
+This upfront declaration enables the Solana Virtual Machine to build a dependency graph and maximize parallel execution across all available CPU cores.
+
+<ArticleSection name="The Performance Results" id="performance-results" level="h2" />
+
+Proof of History plus parallel execution delivers dramatic throughput improvements.
+
+**Solana:** 5,000+ transactions per second in production, with theoretical capacity exceeding 65,000 TPS. Block time is 400 milliseconds. Finality typically occurs within 1-2 seconds.
+
+**Ethereum:** Approximately 15 transactions per second. Block time is 12 seconds. Finality takes about 13 minutes with Proof of Stake.
+
+**Bitcoin:** Approximately 7 transactions per second. Block time is 10 minutes. Finality requires 6 confirmations (60 minutes).
+
+The difference is architectural. Ethereum and Bitcoin process sequentially. Solana processes in parallel. The hardware is similar—consumer servers with modern CPUs. The execution model is different.
+
+Solana achieves this throughput without sacrificing decentralization. The network has over 1,000 independent validators. Running a validator requires specific hardware (12+ CPU cores, 256GB RAM, fast SSD), but remains accessible to individuals and small organizations.
+
+<ArticleSection name="What This Enables" id="what-this-enables" level="h2" />
+
+High throughput and low latency enable applications impossible on other blockchains.
+
+**Real-time applications:** Order books with thousands of updates per second. On-chain games with interactive gameplay. Live bidding and auctions.
+
+**Micro-transactions:** When transaction costs are $0.00025, micro-payments become viable. Stream tiny payments per second. Pay per API call. Monetize previously unmonetizable actions.
+
+**Composability at scale:** Flash loans, arbitrage, and complex DeFi strategies work when you can execute many operations quickly and cheaply within a single transaction.
+
+**Accessible DeFi:** High Ethereum fees price out small users. When swapping $100 costs $50 in fees, DeFi serves only the wealthy. Solana's low fees make DeFi accessible to everyone.
+
+**NFT infrastructure:** Minting thousands of NFTs is practical. Marketplaces can handle trading volume. Royalties can execute automatically without prohibitive costs.
+
+Solana's throughput transforms blockchain from a settlement layer into a runtime for interactive applications. Programs don't just store and transfer value—they execute complex logic at speeds approaching traditional databases.
+
+<ArticleSection name="The Architectural Trade-offs" id="architectural-tradeoffs" level="h2" />
+
+Solana trades some simplicity for high performance.
+
+**Higher hardware requirements:** Validators need dedicated servers (12+ CPU cores, 256GB RAM). This reduces the number of potential validators compared to Bitcoin or Ethereum, where consumer laptops can validate. However, 1,000+ validators still provides strong decentralization.
+
+**Explicit account declarations:** Transactions must declare which accounts they will access. This requires more upfront planning from developers but enables the runtime to schedule parallel execution.
+
+**Different mental model:** Ethereum's sequential execution is conceptually simpler. Solana's parallel model requires understanding how transactions interact and conflict. This increases developer complexity.
+
+**Network demands:** High throughput requires high bandwidth. Validators need fast internet connections to keep up with transaction flow. Geographic distribution can be challenging in regions with limited infrastructure.
+
+These tradeoffs are intentional. Solana optimizes for performance and cost while maintaining meaningful decentralization. Different applications have different requirements—Solana targets applications where throughput and latency matter.
+
+Proof of History enables parallel execution by solving the ordering problem. Executing in parallel requires rethinking how programs and data work, which leads to Solana's unique architecture.
