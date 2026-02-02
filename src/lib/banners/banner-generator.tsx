@@ -61,7 +61,9 @@ export const generateBannerData = async ({
     const itemTitle = t(`${type}s.${itemSlug}.title`);
     const lessonTitle =
       lessonSlug && "lessons" in item
-        ? t(`${type}s.${itemSlug}.lessons.${lessonSlug}`)
+        ? type === "course"
+          ? t(`${type}s.${itemSlug}.lessons.${lessonSlug}.title`)
+          : t(`${type}s.${itemSlug}.lessons.${lessonSlug}`)
         : null;
     const title = lessonTitle ? `${itemTitle} - ${lessonTitle}` : itemTitle;
 

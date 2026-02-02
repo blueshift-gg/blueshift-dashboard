@@ -187,7 +187,9 @@ export default async function LessonPage({ params }: LessonPageProps) {
   };
 
   // Generate LearningResource JSON-LD Schema for the individual lesson
-  const lessonTitle = t(`courses.${courseMetadata.slug}.lessons.${lessonName}`);
+  const lessonTitle = t(
+    `courses.${courseMetadata.slug}.lessons.${lessonName}.title`
+  );
   const learningResourceSchema = {
     "@context": "https://schema.org",
     "@type": "LearningResource",
