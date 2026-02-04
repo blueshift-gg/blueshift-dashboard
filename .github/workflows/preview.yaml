@@ -97,6 +97,13 @@ jobs:
       - name: Precompile MDX
         run: pnpm precompile-mdx
 
+      - name: Tune AWS CLI transfers
+        run: |
+          aws configure set default.s3.max_concurrent_requests 100
+          aws configure set default.s3.max_queue_size 1000
+          aws configure set default.s3.multipart_threshold 100MB
+          aws configure set default.s3.multipart_chunksize 100MB
+
       - name: Derive preview identifiers
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -118,10 +125,9 @@ jobs:
         run: |
           SOURCE_PREFIX="s3://${{ secrets.R2_BUCKET }}/$PROD_CONTENT_PREFIX"
           DEST_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
-
           aws s3 sync "$SOURCE_PREFIX" "$DEST_PREFIX" \
             --endpoint-url "$ENDPOINT" \
-            --no-progress \
+            --quiet \
             --size-only \
             --delete
 
@@ -141,7 +147,7 @@ jobs:
 
           aws s3 sync "$COMPILED_DIR/" "$S3_PREFIX" \
             --endpoint-url "$ENDPOINT" \
-            --no-progress \
+            --quiet \
             --size-only \
             --delete \
             --content-type "application/json"
@@ -161,7 +167,7 @@ jobs:
             if [ -f "$compiled_file" ]; then
               aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
                 --endpoint-url "$ENDPOINT" \
-                --no-progress \
+                --quiet \
                 --content-type "application/json"
             fi
           done
