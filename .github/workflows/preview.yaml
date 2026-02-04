@@ -2,15 +2,9 @@ name: Preview
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: PR number to deploy a preview for
-        required: true
-        type: number
 
 concurrency:
-  group: preview-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: preview-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -23,84 +17,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Resolve PR metadata
-        id: pr
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # https://github.com/actions/github-script/releases/tag/v8.0.0
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const isDispatch = context.eventName === 'workflow_dispatch';
-            let pr;
-
-            if (isDispatch) {
-              const prNumber = Number(context.payload.inputs?.pr_number);
-              if (!prNumber) {
-                core.setFailed('pr_number is required.');
-                return;
-              }
-
-              const { data } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber,
-              });
-              pr = data;
-            } else {
-              pr = context.payload.pull_request;
-            }
-
-            core.setOutput('pr_number', String(pr.number));
-            core.setOutput('head_repo', pr.head.repo.full_name);
-            core.setOutput('head_ref', pr.head.ref);
-            core.setOutput('head_sha', pr.head.sha);
-            core.setOutput('is_draft', pr.draft ? 'true' : 'false');
-
       - name: Abort for draft PRs
-        if: steps.pr.outputs.is_draft == 'true'
+        if: github.event.pull_request.draft == true
         run: |
           echo "Draft PRs do not get previews. Skipping preview deployment."
           exit 0
 
       - name: Resolve workers.dev subdomain
         id: workers_dev
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # https://github.com/actions/github-script/releases/tag/v8.0.0
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-            const token = process.env.CLOUDFLARE_API_TOKEN;
+        run: |
+          set -euo pipefail
 
-            if (!accountId || !token) {
-              core.info('Skipping workers.dev subdomain lookup (missing Cloudflare credentials).');
-              return;
-            }
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "Missing Cloudflare credentials; cannot resolve workers.dev subdomain." >&2
+            exit 1
+          fi
 
-            const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-            });
+          response=$(curl -sSL \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")
 
-            const data = await res.json();
-            if (!data?.success) {
-              core.info(`workers.dev subdomain lookup failed: ${JSON.stringify(data?.errors || data)}`);
-              return;
-            }
+          success=$(echo "$response" | jq -r '.success // false')
+          if [ "$success" != "true" ]; then
+            echo "workers.dev subdomain lookup failed" >&2
+            exit 1
+          fi
 
-            if (data.result?.subdomain) {
-              core.setOutput('subdomain', data.result.subdomain);
-            }
+          subdomain=$(echo "$response" | jq -r '.result.subdomain // empty')
+          if [ -z "$subdomain" ]; then
+            echo "workers.dev subdomain missing in response" >&2
+            exit 1
+          fi
+
+          echo "subdomain=$subdomain" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # https://github.com/actions/checkout/releases/tag/v6.0.0
         with:
-          repository: ${{ steps.pr.outputs.head_repo }}
-          ref: ${{ steps.pr.outputs.head_sha }}
-          fetch-depth: 2
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install pnpm
@@ -139,16 +99,31 @@ jobs:
 
       - name: Derive preview identifiers
         env:
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           WORKERS_DEV_SUBDOMAIN: ${{ steps.workers_dev.outputs.subdomain }}
         run: |
           PR_NUMBER="${PR_NUMBER}"
           echo "WORKER_NAME=blueshift-preview-pr-${PR_NUMBER}" >> "$GITHUB_ENV"
           echo "CONTENT_PREFIX=compiled-mdx-preview/pr-${PR_NUMBER}" >> "$GITHUB_ENV"
-
-          if [ -n "${WORKERS_DEV_SUBDOMAIN}" ]; then
+          if [ -n "${WORKERS_DEV_SUBDOMAIN:-}" ]; then
             echo "PREVIEW_URL=https://blueshift-preview-pr-${PR_NUMBER}.${WORKERS_DEV_SUBDOMAIN}.workers.dev" >> "$GITHUB_ENV"
           fi
+
+      - name: Seed preview content from production
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          PROD_CONTENT_PREFIX: compiled-mdx
+        run: |
+          SOURCE_PREFIX="s3://${{ secrets.R2_BUCKET }}/$PROD_CONTENT_PREFIX"
+          DEST_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
+
+          aws s3 sync "$SOURCE_PREFIX" "$DEST_PREFIX" \
+            --endpoint-url "$ENDPOINT" \
+            --no-progress \
+            --size-only \
+            --delete
 
       - name: Upload Compiled MDX to R2 (preview)
         env:
@@ -157,10 +132,13 @@ jobs:
           ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           COMPILED_DIR: .compiled-mdx
           CONTENT_DIR: src/app/content
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
 
-          # Size-only sync first (handles new files, size changes, and deletions efficiently)
           aws s3 sync "$COMPILED_DIR/" "$S3_PREFIX" \
             --endpoint-url "$ENDPOINT" \
             --no-progress \
@@ -168,25 +146,25 @@ jobs:
             --delete \
             --content-type "application/json"
 
-          # Then force-upload any files changed in this commit (catches same-size content edits)
-          # Skip if this is the first commit
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            changed_files=$(git diff --name-only --diff-filter=ACM HEAD^ "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
-
-            for file in $changed_files; do
-              # Convert .mdx path to .json path in compiled directory
-              relative_path="${file#$CONTENT_DIR/}"
-              json_path="${relative_path%.mdx}.json"
-              compiled_file="$COMPILED_DIR/$json_path"
-
-              if [ -f "$compiled_file" ]; then
-                aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
-                  --endpoint-url "$ENDPOINT" \
-                  --no-progress \
-                  --content-type "application/json"
-              fi
-            done
+          # Force-upload any files changed in this PR (catches same-size content edits)
+          if [ "$BASE_REPO" != "$GITHUB_REPOSITORY" ]; then
+            git fetch --no-tags --depth=1 "https://github.com/${BASE_REPO}.git" "$BASE_SHA"
           fi
+
+          changed_files=$(git diff --name-only --diff-filter=ACM "$BASE_SHA...$HEAD_SHA" "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
+
+          for file in $changed_files; do
+            relative_path="${file#$CONTENT_DIR/}"
+            json_path="${relative_path%.mdx}.json"
+            compiled_file="$COMPILED_DIR/$json_path"
+
+            if [ -f "$compiled_file" ]; then
+              aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
+                --endpoint-url "$ENDPOINT" \
+                --no-progress \
+                --content-type "application/json"
+            fi
+          done
 
       - name: Build
         env:
@@ -208,39 +186,44 @@ jobs:
             --var CONTENT_PREFIX:${{ env.CONTENT_PREFIX }}
 
       - name: Comment preview URL
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # https://github.com/actions/github-script/releases/tag/v8.0.0
         env:
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PREVIEW_URL: ${{ env.PREVIEW_URL }}
-          WORKER_NAME: ${{ env.WORKER_NAME }}
-          CONTENT_PREFIX: ${{ env.CONTENT_PREFIX }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const prNumber = Number(process.env.PR_NUMBER);
-            const marker = '<!-- preview-link -->';
-            const body = `${marker}\n✅ Preview deployed: ${process.env.PREVIEW_URL}`;
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-            });
+          if [ -z "${PREVIEW_URL:-}" ]; then
+            echo "No preview URL available. Skipping comment."
+            exit 0
+          fi
 
-            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+          marker='<!-- preview-link -->'
+          body="$marker\n✅ Preview deployed: ${PREVIEW_URL}"
+          payload=$(jq -n --arg body "$body" '{body: $body}')
 
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
+          comments_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
+          comments=$(curl -sSL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$comments_url")
+
+          comment_id=$(echo "$comments" | jq -r --arg marker "$marker" 'map(select(.body | contains($marker))) | .[0].id // empty')
+
+          if [ -n "$comment_id" ]; then
+            curl -sSL -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$payload" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" > /dev/null
+            exit 0
+          fi
+
+          curl -sSL -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$comments_url" > /dev/null

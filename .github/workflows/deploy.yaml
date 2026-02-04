@@ -64,6 +64,8 @@ jobs:
           COMPILED_DIR: .compiled-mdx
           CONTENT_DIR: src/app/content
           CONTENT_PREFIX: compiled-mdx
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           CONTENT_PREFIX=${CONTENT_PREFIX:-compiled-mdx}
           S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
@@ -76,10 +78,9 @@ jobs:
             --delete \
             --content-type "application/json"
 
-          # Then force-upload any files changed in this commit (catches same-size content edits)
-          # Skip if this is the first commit
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            changed_files=$(git diff --name-only --diff-filter=ACM HEAD^ "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
+          # Then force-upload any files changed in this push (catches same-size content edits)
+          if git rev-parse --verify "$BASE_SHA" >/dev/null 2>&1; then
+            changed_files=$(git diff --name-only --diff-filter=ACM "$BASE_SHA...$HEAD_SHA" "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
 
             for file in $changed_files; do
               # Convert .mdx path to .json path in compiled directory
