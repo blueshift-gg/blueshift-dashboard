@@ -1,0 +1,575 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Advanced Techniques
+
+You now know the fundamentals of Trident fuzzing. This lesson covers advanced features that take your security testing to production grade: code coverage, multi-instruction transactions, using mainnet state, and performance optimization.
+
+<ArticleSection name="Code Coverage" id="code-coverage" level="h2" />
+
+Code coverage tells you which parts of your program are actually being tested. Without it, you might have comprehensive-looking fuzz tests that miss entire code paths.
+
+### Enabling Coverage
+
+Configure in `Trident.toml`:
+
+```toml
+[fuzz.coverage]
+enable = true
+server_port = 58432
+loopcount = 5
+format = "json"
+attach_extension = true
+```
+
+**Configuration options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enable` | Collect coverage data | `false` |
+| `format` | Output format: `"json"` or `"html"` | `"json"` |
+| `loopcount` | Flows between intermediate coverage updates | `0` (end only) |
+| `server_port` | Port for VS Code extension | `58432` |
+| `attach_extension` | Real-time VS Code visualization | `false` |
+
+### Generating Coverage Reports
+
+Run your fuzz test:
+
+```bash
+trident fuzz run fuzz_0
+```
+
+After completion, find the coverage report in `.fuzz-artifacts/`.
+
+For HTML format:
+```toml
+format = "html"
+```
+
+Open the generated HTML file to see:
+- ✅ Lines that were executed
+- ❌ Lines that were never reached
+- Coverage percentage per function
+
+### VS Code Integration
+
+For real-time coverage visualization:
+
+1. Install the [Solana VS Code extension](https://marketplace.visualstudio.com/items?itemName=AckeeBlockchain.solana)
+2. Configure:
+   ```toml
+   [fuzz.coverage]
+   enable = true
+   loopcount = 5
+   format = "json"
+   attach_extension = true
+   ```
+3. Run fuzz test
+4. See coverage highlighted in your editor as the fuzzer runs
+
+### Important: Entrypoint Deployment
+
+> ⚠️ Coverage is only gathered for programs deployed through an entrypoint!
+
+To get coverage, deploy your program differently:
+
+**1. Comment out the binary deployment in Trident.toml:**
+```toml
+# [[fuzz.programs]]
+# address = "YourProgramId..."
+# program = "../target/deploy/your_program.so"
+```
+
+**2. Add program as dependency in Cargo.toml:**
+```toml
+[dependencies.your_program]
+path = "../programs/your_program"
+```
+
+**3. Enable the syscall feature:**
+```toml
+[dependencies.trident-fuzz]
+features = ["syscall-v2"]  # or "syscall-v1" for older programs
+```
+
+**4. Deploy through entrypoint in test_fuzz.rs:**
+```rust
+use your_program::entry as your_entrypoint;
+
+impl FuzzTest {
+    fn new() -> Self {
+        let mut trident = Trident::default();
+
+        // Deploy through the entrypoint for coverage
+        let program = TridentEntrypoint::new(
+            your_program::ID,
+            None,
+            processor!(your_entrypoint)
+        );
+        trident.deploy_entrypoint(program);
+
+        Self {
+            trident,
+            fuzz_accounts: AccountAddresses::default(),
+        }
+    }
+}
+```
+
+<ArticleSection name="Multi-Instruction Transactions" id="multi-instruction" level="h2" />
+
+Real attacks often involve multiple instructions in a single atomic transaction. Test these scenarios by passing multiple instructions:
+
+### Basic Multi-Instruction
+
+```rust
+#[flow]
+fn atomic_operation_flow(&mut self) {
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
+    
+    // Build multiple instructions
+    let approve_ix = ApproveInstruction::data(ApproveInstructionData::new(1000))
+        .accounts(ApproveInstructionAccounts::new(user, delegate))
+        .instruction();
+    
+    let transfer_ix = TransferInstruction::data(TransferInstructionData::new(500))
+        .accounts(TransferInstructionAccounts::new(delegate, receiver))
+        .instruction();
+    
+    let revoke_ix = RevokeInstruction::data(RevokeInstructionData::new())
+        .accounts(RevokeInstructionAccounts::new(user, delegate))
+        .instruction();
+    
+    // Execute atomically
+    let result = self.trident.process_transaction(
+        &[approve_ix, transfer_ix, revoke_ix],
+        Some("ApproveTransferRevoke")
+    );
+    
+    // All succeed or all fail
+    if result.is_success() {
+        // Verify final state
+    }
+}
+```
+
+### Testing Flash Loan Patterns
+
+```rust
+#[flow]
+fn flash_loan_flow(&mut self) {
+    // Borrow, use, repay - all in one transaction
+    let borrow_ix = FlashBorrowInstruction::data(FlashBorrowInstructionData::new(1000000))
+        .accounts(...)
+        .instruction();
+    
+    let use_funds_ix = SwapInstruction::data(SwapInstructionData::new(...))
+        .accounts(...)
+        .instruction();
+    
+    let repay_ix = FlashRepayInstruction::data(FlashRepayInstructionData::new(1000000 + fee))
+        .accounts(...)
+        .instruction();
+    
+    let result = self.trident.process_transaction(
+        &[borrow_ix, use_funds_ix, repay_ix],
+        Some("FlashLoan")
+    );
+    
+    // If repay is insufficient, whole transaction should fail
+    // If it succeeds with incorrect repay, we found a bug
+}
+```
+
+### Testing Partial Failures
+
+What happens when the second instruction fails?
+
+```rust
+#[flow]
+fn partial_failure_flow(&mut self) {
+    let deposit_ix = DepositInstruction::data(DepositInstructionData::new(1000))
+        .accounts(...)
+        .instruction();
+    
+    // This might fail (not enough balance to withdraw)
+    let withdraw_ix = WithdrawInstruction::data(WithdrawInstructionData::new(999999))
+        .accounts(...)
+        .instruction();
+    
+    let capture_before = self.capture_all_state();
+    
+    let result = self.trident.process_transaction(
+        &[deposit_ix, withdraw_ix],
+        Some("DepositThenOverdraw")
+    );
+    
+    if result.is_err() {
+        // Verify NOTHING changed - atomicity
+        let capture_after = self.capture_all_state();
+        assert_eq!(capture_before, capture_after, "State changed despite failed tx!");
+    }
+}
+```
+
+<ArticleSection name="Using Mainnet State" id="mainnet-state" level="h2" />
+
+Test against real-world data by importing mainnet accounts and programs.
+
+### Importing Programs
+
+First, dump the program from mainnet:
+
+```bash
+solana program dump metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s ./programs/metaplex.so
+```
+
+Then configure in `Trident.toml`:
+
+```toml
+[[fuzz.programs]]
+address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+program = "./programs/metaplex.so"
+```
+
+Now your fuzz tests can interact with the real Metaplex program.
+
+### Importing Accounts
+
+Dump accounts:
+
+```bash
+solana account TokenAccountPubkey... --output json > ./accounts/token_account.json
+```
+
+Configure:
+
+```toml
+[[fuzz.accounts]]
+address = "TokenAccountPubkey..."
+filename = "./accounts/token_account.json"
+```
+
+### Use Case: Testing Against Real Liquidity Pools
+
+```rust
+// Trident.toml
+[[fuzz.programs]]
+address = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"  # Orca Whirlpool
+program = "./programs/whirlpool.so"
+
+[[fuzz.accounts]]
+address = "PoolPubkey..."
+filename = "./accounts/sol_usdc_pool.json"
+
+[[fuzz.accounts]]
+address = "PoolTokenVaultA..."
+filename = "./accounts/vault_a.json"
+
+[[fuzz.accounts]]
+address = "PoolTokenVaultB..."
+filename = "./accounts/vault_b.json"
+```
+
+Now you can fuzz your program's integration with real mainnet pool state:
+
+```rust
+#[flow]
+fn swap_integration_flow(&mut self) {
+    // Your program calls Orca Whirlpool via CPI
+    // Test with real pool parameters and liquidity
+}
+```
+
+<ArticleSection name="Token Program Helpers" id="token-helpers" level="h2" />
+
+For programs involving SPL tokens, enable the token feature:
+
+```toml
+# Cargo.toml
+[dependencies.trident-fuzz]
+features = ["token"]
+```
+
+### Creating Mints and Token Accounts
+
+```rust
+#[init]
+fn start(&mut self) {
+    let authority = self.fuzz_accounts.authority.insert(&mut self.trident, None);
+    
+    // Create a mint
+    let mint = self.trident.create_mint(&authority, 9); // 9 decimals
+    self.fuzz_accounts.mint.insert(&mut self.trident, None); // Store it
+    
+    // Create token accounts
+    let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+    let token_account = self.trident.create_token_account(&mint, &user);
+    
+    // Mint tokens
+    self.trident.mint_to(&mint, &token_account, 1_000_000_000);
+}
+```
+
+### Token Operations in Flows
+
+```rust
+#[flow]
+fn token_transfer_flow(&mut self) {
+    let from = self.fuzz_accounts.token_account_a.get(&mut self.trident);
+    let to = self.fuzz_accounts.token_account_b.get(&mut self.trident);
+    
+    let amount = self.trident.random_from_range(1..1000000u64);
+    
+    // Direct token transfer
+    self.trident.transfer_tokens(&from, &to, amount);
+    
+    // Or test your program's token handling
+    let ix = YourTransferInstruction::data(...)
+        .accounts(...)
+        .instruction();
+    
+    self.trident.process_transaction(&[ix], Some("TokenTransfer"));
+}
+```
+
+### Token-2022
+
+For Token-2022 (Token Extensions):
+
+```toml
+[dependencies.trident-fuzz]
+features = ["token"]  # Same feature, supports both
+```
+
+<ArticleSection name="Dashboard and Metrics" id="dashboard" level="h2" />
+
+Visualize your fuzzing sessions with the built-in dashboard.
+
+### Enabling the Dashboard
+
+```toml
+[fuzz.metrics]
+enabled = true
+dashboard = true
+json = false
+```
+
+### Viewing Results
+
+After a fuzz run, open the HTML file in `.fuzz-artifacts/`:
+
+```bash
+open .fuzz-artifacts/dashboard.html
+```
+
+The dashboard shows:
+- Transaction success/failure rates
+- Instruction distribution
+- Time spent per flow
+- Panics and where they occurred
+
+### JSON Output for CI
+
+For programmatic analysis:
+
+```toml
+[fuzz.metrics]
+enabled = true
+dashboard = false
+json = true
+```
+
+Parse the JSON in your CI pipeline:
+
+```bash
+# Check for panics in CI
+if jq '.panics > 0' .fuzz-artifacts/metrics.json; then
+  echo "Fuzzing found bugs!"
+  exit 1
+fi
+```
+
+<ArticleSection name="Performance Optimization" id="performance" level="h2" />
+
+Fuzzing effectiveness depends on how many iterations you can run. Here's how to maximize throughput.
+
+### 1. Keep Flows Focused
+
+Small, targeted flows run faster than kitchen-sink flows:
+
+```rust
+// Fast: Single operation
+#[flow]
+fn deposit_flow(&mut self) {
+    // Just deposit
+}
+
+// Slow: Many operations
+#[flow]
+fn everything_flow(&mut self) {
+    // Deposit, withdraw, stake, trade, govern...
+}
+```
+
+### 2. Skip Logging for Unimportant Transactions
+
+Use `None` to skip metrics collection:
+
+```rust
+// Log this (important for debugging)
+self.trident.process_transaction(&[important_ix], Some("CriticalOp"));
+
+// Skip logging (setup, common ops)
+self.trident.process_transaction(&[setup_ix], None);
+```
+
+### 3. Tune Iteration Counts
+
+Start small, scale up:
+
+```rust
+fn main() {
+    // Development: Fast iteration
+    FuzzTest::fuzz(100, 50);
+    
+    // PR validation: Moderate
+    FuzzTest::fuzz(1_000, 100);
+    
+    // Release: Thorough
+    FuzzTest::fuzz(100_000, 500);
+}
+```
+
+### 4. Use `--with-exit-code` in CI
+
+Fail fast when bugs are found:
+
+```bash
+trident fuzz run fuzz_0 --with-exit-code
+```
+
+### 5. Parallelize Multiple Fuzz Tests
+
+Run different fuzz tests simultaneously:
+
+```bash
+trident fuzz run fuzz_0 &
+trident fuzz run fuzz_1 &
+trident fuzz run fuzz_2 &
+wait
+```
+
+Or in CI:
+
+```yaml
+jobs:
+  fuzz:
+    strategy:
+      matrix:
+        target: [fuzz_0, fuzz_1, fuzz_2]
+    steps:
+      - run: trident fuzz run ${{ matrix.target }} --with-exit-code
+```
+
+<ArticleSection name="CI/CD Integration" id="cicd" level="h2" />
+
+Automate fuzzing in your development workflow.
+
+### GitHub Actions Example
+
+```yaml
+name: Fuzz Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+      
+      - name: Install Solana
+        uses: solana-labs/solana-install@v1
+        
+      - name: Install Anchor
+        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli
+        
+      - name: Install Trident
+        run: cargo install trident-cli
+        
+      - name: Build Program
+        run: anchor build
+        
+      - name: Run Fuzz Tests
+        run: |
+          cd trident-tests
+          trident fuzz run fuzz_0 --with-exit-code
+        env:
+          RUST_BACKTRACE: 1
+          
+      - name: Upload Crash Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: trident-tests/.fuzz-artifacts/
+```
+
+### Nightly Extensive Fuzzing
+
+```yaml
+name: Nightly Fuzz
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Every night at midnight
+
+jobs:
+  extensive-fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      # ... setup steps ...
+      
+      - name: Extensive Fuzz
+        run: |
+          cd trident-tests
+          # Run for much longer overnight
+          sed -i 's/fuzz(.*)/fuzz(100000, 500)/' fuzz_0/test_fuzz.rs
+          trident fuzz run fuzz_0 --with-exit-code
+        timeout-minutes: 360  # 6 hours max
+```
+
+<ArticleSection name="Best Practices Summary" id="best-practices" level="h2" />
+
+### For Effective Fuzzing
+
+1. **Mix focused flows** - Some test single operations, some test sequences
+2. **Test access control explicitly** - Create flows that try unauthorized operations
+3. **Use strategic random ranges** - Include edge values (0, 1, MAX)
+4. **Define strong invariants** - Conservation, monotonicity, bounds
+5. **Save bug-finding seeds** - Build a regression test suite
+
+### For Performance
+
+1. **Start with low iteration counts** during development
+2. **Skip logging for routine operations**
+3. **Keep flows small and focused**
+4. **Run extensive fuzz tests nightly**
+
+### For Debugging
+
+1. **Always save the Master Seed** when finding bugs
+2. **Use `TRIDENT_LOG=1`** to understand crash context
+3. **Add state dumps** before panics
+4. **Build regression suite** from found bugs
+
+---
+
+You now have all the tools to comprehensively fuzz your Solana programs. In the final lesson, we'll summarize the key concepts and discuss integrating fuzzing into your development workflow.

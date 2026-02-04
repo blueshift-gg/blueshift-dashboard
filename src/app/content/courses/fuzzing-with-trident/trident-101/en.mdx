@@ -1,0 +1,255 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Trident 101
+
+![Fuzzing with Trident - Security testing for Solana programs](/graphics/course-banners/fuzzing-with-trident.png)
+
+Your unit tests prove your code works as expected. Fuzzing proves it doesn't break unexpectedly.
+
+Trident is a **manually guided fuzzing framework** built specifically for Solana programs. While traditional fuzzers throw random data at programs hoping something breaks, Trident understands Solana's unique constraints: account dependencies, instruction ordering, and PDA derivation. This makes it dramatically more effective at finding real vulnerabilities.
+
+This course takes you from zero to confident fuzzer, teaching you not just how to use Trident, but how to think about security testing for blockchain programs.
+
+<ArticleSection name="What is Fuzzing" id="what-is-fuzzing" level="h2" />
+
+Fuzzing is an automated testing technique that feeds programs unexpected, random, or malformed inputs to discover bugs that human-written tests miss.
+
+Think about how you write tests:
+- You test the happy path: "When I deposit 100 tokens, my balance increases by 100"
+- You test known edge cases: "Deposit with zero amount should fail"
+- You test error conditions: "Deposit without signer should fail"
+
+But what about:
+- Deposit with amount `u64::MAX - 1` when balance is 2?
+- Deposit followed by 47 withdrawals in a specific sequence?
+- Deposit to an account that was just closed in the same transaction?
+
+You can't think of every possible input combination. Fuzzers can try millions of them.
+
+<ArticleSection name="Why Solana Programs Need Guided Fuzzing" id="why-guided-fuzzing" level="h2" />
+
+Traditional fuzzers work great for simple programs: generate random bytes, feed them in, see what crashes. But Solana programs have structure that random data can't satisfy:
+
+**Account Constraints**
+```rust
+#[account(
+    mut,
+    seeds = [b"vault", user.key().as_ref()],
+    bump
+)]
+pub vault: Account<'info, Vault>,
+```
+
+Random bytes won't produce a valid PDA. The fuzzer would waste all its time on "account not found" errors.
+
+**Instruction Ordering**
+```
+initialize_vault() → deposit() → withdraw()
+```
+
+You can't withdraw before depositing. Random instruction sequences hit these constraints immediately.
+
+**Account Relationships**
+```rust
+#[account(has_one = authority)]
+pub config: Account<'info, Config>,
+```
+
+The authority account must match what's stored in config. Random pubkeys fail instantly.
+
+**Trident's Solution: Manual Guidance**
+
+Instead of random chaos, you guide the fuzzer:
+1. Tell it which accounts to create and how (including PDAs)
+2. Define valid instruction sequences (flows)
+3. Specify what inputs to randomize and within what ranges
+4. Let the fuzzer explore within these constraints
+
+This means the fuzzer spends its time testing actual program logic, not fighting Solana's validation.
+
+<ArticleSection name="Getting Started" id="getting-started" level="h2" />
+
+### Prerequisites
+
+Ensure you have:
+- Rust (stable version)
+- Solana CLI
+- Anchor framework
+
+### Installation
+
+Install the Trident CLI:
+
+```bash
+cargo install trident-cli
+```
+
+For code coverage support (optional but recommended):
+
+```bash
+cargo +stable install cargo-llvm-cov --locked
+```
+
+### Initializing Trident
+
+Navigate to your Anchor project and initialize Trident:
+
+```bash
+cd your-anchor-project
+trident init
+```
+
+This creates the `trident-tests/` directory with everything you need to start fuzzing.
+
+<ArticleSection name="Project Structure" id="project-structure" level="h2" />
+
+After initialization, your project looks like this:
+
+```
+your-project/
+├── programs/
+│   └── your_program/
+│       └── src/lib.rs
+├── trident-tests/
+│   ├── .fuzz-artifacts/          # Dashboard, metrics, crashes
+│   ├── fuzz_0/                   # Your first fuzz test
+│   │   ├── test_fuzz.rs          # Main fuzz test logic
+│   │   ├── fuzz_accounts.rs      # Address storage definitions
+│   │   └── types.rs              # Auto-generated instruction types
+│   ├── fuzzing/                  # Compilation artifacts
+│   ├── Cargo.toml                # Rust dependencies
+│   └── Trident.toml              # Trident configuration
+└── ...
+```
+
+**Key files:**
+
+- **`test_fuzz.rs`** - Where you write your fuzz test logic, define flows, and set up invariants
+- **`fuzz_accounts.rs`** - Stores addresses used across your fuzz test (users, PDAs, etc.)
+- **`types.rs`** - Auto-generated types matching your program's instructions and accounts
+- **`Trident.toml`** - Configuration for metrics, coverage, regression testing
+
+<ArticleSection name="Your First Fuzz Run" id="first-fuzz-run" level="h2" />
+
+Even before writing custom logic, you can run the generated template:
+
+```bash
+cd trident-tests
+trident fuzz run fuzz_0
+```
+
+After a few seconds, you'll see output like:
+
+```
++-------------+---------------+------------+-----------+----------------------+
+| Instruction | Invoked Total | Ix Success | Ix Failed | Instruction Panicked |
++-------------+---------------+------------+-----------+----------------------+
+| Initialize  |         1,000 |      1,000 |         0 |                    0 |
+| Deposit     |         5,234 |      4,891 |       343 |                    0 |
+| Withdraw    |         4,766 |      3,102 |     1,664 |                    0 |
++-------------+---------------+------------+-----------+----------------------+
+MASTER SEED used: "b6562888e52de3436324c96c76ab8d16a9877af74f3a2fe71dc2d363a2fc6337"
+```
+
+**Understanding the output:**
+
+| Column | Meaning |
+|--------|---------|
+| Invoked Total | How many times this instruction was attempted |
+| Ix Success | Transactions that succeeded |
+| Ix Failed | Transaction failures (expected - fuzzer tries invalid inputs) |
+| Instruction Panicked | **Bugs found!** Panics indicate real issues |
+
+A healthy fuzz run has:
+- Many invocations (good coverage)
+- Some failures (fuzzer is testing edge cases)
+- **Zero panics** (unless you're hunting for bugs)
+
+**The Master Seed:**
+
+```
+MASTER SEED used: "b6562888e52de3436324c96c76ab8d16a9877af74f3a2fe71dc2d363a2fc6337"
+```
+
+This 256-bit seed controls ALL randomness in the fuzz session. Every random number, every pubkey, every flow selection is derived from this seed. This means:
+
+- **Same seed = Same exact execution**
+- If you find a crash, this seed lets you reproduce it exactly
+- Essential for debugging (covered in Lesson 3)
+
+> Save your Master Seed whenever you find interesting behavior. You can replay the exact same fuzz session with `trident fuzz run fuzz_0 <seed>`.
+
+<ArticleSection name="The FuzzTest Anatomy" id="fuzztest-anatomy" level="h2" />
+
+Let's examine the generated `test_fuzz.rs`:
+
+```rust
+use fuzz_accounts::*;
+use trident_fuzz::fuzzing::*;
+mod fuzz_accounts;
+mod types;
+use types::*;
+
+#[derive(FuzzTestMethods)]
+struct FuzzTest {
+    trident: Trident,              // The fuzzing engine
+    fuzz_accounts: AccountAddresses // Address storage
+}
+
+#[flow_executor]
+impl FuzzTest {
+    fn new() -> Self {
+        Self {
+            trident: Trident::default(),
+            fuzz_accounts: AccountAddresses::default(),
+        }
+    }
+
+    #[init]
+    fn start(&mut self) {
+        // Runs at the START of each iteration
+        // Use for required setup (initialize accounts, fund users, etc.)
+    }
+
+    #[flow]
+    fn flow1(&mut self) {
+        // Randomly selected during fuzzing
+        // Put your deposit/withdraw/trade logic here
+    }
+
+    #[flow]
+    fn flow2(&mut self) {
+        // Another randomly selected flow
+        // More operations to fuzz
+    }
+
+    #[end]
+    fn end(&mut self) {
+        // Runs at the END of each iteration
+        // Optional cleanup or final invariant checks
+    }
+}
+
+fn main() {
+    FuzzTest::fuzz(1000, 100);
+}
+```
+
+**The lifecycle:**
+
+```
+For each of 1000 iterations:
+  1. new()      → Fresh state
+  2. start()    → Required setup (init accounts, etc.)
+  3. [flow]     → 100 randomly chosen flows execute
+  4. end()      → Cleanup/final checks
+```
+
+**Why this structure?**
+
+- `#[init]` ensures your program is in a valid state before fuzzing begins
+- `#[flow]` methods are the variable operations you want to fuzz
+- Random flow selection explores different operation sequences
+- `#[end]` lets you check that invariants hold after all operations
+
+In the next lesson, we'll fill in these methods with real logic to test your program's security.

@@ -1,0 +1,665 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Writing Fuzz Tests
+
+Now that you understand Trident's structure, let's write fuzz tests that actually find bugs. This lesson covers the complete workflow: managing accounts, constructing instructions, generating random data, and defining invariants that catch security issues.
+
+<ArticleSection name="Address Storage" id="address-storage" level="h2" />
+
+Fuzz tests need to track accounts across multiple operations. You can't just create a new random pubkey for each instruction - the user who deposits needs to be the same user who withdraws.
+
+Trident solves this with **address storage** - containers that hold pubkeys and keypairs for reuse.
+
+### The insert() Method
+
+`insert()` adds a new address to storage and returns it:
+
+```rust
+// Create a random keypair for a user
+let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+```
+
+For PDAs, provide the seeds:
+
+```rust
+let vault = self.fuzz_accounts.vault.insert(
+    &mut self.trident,
+    Some(PdaSeeds {
+        seeds: &[b"vault", user.as_ref()],
+        program_id: my_program::ID,
+    }),
+);
+```
+
+### The get() Method
+
+`get()` retrieves a random existing address from storage:
+
+```rust
+// Get any user we've previously created
+let random_user = self.fuzz_accounts.user.get(&mut self.trident);
+```
+
+This is powerful for testing access control. By using `get()`, you might retrieve a different user than the one who owns an account, testing whether your program correctly rejects unauthorized access.
+
+### Patterns
+
+**Pattern 1: Consistent User Identity**
+```rust
+#[init]
+fn start(&mut self) {
+    // Create user once during init
+    let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+    self.trident.airdrop(&user, 10 * LAMPORTS_PER_SOL);
+    
+    // Derive their PDA
+    let user_account = self.fuzz_accounts.user_account.insert(
+        &mut self.trident,
+        Some(PdaSeeds {
+            seeds: &[b"user", user.as_ref()],
+            program_id: my_program::ID,
+        }),
+    );
+    
+    // Initialize their account
+    let ix = InitializeUserInstruction::data(InitializeUserInstructionData::new())
+        .accounts(InitializeUserInstructionAccounts::new(user, user_account))
+        .instruction();
+    
+    self.trident.process_transaction(&[ix], Some("InitUser"));
+}
+
+#[flow]
+fn deposit_flow(&mut self) {
+    // Use the same user we created in init
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
+    let user_account = self.fuzz_accounts.user_account.get(&mut self.trident);
+    
+    // Now deposit...
+}
+```
+
+**Pattern 2: Multiple Users**
+```rust
+#[init]
+fn start(&mut self) {
+    // Create multiple users
+    for _ in 0..5 {
+        let user = self.fuzz_accounts.users.insert(&mut self.trident, None);
+        self.trident.airdrop(&user, 10 * LAMPORTS_PER_SOL);
+    }
+}
+
+#[flow]
+fn transfer_flow(&mut self) {
+    // Random sender and receiver (might be the same!)
+    let sender = self.fuzz_accounts.users.get(&mut self.trident);
+    let receiver = self.fuzz_accounts.users.get(&mut self.trident);
+    
+    // Test transfer between any two users
+}
+```
+
+**Pattern 3: Testing Wrong Accounts**
+```rust
+#[flow]
+fn unauthorized_access_flow(&mut self) {
+    // Get the real owner
+    let owner = self.fuzz_accounts.owner.get(&mut self.trident);
+    let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+    
+    // But try with a different user (should fail!)
+    let attacker = self.fuzz_accounts.users.get(&mut self.trident);
+    
+    let ix = WithdrawInstruction::data(WithdrawInstructionData::new(100))
+        .accounts(WithdrawInstructionAccounts::new(attacker, vault))
+        .instruction();
+    
+    let result = self.trident.process_transaction(&[ix], Some("UnauthorizedWithdraw"));
+    
+    // This SHOULD fail. If it succeeds, we found a bug!
+    if result.is_success() {
+        panic!("VULNERABILITY: Unauthorized user was able to withdraw!");
+    }
+}
+```
+
+<ArticleSection name="Constructing Instructions" id="constructing-instructions" level="h2" />
+
+Trident auto-generates instruction builders in `types.rs` based on your program's IDL. The pattern is:
+
+```rust
+let ix = InstructionName::data(InstructionNameData::new(/* args */))
+    .accounts(InstructionNameAccounts::new(/* accounts */))
+    .instruction();
+```
+
+### Complete Example
+
+Let's say your program has this instruction:
+
+```rust
+// In your Anchor program
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    // ...
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(mut, seeds = [b"vault", user.key().as_ref()], bump)]
+    pub vault: Account<'info, Vault>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+In your fuzz test:
+
+```rust
+#[flow]
+fn deposit_flow(&mut self) {
+    // 1. Get accounts
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
+    let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+    
+    // 2. Generate random input
+    let amount = self.trident.random_from_range(1..1_000_000u64);
+    
+    // 3. Build instruction
+    let ix = DepositInstruction::data(DepositInstructionData::new(amount))
+        .accounts(DepositInstructionAccounts::new(user, vault))
+        .instruction();
+    
+    // 4. Execute
+    let result = self.trident.process_transaction(&[ix], Some("Deposit"));
+    
+    // 5. Handle result (we'll add invariants shortly)
+    if result.is_success() {
+        // Deposit succeeded
+    } else {
+        // Expected failure (insufficient funds, etc.)
+    }
+}
+```
+
+### Remaining Accounts
+
+For instructions with dynamic remaining accounts:
+
+```rust
+let remaining_accounts = vec![
+    AccountMeta::new(extra_account_1, false),
+    AccountMeta::new_readonly(extra_account_2, false),
+];
+
+let ix = MyInstruction::data(MyInstructionData::new())
+    .accounts(MyInstructionAccounts::new(user, vault))
+    .remaining_accounts(remaining_accounts)
+    .instruction();
+```
+
+<ArticleSection name="Random Data Generation" id="random-data-generation" level="h2" />
+
+The fuzzer's power comes from generating varied inputs. Trident provides methods for all common types:
+
+### Numbers
+
+```rust
+// Within a range
+let amount = self.trident.random_from_range(1..1_000_000u64);
+let percentage = self.trident.random_from_range(0..100u8);
+let timestamp = self.trident.random_from_range(0..i64::MAX);
+
+// Edge cases - test boundaries explicitly
+let edge_amounts = [0, 1, u64::MAX - 1, u64::MAX];
+let amount = edge_amounts[self.trident.random_from_range(0..4usize)];
+```
+
+### Keys and Keypairs
+
+```rust
+// Random pubkey (for read-only accounts or testing invalid accounts)
+let random_key = self.trident.random_pubkey();
+
+// Random keypair (for signers)
+let signer = self.trident.random_keypair();
+```
+
+### Strings and Bytes
+
+```rust
+// Random string of specified length
+let name = self.trident.random_string(32);
+let symbol = self.trident.random_string(10);
+
+// Random bytes
+let mut seed_data = [0u8; 32];
+self.trident.random_bytes(&mut seed_data);
+```
+
+### Booleans
+
+```rust
+let should_freeze = self.trident.random_bool();
+let is_active = self.trident.random_bool();
+```
+
+### Time Manipulation
+
+Test time-dependent logic by moving the clock forward:
+
+```rust
+// Advance time by a random amount (in seconds)
+let time_delta = self.trident.random_from_range(1..86400); // Up to 1 day
+self.trident.forward_in_time(time_delta);
+
+// Now execute time-sensitive operations
+// (vesting unlocks, staking rewards, auction endings, etc.)
+```
+
+### Strategic Ranges
+
+Don't just use arbitrary ranges. Think about what values matter:
+
+```rust
+// For token amounts, test around common boundaries
+let amount = match self.trident.random_from_range(0..4u8) {
+    0 => 0,                           // Zero amount
+    1 => 1,                           // Minimum
+    2 => self.trident.random_from_range(1..1_000_000u64), // Normal
+    _ => u64::MAX,                    // Maximum
+};
+
+// For percentages in basis points
+let fee_bps = self.trident.random_from_range(0..10001u16); // 0% to 100.01%
+
+// For prices that shouldn't be zero
+let price = self.trident.random_from_range(1..u64::MAX);
+```
+
+<ArticleSection name="Invariants and Assertions" id="invariants" level="h2" />
+
+Invariants are conditions that should **always** be true, regardless of what operations occur. They're how you catch bugs during fuzzing.
+
+### The Before/After Pattern
+
+Capture state before an operation, execute it, then verify the change was correct:
+
+```rust
+#[flow]
+fn deposit_flow(&mut self) {
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
+    let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+    
+    // 1. BEFORE: Capture current state
+    let vault_before = self.trident
+        .get_account_with_type::<Vault>(&vault, 8)  // 8-byte discriminator
+        .map(|v| v.balance)
+        .unwrap_or(0);
+    
+    let user_lamports_before = self.trident.get_account(&user).lamports();
+    
+    // 2. EXECUTE: Perform the operation
+    let amount = self.trident.random_from_range(1..1_000_000u64);
+    let ix = DepositInstruction::data(DepositInstructionData::new(amount))
+        .accounts(DepositInstructionAccounts::new(user, vault))
+        .instruction();
+    
+    let result = self.trident.process_transaction(&[ix], Some("Deposit"));
+    
+    // 3. AFTER: Verify invariants
+    if result.is_success() {
+        let vault_after = self.trident
+            .get_account_with_type::<Vault>(&vault, 8)
+            .expect("Vault should exist after deposit")
+            .balance;
+        
+        let user_lamports_after = self.trident.get_account(&user).lamports();
+        
+        // INVARIANT 1: Vault balance increased by deposit amount
+        assert_eq!(
+            vault_after, 
+            vault_before + amount,
+            "Vault balance didn't increase correctly"
+        );
+        
+        // INVARIANT 2: User paid the deposit (plus some for fees)
+        assert!(
+            user_lamports_after < user_lamports_before,
+            "User lamports should decrease after deposit"
+        );
+    }
+}
+```
+
+### Common Invariant Patterns
+
+**Conservation** - Tokens/lamports are never created or destroyed:
+```rust
+let total_before = vault_balance + user_balance;
+// ... execute transfer ...
+let total_after = vault_balance + user_balance;
+assert_eq!(total_before, total_after, "Tokens were created or destroyed!");
+```
+
+**Monotonicity** - Values only move in one direction:
+```rust
+let sequence_before = account.sequence_number;
+// ... execute operation ...
+let sequence_after = account.sequence_number;
+assert!(sequence_after >= sequence_before, "Sequence number went backwards!");
+```
+
+**Bounds** - Values stay within limits:
+```rust
+let utilization = borrowed * 10000 / total_supplied;
+assert!(utilization <= 10000, "Utilization exceeded 100%!");
+```
+
+**State Consistency** - Related values stay synchronized:
+```rust
+let computed_total = users.iter().map(|u| u.balance).sum::<u64>();
+assert_eq!(computed_total, protocol.total_deposits, "User balances don't match total!");
+```
+
+**Access Control** - Unauthorized operations must fail:
+```rust
+if signer != authorized_user {
+    assert!(
+        result.is_err(),
+        "Unauthorized user was able to execute restricted operation!"
+    );
+}
+```
+
+### Handling Expected Failures
+
+Not all failures are bugs. Test that invalid operations fail correctly:
+
+```rust
+#[flow]
+fn overdraw_flow(&mut self) {
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
+    let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+    
+    let vault_balance = self.trident
+        .get_account_with_type::<Vault>(&vault, 8)
+        .map(|v| v.balance)
+        .unwrap_or(0);
+    
+    // Try to withdraw more than the balance
+    let withdraw_amount = vault_balance + 1;
+    
+    let ix = WithdrawInstruction::data(WithdrawInstructionData::new(withdraw_amount))
+        .accounts(WithdrawInstructionAccounts::new(user, vault))
+        .instruction();
+    
+    let result = self.trident.process_transaction(&[ix], Some("Overdraw"));
+    
+    // This SHOULD fail with a specific error
+    if result.is_success() {
+        panic!("VULNERABILITY: Overdraw was allowed!");
+    }
+    
+    // Optionally verify the exact error
+    assert!(
+        result.is_custom_error_with_code(6001), // InsufficientFunds
+        "Expected InsufficientFunds error, got different failure"
+    );
+}
+```
+
+<ArticleSection name="Designing Effective Flows" id="effective-flows" level="h2" />
+
+How you structure flows determines what the fuzzer tests.
+
+### Flow Design Principles
+
+**1. One Logical Operation Per Flow**
+```rust
+// Good: Focused flows
+#[flow]
+fn deposit_flow(&mut self) { /* deposit logic */ }
+
+#[flow]
+fn withdraw_flow(&mut self) { /* withdraw logic */ }
+
+// Avoid: Kitchen sink flows
+#[flow]
+fn do_everything_flow(&mut self) {
+    // deposit... withdraw... stake... trade... govern...
+}
+```
+
+**2. Use Init for Required Setup**
+```rust
+#[init]
+fn start(&mut self) {
+    // Things that MUST happen before any flow
+    self.create_admin_config();
+    self.create_users();
+    self.fund_protocol();
+}
+```
+
+**3. Flows Test Variable Behavior**
+```rust
+#[flow]
+fn normal_deposit_flow(&mut self) {
+    // Standard deposits with valid amounts
+    let amount = self.trident.random_from_range(100..10_000u64);
+    // ...
+}
+
+#[flow]
+fn edge_case_deposit_flow(&mut self) {
+    // Edge case amounts
+    let amount = match self.trident.random_from_range(0..3u8) {
+        0 => 1,         // Minimum
+        1 => u64::MAX,  // Maximum
+        _ => 0,         // Zero (should fail)
+    };
+    // ...
+}
+
+#[flow]
+fn unauthorized_deposit_flow(&mut self) {
+    // Test access control
+    let wrong_signer = self.trident.random_keypair();
+    // ...
+}
+```
+
+**4. Test Sequences with Multi-Flow Patterns**
+```rust
+#[flow]
+fn complete_trade_flow(&mut self) {
+    // Complex multi-step operation
+    // Deposit → Place order → Match → Settle
+    
+    // Step 1: Deposit
+    let deposit_result = self.trident.process_transaction(&[deposit_ix], Some("TradeDeposit"));
+    if !deposit_result.is_success() { return; }
+    
+    // Step 2: Place order
+    let order_result = self.trident.process_transaction(&[order_ix], Some("PlaceOrder"));
+    if !order_result.is_success() { return; }
+    
+    // Step 3: Match
+    let match_result = self.trident.process_transaction(&[match_ix], Some("Match"));
+    
+    // Verify trade invariants...
+}
+```
+
+### The Main Function
+
+Control fuzzing intensity:
+
+```rust
+fn main() {
+    // FuzzTest::fuzz(iterations, flows_per_iteration)
+    
+    // Quick test during development
+    FuzzTest::fuzz(100, 50);
+    
+    // Thorough testing before release
+    FuzzTest::fuzz(10_000, 200);
+    
+    // Overnight stress test
+    FuzzTest::fuzz(1_000_000, 500);
+}
+```
+
+More iterations and flows = more coverage, but longer runtime. Start small during development, scale up for security validation.
+
+<ArticleSection name="Complete Example" id="complete-example" level="h2" />
+
+Here's a complete fuzz test for a simple vault program:
+
+```rust
+use fuzz_accounts::*;
+use trident_fuzz::fuzzing::*;
+mod fuzz_accounts;
+mod types;
+use types::*;
+
+#[derive(FuzzTestMethods)]
+struct FuzzTest {
+    trident: Trident,
+    fuzz_accounts: AccountAddresses,
+}
+
+#[flow_executor]
+impl FuzzTest {
+    fn new() -> Self {
+        Self {
+            trident: Trident::default(),
+            fuzz_accounts: AccountAddresses::default(),
+        }
+    }
+
+    #[init]
+    fn start(&mut self) {
+        // Create and fund a user
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+        self.trident.airdrop(&user, 100 * LAMPORTS_PER_SOL);
+        
+        // Derive the vault PDA
+        let vault = self.fuzz_accounts.vault.insert(
+            &mut self.trident,
+            Some(PdaSeeds {
+                seeds: &[b"vault", user.as_ref()],
+                program_id: vault_program::ID,
+            }),
+        );
+        
+        // Initialize the vault
+        let ix = InitializeVaultInstruction::data(InitializeVaultInstructionData::new())
+            .accounts(InitializeVaultInstructionAccounts::new(user, vault))
+            .instruction();
+        
+        self.trident.process_transaction(&[ix], Some("InitVault"));
+    }
+
+    #[flow]
+    fn deposit_flow(&mut self) {
+        let user = self.fuzz_accounts.user.get(&mut self.trident);
+        let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+        
+        // Capture before state
+        let balance_before = self.trident
+            .get_account_with_type::<Vault>(&vault, 8)
+            .map(|v| v.balance)
+            .unwrap_or(0);
+        
+        // Random deposit amount
+        let amount = self.trident.random_from_range(1..10_000_000u64);
+        
+        let ix = DepositInstruction::data(DepositInstructionData::new(amount))
+            .accounts(DepositInstructionAccounts::new(user, vault))
+            .instruction();
+        
+        let result = self.trident.process_transaction(&[ix], Some("Deposit"));
+        
+        // Verify invariant
+        if result.is_success() {
+            let balance_after = self.trident
+                .get_account_with_type::<Vault>(&vault, 8)
+                .expect("Vault should exist")
+                .balance;
+            
+            assert_eq!(
+                balance_after,
+                balance_before + amount,
+                "Deposit didn't increase balance correctly"
+            );
+        }
+    }
+
+    #[flow]
+    fn withdraw_flow(&mut self) {
+        let user = self.fuzz_accounts.user.get(&mut self.trident);
+        let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+        
+        let balance_before = self.trident
+            .get_account_with_type::<Vault>(&vault, 8)
+            .map(|v| v.balance)
+            .unwrap_or(0);
+        
+        // Random withdrawal (might exceed balance - that's fine, should fail)
+        let amount = self.trident.random_from_range(1..20_000_000u64);
+        
+        let ix = WithdrawInstruction::data(WithdrawInstructionData::new(amount))
+            .accounts(WithdrawInstructionAccounts::new(user, vault))
+            .instruction();
+        
+        let result = self.trident.process_transaction(&[ix], Some("Withdraw"));
+        
+        if result.is_success() {
+            let balance_after = self.trident
+                .get_account_with_type::<Vault>(&vault, 8)
+                .expect("Vault should exist")
+                .balance;
+            
+            assert_eq!(
+                balance_after,
+                balance_before - amount,
+                "Withdraw didn't decrease balance correctly"
+            );
+        } else if amount <= balance_before {
+            // If we had enough balance but still failed, that's a bug
+            panic!(
+                "Withdraw failed with sufficient balance! amount={}, balance={}",
+                amount, balance_before
+            );
+        }
+        // If amount > balance and it failed, that's expected behavior
+    }
+
+    #[end]
+    fn end(&mut self) {
+        // Final invariant: vault balance should never be negative
+        // (We can't actually go negative with u64, but we check consistency)
+        let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+        
+        if let Some(vault_data) = self.trident.get_account_with_type::<Vault>(&vault, 8) {
+            // Could add more global invariant checks here
+        }
+    }
+}
+
+fn main() {
+    FuzzTest::fuzz(1000, 100);
+}
+```
+
+This fuzz test will:
+1. Create a user and initialize their vault
+2. Randomly deposit and withdraw
+3. Verify that deposits increase balance correctly
+4. Verify that withdrawals decrease balance correctly
+5. Catch any arithmetic issues, missing checks, or state corruption
+
+In the next lesson, we'll learn how to use **Master Seeds** to reproduce and debug any crashes this fuzzer finds.

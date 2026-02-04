@@ -388,4 +388,18 @@ export const courses: CourseMetadata[] = withCourseNumber([
       { slug: "production-best-practices" },
     ],
   },
+  {
+    slug: "fuzzing-with-trident",
+    language: "Rust",
+    color: BRAND_COLOURS.rust,
+    difficulty: 2,
+    isFeatured: true,
+    lessons: [
+      { slug: "trident-101" },
+      { slug: "writing-fuzz-tests" },
+      { slug: "master-seeds-and-debugging" },
+      { slug: "advanced-techniques" },
+      { slug: "conclusion" },
+    ],
+  },
 ]);
