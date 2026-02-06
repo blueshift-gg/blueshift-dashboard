@@ -1,0 +1,73 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Syscalls
+
+Bài viết này được lấy cảm hứng từ [Richard's old website](https://web.archive.org/web/20230107121438/https://bpf.wtf/sol-0x04-syscalls/).
+Syscalls cho phép các chương trình chạy trong máy ảo Solana tương tác với các tài nguyên bên ngoài. Chúng có thể được gọi bằng lệnh `call` với giá trị tức thời được đặt thành ký hiệu hash.
+
+<ArticleSection name="Syscalls" id="syscalls" level="h2" />
+
+Tham số đầu vào được cung cấp trong các thanh ghi `r1`, `r2`, `r3`, `r4`, `r5`.
+Thanh ghi `r0` luôn được thiết lập, hoặc là giá trị trả về, hoặc là zero đối với các syscall void.
+Các thanh ghi khác được giữ nguyên. Syscalls không cấp phát một call frame.
+
+Nếu caller cung cấp các tham số không hợp lệ gây ra lỗi runtime (ví dụ: gọi `sol_memcpy_` trên con trỏ null), VM sẽ phát ra lỗi tại vị trí gọi.
+
+| Syscall                                 | Hash         | `r1`                          | `r2`                            | `r3`                         | `r4`                            | `r5`                         | Returns |
+| --------------------------------------- | ------------ | ----------------------------- | ------------------------------- | ---------------------------- | ------------------------------- | ---------------------------- | ------- |
+| `sol_secp256k1_recover`                 | `0x17E40350` | hash: `*const u8`             | recovery_id: `u64`              | signature: `*const u8`       | result: `*mut u8`               | `-`                          | `u64`   |
+| `sol_poseidon`                          | `0xC4947C21` | parameters: `u64`             | endianness: `u64`               | vals: `*const u8`            | val_len: `u64`                  | hash_result: `*mut u8`       | `u64`   |
+| `sol_invoke_signed_c`                   | `0xA22B9C85` | instruction_addr: `*const u8` | account_infos_addr: `*const u8` | account_infos_len: `u64`     | signers_seeds_addr: `*const u8` | signers_seeds_len: `u64`     | `u64`   |
+| `sol_invoke_signed_rust`                | `0xD7449092` | instruction_addr: `*const u8` | account_infos_addr: `*const u8` | account_infos_len: `u64`     | signers_seeds_addr: `*const u8` | signers_seeds_len: `u64`     | `u64`   |
+| `sol_set_return_data`                   | `0xA226D3EB` | data: `*const u8`             | length: `u64`                   | `-`                          | `-`                             | `-`                          | `-`     |
+| `sol_get_stack_height`                  | `0x85532D94` | `-`                           | `-`                             | `-`                          | `-`                             | `-`                          | `u64`   |
+| `sol_log_`                              | `0x207559BD` | message: `*const u8`          | len: `u64`                      | `-`                          | `-`                             | `-`                          | `-`     |
+| `sol_log_64_`                           | `0x5C2A3178` | arg1: `u64`                   | arg2: `u64`                     | arg3: `u64`                  | arg4: `u64`                     | arg5: `u64`                  | `-`     |
+| `sol_log_compute_units_`                | `0x52BA5096` | `-`                           | `-`                             | `-`                          | `-`                             | `-`                          | `-`     |
+| `sol_log_data`                          | `0x7317B434` | data: `*const u8`             | data_len: `u64`                 | `-`                          | `-`                             | `-`                          | `-`     |
+| `sol_memcpy_`                           | `0x717CC4A3` | dst: `*mut u8`                | src: `*const u8`                | n: `u64`                     | `-`                             | `-`                          | `-`     |
+| `sol_memmove_`                          | `0x434371F8` | dst: `*mut u8`                | src: `*const u8`                | n: `u64`                     | `-`                             | `-`                          | `-`     |
+| `sol_memcmp_`                           | `0x5FDCDE31` | s1: `*const u8`               | s2: `*const u8`                 | n: `u64`                     | result: `*mut i32`              | `-`                          | `-`     |
+| `sol_memset_`                           | `0x3770FB22` | s: `*mut u8`                  | c: `u8`                         | n: `u64`                     | `-`                             | `-`                          | `-`     |
+| `sol_log_pubkey`                        | `0x7EF088CA` | pubkey_addr:` *const u8`      | `-`                             | `-`                          | `-`                             | `-`                          | `-`     |
+| `sol_create_program_address`            | `0x9377323C` | seeds_addr: `*const u8`       | seeds_len: `u64`                | program_id_addr: `*const u8` | address_bytes_addr: `*const u8` | `-`                          | `u64`   |
+| `sol_try_find_program_address`          | `0x48504A38` | seeds_addr: `*const u8`       | seeds_len: `u64`                | program_id_addr: `*const u8` | address_bytes_addr: `*const u8` | bump_seed_addr: `*const u8`  | `u64`   |
+| `sol_sha256`                            | `0x11F49D86` | vals: `*const u8`             | val_len: `u64`                  | hash_result: `*mut u8`       | `-`                             | `-`                          | `u64`   |
+| `sol_keccak256`                         | `0xD7793ABB` | vals: `*const u8`             | val_len: `u64`                  | hash_result: `*mut u8`       | `-`                             | `-`                          | `u64`   |
+| `sol_blake3`                            | `0x174C5122` | vals: `*const u8`             | val_len: `u64`                  | hash_result: `*mut u8`       | `-`                             | `-`                          | `u64`   |
+| `sol_curve_validate_point`              | `0xAA2607CA` | curve_id: `u64`               | point_addr: `*const u8`         | result: `*mut u8`            | `-`                             | `-`                          | `u64`   |
+| `sol_curve_group_op`                    | `0xDD1C41A6` | curve_id: `u64`               | group_op: `u64`                 | left_input_addr: `*const u8` | right_input_addr: `*const u8`   | result_point_addr: `*mut u8` | `u64`   |
+| `sol_curve_multiscalar_mul`             | `0x60A40880` | curve_id: `u64`               | scalars_addr: `*const u8`       | points_addr: `*const u8`     | points_len: `u64`               | result_point_addr: `*mut u8` | `u64`   |
+| `sol_curve_pairing_map`                 | `0xF111A47E` | curve_id: `u64`               | num_pairs: u`64`                | g1_points: `*const u8`       | g2_points: `*const u8`          | result: `*mut u8`            | `u64`   |
+| `sol_curve_decompress`                  | `0x80C98B0`  | curve_id: `u64`               | point: `*const u8`              | result: *mut `u8`            | `-`                             | `-`                          | `u64`   |
+| `sol_alt_bn128_group_op`                | `0xAE0C318B` | group_op: `u64`               | input: `*const u8`              | input_size: `u64`            | result: `*mut u8`               | `-`                          | `u64`   |
+| `sol_big_mod_exp`                       | `0x780E4C15` | params: `*const u8`           | result: `*mut u8`               | `-`                          | `-`                             | `-`                          | `u64`   |
+| `sol_remaining_compute_units`           | `0xEDEF5AEE` | `-`                           | `-`                             | `-`                          | `-`                             | `-`                          | `u64`   |
+| `sol_alt_bn128_compression`             | `0x334FD5ED` | op: `u64`                     | input: `*const u8`              | input_size: `u64`            | result: `*mut u8`               | `-`                          | `u64`   |
+| `sol_get_sysvar`                        | `0x13C1B505` | sysvar_id_addr: `*const u8`   | result: `*mut u8`               | offset: `u64`                | length: `u64`                   | `-`                          | `u64`   |
+| `sol_get_epoch_stake`                   | `0x5BE92F4A` | vote_address: `*const u8`     | `-`                             | `-`                          | `-`                             | `-`                          | `u64`   |
+| `sol_panic_`                            | `0x686093BB` | filename: `*const u8`         | filename_len: `u64`             | line: `u64`                  | column: `u64`                   | `-`                          | `!`     |
+| `abort`                                 | `0xB6FC1A11` | `-`                           | `-`                             | `-`                          | `-`                             | `-`                          | `!`     |
+| `sol_get_return_data`                   | `0x5D2245E4` | data: `*mut u8`               | length: `u64`                   | program_id: `*mut u8`        | `-`                             | `-`                          | `u64`   |
+| `sol_get_processed_sibling_instruction` | `0xADB8EFC8` | index: `u64`                  | meta: `*mut u8`                 | program_id: `*mut u8`        | data: `*mut u8`                 | accounts: `*mut u8`          | `u64`   |
+
+### ĐÃ LỖI THỜI - sử dụng `sol_get_sysvar` thay cho
+
+| Syscall                         | Hash         | `r1`            | Returns |
+| ------------------------------- | ------------ | --------------- | ------- |
+| `sol_get_clock_sysvar`          | `0xD56B5FE9` | addr: `*mut u8` | `u64`   |
+| `sol_get_epoch_schedule_sysvar` | `0x23A29A61` | addr: `*mut u8` | `u64`   |
+| `sol_get_rent_sysvar`           | `0xBF7188F6` | addr: `*mut u8` | `u64`   |
+| `sol_get_last_restart_slot`     | `0x188A0031` | addr: `*mut u8` | `u64`   |
+| `sol_get_epoch_rewards_sysvar`  | `0xFDBA2B3B` | addr: `*mut u8` | `u64`   |
+| `sol_get_fees_sysvar`           | `0x3B97B73C` | addr: `*mut u8` | `u64`   |
+
+**Ghi chú:** `sol_get_fees_sysvar` không thể đi qua `sol_get_sysvar` nhưng có thể được loại bỏ khi không còn sử dụng
+
+### JIT Intrinsic
+
+Bạn có thể tìm hiểu chúng trên các trang nghiên cứu [Accelerating the SVM with JIT Intrinsics ](https://blueshift.gg/research/accelerating-svm-with-jit-intrinsics) và [Accelerating u128 Math with Libcalls and JIT Intrinsics](https://blueshift.gg/research/accelerating-u128-math-with-libcalls-and-jit-intrinsics)
+
+| Syscall            | Hash         | `r1`              | `r2`     | `r3`      | Returns |
+|--------------------|--------------|-------------------|----------|-----------|---------|
+| `sol_u64_wide_mul` | `0x61BAE2E8` |result: `*mut u128`| a: `u64` |  b: `u64` | `u64`   |
