@@ -1,0 +1,318 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# SPL Token Multisig Approach
+
+The SPL Token Program includes a built-in multisig account type that predates dedicated smart account protocols. It's a lightweight, on-chain multisig specifically for token operations. Understanding how it works, what it can do, and where it falls short helps you choose the right tool for your use case.
+
+<ArticleSection name="SPL Token Multisig Overview" id="overview" level="h2" />
+
+The SPL Token multisig is a special account type within the Token Program that acts as a multi-party authority for token operations. Instead of a single keypair controlling a mint or token account, a multisig account requires M-of-N signers to authorize actions.
+
+```
+┌──────────────────────┐
+│  SPL Multisig        │
+│  Account             │
+│                      │
+│  M: 2                │
+│  N: 3                │
+│                      │
+│  Signers:            │
+│    [0]: Alice        │
+│    [1]: Bob          │
+│    [2]: Carol        │
+│                      │
+│  is_initialized: true│
+└──────────────────────┘
+         │
+    Used as authority for:
+         │
+    ┌────┴────┐
+    ▼         ▼
+  Mint     Token
+ Account   Account
+```
+
+The multisig account can serve as the authority for:
+- **Mint authority**: Control who can mint new tokens
+- **Freeze authority**: Control who can freeze/thaw token accounts
+- **Token account owner**: Control who can transfer tokens from an account
+- **Close authority**: Control who can close a token account
+- **Token account delegate**: Act as a delegated authority
+
+<ArticleSection name="Creating an SPL Token Multisig" id="creating-multisig" level="h2" />
+
+### Account Structure
+
+The SPL Token multisig account has a fixed layout:
+
+```rust
+pub struct Multisig {
+    /// Number of signers required (M)
+    pub m: u8,
+    /// Number of valid signers (N)
+    pub n: u8,
+    /// Is this multisig initialized
+    pub is_initialized: bool,
+    /// Signer public keys (fixed array of 11)
+    pub signers: [Pubkey; MAX_SIGNERS],  // MAX_SIGNERS = 11
+}
+```
+
+Key constraints:
+- Maximum of **11 signers** (N ≤ 11)
+- Threshold M must satisfy: 1 ≤ M ≤ N
+- The signer list is **fixed at creation** — signers cannot be added or removed after initialization
+
+### Initialization
+
+Creating an SPL Token multisig requires:
+
+1. Create the account with sufficient space (355 bytes)
+2. Initialize it with the list of signers and the threshold
+
+```typescript
+import {
+  createAccount,
+  createInitializeMultisigInstruction,
+  TOKEN_PROGRAM_ID,
+  MULTISIG_SIZE,
+} from "@solana/spl-token";
+
+// Step 1: Create the account
+const multisigKeypair = Keypair.generate();
+const createAccountIx = SystemProgram.createAccount({
+  fromPubkey: payer.publicKey,
+  newAccountPubkey: multisigKeypair.publicKey,
+  lamports: await connection.getMinimumBalanceForRentExemption(MULTISIG_SIZE),
+  space: MULTISIG_SIZE,
+  programId: TOKEN_PROGRAM_ID,
+});
+
+// Step 2: Initialize as multisig
+const initMultisigIx = createInitializeMultisigInstruction(
+  multisigKeypair.publicKey,   // multisig account
+  [                             // signers
+    alice.publicKey,
+    bob.publicKey,
+    carol.publicKey,
+  ],
+  2,                            // threshold (M = 2)
+  TOKEN_PROGRAM_ID,
+);
+
+// Step 3: Send transaction
+const tx = new Transaction().add(createAccountIx, initMultisigIx);
+await sendAndConfirmTransaction(connection, tx, [payer, multisigKeypair]);
+```
+
+### Using Multisig as Mint Authority
+
+To create a mint where the multisig controls minting:
+
+```typescript
+// Create mint with multisig as mint authority
+const mint = await createMint(
+  connection,
+  payer,
+  multisigKeypair.publicKey,  // mint authority = multisig
+  multisigKeypair.publicKey,  // freeze authority = multisig (optional)
+  9,                           // decimals
+);
+```
+
+Now minting tokens requires M-of-N signers from the multisig.
+
+<ArticleSection name="Using the Multisig" id="using-multisig" level="h2" />
+
+### Signing Token Operations
+
+When performing a token operation with a multisig authority, you must:
+
+1. Pass the multisig account as the authority
+2. Include M signer accounts as remaining accounts
+3. Each signer must actually sign the transaction
+
+```typescript
+import { createMintToInstruction } from "@solana/spl-token";
+
+// Mint tokens using multisig authority
+const mintToIx = createMintToInstruction(
+  mint,                          // mint
+  destinationAta,                // destination token account
+  multisigKeypair.publicKey,     // authority (multisig)
+  1000000000,                    // amount
+  [alice, bob],                  // M signers (2 of 3)
+);
+
+const tx = new Transaction().add(mintToIx);
+await sendAndConfirmTransaction(connection, tx, [payer, alice, bob]);
+```
+
+The Token Program verifies:
+1. The authority is a valid, initialized multisig account
+2. At least M of the provided signers match the multisig's signer list
+3. Each provided signer has actually signed the transaction
+
+### Transfer with Multisig Owner
+
+If a token account's owner is a multisig:
+
+```typescript
+import { createTransferInstruction } from "@solana/spl-token";
+
+const transferIx = createTransferInstruction(
+  sourceTokenAccount,            // source
+  destinationTokenAccount,       // destination
+  multisigKeypair.publicKey,     // owner (multisig)
+  amount,
+  [alice, carol],                // M signers
+);
+
+const tx = new Transaction().add(transferIx);
+await sendAndConfirmTransaction(connection, tx, [payer, alice, carol]);
+```
+
+### Freeze/Thaw with Multisig Authority
+
+```typescript
+import {
+  createFreezeAccountInstruction,
+  createThawAccountInstruction,
+} from "@solana/spl-token";
+
+// Freeze
+const freezeIx = createFreezeAccountInstruction(
+  tokenAccount,
+  mint,
+  multisigKeypair.publicKey,     // freeze authority (multisig)
+  [bob, carol],                  // M signers
+);
+
+// Thaw
+const thawIx = createThawAccountInstruction(
+  tokenAccount,
+  mint,
+  multisigKeypair.publicKey,     // freeze authority (multisig)
+  [alice, bob],                  // M signers
+);
+```
+
+<ArticleSection name="Limitations" id="limitations" level="h2" />
+
+The SPL Token multisig is intentionally simple. This simplicity comes with significant limitations:
+
+### Token Operations Only
+
+The SPL Token multisig can only authorize **token program operations**. It cannot:
+
+- Transfer SOL
+- Interact with DeFi protocols
+- Execute arbitrary program instructions
+- Manage program upgrade authority
+- Govern non-token accounts
+
+It's scoped entirely to the SPL Token Program's instruction set.
+
+### No SOL Control
+
+SPL Token multisig accounts cannot hold or transfer SOL (beyond the rent-exempt minimum). If you need multi-party control over SOL, you need a different solution like Squads.
+
+### Fixed Signer Set
+
+Once created, the signer list cannot be modified. You cannot:
+
+- Add new signers
+- Remove existing signers
+- Change the threshold
+- Replace a compromised key
+
+If a signer's key is compromised or lost, the only option is to create a new multisig, create new mint/token accounts, and migrate assets.
+
+### No Proposal System
+
+All M signers must sign the **same transaction**. There's no on-chain proposal, no asynchronous approval, no review period. This means:
+
+1. All signers must be available at the same time (or use partial signing)
+2. There's no on-chain record of what was proposed vs. what was approved
+3. No timelock or cooling-off period before execution
+
+### Maximum 11 Signers
+
+The fixed array size limits the multisig to 11 signers. For large organizations or DAOs, this is insufficient.
+
+### No Role Separation
+
+All signers are equal. There's no concept of proposers, voters, or executors. Every signer has the same authority.
+
+### Transaction Size Constraints
+
+Because all M signers must be included in a single transaction, complex operations with many accounts may hit Solana's transaction size limits. Each additional signer adds 32 bytes to the transaction plus a signature (64 bytes).
+
+<ArticleSection name="When to Use SPL Token Multisig" id="when-to-use" level="h2" />
+
+Despite its limitations, SPL Token multisig is the right choice in specific scenarios:
+
+### Good Fit
+
+- **Simple token authority**: You need multi-party control over a mint authority and nothing else
+- **Small, stable teams**: 2-3 signers who won't change and can coordinate synchronously
+- **Minimal infrastructure**: You don't want to depend on a third-party protocol or SDK
+- **Cost sensitivity**: No additional program accounts or proposal overhead
+
+### Not a Good Fit
+
+- **SOL management**: Need to control SOL holdings → use Squads
+- **Arbitrary transactions**: Need to interact with DeFi, NFTs, or other programs → use Squads
+- **Asynchronous approval**: Signers can't coordinate same-transaction signing → use Squads
+- **Dynamic membership**: Need to add/remove signers over time → use Squads
+- **Large organizations**: More than 11 signers needed → use Squads
+- **Operational features**: Need spending limits, timelocks, or proposals → use Squads
+
+### Practical Example
+
+A common legitimate use case: a project creates a token where the mint authority is a 2-of-3 SPL Token multisig. The three signers are core team members. This ensures no single person can mint new tokens, while keeping the setup simple and dependency-free.
+
+```
+Token Mint
+  Mint Authority: SPL Multisig (2 of 3)
+    - Signer 0: Team Lead
+    - Signer 1: CTO
+    - Signer 2: Operations
+
+  The team can only mint tokens when 2 of 3 agree.
+  No other operations need multisig.
+```
+
+<ArticleSection name="SPL Token Multisig vs Squads" id="comparison" level="h2" />
+
+| Feature | SPL Token Multisig | Squads |
+|---------|-------------------|--------|
+| Token operations | Yes | Yes |
+| SOL transfers | No | Yes |
+| Arbitrary CPI | No | Yes |
+| Max signers | 11 | Unlimited |
+| Modifiable signers | No | Yes |
+| Modifiable threshold | No | Yes |
+| Proposal system | No | Yes |
+| Async approval | No (same tx) | Yes |
+| Timelocks | No | Yes |
+| Spending limits | No | Yes |
+| Role separation | No | Yes |
+| Dependencies | None (built-in) | Squads program |
+| Setup complexity | Low | Moderate |
+| Operational overhead | Low | Moderate |
+
+The choice comes down to scope: if you only need multi-party authorization for token operations with a small, fixed set of signers, SPL Token multisig is sufficient. For anything more complex, Squads provides the full-featured solution.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+The SPL Token multisig:
+
+1. **Built into the Token Program** — no external dependencies
+2. **M-of-N authorization** for token operations (mint, transfer, freeze, etc.)
+3. **Fixed signer set** — cannot modify after creation
+4. **Synchronous signing** — all signers must co-sign the same transaction
+5. **Token-only scope** — cannot control SOL or interact with other programs
+6. **Best for simple use cases** — small teams, stable membership, token authority only
+
+In the next lesson, we'll bring everything together with a comprehensive comparison and conclusion.

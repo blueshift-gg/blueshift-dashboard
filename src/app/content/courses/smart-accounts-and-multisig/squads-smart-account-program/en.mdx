@@ -1,0 +1,708 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Squads Smart Account Program
+
+[Squads Protocol](https://squads.so) is the leading smart account infrastructure on Solana. The Squads v4 program (also known as Squads Multisig Program v4) is open-source, audited, and used by hundreds of teams to manage billions of dollars in assets.
+
+This lesson walks through the Squads v4 program architecture, its account types, instruction set, and how vault PDAs enable composable smart accounts.
+
+> The Squads v4 program source code is available at [github.com/Squads-Protocol/v4](https://github.com/Squads-Protocol/v4)
+
+<ArticleSection name="Program Overview" id="program-overview" level="h2" />
+
+The Squads v4 program is built with Anchor and implements a complete smart account system with:
+
+- **Multisig accounts** for member management and threshold configuration
+- **Vault PDAs** for holding assets
+- **Proposals** for the approval lifecycle
+- **Vault transactions** for storing executable instructions
+- **Config transactions** for modifying the smart account itself
+- **Spending limits** for autonomous vault operations within defined bounds
+- **Batches** for grouping multiple vault transactions under a single proposal
+- **Transaction buffers** for large transactions that exceed single-instruction size limits
+
+The program ID for the Squads v4 program on mainnet is:
+
+```
+SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf
+```
+
+<ArticleSection name="Account Types" id="account-types" level="h2" />
+
+### Multisig Account
+
+The core configuration account. It stores:
+
+```rust
+pub struct Multisig {
+    /// Key used to derive the multisig PDA
+    pub create_key: Pubkey,
+    /// Authority that can modify config without going through
+    /// the normal proposal process (optional)
+    pub config_authority: Pubkey,
+    /// Number of approvals required to execute a proposal
+    pub threshold: u16,
+    /// Time lock in seconds for proposal execution
+    pub time_lock: u32,
+    /// Running index for proposals
+    pub transaction_index: u64,
+    /// Last known stale transaction index
+    pub stale_transaction_index: u64,
+    /// Rent collector address for closed accounts
+    pub rent_collector: Option<Pubkey>,
+    /// Bump seed for the PDA
+    pub bump: u8,
+    /// Members with their permissions
+    pub members: Vec<Member>,
+}
+```
+
+The multisig PDA is derived from a prefix and the `create_key`:
+
+```
+multisig_pda = findProgramAddress(
+  ["multisig", "multisig", create_key],
+  program_id
+)
+```
+
+Each member has a `Pubkey` and a `Permissions` bitmask that determines their capabilities:
+
+```rust
+pub struct Member {
+    pub key: Pubkey,
+    pub permissions: Permissions,
+}
+
+pub struct Permissions {
+    pub mask: u8,
+}
+
+pub enum Permission {
+    Initiate = 1 << 0,  // bit 0 — can create proposals and transactions
+    Vote     = 1 << 1,  // bit 1 — can approve or reject proposals
+    Execute  = 1 << 2,  // bit 2 — can execute approved proposals
+}
+```
+
+A member can have any combination of these permissions. For example, a member with mask `7` (all bits set) can initiate, vote, and execute. Members must be stored sorted by public key with no duplicates.
+
+### Vault PDA
+
+Vaults are PDAs derived from the multisig account and an index:
+
+```
+vault_pda = findProgramAddress(
+  ["multisig", multisig_pda, "vault", vault_index_bytes],
+  program_id
+)
+```
+
+The default vault uses index `0`. Teams can create additional vaults for operational separation — one for day-to-day expenses, another for long-term reserves.
+
+Vaults don't have their own account data in the Squads program. They're simply PDA addresses that hold SOL and own token accounts. The smart account program signs for them using `invoke_signed`.
+
+### Proposal Account
+
+Proposals track the approval state for a specific action:
+
+```rust
+pub struct Proposal {
+    /// The multisig this proposal belongs to
+    pub multisig: Pubkey,
+    /// Index of the transaction this proposal is for
+    pub transaction_index: u64,
+    /// Current status
+    pub status: ProposalStatus,
+    /// Bump seed
+    pub bump: u8,
+    /// Members who approved
+    pub approved: Vec<Pubkey>,
+    /// Members who rejected
+    pub rejected: Vec<Pubkey>,
+    /// Members who cancelled
+    pub cancelled: Vec<Pubkey>,
+}
+```
+
+Each status variant carries a timestamp recording when the transition occurred:
+
+```rust
+pub enum ProposalStatus {
+    Draft { timestamp: i64 },
+    Active { timestamp: i64 },
+    Rejected { timestamp: i64 },
+    Approved { timestamp: i64 },
+    Executing,                    // Deprecated transient state
+    Executed { timestamp: i64 },
+    Cancelled { timestamp: i64 },
+}
+```
+
+The proposal lifecycle:
+
+```
+Draft ──► Active ──► Approved ──► Executed
+                 ──► Rejected
+                 ──► Cancelled
+              ──► Stale (if config changes)
+```
+
+A proposal becomes **stale** when the multisig configuration changes after the proposal was created. This prevents proposals created under an old configuration from executing with different authorization rules.
+
+### Vault Transaction
+
+Stores the instructions to be executed through a vault:
+
+```rust
+pub struct VaultTransaction {
+    /// The multisig this transaction belongs to
+    pub multisig: Pubkey,
+    /// Member who created this transaction
+    pub creator: Pubkey,
+    /// Transaction index
+    pub index: u64,
+    /// Bump seed
+    pub bump: u8,
+    /// The vault index this transaction uses
+    pub vault_index: u8,
+    /// Bump for the vault PDA
+    pub vault_bump: u8,
+    /// Bump seeds for ephemeral signing PDAs
+    pub ephemeral_signer_bumps: Vec<u8>,
+    /// The transaction message containing instructions
+    pub message: VaultTransactionMessage,
+}
+```
+
+The `VaultTransactionMessage` contains the actual instructions (program IDs, account keys, data) that will be executed via CPI when the proposal is approved and executed:
+
+```rust
+pub struct VaultTransactionMessage {
+    /// Number of signer accounts
+    pub num_signers: u8,
+    /// Number of writable signer accounts
+    pub num_writable_signers: u8,
+    /// Number of writable non-signer accounts
+    pub num_writable_non_signers: u8,
+    /// All account keys referenced by the instructions
+    pub account_keys: Vec<Pubkey>,
+    /// Compiled instructions referencing account_keys by index
+    pub instructions: Vec<MultisigCompiledInstruction>,
+    /// Address table lookups for versioned transactions
+    pub address_table_lookups: Vec<MultisigMessageAddressTableLookup>,
+}
+```
+
+### Config Transaction
+
+Config transactions modify the multisig's own configuration:
+
+```rust
+pub struct ConfigTransaction {
+    /// The multisig this transaction belongs to
+    pub multisig: Pubkey,
+    /// Member who created this transaction
+    pub creator: Pubkey,
+    /// Transaction index
+    pub index: u64,
+    /// Bump seed
+    pub bump: u8,
+    /// The config actions to execute
+    pub actions: Vec<ConfigAction>,
+}
+```
+
+Config actions include:
+
+```rust
+pub enum ConfigAction {
+    AddMember { new_member: Member },
+    RemoveMember { old_member: Pubkey },
+    ChangeThreshold { new_threshold: u16 },
+    SetTimeLock { new_time_lock: u32 },
+    AddSpendingLimit {
+        create_key: Pubkey,
+        vault_index: u8,
+        mint: Pubkey,
+        amount: u64,
+        period: Period,
+        members: Vec<Pubkey>,
+        destinations: Vec<Pubkey>,
+    },
+    RemoveSpendingLimit { spending_limit: Pubkey },
+    SetRentCollector { new_rent_collector: Option<Pubkey> },
+}
+```
+
+<ArticleSection name="Instruction Set" id="instruction-set" level="h2" />
+
+The program exposes 36 instructions organized by function. Here are the key ones:
+
+### Creating a Multisig
+
+The `multisig_create_v2` instruction initializes a new smart account (v1 is deprecated):
+
+```
+multisig_create_v2:
+  - create_key: Pubkey        // Unique key for PDA derivation
+  - members: Vec<Member>      // Initial member list (sorted, no duplicates)
+  - threshold: u16            // Approval threshold
+  - config_authority: Pubkey  // Optional config authority
+  - rent_collector: Pubkey    // Optional rent collector
+  - time_lock: u32            // Optional timelock in seconds (max 90 days)
+```
+
+The `create_key` is typically a randomly generated keypair that must sign the creation transaction. This ensures unique multisig addresses even with the same member set. The threshold must be between 1 and the number of members with `Vote` permission.
+
+### Proposal Lifecycle
+
+**Creating a proposal**:
+
+```
+proposal_create:
+  - transaction_index: u64
+  - draft: bool               // Start as draft or active
+```
+
+Only members with `Initiate` permission can create proposals. If `draft` is `true`, the proposal must be explicitly activated via `proposal_activate` before members can vote.
+
+**Approving a proposal**:
+
+```
+proposal_approve:
+  - memo: Option<String>      // Optional approval memo
+```
+
+Only members with `Vote` permission can approve. Each member can only approve once.
+
+**Executing a proposal**:
+
+Once the approval count reaches the threshold, anyone with `Execute` permission can trigger execution:
+
+```
+vault_transaction_execute
+```
+
+This instruction takes no arguments beyond the accounts — it reads the stored instructions from the vault transaction and executes them via CPI, signing with the vault PDA's seeds.
+
+### Configuration Changes
+
+Config transactions follow the same proposal lifecycle but execute configuration changes instead of vault transactions:
+
+```
+config_transaction_create:
+  - actions: Vec<ConfigAction>
+
+config_transaction_execute
+  // no args — reads config from the transaction account
+```
+
+When a config transaction executes, the multisig's `stale_transaction_index` is updated, invalidating any pending proposals created before the config change.
+
+The program also provides direct config instructions for use with the `config_authority` (bypassing the proposal process):
+
+- `multisig_add_member`
+- `multisig_remove_member`
+- `multisig_change_threshold`
+- `multisig_set_time_lock`
+- `multisig_set_config_authority`
+- `multisig_set_rent_collector`
+- `multisig_add_spending_limit`
+- `multisig_remove_spending_limit`
+
+### Batch Operations
+
+For scenarios requiring multiple vault transactions under a single proposal:
+
+```
+batch_create:
+  - vault_index: u8
+  - memo: Option<String>
+
+batch_add_transaction:
+  - ephemeral_signers: u8
+  - transaction_message: Vec<u8>
+
+batch_execute_transaction
+```
+
+Batches group related transactions — for example, distributing tokens to multiple recipients in a single approved proposal.
+
+### Transaction Buffers
+
+For vault transactions too large to fit in a single Solana instruction:
+
+```
+transaction_buffer_create:
+  - buffer_index: u8
+  - vault_index: u8
+  - final_buffer_hash: [u8; 32]
+  - final_buffer_size: u16        // max ~10,128 bytes
+  - buffer: Vec<u8>
+
+transaction_buffer_extend:
+  - buffer: Vec<u8>
+
+vault_transaction_create_from_buffer
+```
+
+The buffer is built incrementally across multiple transactions, verified against a hash, then converted into a vault transaction.
+
+<ArticleSection name="Vault PDA Mechanics" id="vault-mechanics" level="h2" />
+
+Understanding how vault PDAs work is essential for integrating with Squads.
+
+### PDA Seed Constants
+
+The program uses these seed prefixes:
+
+```rust
+pub const SEED_PREFIX: &[u8] = b"multisig";
+pub const SEED_PROGRAM_CONFIG: &[u8] = b"program_config";
+pub const SEED_MULTISIG: &[u8] = b"multisig";
+pub const SEED_VAULT: &[u8] = b"vault";
+pub const SEED_PROPOSAL: &[u8] = b"proposal";
+pub const SEED_TRANSACTION: &[u8] = b"transaction";
+pub const SEED_EPHEMERAL_SIGNER: &[u8] = b"ephemeral_signer";
+pub const SEED_SPENDING_LIMIT: &[u8] = b"spending_limit";
+pub const SEED_BATCH_TRANSACTION: &[u8] = b"batch_transaction";
+pub const SEED_TRANSACTION_BUFFER: &[u8] = b"transaction_buffer";
+```
+
+### Deriving Vault Addresses
+
+Clients derive vault addresses deterministically using the `@sqds/multisig` SDK or manually:
+
+```typescript
+const [vaultPda] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("multisig"),
+    multisigPda.toBuffer(),
+    Buffer.from("vault"),
+    new Uint8Array([vaultIndex]),
+  ],
+  SQUADS_PROGRAM_ID
+);
+```
+
+This vault address can receive SOL transfers, own token accounts, and interact with any Solana program.
+
+### Token Accounts for Vaults
+
+To hold SPL tokens, the vault needs associated token accounts:
+
+```
+Vault PDA (holds SOL)
+  └── ATA: vault_pda × token_mint (holds tokens)
+```
+
+Anyone can create an ATA for the vault PDA. Once created, only the Squads program (through approved proposals) can transfer tokens out.
+
+### Ephemeral Signers
+
+Some DeFi protocols require additional signers beyond the vault PDA. Squads supports ephemeral signing PDAs:
+
+```
+ephemeral_signer = findProgramAddress(
+  ["multisig", transaction_account_key,
+   "ephemeral_signer", signer_index_bytes],
+  program_id
+)
+```
+
+These are temporary PDAs that exist only for the scope of a specific transaction, enabling complex DeFi interactions that require auxiliary signers.
+
+<ArticleSection name="Spending Limits" id="spending-limits" level="h2" />
+
+Squads v4 includes a spending limits feature that allows members to execute transfers without going through the full proposal lifecycle:
+
+```rust
+pub struct SpendingLimit {
+    /// The multisig this spending limit belongs to
+    pub multisig: Pubkey,
+    /// Key used to derive the spending limit PDA
+    pub create_key: Pubkey,
+    /// Which vault this limit applies to
+    pub vault_index: u8,
+    /// Token mint (system program pubkey for SOL)
+    pub mint: Pubkey,
+    /// Maximum amount per period
+    pub amount: u64,
+    /// Period type (OneTime, Day, Week, Month)
+    pub period: Period,
+    /// Amount remaining in current period
+    pub remaining_amount: u64,
+    /// Last reset timestamp
+    pub last_reset: i64,
+    /// Bump seed
+    pub bump: u8,
+    /// Members authorized to use this spending limit
+    pub members: Vec<Pubkey>,
+    /// Allowed destinations (empty = unrestricted)
+    pub destinations: Vec<Pubkey>,
+}
+```
+
+The `Period` enum defines reset intervals:
+
+```rust
+pub enum Period {
+    OneTime,  // Single use, never resets
+    Day,      // Resets every 86,400 seconds
+    Week,     // Resets every 604,800 seconds
+    Month,    // Resets every 2,592,000 seconds (30 days)
+}
+```
+
+Spending limits enable operational efficiency: a team member can transfer up to 10 SOL per day from the operational vault without needing a full multisig approval for each transfer. The `destinations` field can optionally restrict where funds can be sent.
+
+Spending limits are created and removed through `ConfigAction::AddSpendingLimit` and `ConfigAction::RemoveSpendingLimit`, going through the normal proposal process. Members use the `spending_limit_use` instruction to execute transfers within their limits.
+
+<ArticleSection name="Integration Patterns" id="integration" level="h2" />
+
+The `@sqds/multisig` SDK (v2.x) provides TypeScript helpers organized into modules:
+
+- `multisig.rpc.*` — convenience functions that build, sign, and send transactions in one call
+- `multisig.instructions.*` — low-level instruction builders for custom transaction composition
+- `multisig.transactions.*` — transaction builders that return unsigned transactions
+- `multisig.accounts.*` — account deserialization (via `Multisig.fromAccountAddress`, etc.)
+- `multisig.types.*` — TypeScript type definitions (`Permission`, `Permissions`, `Period`, etc.)
+- PDA helpers exported directly: `getMultisigPda`, `getVaultPda`, `getTransactionPda`, `getProposalPda`, etc.
+
+### Step 1: Create a Multisig
+
+```typescript
+import * as multisig from "@sqds/multisig";
+import { Connection, Keypair } from "@solana/web3.js";
+
+const connection = new Connection("https://api.devnet.solana.com");
+const creator = Keypair.generate();
+const createKey = Keypair.generate();
+
+// Derive the multisig PDA
+const [multisigPda] = multisig.getMultisigPda({
+  createKey: createKey.publicKey,
+});
+
+// Derive the default vault (index 0)
+const [vaultPda] = multisig.getVaultPda({
+  multisigPda,
+  index: 0,
+});
+
+// Create the multisig with rpc convenience function
+const signature = await multisig.rpc.multisigCreateV2({
+  connection,
+  feePayer: creator,
+  creator: creator,
+  createKey: createKey,
+  multisigPda,
+  configAuthority: null,
+  threshold: 2,
+  timeLock: 0,
+  members: [
+    { key: alice.publicKey, permissions: Permissions.all() },
+    { key: bob.publicKey, permissions: Permissions.all() },
+    { key: carol.publicKey, permissions: Permissions.fromPermissions([
+      Permission.Vote,
+    ])},
+  ],
+  treasury: vaultPda,
+  rentCollector: null,
+  programId: multisig.PROGRAM_ID,
+});
+await connection.confirmTransaction(signature);
+```
+
+### Step 2: Build a Transaction Message
+
+The most critical part of integration — constructing the instructions the vault will execute. The vault PDA acts as the payer/signer for these instructions:
+
+```typescript
+import { SystemProgram, TransactionMessage } from "@solana/web3.js";
+
+// Example: transfer SOL from the vault to a recipient
+const transferIx = SystemProgram.transfer({
+  fromPubkey: vaultPda,       // Vault is the sender
+  toPubkey: recipientPubkey,
+  lamports: 1_000_000_000,   // 1 SOL
+});
+
+// Build a TransactionMessage with the vault as the payer
+const transactionMessage = new TransactionMessage({
+  payerKey: vaultPda,
+  recentBlockhash: (await connection.getLatestBlockhash()).blockhash,
+  instructions: [transferIx],
+});
+```
+
+The `transactionMessage` can contain any instructions — token transfers, DeFi interactions, NFT operations, program upgrades — as long as the vault PDA is set as the signer where needed.
+
+### Step 3: Create Vault Transaction + Proposal
+
+```typescript
+// Read the current transaction index from the multisig account
+const multisigAccount = await multisig.accounts.Multisig.fromAccountAddress(
+  connection,
+  multisigPda
+);
+const transactionIndex = BigInt(Number(multisigAccount.transactionIndex) + 1);
+
+// Create the vault transaction (stores the instructions on-chain)
+await multisig.rpc.vaultTransactionCreate({
+  connection,
+  feePayer: alice,
+  multisigPda,
+  transactionIndex,
+  creator: alice.publicKey,
+  vaultIndex: 0,
+  ephemeralSigners: 0,
+  transactionMessage,
+  addressLookupTableAccounts: [],
+  programId: multisig.PROGRAM_ID,
+});
+
+// Create a proposal for voting (isDraft: false activates it immediately)
+await multisig.rpc.proposalCreate({
+  connection,
+  feePayer: alice,
+  multisigPda,
+  transactionIndex,
+  creator: alice.publicKey,
+  isDraft: false,
+  programId: multisig.PROGRAM_ID,
+});
+```
+
+### Step 4: Approve the Proposal
+
+Each member with `Vote` permission submits their approval as a separate transaction:
+
+```typescript
+// Alice approves
+await multisig.rpc.proposalApprove({
+  connection,
+  feePayer: alice,
+  multisigPda,
+  transactionIndex,
+  member: alice.publicKey,
+  memo: "Looks good",
+  programId: multisig.PROGRAM_ID,
+});
+
+// Bob approves (threshold of 2 is now met)
+await multisig.rpc.proposalApprove({
+  connection,
+  feePayer: bob,
+  multisigPda,
+  transactionIndex,
+  member: bob.publicKey,
+  programId: multisig.PROGRAM_ID,
+});
+```
+
+### Step 5: Execute the Transaction
+
+Once the threshold is met, any member with `Execute` permission triggers execution. The program reads the stored instructions, resolves the required accounts, and executes them via CPI with the vault PDA's seeds:
+
+```typescript
+await multisig.rpc.vaultTransactionExecute({
+  connection,
+  feePayer: bob,
+  multisigPda,
+  transactionIndex,
+  member: bob.publicKey,
+  programId: multisig.PROGRAM_ID,
+});
+```
+
+The `rpc.vaultTransactionExecute` function handles the complexity of passing the correct remaining accounts — all accounts referenced in the stored transaction message must be included for the CPI to succeed.
+
+### Reading Multisig State
+
+Query on-chain state to display multisig status in your UI:
+
+```typescript
+import { Multisig, Proposal } from "@sqds/multisig/lib/generated/accounts";
+
+// Read multisig configuration
+const msAccount = await Multisig.fromAccountAddress(connection, multisigPda);
+console.log("Threshold:", msAccount.threshold);
+console.log("Members:", msAccount.members.length);
+console.log("Next tx index:", msAccount.transactionIndex);
+
+// Read proposal status
+const [proposalPda] = multisig.getProposalPda({
+  multisigPda,
+  transactionIndex,
+});
+const proposal = await Proposal.fromAccountAddress(connection, proposalPda);
+console.log("Status:", proposal.status);
+console.log("Approved by:", proposal.approved.length);
+console.log("Rejected by:", proposal.rejected.length);
+```
+
+### Using Spending Limits
+
+Members authorized on a spending limit can transfer funds without a proposal:
+
+```typescript
+const [spendingLimitPda] = multisig.getSpendingLimitPda({
+  multisigPda,
+  createKey: spendingLimitCreateKey,
+  programId: multisig.PROGRAM_ID,
+});
+
+await multisig.rpc.spendingLimitUse({
+  connection,
+  feePayer: alice,
+  member: alice,
+  multisigPda,
+  spendingLimit: spendingLimitPda,
+  mint: undefined,           // undefined for SOL transfers
+  vaultIndex: 0,
+  amount: 1_000_000_000,    // 1 SOL
+  decimals: 9,
+  destination: recipientPubkey,
+  memo: "Operational expense",
+  programId: multisig.PROGRAM_ID,
+});
+```
+
+### On-Chain CPI
+
+Programs can interact with Squads multisigs through CPI, enabling automated proposals and approvals from other programs — useful for governance systems, automated treasury management, or protocol-controlled multisigs.
+
+<ArticleSection name="Security Model" id="security-model" level="h2" />
+
+The Squads v4 program has been audited multiple times and implements several security measures:
+
+**Stale proposal protection**: When the multisig configuration changes, pending proposals are invalidated. This prevents executing proposals that were approved under a different member set or threshold.
+
+**Permission enforcement**: Every instruction checks the signer's permissions before proceeding. A member with only `Vote` permission cannot create proposals or execute transactions.
+
+**PDA verification**: All PDA accounts are verified against expected seeds and bumps during instruction processing.
+
+**Rent protection**: The optional `rent_collector` ensures that rent from closed accounts goes to the expected address, not to a malicious actor.
+
+**Timelock enforcement**: When configured (max 90 days), proposals cannot be executed until the timelock period has elapsed, giving stakeholders time to review.
+
+**Member constraints**: Members must be sorted by public key with no duplicates. The threshold cannot exceed the number of members with `Vote` permission.
+
+**Account closure instructions**: Dedicated `*_accounts_close` instructions ensure proper cleanup of completed proposals, transactions, and batches, reclaiming rent to the configured `rent_collector`.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+The Squads Smart Account Program provides:
+
+1. **Flexible member management** with role-based permissions (Initiate, Vote, Execute)
+2. **Vault PDAs** for holding and managing assets across any Solana program
+3. **Proposal lifecycle** with draft, activation, approval, rejection, cancellation, and stale handling
+4. **Config transactions** for self-governing configuration changes
+5. **Spending limits** with configurable periods, destination restrictions, and per-member authorization
+6. **Ephemeral signers** for complex DeFi composability
+7. **Batch operations** for grouping multiple transactions under a single proposal
+8. **Transaction buffers** for large transactions that exceed single-instruction limits
+
+In the next section, we'll explore multisig fundamentals — the M-of-N threshold model that underpins the approval logic we've seen in Squads.

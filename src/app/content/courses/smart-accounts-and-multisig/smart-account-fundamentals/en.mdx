@@ -1,0 +1,185 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Smart Account Fundamentals
+
+A smart account is an on-chain account whose authority is determined by program logic rather than a single keypair. The account itself is typically a PDA — an address with no corresponding private key — and all interactions with it flow through a program that enforces configurable authorization rules.
+
+This lesson covers the primitives that make smart accounts possible on Solana and the patterns used to build them.
+
+<ArticleSection name="PDAs as the Foundation" id="pdas-foundation" level="h2" />
+
+Program Derived Addresses are the cornerstone of smart accounts. A PDA is computed by hashing a set of seeds together with a program ID and finding a point that does not lie on the Ed25519 curve:
+
+```
+PDA = findProgramAddress([seed_1, seed_2, ...], program_id)
+```
+
+The critical property: no private key maps to this address. The PDA can only "sign" through `invoke_signed`, where the program provides the seeds and bump used to derive it. This means:
+
+1. **Only the owning program can authorize actions** on accounts at PDA addresses
+2. **The authorization logic lives in code**, not in key management
+3. **Seeds create deterministic, discoverable addresses** that clients can derive off-chain
+
+### Vault PDAs
+
+In a smart account system, the vault PDA holds the actual assets — SOL, tokens, or any account data. It's derived from the smart account's identity:
+
+```
+vault_pda = findProgramAddress(
+  ["vault", smart_account_pubkey, vault_index],
+  program_id
+)
+```
+
+The smart account program controls this vault. When a properly authorized action requests a transfer from the vault, the program executes `invoke_signed` with the correct seeds, and the runtime treats it as if the vault itself signed.
+
+### Configuration PDAs
+
+Smart account configuration — members, thresholds, permissions — is also stored at PDAs:
+
+```
+config_pda = findProgramAddress(
+  ["smart_account", create_key],
+  program_id
+)
+```
+
+This configuration account stores the state that the program reads during authorization checks. Modifying it requires going through the same authorization logic.
+
+<ArticleSection name="Authorization Patterns" id="authorization-patterns" level="h2" />
+
+Smart accounts implement authorization through several patterns, often combined:
+
+### Signer Verification
+
+The simplest pattern: check that one or more required signers have signed the transaction.
+
+```rust
+// Pseudocode: verify a member has signed
+if !member_account.is_signer {
+    return Err(SmartAccountError::MissingSigner);
+}
+```
+
+In a multisig context, the program collects signatures from multiple members and checks against a threshold.
+
+### Role-Based Access
+
+Different members can have different permissions:
+
+```
+┌─────────────────────────────┐
+│  Smart Account Config       │
+│                             │
+│  Members:                   │
+│    Alice  - Proposer, Voter │
+│    Bob    - Voter, Executor │
+│    Carol  - Voter           │
+│    Dave   - Proposer        │
+│                             │
+│  Threshold: 2 of 3 voters   │
+└─────────────────────────────┘
+```
+
+Not everyone can do everything. Proposers can create proposals. Voters can approve them. Executors can trigger execution once the threshold is met. This separation of duties mirrors how real organizations operate.
+
+### Time-Based Constraints
+
+Some operations require a waiting period between approval and execution:
+
+```
+Proposal approved at: slot 300,000,000
+Timelock duration:    100 slots
+Executable after:     slot 300,000,100
+```
+
+Timelocks give stakeholders time to review approved actions and potentially veto them before execution. This is particularly important for high-value operations or protocol upgrades.
+
+### Transaction Scope
+
+Smart accounts can restrict what kinds of instructions can be executed:
+
+- **Allowlists**: Only interact with approved programs
+- **Spending limits**: Cap the value of transfers per period
+- **Instruction filtering**: Block specific instruction types
+
+<ArticleSection name="The Account Model" id="account-model" level="h2" />
+
+A smart account system typically involves several interconnected accounts:
+
+```
+┌───────────────────┐
+│  Smart Account    │─────── Configuration, members, threshold
+│  (Config PDA)     │
+└───────┬───────────┘
+        │
+        ├─── Vault 0 (PDA) ─── Holds SOL and token accounts
+        ├─── Vault 1 (PDA) ─── Separate vault for operations
+        │
+        ├─── Proposal 0 ────── Pending action with approval state
+        ├─── Proposal 1 ────── Another pending action
+        │
+        └─── Transaction 0 ── Instructions to execute
+```
+
+**Smart Account (Config)**: The root account storing members, threshold, and configuration. All other accounts derive from this.
+
+**Vaults**: PDA-controlled accounts that hold assets. A smart account can have multiple vaults for organizational separation (e.g., operational funds vs. treasury reserves).
+
+**Proposals**: Represent pending actions awaiting approval. Each proposal tracks which members have approved and whether the threshold has been met.
+
+**Transactions**: Store the actual instructions to execute. Once a proposal is approved, the transaction's instructions are executed through CPI with the vault's PDA seeds.
+
+<ArticleSection name="Real-World Use Cases" id="use-cases" level="h2" />
+
+### Protocol Treasuries
+
+DeFi protocols and DAOs hold substantial assets that require multi-party authorization. A smart account protects these funds by requiring a quorum of core team members or elected council members to approve spending.
+
+The treasury vault holds the protocol's assets. Proposals for spending must reach a threshold (e.g., 4 of 7 council members) before funds can be transferred. Time-locked execution ensures transparency — community members can see approved proposals before they execute.
+
+### Program Upgrade Authority
+
+Solana programs can be upgraded by their upgrade authority. Assigning this authority to a smart account means no single developer can push a malicious upgrade. The upgrade must be proposed, reviewed by multiple team members, and approved before execution.
+
+```
+Program Upgrade Flow:
+1. Developer proposes upgrade with new binary hash
+2. Team members review the code diff
+3. 3 of 5 signers approve the proposal
+4. Timelock period (e.g., 24 hours) passes
+5. Upgrade executes through the smart account
+```
+
+### Institutional Custody
+
+Custody providers use smart accounts to implement configurable security policies for client funds. Different tiers of authorization can apply based on transaction value, destination, or time of day. This enables institutional-grade security without sacrificing on-chain composability.
+
+### Escrow and Conditional Release
+
+Smart accounts can act as programmable escrows where funds are released when specific conditions are met — milestone completion, oracle price feeds, or time-based vesting schedules.
+
+<ArticleSection name="Security Considerations" id="security" level="h2" />
+
+Smart accounts introduce new security considerations beyond simple keypair management:
+
+**Configuration integrity**: The smart account's configuration (members, threshold) must be protected against unauthorized modification. Changing the threshold or adding members should require the same authorization as any other action.
+
+**Proposal lifecycle**: Stale proposals can be dangerous. If a proposal was created months ago and the context has changed, executing it could cause harm. Proposals should have expiration mechanisms.
+
+**Vault isolation**: Multiple vaults allow risk segmentation. Operational funds can have a lower threshold than treasury reserves, limiting the blast radius of a compromised signer.
+
+**Key management for members**: While the smart account itself eliminates single-key risk, each member's key still needs proper management. A compromised member key reduces the effective security threshold.
+
+**CPI validation**: When executing transactions through CPI, the smart account program must validate that the instructions are well-formed and target the expected programs. Arbitrary CPI execution without validation opens the door to exploits.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Smart accounts transform static, keypair-controlled accounts into dynamic, program-governed entities. The key concepts:
+
+1. **PDAs provide keyless control** — no private key exists for the vault, only program logic can authorize actions
+2. **Authorization is configurable** — members, thresholds, roles, and timelocks can all be defined and modified on-chain
+3. **Multiple vaults enable risk segmentation** — different assets can have different security policies
+4. **The proposal lifecycle governs actions** — propose, approve, execute is the standard flow
+
+In the next lesson, we'll explore the architectural patterns used to build robust smart account systems, including permission models, upgradeability, and composability.

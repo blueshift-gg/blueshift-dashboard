@@ -1,0 +1,238 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Smart Account Architecture Patterns
+
+Building a smart account system requires architectural decisions that affect security, flexibility, and composability. This lesson explores the design patterns used in production smart account implementations on Solana, with attention to the trade-offs each pattern introduces.
+
+<ArticleSection name="Permission Models" id="permission-models" level="h2" />
+
+How a smart account defines "who can do what" is its most critical design decision.
+
+### Flat Threshold Model
+
+The simplest permission model: every member has equal authority, and any M of N members can approve any action.
+
+```
+Members: [Alice, Bob, Carol, Dave, Eve]
+Threshold: 3 of 5
+
+Any 3 members can approve ANY operation.
+```
+
+**Advantages**: Simple to understand, simple to implement, hard to misconfigure.
+
+**Disadvantages**: No granular control. A member who should only be able to propose transfers can also approve protocol upgrades.
+
+### Role-Based Model
+
+Members are assigned roles that determine what actions they can perform:
+
+```
+┌────────────────────────────────────────┐
+│  Roles:                                │
+│                                        │
+│  Proposer  - Can create proposals      │
+│  Voter     - Can approve/reject        │
+│  Executor  - Can execute approved      │
+│  Admin     - Can modify configuration  │
+│                                        │
+│  Members:                              │
+│    Alice: [Voter, Admin]               │
+│    Bob:   [Proposer, Voter]            │
+│    Carol: [Voter, Executor]            │
+│    Dave:  [Proposer]                   │
+└────────────────────────────────────────┘
+```
+
+This separation of duties ensures that the person proposing an action isn't the same person executing it. It also allows non-voting participants (like automated systems) to handle execution without having approval authority.
+
+### Permission-Based Model
+
+The most granular approach: define specific permissions and assign them to members independently.
+
+```
+Permissions:
+  - transfer_sol       (threshold: 2)
+  - transfer_token     (threshold: 2)
+  - upgrade_program    (threshold: 4)
+  - modify_members     (threshold: 4)
+  - modify_threshold   (threshold: 5)
+
+Member permissions vary by operation type.
+```
+
+This model allows critical operations (program upgrades, member changes) to require higher thresholds than routine operations (token transfers).
+
+<ArticleSection name="Upgradeability Trade-offs" id="upgradeability" level="h2" />
+
+Smart account programs themselves can be upgradeable or immutable. Each choice has significant implications.
+
+### Immutable Programs
+
+Once deployed, the program cannot be changed. The behavior is permanent.
+
+**Security benefits**:
+- No upgrade authority to compromise
+- Users can verify the exact code that governs their assets forever
+- No risk of malicious upgrades
+
+**Operational risks**:
+- Bugs cannot be fixed
+- New features cannot be added
+- If a vulnerability is discovered, funds may need to be migrated to a new program entirely
+
+### Upgradeable Programs
+
+The program can be modified by its upgrade authority.
+
+**Benefits**:
+- Bugs can be patched
+- Features can evolve with the ecosystem
+- Compliance requirements can be addressed
+
+**Risks**:
+- The upgrade authority is a powerful target
+- Users must trust the upgrade authority not to introduce malicious changes
+- Upgrades can break existing integrations
+
+### Managed Upgradeability
+
+The most common production pattern: the program is upgradeable, but the upgrade authority is itself a multisig smart account with a timelock.
+
+```
+Program Upgrade Path:
+                                        ┌──────────────┐
+  Developer proposes ──► Multisig       │  24h timelock │
+  upgrade binary         approves  ────►│  (public      │──► Upgrade
+                         (4 of 7)       │   review)     │    executes
+                                        └──────────────┘
+```
+
+The timelock gives users time to verify the new binary and withdraw funds if they disagree with the upgrade. This pattern balances flexibility with trust minimization.
+
+### Program Configuration vs. Program Upgrade
+
+Not all changes require upgrading the program binary. Many smart account systems separate:
+
+- **Program logic** (immutable or rarely upgraded): the core authorization, CPI execution, and PDA derivation
+- **Program configuration** (frequently updated): thresholds, members, permissions, stored in accounts
+
+This separation means the program's behavior is stable and auditable, while the configuration can evolve through the smart account's own authorization process.
+
+<ArticleSection name="On-Chain vs Off-Chain Logic" id="on-off-chain" level="h2" />
+
+Smart account systems distribute logic between on-chain programs and off-chain components. The boundary matters.
+
+### What Must Be On-Chain
+
+- **Authorization checks**: Verifying signers, checking thresholds, validating roles
+- **Asset control**: CPI execution with PDA signing for transfers and interactions
+- **State management**: Proposal status, member lists, configuration
+- **Atomic execution**: Ensuring all-or-nothing transaction semantics
+
+These operations must be trustless and verifiable, which requires on-chain execution.
+
+### What Can Be Off-Chain
+
+- **Proposal construction**: Building the transaction instructions to propose
+- **Notification**: Alerting members that a proposal needs their approval
+- **Signature collection**: Gathering approvals before submitting them on-chain
+- **UI and management**: Displaying account state, creating human-readable summaries
+
+These operations are about convenience and coordination, not trust. They can be handled by frontends, bots, or backend services.
+
+### The Coordination Problem
+
+A key challenge in multisig systems is coordinating approvals. If 3 of 5 signers need to approve, how do they coordinate?
+
+**On-chain proposals**: Each approval is a separate transaction that updates the proposal's state on-chain. This is fully trustless but requires each signer to submit a transaction (and pay fees).
+
+**Off-chain collection**: Approvals are collected off-chain (e.g., through a web app) and submitted in a single transaction. This is more gas-efficient but requires trusting the collection service to relay approvals honestly.
+
+**Hybrid**: Approvals are submitted individually on-chain, but a notification service alerts signers when their approval is needed. This combines trustless execution with coordination convenience.
+
+<ArticleSection name="CPI Composability" id="cpi-composability" level="h2" />
+
+One of the most powerful aspects of smart accounts on Solana is their composability through Cross-Program Invocations. A smart account can interact with any program in the ecosystem.
+
+### How Smart Account CPI Works
+
+When a smart account executes an approved transaction, it:
+
+1. Reads the stored instructions from the transaction account
+2. For each instruction, builds the CPI call
+3. If the instruction needs the vault PDA as a signer, uses `invoke_signed` with the vault's seeds
+4. Executes the CPI, and the target program sees the vault PDA as a valid signer
+
+```
+Smart Account Program
+        │
+        │  invoke_signed(
+        │    instruction,
+        │    accounts,
+        │    [vault_seeds]
+        │  )
+        │
+        ▼
+┌─────────────────┐
+│  Target Program  │
+│  (Token, DeFi,  │  ◄── Sees vault PDA as signer
+│   NFT, etc.)    │
+└─────────────────┘
+```
+
+### Composability Patterns
+
+**DeFi integration**: A DAO treasury smart account can swap tokens on a DEX, provide liquidity, or stake SOL — all through approved proposals that execute via CPI.
+
+**Token management**: Mint new tokens, transfer assets, manage token accounts — any SPL Token or Token-2022 operation can be executed through the smart account.
+
+**Program governance**: Upgrade programs, modify program configuration accounts, or interact with governance protocols — all requiring multisig approval.
+
+**NFT operations**: Mint, transfer, or burn NFTs. Manage collections. Update metadata. Smart accounts can govern any on-chain asset type.
+
+### CPI Security
+
+Composability introduces risk. The smart account program must validate:
+
+**Target program**: Verify that the CPI targets the expected program. An attacker could propose a transaction targeting a malicious program that mimics a legitimate one.
+
+**Account validation**: Ensure the accounts passed to the CPI are correct. Wrong accounts could redirect funds or modify unintended state.
+
+**Instruction data**: Validate that the instruction data matches the expected format. Malformed data could trigger unexpected behavior in the target program.
+
+In practice, most smart account implementations leave instruction validation to the proposal review process — signers are expected to verify what they're approving. The program ensures correct PDA signing but doesn't parse every possible CPI target's instruction format.
+
+<ArticleSection name="Account Size and Rent" id="account-size" level="h2" />
+
+Solana charges rent for account storage, which affects smart account architecture:
+
+### Fixed vs. Dynamic Accounts
+
+**Fixed-size accounts**: The smart account config has a maximum member count defined at creation. Simpler but inflexible.
+
+**Dynamic accounts**: Use reallocations to grow accounts as members are added. More flexible but adds complexity and cost.
+
+### Account Cleanup
+
+Completed proposals and executed transactions consume storage. Production systems need strategies for:
+
+- **Closing stale proposals**: Reclaiming rent from expired or rejected proposals
+- **Archiving executed transactions**: Removing on-chain data for completed actions
+- **Rent recovery**: Returning lamports to the treasury when accounts are closed
+
+<ArticleSection name="Design Principles" id="design-principles" level="h2" />
+
+Successful smart account architectures follow these principles:
+
+**Minimize trust assumptions.** Every operation that affects assets should be verifiable on-chain. Off-chain components should handle convenience, not security.
+
+**Separate configuration from execution.** The rules governing the smart account should be modifiable through the smart account's own authorization process, creating a self-governing system.
+
+**Design for failure.** What happens if a member loses their key? What if a proposal is never executed? What if the program has a bug? Each failure mode should have a recovery path.
+
+**Keep the program simple.** Complex authorization logic is hard to audit and easy to get wrong. Prefer simple, well-tested patterns over clever optimizations.
+
+**Enable composability.** The smart account should be able to interact with any program in the ecosystem without requiring custom integration for each one.
+
+In the next lesson, we'll see how these principles are applied in practice by examining the Squads Smart Account Program.
