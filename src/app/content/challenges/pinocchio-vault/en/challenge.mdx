@@ -21,7 +21,9 @@ cd blueshift_vault
 Add Pinocchio:
 
 ```bash
-cargo add pinocchio pinocchio-system
+cargo add pinocchio@0.10.2
+cargo add pinocchio-system@0.5.0
+cargo add solana-address@2.0.0 --features syscalls --features curve25519 
 ```
 
 Declare the crate types in `Cargo.toml` to generate deployment artifacts in `target/deploy`:
@@ -38,7 +40,9 @@ Let's start with the basic program structure. We'll implement everything in `lib
 ```rust
 #![no_std]
 
-use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+use pinocchio::{
+    entrypoint, error::ProgramError, nostd_panic_handler, AccountView, Address, ProgramResult,
+};
 
 entrypoint!(process_instruction);
 nostd_panic_handler!();
@@ -47,16 +51,11 @@ pub mod instructions;
 pub use instructions::*;
 
 // 22222222222222222222222222222222222222222222
-pub const ID: Pubkey = [
-    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
-    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
-    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
-    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
-];
+pub const ID: Address = address!("22222222222222222222222222222222222222222222");
 
 fn process_instruction(
-    _program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    _program_id: &Address,
+    accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
     match instruction_data.split_first() {
@@ -79,14 +78,15 @@ First, let's define the account struct for deposit:
 
 ```rust
 pub struct DepositAccounts<'a> {
-    pub owner: &'a AccountInfo,
-    pub vault: &'a AccountInfo,
+    pub owner: &'a AccountView,
+
+    pub vault: &'a AccountView,
 }
 
-impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+impl<'a> TryFrom<&'a [AccountView]> for DepositAccounts<'a> {
     type Error = ProgramError;
 
-    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    fn try_from(accounts: &'a [AccountView]) -> Result<Self, Self::Error> {
         let [owner, vault, _] = accounts else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
@@ -96,7 +96,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
-        if !vault.is_owned_by(&pinocchio_system::ID) {
+        if !vault.owned_by(&pinocchio_system::ID) {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
@@ -104,8 +104,9 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
             return Err(ProgramError::InvalidAccountData);
         }
 
-        let (vault_key, _) = find_program_address(&[b"vault", owner.key()], &crate::ID);
-        if vault.key().ne(&vault_key) {
+        let (vault_key, _) =
+            Address::find_program_address(&[b"vault", &owner.address().to_bytes()], &crate::ID);
+        if vault.address().ne(&vault_key) {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
@@ -157,13 +158,14 @@ Finally, let's implement the deposit instruction:
 ```rust
 pub struct Deposit<'a> {
     pub accounts: DepositAccounts<'a>,
+
     pub instruction_data: DepositInstructionData,
 }
 
-impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+impl<'a> TryFrom<(&'a [u8], &'a [AccountView])> for Deposit<'a> {
     type Error = ProgramError;
 
-    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountView])) -> Result<Self, Self::Error> {
         let accounts = DepositAccounts::try_from(accounts)?;
         let instruction_data = DepositInstructionData::try_from(data)?;
 
@@ -201,15 +203,17 @@ First, let's define the account struct for withdraw:
 
 ```rust
 pub struct WithdrawAccounts<'a> {
-    pub owner: &'a AccountInfo,
-    pub vault: &'a AccountInfo,
+    pub owner: &'a AccountView,
+
+    pub vault: &'a AccountView,
+
     pub bumps: [u8; 1],
 }
 
-impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+impl<'a> TryFrom<&'a [AccountView]> for WithdrawAccounts<'a> {
     type Error = ProgramError;
 
-    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    fn try_from(accounts: &'a [AccountView]) -> Result<Self, Self::Error> {
         let [owner, vault, _] = accounts else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
@@ -219,7 +223,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
-        if !vault.is_owned_by(&pinocchio_system::ID) {
+        if !vault.owned_by(&pinocchio_system::ID) {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
@@ -227,12 +231,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
             return Err(ProgramError::InvalidAccountData);
         }
 
-        let (vault_key, bump) = find_program_address(&[b"vault", owner.key()], &crate::ID);
-        if &vault_key != vault.key() {
+        let (vault_key, bump) =
+            Address::find_program_address(&[b"vault", &owner.address().to_bytes()], &crate::ID);
+        if &vault_key != vault.address() {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
-        Ok(Self { owner, vault, bumps: [bump] })
+        Ok(Self {
+            owner,
+            vault,
+            bumps: [bump],
+        })
     }
 }
 ```
@@ -252,10 +261,10 @@ pub struct Withdraw<'a> {
     pub accounts: WithdrawAccounts<'a>,
 }
 
-impl<'a> TryFrom<&'a [AccountInfo]> for Withdraw<'a> {
+impl<'a> TryFrom<&'a [AccountView]> for Withdraw<'a> {
     type Error = ProgramError;
 
-    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    fn try_from(accounts: &'a [AccountView]) -> Result<Self, Self::Error> {
         let accounts = WithdrawAccounts::try_from(accounts)?;
 
         Ok(Self { accounts })
@@ -269,7 +278,7 @@ impl<'a> Withdraw<'a> {
         // Create PDA signer seeds
         let seeds = [
             Seed::from(b"vault"),
-            Seed::from(self.accounts.owner.key().as_ref()),
+            Seed::from(self.accounts.owner.address().as_ref()),
             Seed::from(&self.accounts.bumps),
         ];
         let signers = [Signer::from(&seeds)];
