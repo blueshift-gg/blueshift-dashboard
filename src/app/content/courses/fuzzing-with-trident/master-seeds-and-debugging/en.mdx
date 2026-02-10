@@ -4,7 +4,11 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 When your fuzz test finds a crash, you need to reproduce it to understand what happened. This is where **Master Seeds** become essential. This lesson covers the complete debugging workflow: from crash discovery to understanding the root cause to verifying your fix.
 
-<ArticleSection name="Understanding Master Seeds" id="understanding-master-seeds" level="h2" />
+<ArticleSection
+  name="Understanding Master Seeds"
+  id="understanding-master-seeds"
+  level="h2"
+/>
 
 Every fuzz run ends with output like this:
 
@@ -27,6 +31,7 @@ Everything is deterministically derived from this single seed.
 ### Why Does This Matter?
 
 **Reproducibility.** Given the same seed, Trident will:
+
 - Generate the exact same random values
 - Select the exact same flows
 - Execute in the exact same order
@@ -61,117 +66,95 @@ Here's the complete process when fuzzing finds a bug:
 
 ```bash
 cd trident-tests
-trident fuzz run fuzz_0
+trident fuzz run fuzz_vulnerable
 ```
 
-Let it run. If there's a bug, you'll see something like:
+Let it run. If there's a bug, you'll see something like: 1
 
-```
-thread 'main' panicked at 'assertion failed: balance_after == balance_before + amount'
-   at trident-tests/fuzz_0/test_fuzz.rs:87:13
+```text
+Assertion failed at fuzz_vulnerable/test_fuzz.rs:158:9: Error, Balance overflowed to
+18446744073538639099 (seed: 0d0258fb7dcc05cac0b2d576418a8ebe946deb8bf7d11e10067c4faf4a0f0924)
 
-+-------------+---------------+------------+-----------+----------------------+
-| Instruction | Invoked Total | Ix Success | Ix Failed | Instruction Panicked |
-+-------------+---------------+------------+-----------+----------------------+
-| Initialize  |           847 |        847 |         0 |                    0 |
-| Deposit     |         4,123 |      3,891 |       232 |                    0 |
-| Withdraw    |         3,982 |      2,456 |     1,525 |                    1 |
-+-------------+---------------+------------+-----------+----------------------+
-MASTER SEED used: "abc123def456..."
++----------------------+---------------+------------+-----------+----------------------+
+| Instruction          | Invoked Total | Ix Success | Ix Failed | Instruction Panicked |
++----------------------+---------------+------------+-----------+----------------------+
+| Initialize Vault     |            48 |         48 |         0 |                    0 |
+| Create User Account  |            48 |         48 |         0 |                    0 |
+| Withdraw Instruction |            60 |         60 |         0 |                    0 |
++----------------------+---------------+------------+-----------+----------------------+
+MASTER SEED used: "06d4d112c9531950152869399f2e888e0425cf8a7bad9e8b672b1a7f61f41b52"
 ```
 
 **What this tells you:**
-- There was a panic on line 87 of your test
-- It happened during a Withdraw instruction (1 panicked)
-- The seed is `abc123def456...`
+
+- **Instruction Panicked: 0**: No runtime errors occurred on-chain. This is a "Silent Killer" bug.
+- **Assertion Failed**: Your test code checked the account data _after_ the transaction and found the balance was impossibly high.
+- **Master Seed**: `06d4d112...` (Save this!)
 
 ### Step 2: Reproduce the Crash
 
-Use the `debug` command with the captured seed:
+Since the bug relies on a specific sequence of random numbers, you must use the **Master Seed** to replay it. This allows you to isolate the exact scenario that caused the bug.
 
 ```bash
-trident fuzz debug fuzz_0 abc123def456...
+trident fuzz debug fuzz_vulnerable 06d4d112c9531950152869399f2e888e0425cf8a7bad9e8b672b1a7f61f41b52
 ```
 
-This replays the exact same fuzz session. The crash will occur at the same point, with the same data.
+### Step 3: Verify Persistence
 
-### Step 3: Enable Detailed Logging
+The output confirms that the bug is reproducible with 100% accuracy:
 
-To see what happened, add `TRIDENT_LOG=1`:
-
-```bash
-TRIDENT_LOG=1 trident fuzz debug fuzz_0 abc123def456...
+```text
+Debug mode detected: Running single iteration with provided seed
+Using debug seed: 06d4d112c9531950152869399f2e888e0425cf8a7bad9e8b672b1a7f61f41b52
+DEBUG_FUZZ: Balance = 18446744073538639099
+Assertion failed at fuzz_vulnerable/test_fuzz.rs:158:9: Error, Balance overflowed to 18446744073538639099
 ```
 
-Now you'll see detailed output:
-- Every instruction executed
-- Account states before/after
-- The exact values that were used
-- The complete execution trace leading to the crash
+This confirms:
 
-### Step 4: Analyze the Bug
+1. **Determinism**: The same seed produces the exact same random values.
+2. **State Corruption**: The balance wraps around to the same massive number every time.
 
-With logs enabled, you can see exactly what happened:
+### Step 4: Analyze and Fix
 
-```
-[Iteration 423, Flow 67]
-Executing: Withdraw
-  User: 5XjU7n...
-  Vault: 8Kp2mQ...
-  Amount: 999999999999
+The fact that the balance is `18,446,744...` (u64::MAX) confirms an integer underflow occurred. The user withdrew more than they had, and the program didn't stop them.
 
-[Account State Before]
-  Vault.balance: 1000000
-
-[Transaction Result]
-  Status: Success (!!)
-
-[Account State After]
-  Vault.balance: 18446744072709551617   <-- OVERFLOW!
-
-PANIC: assertion failed: balance_after == balance_before - amount
-```
-
-In this example, the bug is clear: withdrawing more than the balance caused an integer underflow (the balance wrapped to a huge number), and somehow the transaction still succeeded.
-
-### Step 5: Fix the Bug
-
-Now fix your program. In this case, you need to add a balance check:
+**The Fix:**
+Open `programs/vulnerable/src/lib.rs` and add a check before subtraction:
 
 ```rust
-// In your Anchor program
 pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-    let vault = &mut ctx.accounts.vault;
-    
-    // ADD THIS CHECK
-    require!(amount <= vault.balance, ErrorCode::InsufficientBalance);
-    
-    vault.balance = vault.balance.checked_sub(amount)
-        .ok_or(ErrorCode::MathOverflow)?;
-    
-    // ... transfer logic
+    let user_account = &mut ctx.accounts.user_account;
+
+    // FIX: Check if balance is sufficient
+    require!(user_account.balance >= amount, ErrorCode::InsufficientFunds);
+
+    // ...
 }
 ```
 
-### Step 6: Verify the Fix
+### Step 5: Verify the Fix
 
-Run the same seed again - it should now fail gracefully instead of panicking:
-
-```bash
-TRIDENT_LOG=1 trident fuzz debug fuzz_0 abc123def456...
-```
-
-Expected: The withdrawal attempt should fail with `InsufficientBalance` error, not succeed with corrupted state.
-
-### Step 7: Run Full Fuzz Test
-
-Verify no new issues and that similar bugs are now caught:
+Run the **same seed** again with the fixed code. This proves your fix works for the exact edge case you found.
 
 ```bash
-trident fuzz run fuzz_0
+trident fuzz debug fuzz_vulnerable 06d4d112c9531950152869399f2e888e0425cf8a7bad9e8b672b1a7f61f41b52
 ```
 
-A clean run with zero panics means your fix is working.
+**Expected Result:**
+
+- **No Assertion Failure**: The transaction will now fail gracefully (with your error code) OR the condition to withdraw invalid funds will be blocked.
+- The test will pass successfully because the "Balance overflow" state is never reached.
+
+### Step 6: Run Full Fuzz Test
+
+Finally, run the fuzzer without a seed to search for _new_ bugs to ensure your fix didn't break anything else.
+
+```bash
+trident fuzz run fuzz_vulnerable
+```
+
+A clean run ensures your fix didn't break anything else and that no other bypasses exist.
 
 <ArticleSection name="CLI Commands Reference" id="cli-reference" level="h2" />
 
@@ -205,9 +188,14 @@ TRIDENT_LOG=1 trident fuzz run fuzz_0 abc123def456...
 ### Adding New Fuzz Tests
 
 ```bash
-# Add another fuzz test (fuzz_1, fuzz_2, etc.)
+# Add another fuzz test with default naming (fuzz_1, fuzz_2, etc.)
 trident fuzz add
+
+# Specify target program and test name
+trident fuzz add -p staking -t fuzz_staking
 ```
+
+The `-p` flag specifies which program to generate the fuzz test for, and `-t` sets a custom name for the test directory. This is useful when your workspace has multiple programs (e.g., a lending program and a staking program).
 
 <ArticleSection name="Reading Fuzz Output" id="reading-output" level="h2" />
 
@@ -226,92 +214,123 @@ trident fuzz add
 
 **Interpreting each column:**
 
-| Column | Meaning | Good Sign | Bad Sign |
-|--------|---------|-----------|----------|
-| Invoked Total | Times instruction was attempted | High numbers = good coverage | Very low = flow issues |
-| Ix Success | Successful transactions | Some successes | Zero = flows are broken |
-| Ix Failed | Failed transactions | Expected - fuzzer tests invalid inputs | Zero = not testing edge cases |
-| Instruction Panicked | **BUGS FOUND** | Zero | Any non-zero = investigate! |
+| Column               | Meaning                         | Good Sign                              | Bad Sign                      |
+| -------------------- | ------------------------------- | -------------------------------------- | ----------------------------- |
+| Invoked Total        | Times instruction was attempted | High numbers = good coverage           | Very low = flow issues        |
+| Ix Success           | Successful transactions         | Some successes                         | Zero = flows are broken       |
+| Ix Failed            | Failed transactions             | Expected - fuzzer tests invalid inputs | Zero = not testing edge cases |
+| Instruction Panicked | **BUGS FOUND**                  | Zero                                   | Any non-zero = investigate!   |
 
 **Healthy ratios:**
+
 - Success rate of 60-90% is normal (fuzzer intentionally tests invalid inputs)
 - 100% success = you're not testing error paths
 - 0% success = your flows are misconfigured
 - **Any panics = bugs to investigate**
 
-### Common Panic Sources
-
-**Assertion failures in your test:**
-```
-thread 'main' panicked at 'assertion failed: balance == expected'
-```
-Your invariant caught a bug. Investigate the state that caused it.
-
-**Rust panics in your program:**
-```
-thread 'main' panicked at 'attempt to subtract with overflow'
-```
-Arithmetic bug in your program code.
-
-**Anchor constraint failures:**
-```
-Error: AccountNotInitialized
-```
-This shows as a failed transaction, not a panic - expected behavior.
-
 <ArticleSection name="Regression Testing" id="regression-testing" level="h2" />
 
-Once you've found and fixed bugs, you want to ensure they never come back.
+Regression testing ensures that code changes don't break existing functionality. Trident supports this by tracking the state of specific accounts across fuzz runs and letting you compare results between program versions.
 
-### Automatic Regression Tracking
+### Step 1: Enable Regression in Config
 
-Enable in `Trident.toml`:
+In your `Trident.toml`:
 
 ```toml
 [fuzz.regression]
-enabled = true
+enable = true
 ```
 
-Trident will save state hashes after each session to detect if behavior changes.
+When enabled, Trident sets the `FUZZING_REGRESSION` environment variable internally. This tells the fuzzer to generate a regression JSON file containing snapshots of tracked account states.
+
+### Step 2: Track Accounts in Your Fuzz Test
+
+Use `track_account_regression` to mark which accounts should be monitored:
+
+```rust
+#[flow_executor]
+impl FuzzTest {
+    #[init]
+    fn start(&mut self) {
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+        let vault = self.fuzz_accounts.vault.insert(&mut self.trident, None);
+
+        // ... initialize accounts ...
+
+        // Track these accounts for regression
+        self.trident.track_account_regression(&vault, "vault_account");
+    }
+
+    #[flow]
+    fn deposit_flow(&mut self) {
+        let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+
+        // ... execute deposit ...
+
+        // Track state after modification
+        self.trident.track_account_regression(&vault, "vault_account");
+    }
+}
+```
+
+You can track accounts in `#[init]`, `#[flow]`, or `#[end]`. Each call captures a snapshot of the account's data at that point.
+
+> **Note:** `track_account_regression` returns nothing (`()`), so calls cannot be chained. Track each account separately.
+
+### Step 3: Run on the Stable Version
+
+Run your fuzz test on the current (working) version of your program:
+
+```bash
+trident fuzz run fuzz_0
+```
+
+Trident generates a regression JSON file (e.g., `regression_fuzz_0_<timestamp>.json`) in `.fuzz-artifacts/`. This file contains hashes of the tracked account data at each snapshot point, organized by iteration seed.
+
+Note the **Master Seed** from the output - you'll need it to ensure the same sequence runs on the new version.
+
+### Step 4: Run on the New Version
+
+After making your code changes, run the fuzz test again with the **same seed**:
+
+```bash
+trident fuzz run fuzz_0 <MASTER_SEED>
+```
+
+This generates a second regression JSON file with snapshots from the updated program.
+
+### Step 5: Compare Results
+
+Use `trident compare` to check for differences:
+
+```bash
+trident compare <path_to_old_regression.json> <path_to_new_regression.json>
+```
+
+This compares the account state hashes between the two runs. If any tracked account's data differs at the same point in the sequence, Trident reports which iteration seeds produced different results.
+
+**Matching hashes** = your changes didn't affect the tracked account states.
+**Different hashes** = something changed in how the program modifies those accounts.
 
 ### Manual Seed Collection
 
-Keep a list of seeds that found bugs:
+In addition to automatic regression tracking, keep a record of seeds that found bugs:
 
-```rust
-// In a separate test file: regression_seeds.rs
-pub const BUG_FINDING_SEEDS: &[&str] = &[
-    // Integer overflow in withdraw - fixed 2024-01-15
-    "abc123def456...",
-    
-    // Missing authority check in config update - fixed 2024-01-20
-    "789xyz012abc...",
-    
-    // Race condition in concurrent deposits - fixed 2024-02-01
-    "mno345pqr678...",
-];
+```text
+# regression_seeds.txt
+# Integer overflow in withdraw - fixed 2024-01-15
+abc123def456...
+
+# Missing authority check - fixed 2024-01-20
+789xyz012abc...
 ```
 
-### Regression Test Suite
+Re-run these seeds after changes to confirm fixes still hold:
 
-Create a test that runs all bug-finding seeds:
-
-```rust
-#[cfg(test)]
-mod regression_tests {
-    use super::*;
-    
-    #[test]
-    fn test_fixed_bugs_stay_fixed() {
-        for seed in BUG_FINDING_SEEDS {
-            println!("Testing regression seed: {}", seed);
-            
-            // Run fuzz with this seed - should complete without panic
-            // In practice, you'd call FuzzTest::fuzz_with_seed(seed, ...)
-            // or use the CLI in your CI script
-        }
-    }
-}
+```bash
+# Run each bug-finding seed to verify fixes
+trident fuzz run fuzz_0 abc123def456... --with-exit-code
+trident fuzz run fuzz_0 789xyz012abc... --with-exit-code
 ```
 
 Or in CI:
@@ -320,7 +339,7 @@ Or in CI:
 # .github/workflows/fuzz.yml
 - name: Run regression seeds
   run: |
-    for seed in abc123... 789xyz... mno345...; do
+    for seed in abc123def456 789xyz012abc; do
       trident fuzz run fuzz_0 $seed --with-exit-code
     done
 ```
@@ -335,7 +354,7 @@ During debugging, reduce iterations to find the crash faster:
 fn main() {
     // During debugging
     FuzzTest::fuzz(100, 20);
-    
+
     // For real testing
     // FuzzTest::fuzz(10000, 200);
 }
@@ -349,12 +368,12 @@ In your fuzz test, add prints that only show when `TRIDENT_LOG=1` is set:
 #[flow]
 fn deposit_flow(&mut self) {
     let amount = self.trident.random_from_range(1..1_000_000u64);
-    
+
     // This only shows when TRIDENT_LOG=1
     println!("Attempting deposit of {} lamports", amount);
-    
+
     let result = self.trident.process_transaction(&[ix], Some("Deposit"));
-    
+
     println!("Deposit result: {:?}", result.is_success());
 }
 ```
@@ -388,7 +407,7 @@ if result.is_success() {
         .get_account_with_type::<Vault>(&vault, 8)
         .expect("Vault should exist")
         .balance;
-    
+
     if balance_after != balance_before + amount {
         // Dump state before panicking
         println!("=== INVARIANT VIOLATION ===");
@@ -397,7 +416,7 @@ if result.is_success() {
         println!("Amount: {}", amount);
         println!("Expected: {}", balance_before + amount);
         println!("Difference: {}", (balance_after as i128) - (balance_before as i128) - (amount as i128));
-        
+
         panic!("Balance invariant violated");
     }
 }
@@ -415,71 +434,10 @@ dashboard = true
 ```
 
 After running, open the HTML dashboard in `.fuzz-artifacts/` to see:
+
 - Transaction success/failure rates over time
 - Which flows are executing
 - Where crashes occurred
-
-<ArticleSection name="Common Debugging Scenarios" id="scenarios" level="h2" />
-
-### Scenario: Arithmetic Overflow
-
-**Symptom:**
-```
-thread 'main' panicked at 'attempt to multiply with overflow'
-```
-
-**Investigation:**
-Run with `TRIDENT_LOG=1` and look for large numbers being multiplied:
-```
-Deposit amount: 18446744073709551615  <-- u64::MAX
-Fee calculation: amount * fee_bps / 10000  <-- overflow!
-```
-
-**Fix:**
-Use checked math:
-```rust
-let fee = amount.checked_mul(fee_bps)?
-    .checked_div(10000)?;
-```
-
-### Scenario: Missing Access Control
-
-**Symptom:**
-```
-PANIC: Unauthorized user was able to withdraw!
-```
-
-**Investigation:**
-Look at which accounts were used:
-```
-Vault owner: 5XjU7n...
-Transaction signer: 8Kp2mQ...  <-- Different!
-Result: Success  <-- Should have failed!
-```
-
-**Fix:**
-Add proper signer check:
-```rust
-#[account(constraint = user.key() == vault.owner)]
-pub user: Signer<'info>,
-```
-
-### Scenario: State Corruption After Sequence
-
-**Symptom:**
-The crash only happens after many operations:
-```
-[Iteration 847, Flow 134]  <-- Deep into the iteration
-```
-
-**Investigation:**
-This suggests state accumulates incorrectly. Check:
-- Counters that increment (sequence numbers, nonces)
-- Balances that drift over many operations
-- State that should reset but doesn't
-
-**Fix:**
-Usually involves fixing accumulated rounding errors or resetting state properly.
 
 ---
 

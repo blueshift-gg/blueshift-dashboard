@@ -2,207 +2,26 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Conclusion
 
-You've completed the Fuzzing with Trident course. Let's summarize what you've learned and discuss how to integrate fuzzing into your ongoing development practice.
+Congratulations! You've completed the Fuzzing with Trident course. You now have the knowledge and tools to systematically test your Solana programs for security vulnerabilities using automated fuzzing.
 
-<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+## What You've Learned
 
-### 1. Fuzzing Complements Unit Tests
+- How Trident uses your program's IDL to generate instruction builders, address storage, and fuzz test templates
+- How TridentSVM executes your program in-process for fast, deterministic testing
+- Managing accounts with `AddressStorage` methods like `insert()`, `get()`, and `get_except()`
+- Structuring fuzz tests with `#[init]`, `#[flow]`, and `#[end]` lifecycle methods
+- Generating random data to explore unexpected inputs and edge cases
+- Writing invariants that catch bugs across millions of scenarios
+- Reproducing and debugging crashes using Master Seeds and `TRIDENT_LOG=1`
+- Using code coverage, dashboards, and regression testing for production-grade fuzzing
+- Integrating fuzz tests into your CI/CD pipeline
 
-Unit tests verify that your code works **as expected** for known inputs. Fuzzing verifies that your code doesn't break **unexpectedly** for unknown inputs.
+## Next Steps
 
-```
-Unit Tests: "When I deposit 100, balance increases by 100" ✓
-Fuzzing: "When I deposit u64::MAX after 47 withdrawals in this specific sequence..." ✓
-```
-
-Both are essential. Unit tests give you confidence in intended behavior. Fuzzing gives you confidence against unintended behavior.
-
-### 2. Solana Programs Need Guided Fuzzing
-
-Random input fuzzing fails on Solana because:
-- Account constraints reject most random data
-- Instruction ordering matters
-- PDAs must be correctly derived
-
-Trident's manual guidance lets the fuzzer focus on testing actual program logic instead of fighting Solana's validation.
-
-### 3. Master Seeds Enable Reproducibility
-
-Every fuzz session outputs a Master Seed:
-```
-MASTER SEED used: "b6562888e52de3436324c96c76ab8d16a9877af74f3a2fe71dc2d363a2fc6337"
-```
-
-This seed controls all randomness. Same seed = same execution. This transforms "random crash somewhere" into "exact reproducible sequence."
-
-**The debugging workflow:**
-1. Run fuzz test → find crash
-2. Save the Master Seed
-3. `trident fuzz debug fuzz_0 <seed>` to reproduce
-4. `TRIDENT_LOG=1` to see details
-5. Fix the bug
-6. Verify with same seed
-7. Add to regression suite
-
-### 4. Invariants Are Your Safety Net
-
-Invariants describe what must **always** be true:
-
-```rust
-// Conservation: Tokens aren't created or destroyed
-assert_eq!(total_before, total_after);
-
-// Bounds: Values stay within limits
-assert!(utilization <= MAX_UTILIZATION);
-
-// Access control: Unauthorized operations fail
-if signer != authority {
-    assert!(result.is_err());
-}
-```
-
-The fuzzer generates millions of scenarios. Invariants catch when any of them violate your program's rules.
-
-<ArticleSection name="The Complete Workflow" id="workflow" level="h2" />
-
-Here's how fuzzing fits into your development process:
-
-### During Development
-
-```
-1. Write program code
-2. Write unit tests (expected behavior)
-3. Write fuzz tests (unexpected behavior)
-4. Run quick fuzz: trident fuzz run fuzz_0  # 100 iterations
-5. Fix any issues found
-6. Repeat
-```
-
-### Before Pull Requests
-
-```
-1. Run thorough fuzz: trident fuzz run fuzz_0  # 1000+ iterations
-2. Review coverage report
-3. Add flows for untested paths
-4. Run regression seeds
-5. Commit
-```
-
-### In CI/CD
-
-```text
-# On every PR
-- name: Quick Fuzz
-  run: trident fuzz run fuzz_0 --with-exit-code
-  
-# Nightly
-- name: Extensive Fuzz
-  run: |
-    trident fuzz run fuzz_0 --with-exit-code
-    # Run for hours, with high iteration counts
-```
-
-### Before Mainnet
-
-```
-1. Run extensive fuzzing (overnight, high iterations)
-2. Verify 100% of critical paths have coverage
-3. Run all regression seeds
-4. Consider professional audit
-```
-
-<ArticleSection name="Checklist for Production" id="checklist" level="h2" />
-
-Before deploying to mainnet, verify:
-
-**Fuzz Test Coverage:**
-- [ ] All instructions have dedicated flows
-- [ ] Access control tested (unauthorized signer flows)
-- [ ] Edge values tested (0, 1, MAX)
-- [ ] Multi-instruction sequences tested
-- [ ] Time-dependent logic tested (`forward_in_time`)
-
-**Invariants:**
-- [ ] Token conservation (no creation/destruction)
-- [ ] Balance bounds (no underflow/overflow)
-- [ ] State consistency (related values match)
-- [ ] Access control (unauthorized ops fail)
-
-**Quality:**
-- [ ] Zero panics in extended fuzzing
-- [ ] Code coverage above 80% for critical paths
-- [ ] Regression suite from found bugs
-- [ ] CI integration enabled
-
-<ArticleSection name="Common Vulnerabilities Fuzzing Finds" id="vulnerabilities" level="h2" />
-
-Trident is particularly effective at finding:
-
-**Arithmetic Issues:**
-- Integer overflow/underflow
-- Division by zero
-- Rounding errors that accumulate
-
-**Access Control Gaps:**
-- Missing signer checks
-- Incorrect authority validation
-- PDA seed manipulation
-
-**State Corruption:**
-- Uninitialized account usage
-- Account reuse attacks
-- Inconsistent state after partial failures
-
-**Logic Errors:**
-- Edge cases in conditional logic
-- Incorrect bounds checking
-- Race conditions in multi-step operations
-
-<ArticleSection name="Resources" id="resources" level="h2" />
-
-### Official Resources
-
-- [Trident GitHub Repository](https://github.com/Ackee-Blockchain/trident) - Source code and examples
-- [Trident Documentation](https://ackee.xyz/trident/docs) - Official reference docs
-- [Trident Examples](https://github.com/Ackee-Blockchain/trident/tree/master/examples) - Working example projects
-
-### Community
-
-- [Ackee Blockchain](https://ackee.xyz) - The team behind Trident
-- [Solana Security Resources](https://github.com/coral-xyz/sealevel-attacks) - Common vulnerability patterns
-- [Anchor Discord](https://discord.gg/anchor) - Get help with Anchor + Trident
-
-### Further Learning
-
-- **Formal Verification** - Mathematical proofs of correctness
-- **Professional Audits** - Third-party security review
-- **Bug Bounties** - Incentivize external security researchers
-
-<ArticleSection name="Next Steps" id="next-steps" level="h2" />
-
-1. **Apply to your project:** Take an existing Anchor program and add fuzz tests using what you learned.
-
-2. **Start simple:** Begin with basic flows and invariants. Add complexity as you get comfortable.
-
-3. **Build habits:** Run fuzz tests before every PR. Save every bug-finding seed.
-
-4. **Share knowledge:** Teach your team about fuzzing. Security is everyone's responsibility.
-
-5. **Contribute back:** Found a useful pattern? Consider contributing to Trident or sharing with the community.
-
----
-
-## Summary
-
-Fuzzing with Trident transforms security testing from "did I think of everything?" to "what can the computer find that I missed?"
-
-You now know how to:
-- **Set up Trident** and understand its project structure
-- **Write effective fuzz tests** with flows, address storage, and random data
-- **Define invariants** that catch security issues
-- **Use Master Seeds** to reproduce and debug crashes
-- **Apply advanced techniques** like coverage, multi-instruction testing, and CI integration
+1. Apply to your projects: Take an existing Anchor program and add fuzz tests using what you learned
+2. Start simple: Begin with basic flows and invariants, then add complexity as you get comfortable
+3. Build habits: Run fuzz tests before every PR and save every bug-finding seed
 
 Security is not a feature you add at the end. It's a practice you maintain throughout development. Fuzzing is one of the most powerful tools in that practice.
 
-Happy fuzzing! 🔐
+Happy fuzzing! 

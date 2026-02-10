@@ -32,6 +32,18 @@ let vault = self.fuzz_accounts.vault.insert(
 );
 ```
 
+### The insert_with_address() Method
+
+`insert_with_address()` stores an address created elsewhere:
+
+```rust
+// Store an associated token account created by another instruction
+let ata = get_associated_token_address(&user, &mint);
+self.fuzz_accounts.token_account.insert_with_address(ata);
+```
+
+This is useful for tracking addresses returned from program instructions or derived externally.
+
 ### The get() Method
 
 `get()` retrieves a random existing address from storage:
@@ -42,14 +54,34 @@ let user = self.fuzz_accounts.user.get(&mut self.trident);
 
 > **Note:** `get()` returns `Option<Pubkey>` - it returns `None` if the storage is empty. In our examples, we assume accounts were inserted during `#[init]`, so the storage is never empty. Handle the `Option` appropriately in your own code.
 
+### The get_except() Method
+
+`get_except()` retrieves a random address, excluding specific ones:
+
+```rust
+// Get sender
+let sender = self.fuzz_accounts.user.get(&mut self.trident);
+
+// Get receiver - guaranteed to be different from sender
+let receiver = self.fuzz_accounts.user.get_except(&mut self.trident, &[sender]);
+```
+
+This is essential for operations where accounts must be distinct, like transfers.
+
 ### When to Use Each
 
-| Method | When to Use |
-|--------|-------------|
-| `insert()` | In `#[init]` to create accounts that must exist |
-| `get()` | In `#[flow]` to retrieve existing accounts |
+| Method                  | When to Use                                                                 |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `insert()`              | Create new accounts in `#[init]`                                            |
+| `insert_with_address()` | Track addresses created elsewhere (ATAs, returned from instructions)        |
+| `get()`                 | Retrieve a random existing account in `#[flow]`                             |
+| `get_except()`          | Retrieve a random account excluding specific ones (e.g., sender ≠ receiver) |
 
-<ArticleSection name="Constructing Instructions" id="constructing-instructions" level="h2" />
+<ArticleSection
+  name="Constructing Instructions"
+  id="constructing-instructions"
+  level="h2"
+/>
 
 Now that we can get accounts from storage, let's use them to build instructions.
 
@@ -122,6 +154,7 @@ Every fuzz test has three key methods that control the testing lifecycle:
 ### #[init] - Setup Phase
 
 Runs **once at the start** of each iteration. Use it to:
+
 - Create accounts with `insert()`
 - Fund users with `airdrop()`
 - Initialize program state
@@ -132,7 +165,7 @@ fn start(&mut self) {
     // Create and fund user
     let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
     self.trident.airdrop(&user, 10 * LAMPORTS_PER_SOL);
-    
+
     // Derive vault PDA
     let vault = self.fuzz_accounts.vault.insert(
         &mut self.trident,
@@ -141,12 +174,12 @@ fn start(&mut self) {
             program_id: my_program::ID,
         }),
     );
-    
+
     // Initialize the vault
     let ix = InitializeInstruction::data(InitializeInstructionData::new())
         .accounts(InitializeInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     self.trident.process_transaction(&[ix], Some("Initialize"));
 }
 ```
@@ -154,6 +187,7 @@ fn start(&mut self) {
 ### #[flow] - Fuzz Phase
 
 **Randomly selected** and executed multiple times per iteration. This is where fuzzing happens:
+
 - Execute operations with random inputs
 - Test different scenarios
 - Check invariants
@@ -163,14 +197,14 @@ fn start(&mut self) {
 fn deposit_flow(&mut self) {
     let user = self.fuzz_accounts.user.get(&mut self.trident);
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     // Random amount - this is the fuzzing!
     let amount = self.trident.random_from_range(1..10_000_000u64);
-    
+
     let ix = DepositInstruction::data(DepositInstructionData::new(amount))
         .accounts(DepositInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     self.trident.process_transaction(&[ix], Some("Deposit"));
 }
 
@@ -179,13 +213,13 @@ fn withdraw_flow(&mut self) {
     // Another flow - fuzzer randomly picks between flows
     let user = self.fuzz_accounts.user.get(&mut self.trident);
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     let amount = self.trident.random_from_range(1..5_000_000u64);
-    
+
     let ix = WithdrawInstruction::data(WithdrawInstructionData::new(amount))
         .accounts(WithdrawInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     self.trident.process_transaction(&[ix], Some("Withdraw"));
 }
 ```
@@ -193,6 +227,7 @@ fn withdraw_flow(&mut self) {
 ### #[end] - Cleanup Phase
 
 Runs **once at the end** of each iteration. Use it for:
+
 - Final invariant checks
 - State verification
 
@@ -201,7 +236,7 @@ Runs **once at the end** of each iteration. Use it for:
 fn end(&mut self) {
     // Verify global invariants after all flows complete
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     if let Some(vault_data) = self.trident.get_account_with_type::<Vault>(&vault, 8) {
         // Example: Verify vault state is consistent
     }
@@ -276,28 +311,28 @@ Invariants are conditions that should **always** be true, regardless of what ope
 fn deposit_flow(&mut self) {
     let user = self.fuzz_accounts.user.get(&mut self.trident);
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     // 1. BEFORE: Capture state
     let balance_before = self.trident
         .get_account_with_type::<Vault>(&vault, 8)
         .map(|v| v.balance)
         .unwrap_or(0);
-    
+
     // 2. EXECUTE: Random operation
     let amount = self.trident.random_from_range(1..1_000_000u64);
     let ix = DepositInstruction::data(DepositInstructionData::new(amount))
         .accounts(DepositInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     let result = self.trident.process_transaction(&[ix], Some("Deposit"));
-    
+
     // 3. AFTER: Verify invariant
     if result.is_success() {
         let balance_after = self.trident
             .get_account_with_type::<Vault>(&vault, 8)
             .expect("Vault should exist")
             .balance;
-        
+
         assert_eq!(
             balance_after,
             balance_before + amount,
@@ -330,15 +365,15 @@ Verify unauthorized operations fail:
 ```rust
 #[flow]
 fn unauthorized_action_flow(&mut self) {
-    let attacker = self.fuzz_accounts.users.get(&mut self.trident);
-    let victim_vault = self.fuzz_accounts.vaults.get(&mut self.trident);
-    
+    let attacker = self.fuzz_accounts.user.get(&mut self.trident);
+    let victim_vault = self.fuzz_accounts.vault.get(&mut self.trident);
+
     // Get vault owner
     let vault_data = self.trident
         .get_account_with_type::<Vault>(&victim_vault, 8);
-    
+
     let result = self.trident.process_transaction(&[withdraw_ix], Some("Withdraw"));
-    
+
     // If attacker != owner, this MUST fail
     if let Some(data) = vault_data {
         if attacker != data.owner && result.is_success() {
@@ -355,20 +390,20 @@ Verify state changes follow valid paths:
 ```rust
 #[flow]
 fn process_order_flow(&mut self) {
-    let order = self.fuzz_accounts.orders.get(&mut self.trident);
-    
+    let order = self.fuzz_accounts.order.get(&mut self.trident);
+
     let status_before = self.trident
         .get_account_with_type::<Order>(&order, 8)
         .map(|o| o.status);
-    
+
     let result = self.trident.process_transaction(&[process_ix], Some("Process"));
-    
+
     if result.is_success() {
         let status_after = self.trident
             .get_account_with_type::<Order>(&order, 8)
             .expect("Order should exist")
             .status;
-        
+
         // Valid transitions: Pending → Active → Completed
         // Invalid: Completed → Pending, Active → Pending
         match (status_before, status_after) {
@@ -396,14 +431,14 @@ Test your program with varied input values:
 fn deposit_flow(&mut self) {
     let user = self.fuzz_accounts.user.get(&mut self.trident);
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     // FUZZ: Different amount each execution
     let amount = self.trident.random_from_range(1..10_000_000u64);
-    
+
     let ix = DepositInstruction::data(DepositInstructionData::new(amount))
         .accounts(DepositInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     self.trident.process_transaction(&[ix], Some("Deposit"));
 }
 ```
@@ -417,7 +452,7 @@ Test access control by trying random user/vault combinations:
 fn start(&mut self) {
     // Create multiple users and vaults
     for _ in 0..5 {
-        let user = self.fuzz_accounts.users.insert(&mut self.trident, None);
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
         self.trident.airdrop(&user, 10 * LAMPORTS_PER_SOL);
         // Each user has their own vault...
     }
@@ -426,23 +461,23 @@ fn start(&mut self) {
 #[flow]
 fn random_access_flow(&mut self) {
     // FUZZ: Random user
-    let user = self.fuzz_accounts.users.get(&mut self.trident);
+    let user = self.fuzz_accounts.user.get(&mut self.trident);
     // FUZZ: Random vault (may not belong to this user!)
-    let vault = self.fuzz_accounts.vaults.get(&mut self.trident);
-    
+    let vault = self.fuzz_accounts.vault.get(&mut self.trident);
+
     let amount = self.trident.random_from_range(1..1_000u64);
-    
+
     let ix = WithdrawInstruction::data(WithdrawInstructionData::new(amount))
         .accounts(WithdrawInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     let result = self.trident.process_transaction(&[ix], Some("Withdraw"));
-    
+
     // INVARIANT: If user != vault owner, must fail
     let vault_owner = self.trident
         .get_account_with_type::<Vault>(&vault, 8)
         .map(|v| v.owner);
-    
+
     if Some(user) != vault_owner && result.is_success() {
         panic!("VULNERABILITY: Non-owner withdrew from vault!");
     }
@@ -458,7 +493,7 @@ Explicitly test boundary values that cause overflows or edge cases:
 fn edge_case_flow(&mut self) {
     let user = self.fuzz_accounts.user.get(&mut self.trident);
     let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-    
+
     // FUZZ: Specifically target edge values
     let amount = match self.trident.random_from_range(0..4u8) {
         0 => 0,           // Zero - should this be allowed?
@@ -466,11 +501,11 @@ fn edge_case_flow(&mut self) {
         2 => u64::MAX,    // Maximum - overflow risk!
         _ => self.trident.random_from_range(1..1_000_000u64),
     };
-    
+
     let ix = DepositInstruction::data(DepositInstructionData::new(amount))
         .accounts(DepositInstructionAccounts::new(user, vault))
         .instruction();
-    
+
     self.trident.process_transaction(&[ix], Some("EdgeDeposit"));
 }
 ```
@@ -511,7 +546,7 @@ fn start(&mut self) {
 
 Should you split operations into separate flows or combine them?
 
-*Separate flows (recommended default)* - Let the fuzzer discover random orderings:
+_Separate flows (recommended default)_ - Let the fuzzer discover random orderings:
 
 ```rust
 #[flow]
@@ -524,20 +559,20 @@ fn withdraw_flow(&mut self) { /* withdraw logic */ }
 // Discovers edge cases through random ordering
 ```
 
-*Combined flows* - When testing a specific sequence that must happen together:
+_Combined flows_ - When testing a specific sequence that must happen together:
 
 ```rust
 #[flow]
 fn deposit_then_immediate_withdraw(&mut self) {
     // Testing: can you withdraw immediately after deposit?
     let amount = self.trident.random_from_range(1..1_000_000u64);
-    
+
     // Deposit
     let deposit_ix = DepositInstruction::data(DepositInstructionData::new(amount))
         .accounts(DepositInstructionAccounts::new(user, vault))
         .instruction();
     self.trident.process_transaction(&[deposit_ix], Some("Deposit"));
-    
+
     // Immediately withdraw same amount
     let withdraw_ix = WithdrawInstruction::data(WithdrawInstructionData::new(amount))
         .accounts(WithdrawInstructionAccounts::new(user, vault))
@@ -556,9 +591,9 @@ fn main() {
 }
 ```
 
-| Parameter | Meaning |
-|-----------|---------|
-| `iterations` | Number of complete test cycles (init → flows → end) |
+| Parameter             | Meaning                                                    |
+| --------------------- | ---------------------------------------------------------- |
+| `iterations`          | Number of complete test cycles (init → flows → end)        |
 | `flows_per_iteration` | How many `#[flow]` methods are randomly executed per cycle |
 
 **Total operations tested:** `iterations × flows_per_iteration`
@@ -569,16 +604,17 @@ fn main() {
 fn main() {
     // Development: Fast feedback
     FuzzTest::fuzz(100, 50);       // 5,000 operations
-    
+
     // Pre-commit: Reasonable coverage
     FuzzTest::fuzz(1_000, 100);    // 100,000 operations
-    
+
     // Before release: Thorough testing
     FuzzTest::fuzz(10_000, 200);   // 2,000,000 operations
 }
 ```
 
 **Trade-offs:**
+
 - More **iterations** = more random sequences tested (breadth)
 - More **flows_per_iteration** = longer sequences within each test (depth)
 
@@ -614,7 +650,7 @@ impl FuzzTest {
     fn start(&mut self) {
         let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
         self.trident.airdrop(&user, 100 * LAMPORTS_PER_SOL);
-        
+
         let vault = self.fuzz_accounts.vault.insert(
             &mut self.trident,
             Some(PdaSeeds {
@@ -622,11 +658,11 @@ impl FuzzTest {
                 program_id: vault_program::ID,
             }),
         );
-        
+
         let ix = InitializeInstruction::data(InitializeInstructionData::new())
             .accounts(InitializeInstructionAccounts::new(user, vault))
             .instruction();
-        
+
         self.trident.process_transaction(&[ix], Some("Initialize"));
     }
 
@@ -634,26 +670,26 @@ impl FuzzTest {
     fn deposit_flow(&mut self) {
         let user = self.fuzz_accounts.user.get(&mut self.trident);
         let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-        
+
         let balance_before = self.trident
             .get_account_with_type::<Vault>(&vault, 8)
             .map(|v| v.balance)
             .unwrap_or(0);
-        
+
         let amount = self.trident.random_from_range(1..10_000_000u64);
-        
+
         let ix = DepositInstruction::data(DepositInstructionData::new(amount))
             .accounts(DepositInstructionAccounts::new(user, vault))
             .instruction();
-        
+
         let result = self.trident.process_transaction(&[ix], Some("Deposit"));
-        
+
         if result.is_success() {
             let balance_after = self.trident
                 .get_account_with_type::<Vault>(&vault, 8)
                 .expect("Vault should exist")
                 .balance;
-            
+
             assert_eq!(balance_after, balance_before + amount);
         }
     }
@@ -662,26 +698,26 @@ impl FuzzTest {
     fn withdraw_flow(&mut self) {
         let user = self.fuzz_accounts.user.get(&mut self.trident);
         let vault = self.fuzz_accounts.vault.get(&mut self.trident);
-        
+
         let balance_before = self.trident
             .get_account_with_type::<Vault>(&vault, 8)
             .map(|v| v.balance)
             .unwrap_or(0);
-        
+
         let amount = self.trident.random_from_range(1..20_000_000u64);
-        
+
         let ix = WithdrawInstruction::data(WithdrawInstructionData::new(amount))
             .accounts(WithdrawInstructionAccounts::new(user, vault))
             .instruction();
-        
+
         let result = self.trident.process_transaction(&[ix], Some("Withdraw"));
-        
+
         if result.is_success() {
             let balance_after = self.trident
                 .get_account_with_type::<Vault>(&vault, 8)
                 .expect("Vault should exist")
                 .balance;
-            
+
             assert_eq!(balance_after, balance_before - amount);
         }
     }

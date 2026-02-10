@@ -2,7 +2,6 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Trident 101
 
-![Fuzzing with Trident - Security testing for Solana programs](/graphics/course-banners/fuzzing-with-trident.png)
 
 Your unit tests prove your code works as expected. Fuzzing proves it doesn't break unexpectedly.
 
@@ -67,6 +66,72 @@ Instead of random chaos, you guide the fuzzer:
 
 This means the fuzzer spends its time testing actual program logic, not fighting Solana's validation.
 
+<ArticleSection name="How Trident Works" id="how-trident-works" level="h2" />
+
+Before diving into setup, it helps to understand what Trident does under the hood.
+
+### IDL-Driven Code Generation
+
+When you run `trident init`, Trident reads your program's **IDL** (Interface Description Language) — the JSON file Anchor generates during `anchor build`. The IDL describes your program's instructions, accounts, arguments, types, and PDA seeds.
+
+From this IDL, Trident generates three key files:
+
+| Generated File | What Trident creates from the IDL |
+|---------------|-----------------------------------|
+| `types.rs` | Instruction builders with `.data()` and `.accounts()` methods, discriminators, and custom types |
+| `fuzz_accounts.rs` | An `AddressStorage` field for every account referenced across all your instructions |
+| `test_fuzz.rs` | A template fuzz test with `#[init]`, `#[flow]`, `#[end]` for you to fill in |
+
+This is why **you must build your program (`anchor build`) before running `trident init`** — Trident needs the up-to-date IDL. If you change your program's instructions or accounts later, use `trident fuzz refresh` to regenerate `types.rs`.
+
+### The Fuzzing Engine
+
+Trident has its own **built-in fuzzing engine** — it doesn't rely on external fuzzers like Honggfuzz or LibFuzzer.
+
+Here's what happens when you call `FuzzTest::fuzz(1000, 100)`:
+
+1. **Seed generation** — A 256-bit Master Seed is generated (or provided via CLI). All randomness is deterministically derived from this seed.
+2. **Parallelization** — Trident detects available CPU cores and splits iterations across threads. Each thread gets a unique sub-seed derived from the Master Seed + thread ID.
+3. **Per iteration** — For each iteration:
+   - `#[init]` runs (your setup)
+   - The engine randomly selects from your `#[flow]` methods (100 times if you specified 100 flows per iteration)
+   - `#[end]` runs (your cleanup/assertions)
+   - Panics are caught (not crashed) and recorded
+   - State is reset for the next iteration
+4. **Results** — Statistics table, Master Seed, and any metrics/dashboards are output.
+
+### In-Process Execution
+
+Trident doesn't connect to a validator or cluster. Instead, it runs your program on **TridentSVM** — a lightweight Solana Virtual Machine embedded directly in the fuzzing process. Transactions execute instantly with no network latency, which is what makes it feasible to run millions of iterations.
+
+### Putting It Together
+
+```
+anchor build
+    │
+    ▼
+  IDL (JSON)
+    │
+    ▼
+trident init ──► types.rs (instruction builders)
+              ──► fuzz_accounts.rs (address storage)
+              ──► test_fuzz.rs (template)
+              ──► Trident.toml (config)
+    │
+    ▼
+You write flows
+    │
+    ▼
+trident fuzz run
+    │
+    ├─► Thread 1 ──► TridentSVM instance
+    ├─► Thread 2 ──► TridentSVM instance
+    └─► Thread N ──► TridentSVM instance
+                         │
+                   Executes your program
+                   at native speed
+```
+
 <ArticleSection name="Getting Started" id="getting-started" level="h2" />
 
 ### Prerequisites
@@ -101,6 +166,12 @@ trident init
 
 This creates the `trident-tests/` directory with everything you need to start fuzzing.
 
+> **Tip:** Use `-p` to target a specific program and `-t` to name your test:
+> ```bash
+> trident init -p my_program -t fuzz_my_program
+> ```
+> This is especially useful in workspaces with multiple programs.
+
 <ArticleSection name="Project Structure" id="project-structure" level="h2" />
 
 After initialization, your project looks like this:
@@ -131,14 +202,18 @@ your-project/
 
 <ArticleSection name="Your First Fuzz Run" id="first-fuzz-run" level="h2" />
 
-Even before writing custom logic, you can run the generated template:
+After initialization, verify everything compiles by running the template:
 
 ```bash
 cd trident-tests
 trident fuzz run fuzz_0
 ```
 
-After a few seconds, you'll see output like:
+The template has no flows configured yet, so the output will be an empty statistics table and a Master Seed. That's expected — you'll write the actual test logic in the next lesson.
+
+### Understanding Fuzz Output
+
+Once you've written your flows (covered in the next lesson), a fuzz run produces output like this:
 
 ```
 +-------------+---------------+------------+-----------+----------------------+
@@ -151,7 +226,7 @@ After a few seconds, you'll see output like:
 MASTER SEED used: "b6562888e52de3436324c96c76ab8d16a9877af74f3a2fe71dc2d363a2fc6337"
 ```
 
-**Understanding the output:**
+**What each column means:**
 
 | Column | Meaning |
 |--------|---------|

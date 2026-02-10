@@ -153,65 +153,6 @@ fn atomic_operation_flow(&mut self) {
 }
 ```
 
-### Testing Flash Loan Patterns
-
-```rust
-#[flow]
-fn flash_loan_flow(&mut self) {
-    // Borrow, use, repay - all in one transaction
-    let borrow_ix = FlashBorrowInstruction::data(FlashBorrowInstructionData::new(1000000))
-        .accounts(...)
-        .instruction();
-    
-    let use_funds_ix = SwapInstruction::data(SwapInstructionData::new(...))
-        .accounts(...)
-        .instruction();
-    
-    let repay_ix = FlashRepayInstruction::data(FlashRepayInstructionData::new(1000000 + fee))
-        .accounts(...)
-        .instruction();
-    
-    let result = self.trident.process_transaction(
-        &[borrow_ix, use_funds_ix, repay_ix],
-        Some("FlashLoan")
-    );
-    
-    // If repay is insufficient, whole transaction should fail
-    // If it succeeds with incorrect repay, we found a bug
-}
-```
-
-### Testing Partial Failures
-
-What happens when the second instruction fails?
-
-```rust
-#[flow]
-fn partial_failure_flow(&mut self) {
-    let deposit_ix = DepositInstruction::data(DepositInstructionData::new(1000))
-        .accounts(...)
-        .instruction();
-    
-    // This might fail (not enough balance to withdraw)
-    let withdraw_ix = WithdrawInstruction::data(WithdrawInstructionData::new(999999))
-        .accounts(...)
-        .instruction();
-    
-    let capture_before = self.capture_all_state();
-    
-    let result = self.trident.process_transaction(
-        &[deposit_ix, withdraw_ix],
-        Some("DepositThenOverdraw")
-    );
-    
-    if result.is_err() {
-        // Verify NOTHING changed - atomicity
-        let capture_after = self.capture_all_state();
-        assert_eq!(capture_before, capture_after, "State changed despite failed tx!");
-    }
-}
-```
-
 <ArticleSection name="Using Mainnet State" id="mainnet-state" level="h2" />
 
 Test against real-world data by importing mainnet accounts and programs.
@@ -291,56 +232,95 @@ For programs involving SPL tokens, enable the token feature:
 features = ["token"]
 ```
 
-### Creating Mints and Token Accounts
+### Initializing Mints and Token Accounts
+
+These helpers return **instructions** that you execute with `process_transaction`:
 
 ```rust
 #[init]
 fn start(&mut self) {
     let authority = self.fuzz_accounts.authority.insert(&mut self.trident, None);
+    self.trident.airdrop(&authority, 100 * LAMPORTS_PER_SOL);
     
-    // Create a mint
-    let mint = self.trident.create_mint(&authority, 9); // 9 decimals
-    self.fuzz_accounts.mint.insert(&mut self.trident, None); // Store it
+    // Create a mint address
+    let mint = self.fuzz_accounts.mint.insert(&mut self.trident, None);
     
-    // Create token accounts
+    // Initialize the mint (returns Vec<Instruction>)
+    let mint_ixs = self.trident.initialize_mint(
+        &authority,      // payer
+        &mint,           // mint address
+        9,               // decimals
+        &authority,      // mint authority
+        None,            // no freeze authority
+    );
+    self.trident.process_transaction(&mint_ixs, Some("InitMint"));
+    
+    // Create a token account address
     let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
-    let token_account = self.trident.create_token_account(&mint, &user);
+    let token_account = self.fuzz_accounts.token_account.insert(&mut self.trident, None);
     
-    // Mint tokens
-    self.trident.mint_to(&mint, &token_account, 1_000_000_000);
+    // Initialize the token account (returns Vec<Instruction>)
+    let token_ixs = self.trident.initialize_token_account(
+        &authority,       // payer
+        &token_account,   // token account address
+        &mint,            // mint
+        &user,            // owner
+    );
+    self.trident.process_transaction(&token_ixs, Some("InitTokenAccount"));
+    
+    // Mint tokens (returns a single Instruction)
+    let mint_to_ix = self.trident.mint_to(
+        &token_account,   // destination
+        &mint,            // mint
+        &authority,       // mint authority
+        1_000_000_000,    // amount
+    );
+    self.trident.process_transaction(&[mint_to_ix], Some("MintTo"));
 }
 ```
 
-### Token Operations in Flows
+### Associated Token Accounts
 
 ```rust
-#[flow]
-fn token_transfer_flow(&mut self) {
-    let from = self.fuzz_accounts.token_account_a.get(&mut self.trident);
-    let to = self.fuzz_accounts.token_account_b.get(&mut self.trident);
-    
-    let amount = self.trident.random_from_range(1..1000000u64);
-    
-    // Direct token transfer
-    self.trident.transfer_tokens(&from, &to, amount);
-    
-    // Or test your program's token handling
-    let ix = YourTransferInstruction::data(...)
-        .accounts(...)
-        .instruction();
-    
-    self.trident.process_transaction(&[ix], Some("TokenTransfer"));
-}
+// Initialize an ATA (returns a single Instruction)
+let ata_ix = self.trident.initialize_associated_token_account(
+    &payer, // payer
+    &mint,  // mint
+    &owner, // owner
+);
+self.trident.process_transaction(&[ata_ix], Some("InitATA"));
+
+// Get ATA address without creating it
+let ata_address = self.trident.get_associated_token_address(
+    &mint,
+    &owner,
+    &spl_token_interface::ID,
+);
+```
+
+### Reading Token State
+
+```rust
+// Get deserialized token account data
+let token_data = self.trident.get_token_account(token_account_pubkey);
+
+// Get deserialized mint data
+let mint_data = self.trident.get_mint(mint_pubkey);
 ```
 
 ### Token-2022
 
-For Token-2022 (Token Extensions):
+Token-2022 (Token Extensions) is supported with the same feature flag. The `get_token_account` and `get_mint` methods work with both SPL Token and Token-2022 accounts, including extension data.
 
 ```toml
 [dependencies.trident-fuzz]
 features = ["token"]  # Same feature, supports both
 ```
+
+### Other Program Helpers
+
+Trident also provides helpers for the **Stake** (`features = ["stake"]`) and **Vote** (`features = ["vote"]`) programs. These follow the same pattern — enable the feature flag and use the helper methods that return instructions. See the [Trident API Reference](https://ackee.xyz/trident/docs/latest/trident-api/) for details.
+
 
 <ArticleSection name="Dashboard and Metrics" id="dashboard" level="h2" />
 
@@ -352,124 +332,87 @@ Visualize your fuzzing sessions with the built-in dashboard.
 [fuzz.metrics]
 enabled = true
 dashboard = true
-json = false
 ```
 
-### Viewing Results
+### Viewing the Dashboard
 
-After a fuzz run, open the HTML file in `.fuzz-artifacts/`:
+1. Start the dashboard server in a separate terminal from the `trident_tests` directory:
 
 ```bash
-open .fuzz-artifacts/dashboard.html
+trident server
 ```
 
-The dashboard shows:
-- Transaction success/failure rates
-- Instruction distribution
-- Time spent per flow
-- Panics and where they occurred
+2. Run your fuzz test in another terminal:
 
-### JSON Output for CI
+```bash
+trident fuzz run fuzz_0
+```
 
-For programmatic analysis:
+3. Open your browser and navigate to `http://localhost:8000` to see:
+   - Transaction success/failure rates
+   - Instruction distribution
+   - Panics and where they occurred
+
+### Custom Metrics
+
+Track your own metrics on the dashboard using `record_histogram`:
+
+```rust
+#[flow]
+fn deposit_flow(&mut self) {
+    let amount = self.trident.random_from_range(1..1_000_000u64);
+    
+    let result = self.trident.process_transaction(&[ix], Some("Deposit"));
+    
+    // Track deposit amounts in the dashboard
+    self.trident.record_histogram("deposit_amounts", amount as f64);
+}
+```
+
+### JSON Output
+
+For programmatic analysis (e.g., in CI), enable JSON output:
 
 ```toml
 [fuzz.metrics]
 enabled = true
-dashboard = false
 json = true
 ```
 
-Parse the JSON in your CI pipeline:
+This generates a JSON file in `.fuzz-artifacts/` with transaction statistics and custom metrics.
 
-```bash
-# Check for panics in CI
-if jq '.panics > 0' .fuzz-artifacts/metrics.json; then
-  echo "Fuzzing found bugs!"
-  exit 1
-fi
+<ArticleSection name="The Complete Workflow" id="workflow" level="h2" />
+
+Here's how fuzzing fits into your development process:
+
+### During Development
+
+```
+1. Write program code
+2. Write unit tests (expected behavior)
+3. Write fuzz tests (unexpected behavior)
+4. Run quick fuzz: FuzzTest::fuzz(100, 50)
+5. Fix any issues found
+6. Repeat
 ```
 
-<ArticleSection name="Performance Optimization" id="performance" level="h2" />
+### Before Pull Requests
 
-Fuzzing effectiveness depends on how many iterations you can run. Here's how to maximize throughput.
-
-### 1. Keep Flows Focused
-
-Small, targeted flows run faster than kitchen-sink flows:
-
-```rust
-// Fast: Single operation
-#[flow]
-fn deposit_flow(&mut self) {
-    // Just deposit
-}
-
-// Slow: Many operations
-#[flow]
-fn everything_flow(&mut self) {
-    // Deposit, withdraw, stake, trade, govern...
-}
+```
+1. Run thorough fuzz: FuzzTest::fuzz(1_000, 100)
+2. Review coverage report
+3. Add flows for untested paths
+4. Run regression seeds
+5. Commit
 ```
 
-### 2. Skip Logging for Unimportant Transactions
+### Before Mainnet
 
-Use `None` to skip metrics collection:
-
-```rust
-// Log this (important for debugging)
-self.trident.process_transaction(&[important_ix], Some("CriticalOp"));
-
-// Skip logging (setup, common ops)
-self.trident.process_transaction(&[setup_ix], None);
 ```
-
-### 3. Tune Iteration Counts
-
-Start small, scale up:
-
-```rust
-fn main() {
-    // Development: Fast iteration
-    FuzzTest::fuzz(100, 50);
-    
-    // PR validation: Moderate
-    FuzzTest::fuzz(1_000, 100);
-    
-    // Release: Thorough
-    FuzzTest::fuzz(100_000, 500);
-}
-```
-
-### 4. Use `--with-exit-code` in CI
-
-Fail fast when bugs are found:
-
-```bash
-trident fuzz run fuzz_0 --with-exit-code
-```
-
-### 5. Parallelize Multiple Fuzz Tests
-
-Run different fuzz tests simultaneously:
-
-```bash
-trident fuzz run fuzz_0 &
-trident fuzz run fuzz_1 &
-trident fuzz run fuzz_2 &
-wait
-```
-
-Or in CI:
-
-```text
-jobs:
-  fuzz:
-    strategy:
-      matrix:
-        target: [fuzz_0, fuzz_1, fuzz_2]
-    steps:
-      - run: trident fuzz run ${{ matrix.target }} --with-exit-code
+1. Run extensive fuzzing (overnight, high iterations)
+2. Verify critical paths have coverage
+3. Run all regression seeds
+4. Consider professional audit
 ```
 
 <ArticleSection name="CI/CD Integration" id="cicd" level="h2" />
@@ -546,30 +489,7 @@ jobs:
         timeout-minutes: 360  # 6 hours max
 ```
 
-<ArticleSection name="Best Practices Summary" id="best-practices" level="h2" />
-
-### For Effective Fuzzing
-
-1. **Mix focused flows** - Some test single operations, some test sequences
-2. **Test access control explicitly** - Create flows that try unauthorized operations
-3. **Use strategic random ranges** - Include edge values (0, 1, MAX)
-4. **Define strong invariants** - Conservation, monotonicity, bounds
-5. **Save bug-finding seeds** - Build a regression test suite
-
-### For Performance
-
-1. **Start with low iteration counts** during development
-2. **Skip logging for routine operations**
-3. **Keep flows small and focused**
-4. **Run extensive fuzz tests nightly**
-
-### For Debugging
-
-1. **Always save the Master Seed** when finding bugs
-2. **Use `TRIDENT_LOG=1`** to understand crash context
-3. **Add state dumps** before panics
-4. **Build regression suite** from found bugs
 
 ---
 
-You now have all the tools to comprehensively fuzz your Solana programs. In the final lesson, we'll summarize the key concepts and discuss integrating fuzzing into your development workflow.
+You now have all the tools to comprehensively fuzz your Solana programs. In the final lesson, we'll wrap up with best practices, a production checklist, and resources.
