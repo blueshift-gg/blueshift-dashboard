@@ -1,0 +1,430 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Kiến trúc ví thông minh
+
+![Smart Wallet Architectures](/graphics/course-banners/embedded-wallets.png)
+
+Các ví truyền thống là cặp khóa. Khóa công khai là địa chỉ của bạn, khóa riêng là quyền hạn của bạn. Mất khóa riêng, mất tất cả. Chia sẻ khóa riêng, chia sẻ tất cả. Mô hình bảo mật là nhị phân và không khoan nhượng.
+
+Ví thông minh đảo ngược mối quan hệ này. Ví trở thành một tài khoản được kiểm soát bởi chương trình với logic ủy quyền có thể cấu hình. Ai có thể chi tiêu, bao nhiêu, dưới những điều kiện nào: tất cả được định nghĩa trong mã, tất cả được thực thi trên chuỗi.
+
+<ArticleSection name="Từ cặp khóa đến chương trình" id="keypairs-to-programs" level="h2" />
+
+Một tài khoản trên Solana được kiểm soát bởi bất kỳ ai giữ khóa riêng của nó. Không có sự tinh tế nào:
+
+```
++------------------+
+|  Native Account  |
+|                  |
+|  Owner: System   |
+|  Signer: Ed25519 |
++------------------+
+        |
+    [private key]
+        |
+   Full control
+```
+
+Một ví thông minh thay thế việc kiểm soát khóa trực tiếp bằng logic chương trình:
+
+```
++------------------+     +------------------+
+|  Smart Wallet    |     |   Wallet Program |
+|  (PDA)           |<----|                  |
+|                  |     |   Authorization  |
+|  Owner: Program  |     |   Logic          |
++------------------+     +------------------+
+        |                        |
+        |              +---------+---------+
+        |              |         |         |
+        |          [passkey] [guardian] [timelock]
+        |              |         |         |
+        +---------- Multiple authorization paths
+```
+
+Chương trình quyết định những gì cấu thành ủy quyền hợp lệ. Điều này có thể là một passkey đơn, nhiều chữ ký, các điều kiện dựa trên thời gian, hoặc bất kỳ sự kết hợp nào.
+
+<ArticleSection name="Địa chỉ dẫn xuất chương trình" id="pdas" level="h2" />
+
+PDAs là nền tảng của ví thông minh trên Solana. Chúng là các địa chỉ mà không có khóa riêng nào có thể ký, có nghĩa là chúng chỉ có thể được kiểm soát thông qua logic chương trình.
+
+### Cách hoạt động của PDAs
+
+PDAs được dẫn xuất bằng cách băm các hạt giống cùng với ID chương trình, sau đó tìm một điểm không nằm trên đường cong Ed25519:
+
+```
+PDA = findProgramDerivedAddress([seed1, seed2, ...], programId)
+```
+
+Tính chất quan trọng: không tồn tại khóa riêng cho địa chỉ này. Cách duy nhất để ký cho một PDA là thông qua chương trình đã dẫn xuất nó, sử dụng `invoke_signed`.
+
+### Dẫn xuất Ví Thông Minh
+
+Đối với ví thông minh được kiểm soát bằng passkey, PDA thường được dẫn xuất từ khóa công khai của passkey:
+
+```
+smartWalletPDA = findProgramDerivedAddress(
+  ["smart_wallet", passkeyPublicKey],
+  walletProgramId
+)
+```
+
+Điều này tạo ra một địa chỉ ví duy nhất cho mỗi passkey. Chương trình trên chuỗi có thể ủy quyền các hành động trên PDA này bất cứ khi nào nó xác minh được chữ ký passkey hợp lệ.
+
+### Luồng Ủy Quyền
+
+Khi người dùng muốn chuyển tiền từ ví thông minh của họ:
+
+1. Người dùng ký một thông điệp chứa chi tiết chuyển khoản bằng passkey của họ
+2. Giao dịch được gửi đi chứa chữ ký passkey
+3. Chương trình ví xác minh chữ ký passkey (thông qua trình biên dịch sẵn secp256r1)
+4. Nếu hợp lệ, chương trình gọi chuyển khoản sử dụng `invoke_signed` với các hạt giống PDA
+5. Chuyển khoản thực thi như thể PDA tự ký
+
+Từ góc nhìn của tài khoản nhận hoặc bất kỳ chương trình nào khác, đây trông giống như một chuyển khoản bình thường từ địa chỉ ví thông minh.
+
+<ArticleSection name="Các mô hình ủy quyền" id="authorization-models" level="h2" />
+
+Các ví thông minh cho phép có thể ủy quyền với cặp khóa thô.
+
+### Passkey đơn
+
+Mô hình đơn giản nhất: một passkey kiểm soát ví.
+
+```
+Authorization: Xác minh chữ ký secp256r1 từ passkey đã đăng ký
+```
+
+Đây là cách LazorKit thực hiện. Passkey trong vùng an toàn của thiết bị bạn có quyền duy nhất.
+
+### Đa-Passkey
+
+Đăng ký nhiều passkey (ví dụ: điện thoại và laptop) với bất kỳ passkey nào cũng có thể ủy quyền:
+
+```
+Authorization: Xác minh chữ ký secp256r1 từ BẤT KỲ passkey đã đăng ký nào
+```
+
+Điều này cung cấp sự dự phòng mà không làm giảm tính bảo mật. Mất một thiết bị không khiến bạn bị khóa truy cập.
+
+### Passkey với ngưỡng
+
+Yêu cầu nhiều passkey để ủy quyền các hoạt động giá trị cao:
+
+```
+Authorization:
+  - Dưới $100: Bất kỳ passkey đã đăng ký nào
+  - Trên $100: 2 trong 3 passkey đã đăng ký
+```
+
+Điều này tương tự như đa chữ ký nhưng với passkey là phần cứng thay vì khóa phần mềm.
+
+### Bảo vệ khôi phục
+
+Chỉ định các địa chỉ khôi phục có thể khôi phục quyền truy cập dưới các điều kiện cụ thể:
+
+```
+Authorization:
+  - Bình thường: Chữ ký passkey
+  - Khôi phục: Chữ ký người bảo vệ + khóa thời gian 7 ngày
+```
+
+Nếu bạn mất tất cả passkey, người bảo vệ có thể khởi xướng khôi phục. Khóa thời gian cho bạn thời gian để hủy nếu yêu cầu khôi phục là độc hại.
+
+### Khóa phiên
+
+Tạo các khóa tạm thời với quyền hạn giới hạn:
+
+```
+Authorization:
+  - Toàn quyền: Chữ ký passkey
+  - Khóa phiên: Giới hạn cho các chương trình cụ thể, hết hạn sau 24 giờ
+```
+
+Điều này cải thiện trải nghiệm người dùng dApp mà không làm giảm tính bảo mật. Trò chơi có thể thực hiện các giao dịch nhanh với khóa phiên trong khi các hoạt động giá trị cao vẫn yêu cầu ủy quyền bằng passkey.
+
+<ArticleSection name="Các mẫu tài khoản trừu tượng" id="account-abstraction" level="h2" />
+
+Các ví thông minh cho phép tài khoản trừu tượng: tách biệt người trả phí giao dịch và người ủy quyền.
+
+### Tài trợ phí gas
+
+Giao dịch Solana truyền thống yêu cầu người ký trả phí. Ví thông minh phá vỡ giới hạn này:
+
+```
++-------------+     +---------------+     +--------------+
+|   User      |     |   Paymaster   |     |  Smart       |
+|   (passkey) |     |   (pays gas)  |     |  Wallet      |
++-------------+     +---------------+     +--------------+
+      |                    |                     |
+      | 1. Sign action     |                     |
+      +------------------->|                     |
+      |                    | 2. Wrap + pay fees  |
+      |                    +-------------------->|
+      |                    |                     |
+      |                    |    3. Execute       |
+      |                    |<--------------------+
+```
+
+Người dùng ký hành động bằng passkey của họ. Một paymaster đóng gói điều này thành một giao dịch, trả phí và gửi nó. Ví thông minh xác minh chữ ký passkey và thực thi.
+
+Người dùng có thể tương tác với Solana mà không cần sở hữu SOL.
+
+### Token phí thay thế
+
+Paymaster có thể chấp nhận thanh toán phí bằng các token khác ngoài SOL:
+
+1. Người dùng ký hành động + đồng ý trả 0.01 USDC cho phí
+2. Paymaster xác minh thanh toán USDC được đính kèm
+3. Paymaster trả phí SOL, nhận USDC từ ví thông minh
+4. Hành động được thực thi
+
+Điều này loại bỏ sự khó chịu "Tôi cần SOL để làm bất cứ điều gì" ngăn cản người dùng mới.
+
+### Các hoạt động gộp
+
+Ví thông minh có thể gộp nhiều hoạt động thành các giao dịch nguyên tử:
+
+```
+Transaction:
+  1. Xác minh chữ ký passkey một lần
+  2. Thực thi: Hoán đổi USDC sang SOL
+  3. Thực thi: Đặt cọc SOL
+  4. Thực thi: Cập nhật metadata hồ sơ
+```
+
+Một lần xác minh passkey cho phép nhiều instruction. Điều này giảm khó khăn cho người dùng và cho phép các luồng phức tạp mà nếu không sẽ yêu cầu nhiều lời nhắc phê duyệt.
+
+<ArticleSection name="Kiến trúc bảo mật" id="security-architecture" level="h2" />
+
+Ví thông minh chuyển trọng tâm bảo mật từ "bảo vệ khóa" sang "thiết kế các quy tắc."
+
+### Phòng thủ nhiều lớp
+
+Nhiều lớp có thể bảo vệ chống lại các mối đe dọa khác nhau:
+
+**Lớp 1 - Phần cứng**
+Khóa riêng passkey ở trong vùng an toàn bảo mật, không thể truy cập thậm chí phần mềm bị xâm phạm.
+
+**Lớp 2 - Ràng buộc nguồn gốc**
+Passkey chỉ ký cho các nguồn gốc hợp pháp, ngăn chặn phishing.
+
+**Lớp 3 - Xác minh trên chuỗi**
+Chương trình xác minh chữ ký passkey; các chữ ký không hợp lệ bị từ chối.
+
+**Lớp 4 - Thực thi chính sách**
+Chương trình thực thi giới hạn chi tiêu, danh sách trắng, khóa thời gian.
+
+Kẻ tấn công phải vượt qua tất cả các lớp. Xâm phạm ứng dụng không đủ nếu passkey không ký cho nguồn gốc sai. Việc giả mạo chữ ký là không thể nếu không có vùng an toàn bảo mật.
+
+### Cân nhắc về khả năng nâng cấp
+
+Chương trình ví thông minh có thể nâng cấp hoặc không thể thay đổi:
+
+**Có thể nâng cấp:**
+- Có thể sửa lỗi
+- Có thể thêm tính năng
+- Nhưng: quyền nâng cấp là một điểm tin cậy / thất bại
+
+**Không thể thay đổi:**
+- Hành vi là vĩnh viễn và có thể kiểm toán
+- Không thể sửa lỗi trong tương lai
+- Tối đa sự tin cậy
+
+Một số ví sử dụng khả năng nâng cấp có khóa thời gian: các thay đổi yêu cầu một khoảng thời gian chờ, cho phép người dùng có thời gian thoát nếu họ không đồng ý.
+
+### Các cuộc tấn công trạng thái
+
+Ví thông minh phải bảo vệ chống lại việc thao túng trạng thái:
+
+**Tấn công phát lại**: Mỗi ủy quyền nên bao gồm một nonce hoặc blockhash gần đây để ngăn việc sử dụng lại.
+
+**Mất đồng bộ trạng thái**: Nếu trạng thái ngoài chuỗi (passkey đã đăng ký) không đồng ý với trạng thái trên chuỗi, người dùng có thể bị khóa hoặc các bên không được phép có thể truy cập.
+
+**Tấn công chạy trước nâng cấp**: Các nâng cấp độc hại có thể bị chạy trước bởi người dùng rút tiền.
+
+Ví thông minh được thiết kế tốt bao gồm các biện pháp bảo vệ cho từng vectơ.
+
+<ArticleSection name="Cách tiếp cận của Crossmint" id="crossmint" level="h2" />
+
+Crossmint triển khai ví thông minh với kiến trúc signer mô-đun. Ví tự nó là một hợp đồng thông minh có thể được kiểm soát bởi nhiều "signer" khác nhau:
+
+### Các loại tác nhân ký
+
+**Passkey Signer**: Thiết bị của người dùng ủy quyền giao dịch trực tiếp bằng passkey.
+
+**Email/Phone Signer**: Xác thực qua email hoặc SMS OTP, với các khóa được quản lý trong hạ tầng của Crossmint.
+
+**Social Signer**: Xác thực OAuth (Google, Apple) tạo quyền truy cập ví.
+
+**External Wallet Signer**: Ví tiền điện tử hiện có (Phantom, MetaMask) có thể kiểm soát ví thông minh.
+
+**API Key Signer**: Tự động hóa phía máy chủ cho các luồng quản lý hoặc bán quản lý.
+
+### Tính tổng hợp
+
+Nhiều tác nhân ký có thể được gắn vào cùng một ví:
+
+```
+Ví thông minh
+├── Chính: Passkey (điện thoại của người dùng)
+├── Sao lưu: Email (tùy chọn khôi phục)
+└── Tự động: API Key (cho các đăng ký)
+```
+
+Người dùng bắt đầu với một tác nhân ký và thêm nhiều hơn khi cần thiết. Sự linh hoạt này cho phép các ứng dụng phát triển mô hình bảo mật của họ mà không cần người dùng tạo ví mới.
+
+### Nhận dạng đa chuỗi
+
+Ví thông minh của Crossmint duy trì nhận dạng nhất quán trên các chuỗi. Cùng một xác thực tạo ví trên Solana, Ethereum, Polygon và các chuỗi khác, tất cả đều liên kết với cùng một nhận dạng người dùng.
+
+<ArticleSection name="Kiến trúc của LazorKit" id="lazorkit" level="h2" />
+
+LazorKit áp dụng cách tiếp cận gốc Solana với passkey là cơ chế ủy quyền duy nhất.
+
+### Chương trình Ví Thông Minh
+
+Chương trình on-chain của LazorKit duy trì trạng thái ví:
+
+```
+SmartWalletAccount {
+  passkey_pubkey: [u8; 33],    // secp256r1 public key
+  wallet_bump: u8,             // PDA bump seed
+  created_at: i64,             // Timestamp
+  // ... additional state
+}
+```
+
+PDA được dẫn xuất từ khóa công khai passkey, tạo địa chỉ xác định cho mỗi passkey.
+
+### Luồng Giao Dịch
+
+1. **Khách hàng xây dựng giao dịch**: Hướng dẫn những gì ví nên làm
+2. **Tạo thử thách**: Dữ liệu giao dịch được băm thành một thử thách
+3. **Ký passkey**: Thiết bị của người dùng ký thử thách bằng secp256r1
+4. **Hướng dẫn xác minh**: Giao dịch bao gồm xác minh secp256r1
+5. **Thực thi**: Nếu xác minh thành công, chương trình thực thi các hướng dẫn qua CPI
+
+Chữ ký passkey trong bước 3 xảy ra trong vùng an toàn. Việc xác minh trong bước 4 sử dụng bộ biên dịch gốc của Solana để tăng hiệu quả.
+
+### Tích hợp Paymaster
+
+LazorKit bao gồm hỗ trợ paymaster cho trừu tượng hóa gas:
+
+```
+PaymasterConfig {
+  paymasterUrl: string,  // Service that sponsors transactions
+  apiKey?: string,       // Authentication for paymaster
+}
+```
+
+Paymaster bọc các hoạt động do người dùng ký thành các giao dịch đã trả phí. Người dùng tương tác với các ứng dụng Solana mà không cần SOL.
+
+<ArticleSection name="Phân tích đánh đổi" id="tradeoffs" level="h2" />
+
+Các kiến trúc ví thông minh khác nhau đưa ra các đánh đổi khác nhau:
+
+### Chỉ dùng Passkey (LazorKit)
+
+**Ưu điểm:**
+- Mô hình tin cậy đơn giản nhất: chỉ có bảo mật phần cứng là quan trọng
+- Không phụ thuộc vào máy chủ để ký
+- Tự quản lý thực sự
+
+**Nhược điểm:**
+- Khôi phục passkey yêu cầu các bản sao lưu được lên kế hoạch trước
+- Không có phương án dự phòng nếu mất tất cả thiết bị
+- Yêu cầu thiết bị hỗ trợ passkey
+
+### MPC + Ví Thông Minh (Privy, Dynamic)
+
+**Ưu điểm:**
+- Nhiều phương thức xác thực (email, mạng xã hội, passkey)
+- Khôi phục có sự hỗ trợ của nhà cung cấp
+- Hoạt động trên các thiết bị không hỗ trợ passkey
+
+**Nhược điểm:**
+- Nhà cung cấp là một điểm tin cậy
+- Mô hình bảo mật phức tạp hơn
+- Cần hạ tầng nhà cung cấp để ký
+
+### Modular Signers (Crossmint)
+
+**Ưu điểm:**
+- Tính linh hoạt tối đa trong các phương thức xác thực
+- Có thể nâng cấp bảo mật dần dần
+- Phù hợp với đa dạng người dùng
+
+**Nhược điểm:**
+- Quản lý tác nhân ký phức tạp
+- Nhiều rủi ro mặt tấn công tiềm năng
+- Cần hiểu rõ mức độ tin cậy của tác nhân ký
+
+### Lựa chọn phù hợp phụ thuộc vào
+
+**Cơ sở người dùng:**
+- Người dùng tiền điện tử? Chỉ passkey có thể chấp nhận được.
+- Người dùng phổ thông? Cần có phương án dự phòng email/mạng xã hội.
+
+**Yêu cầu khôi phục:**
+- Giá trị cao? Cần các tùy chọn khôi phục mạnh mẽ.
+- Dùng một lần? Đơn giản hơn là tốt hơn.
+
+**Môi trường pháp lý:**
+- Cần tuân thủ? Có thể yêu cầu các tùy chọn lưu ký.
+- Tối đa phi tập trung? Chỉ passkey thuần túy.
+
+<ArticleSection name="Các cân nhắc triển khai" id="implementation" level="h2" />
+
+Xây dựng trên hạ tầng ví thông minh đòi hỏi hiểu rõ các ranh giới.
+
+### Những gì bạn kiểm soát
+
+- Luồng xác thực người dùng
+- Giao diện người dùng/Trải nghiệm người dùng cho phê duyệt giao dịch
+- Logic nghiệp vụ sử dụng ví
+- Tích hợp với backend của bạn
+
+### Những gì giao thức kiểm soát
+
+- Xác minh chữ ký
+- Dẫn xuất và ủy quyền PDA
+- Quản lý trạng thái on-chain
+- Cơ chế nâng cấp (nếu có)
+
+### Những gì phần cứng kiểm soát
+
+- Tạo và lưu trữ khóa riêng
+- Xác thực sinh trắc học
+- Thực thi nguồn gốc
+- Kháng giả mạo
+
+Hiểu rõ các ranh giới này giúp bạn thiết kế ứng dụng an toàn. Bạn không thể tăng cường bảo mật phần cứng từ ứng dụng của mình, nhưng bạn có thể xây dựng UX tận dụng nó một cách hợp lý.
+
+### Các cân nhắc về kiểm thử
+
+Kiểm thử ví thông minh yêu cầu thiết bị thật:
+
+- Trình giả lập không có vùng an toàn
+- Các thao tác passkey thất bại hoặc hoạt động khác trong mô phỏng
+- Các đặc điểm riêng của thiết bị (iOS so với Android) quan trọng
+
+Lên kế hoạch kiểm thử trên thiết bị vật lý trong quy trình phát triển của bạn.
+
+<ArticleSection name="Tóm tắt khái niệm" id="summary" level="h2" />
+
+Các ví thông minh chuyển đổi tài khoản Solana từ kiểm soát bằng khóa sang kiểm soát bằng chương trình:
+
+1. **PDAs** tạo địa chỉ chỉ có thể kiểm soát thông qua logic chương trình
+2. **Quy tắc ủy quyền** có thể yêu cầu passkey, nhiều chữ ký, khóa thời gian, hoặc bất kỳ kết hợp nào
+3. **Trừu tượng gas** cho phép người dùng tương tác mà không cần giữ SOL
+4. **Người ký mô-đun** cho phép các chiến lược xác thực linh hoạt
+
+Mô hình bảo mật chuyển từ "đừng làm mất khóa của bạn" sang "thiết kế các quy tắc ủy quyền an toàn". Passkey được phần cứng hỗ trợ cung cấp xác thực mạnh mẽ. Các chương trình on-chain thực thi các chính sách. Nhiều cách thức ủy quyền cho phép khôi phục.
+
+Khi chọn nhà cung cấp ví thông minh:
+- **LazorKit**: Passkey thuần túy, đơn giản tối đa, Solana hỗ trợ
+- **Crossmint**: Người ký mô-đun, đa chuỗi, mô hình lưu ký linh hoạt
+- **Nhà cung cấp MPC**: Chữ ký ngưỡng với hạ tầng nhà cung cấp
+
+Lựa chọn phù hợp phụ thuộc vào người dùng của bạn, yêu cầu bảo mật của bạn, và mức độ hạ tầng bạn muốn quản lý so với việc ủy quyền.

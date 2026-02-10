@@ -1,0 +1,264 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Tính toán đa bên (MPC)
+
+![MPC Cryptography](/graphics/course-banners/embedded-wallets.png)
+
+Mọi ví truyền thống đều có một điểm yếu chết người: khóa riêng tồn tại ở một nơi duy nhất. Dù đó là cụm từ khôi phục trên giấy, một tệp được mã hóa trên điện thoại của bạn, hay một ví phần cứng trong ngăn kéo, nếu vị trí duy nhất đó bị xâm phạm thì mọi thứ sẽ mất hết.
+
+Tính toán đa bên (MPC) loại bỏ điểm yếu kiến trúc này. Khóa riêng được chia thành các phần được phân phối cho nhiều bên. Không một bên đơn lẻ nào giữ toàn bộ khóa. Để ký một giao dịch, các bên hợp tác thông qua các giao thức mật mã tạo ra các chữ ký hợp lệ mà không bao giờ tái tạo khóa gốc.
+
+Đây không phải là bảo mật thông qua sự mơ hồ. Đây là một sự tái cấu trúc cơ bản về nơi lưu trữ các bí mật.
+
+<ArticleSection name="Vấn đề điểm thất bại duy nhất" id="single-point-of-failure" level="h2" />
+
+Nơi lưu trữ khóa truyền thống tạo ra một mô hình bảo mật nhị phân: hoặc kẻ tấn công có khóa của bạn, hoặc họ không có. Không có trạng thái trung gian.
+
+Hãy xem xét cách tấn công một ví di động thông thường:
+
+- **Xâm phạm thiết bị**: Malware, trộm cắp vật lý, hoặc trích xuất từ điều tra
+- **Xâm phạm sao lưu**: Xâm nhập nơi lưu trữ đám mây, trộm cắp cụm từ khôi phục
+- **Lỗi người dùng**: Lừa đảo, chiếm đoạt clipboard, ứng dụng giả mạo
+- **Xâm phạm nơi kiểm soát**: Nếu bên thứ ba giữ khóa của bạn, bạn sẽ kế thừa tất cả các rủi ro bảo mật của họ
+
+Mỗi trường hợp này đại diện cho mất mát hoàn toàn và không thể đảo ngược của quỹ. Toàn bộ mô hình bảo mật phụ thuộc vào việc ngăn chặn mọi khả năng tấn công vector có thể xảy ra cùng một lúc.
+
+MPC thay đổi cách tính. Ngay cả khi một kẻ tấn công xâm phạm một phần được chia sẻ của khóa, họ cũng không thu được gì có thể sử dụng được. Yêu cầu về ngưỡng (thường là 2-trong-2 hoặc 2-trong-3) có nghĩa là  phải có nhiều hệ thống độc lập bị xâm phạm thì quỹ mới có nguy cơ bị tổn hại.
+
+<ArticleSection name="Chia sẻ bí mật" id="secret-sharing" level="h2" />
+
+Trước khi hiểu về chữ ký MPC, chúng ta cần hiểu cách các bí mật có thể được chia nhỏ.
+
+### Chia sẻ bí mật của Shamir
+
+Vào năm 1979, Adi Shamir đã công bố một phương pháp cho phép chia bất kỳ bí mật nào thành `n` phần, trong đó bất kỳ `t` phần nào (ngưỡng) có thể tái tạo lại bí mật, nhưng `t-1` phần không tiết lộ gì.
+
+Về mặt toán học thì: một đa thức bậc `t-1` được xác định duy nhất bởi `t` điểm. Để chia một bí mật:
+
+1. Chọn một đa thức ngẫu nhiên bậc `t-1` trong đó bí mật là hệ số hằng số
+2. Đánh giá đa thức tại `n` điểm khác nhau
+3. Mỗi điểm trở thành một phần chia sẻ
+
+Ví dụ, để tạo một sơ đồ ngưỡng 2/3 của bí mật `S`:
+- Chọn hệ số ngẫu nhiên `a`
+- Định nghĩa đa thức: `f(x) = S + ax`
+- Phần chia 1: `f(1) = S + a`
+- Phần chia 2: `f(2) = S + 2a`
+- Phần chia 3: `f(3) = S + 3a`
+
+Bất kỳ hai phần chia nào cũng có thể tái tạo lại đường thẳng và tìm `S = f(0)`. Một phần chia đơn lẻ không tiết lộ gì vì có vô số đường thẳng đi qua một điểm duy nhất.
+
+### Từ chia sẻ đến tính toán
+
+Phương pháp của Shamir chia nhỏ bí mật, nhưng việc tái tạo yêu cầu tập hợp các phần chia lại với nhau, tạo ra điểm sơ hở duy nhất khi ký.
+
+Các giao thức MPC đi xa hơn: chúng tính toán trên các bí mật được chia mà không bao giờ kết hợp chúng lại với nhau. Các phần chia tương tác thông qua các giao thức được thiết kế cẩn thận để tạo ra kết quả (như chữ ký) mà không tiết lộ bí mật cơ bản.
+
+<ArticleSection name="Chữ ký ngưỡng" id="threshold-signatures" level="h2" />
+
+Một sơ đồ chữ ký ngưỡng mở rộng chia sẻ bí mật đến chính hoạt động ký. Thay vì tái tạo khóa riêng để ký, mỗi người giữ phần chia sẽ tính toán một phần chữ ký. Các phần của chữ ký này kết hợp thành một chữ ký hợp lệ không thể phân biệt với chữ ký do một người ký duy nhất tạo ra.
+
+### Mô hình 2-trong-2
+
+Hầu hết các nhà cung cấp ví nhúng sử dụng chữ ký ngưỡng 2-trong-2:
+
+```
++------------------+        +------------------+
+|   User Device    |        |  Provider HSMs   |
+|                  |        |                  |
+|   Share A        |        |   Share B        |
+|   (encrypted)    |        |   (isolated)     |
++------------------+        +------------------+
+         |                           |
+         |    MPC Signing Protocol   |
+         +------------+--------------+
+                      |
+              +----------------+
+              | Valid Signature|
+              +----------------+
+```
+
+Không bên nào có thể ký một mình. Phần được chia sẻ nằm trên thiết bị người dùng yêu cầu mở khóa bằng sinh trắc học. Phần cđược chia sẻ của nhà cung cấp nằm trong các Module bảo mật phần cứng (HSM) thực thi các chính sách xác thực.
+
+Một kẻ tấn công phải đồng thời xâm phạm:
+- Thiết bị người dùng VÀ vượt qua sinh trắc học
+- Hạ tầng nhà cung cấp VÀ vượt qua bảo vệ HSM
+
+Điều này khó khăn hơn rất nhiều so với việc xâm phạm một vị trí duy nhất.
+
+### Tại sao không chỉ cần dùng đa chữ ký?
+
+Solana hỗ trợ tài khoản đa chữ ký, vậy tại sao lại sử dụng MPC?
+
+**Giới hạn của đa chữ ký:**
+- Chữ ký là công khai: mọi người có thể thấy cấu trúc ký trên chuỗi
+- Phí cao hơn: nhiều chữ ký nghĩa là giao dịch lớn hơn
+- Địa chỉ khác nhau: tài khoản đa chữ ký có địa chỉ khác với đơn chữ ký
+- Độ phức tạp của giao thức: ứng dụng phải hiểu và hỗ trợ cấu trúc đa chữ ký
+
+**Ưu điểm của MPC:**
+- Đầu ra chữ ký đơn: kích thước và phí giao dịch tiêu chuẩn
+- Bảo mật: cấu trúc ngưỡng không hiển thị trên chuỗi
+- Địa chỉ ví tương thích: ví MPC trông giống hệt ví thông thường
+- Giao thức minh bạch: ứng dụng không cần hỗ trợ MPC đặc biệt
+
+Từ quan điểm của blockchain, chữ ký MPC không thể phân biệt với chữ ký thông thường. Độ phức tạp hoàn toàn nằm ngoài chuỗi.
+
+<ArticleSection name="EdDSA và FROST" id="eddsa-frost" level="h2" />
+
+Solana sử dụng chữ ký Ed25519 (EdDSA trên Curve25519). Việc tạo chữ ký ngưỡng cho EdDSA đòi hỏi các giao thức chuyên biệt vì thuật toán ký không phân tách tự nhiên như ECDSA.
+
+### Giao thức FROST
+
+FROST (Flexible Round-Optimized Schnorr Threshold) là một sơ đồ chữ ký ngưỡng được thiết kế cho các chữ ký giống Schnorr, bao gồm cả EdDSA.
+
+**Tạo khóa** phân phối khóa riêng thành các phần được chia sẻ:
+1. Mỗi bên tạo các đa thức ngẫu nhiên
+2. Các bên trao đổi cam kết và xác minh tính nhất quán
+3. Mỗi bên tính phần được chia sẻ của họ từ các đa thức kết hợp
+4. Khóa công khai được tạo ra từ các cam kết được kết hợp
+
+**Ký** yêu cầu hai vòng giao tiếp:
+1. **Vòng cam kết**: Mỗi người tham gia tạo các nonce ngẫu nhiên và chia sẻ cam kết
+2. **Vòng ký**: Người tham gia tính toán một phần chữ ký sử dụng các phần được chia sẻ của họ và cam kết được tổng hợp. Các phần của chữ ký sau đó được kết hợp thành chữ ký cuối cùng.
+
+Sự đảm bảo an ninh: không có liên minh nào nhỏ hơn ngưỡng có thể giả mạo chữ ký hoặc biết khóa riêng, ngay cả khi họ hành xử ác ý.
+
+### Đầu ra Ed25519 gốc
+
+FROST tạo ra các chữ ký về mặt toán học giống hệt các chữ ký Ed25519 tiêu chuẩn. Khi giao dịch Solana của bạn đính kèm một chữ ký được tạo bởi MPC:
+
+- Các trình xác thực Validators xác minh nó bằng cách sử dụng xác minh Ed25519 tiêu chuẩn
+- Các trình khám phá hiển thị nó như một chữ ký bình thường
+- Các hợp đồng thông minh không thể phân biệt nó với chữ ký ví phần cứng
+
+Tính tương thích này rất quan trọng. MPC chỉ là một cải tiến bảo mật ngoài chuỗi và không yêu cầu thay đổi giao thức blockchain.
+
+<ArticleSection name="Tạo khóa mà không cần tin cậy" id="distributed-key-generation" level="h2" />
+
+Một câu hỏi quan trọng: ai tạo ra khóa ban đầu để chia sẻ?
+
+Nếu một bên tạo khóa và phân phối các phần chia sẻ, bên đó sẽ biết toàn bộ khóa trong quá trình tạo. Điều này làm suy yếu toàn bộ mô hình bảo mật.
+
+### Tạo khóa phi tập trung (DKG)
+
+Các giao thức DKG tạo khóa bằng cách hợp tác để không có bên nào biết toàn bộ khóa:
+
+1. Mỗi bên tạo dữ liệu ngẫu nhiên và cam kết với nó
+2. Các bên trao đổi các phần đóng góp đã được mã hóa
+3. Sự kết hợp toán học tạo ra các phần được chia sẻ mà khóa cơ sở không bao giờ được tính toàn bộ
+
+Khóa thực sự không bao giờ tồn tại ở một nơi duy nhất, ngay cả trong quá trình tạo.
+
+### Giả định về sự tin cậy
+
+Các nhà cung cấp khác nhau đưa ra các giả định về sự tin cậy khác nhau:
+
+**DKG toàn phần**: Thiết bị của người dùng và nhà cung cấp cùng tham gia tạo khóa. Không bên nào có thể đã thấy toàn bộ khóa.
+
+**Nhà cung cấp tạo và phân tách tức thì**: Nhà cung cấp tạo khóa trong HSM và ngay lập tức phân tách. HSM được tin tưởng không rò rỉ.
+
+**Người dùng tạo và sao lưu**: Người dùng tạo khóa cục bộ, phân tách và gửi một phần chia sẻ cho nhà cung cấp. Người dùng đã tạm thời giữ toàn bộ khóa.
+
+Các mô hình này đại diện cho các điểm khác nhau trên phổ bảo mật/tiện lợi. DKG toàn phần là an toàn nhất nhưng yêu cầu các quy trình thiết lập phức tạp hơn.
+
+<ArticleSection name="Phục hồi mà không cần tái tạo" id="recovery" level="h2" />
+
+Điều gì xảy ra khi người dùng mất thiết bị của họ?
+
+Ví truyền thống có câu trả lời tàn nhẫn: khôi phục từ cụm từ hạt giống hoặc mất tất cả. MPC cho phép các tùy chọn khôi phục tinh vi hơn.
+
+### Phục hồi có sự hỗ trợ của nhà cung cấp
+
+Phần chia sẻ của nhà cung cấp không bao giờ bị mất. Việc khôi phục yêu cầu chứng minh danh tính để tạo một phần chia sẻ cho thiết bị mới:
+
+1. Người dùng xác thực qua các kênh đã được xác minh (email, điện thoại, xác minh danh tính)
+2. HSM của nhà cung cấp giữ phần chia sẻ của nhà cung cấp không thay đổi
+3. Phần chia sẻ của thiết bị mới được tạo và ghép nối với phần chia sẻ của nhà cung cấp hiện có
+4. Phần chia sẻ của thiết bị cũ bị vô hiệu hóa
+
+Khóa chính không thay đổi. Chỉ có việc phân phối các phần chia sẻ được cập nhật.
+
+### Phục hồi qua mạng xã hội
+
+Một số giao thức hỗ trợ các sơ đồ `t-of-n` nơi nhiều bên giữ các phần sao lưu:
+
+- Bạn bè tin cậy giữ các phần sao lưu được mã hóa
+- Việc khôi phục yêu cầu `t` trong số họ tham gia
+- Không ai trong số họ có thể truy cập quỹ một mình
+
+Điều này loại bỏ nhà cung cấp như một điểm tin cậy trung tâm trong khi vẫn duy trì khả năng khôi phục.
+
+### Khóa xoay vòng
+
+MPC cho phép bảo mật chủ động thông qua làm mới các phần chia sẻ:
+
+1. Các bên chạy một giao thức tạo ra các phần chia sẻ mới cho cùng một khóa
+2. Các phần chia sẻ cũ trở nên không hợp lệ
+3. Kẻ tấn công đã đánh cắp một phần chia sẻ trước khi khóa được xoay vòng không thu được gì
+
+Việc xoay vòng thường xuyên giúp giới hạn rủi ro. Ngay cả khi các phần chia sẻ bị xâm phạm, việc xoay vòng có thể làm chúng không còn giá trị trước khi bị khai thác.
+
+<ArticleSection name="Cân nhắc về bảo mật" id="security-considerations" level="h2" />
+
+MPC không loại bỏ tất cả rủi ro. Nó thay đổi mô hình mối đe dọa.
+
+### Những gì MPC bảo vệ
+
+- **Xâm phạm 1 điểm yêu duy nhất**: Kẻ tấn công phải xâm phạm nhiều hệ thống độc lập
+- **Mối đe dọa nội bộ**: Nhân viên nhà cung cấp không thể truy cập quỹ người dùng ngay cả khi có quyền truy cập cơ sở dữ liệu
+- **Trích xuất khóa**: Khóa hoàn chỉnh không bao giờ tồn tại để bị trích xuất
+- **Trộm bản sao lưu**: Việc đánh cắp một phần chia sẻ không tiết lộ gì
+
+### Những gì MPC không giải quyết
+
+- **Yêu cầu ký bị xâm phạm**: Nếu thiết bị của bạn bị xâm phạm, kẻ tấn công có thể yêu cầu ký các giao dịch độc hại
+- **Kỹ thuật xã hội**: Người dùng vẫn có thể bị lừa phê duyệt các giao dịch có hại
+- **Thông đồng giữa các nhà cung cấp**: Trong các sơ đồ 2-trong-2, nhà cung cấp độc hại thông đồng với kẻ tấn công tương đương với việc đánh cắp khóa
+- **Lỗi giao thức**: Các lỗi triển khai trong các giao thức MPC có thể làm giảm an ninh
+
+### Phổ tin cậy
+
+MPC thay đổi sự tin cậy, không loại bỏ nó:
+
+| Mô hình | Sự tin cậy của người dùng | Sự tin cậy của nhà cung cấp |
+|-------|-----------|----------------|
+| Tự quản lý | Toàn quyền kiểm soát, toàn bộ trách nhiệm | Không có |
+| MPC 2-trong-2 | Kiểm soát một phần chia sẻ | Kiểm soát một phần chia sẻ, không thể đánh cắp một mình |
+| MPC 2-trong-3 | Kiểm soát một phần chia sẻ | Kiểm soát các phần chia sẻ, cần hai để ký |
+| Quản lý đầy đủ | Không có | Toàn bộ |
+
+Đối với hầu hết người dùng, mô hình tin cậy của MPC thực tế hơn so với việc mong đợi quản lý cụm từ khôi phục một cách hoàn hảo.
+
+<ArticleSection name="Các triển khai nhà cung cấp" id="provider-implementations" level="h2" />
+
+Các nhà cung cấp ví nhúng khác nhau triển khai MPC với các kiến trúc khác nhau:
+
+**Privy** sử dụng chữ ký ngưỡng 2-trong-2 với các phần chia sẻ được phân chia giữa thiết bị của người dùng và cơ sở hạ tầng HSM của Privy. Việc tạo khóa diễn ra trong các vùng bảo mật với việc phân chia ngay lập tức.
+
+**Dynamic** triển khai EdDSA FROST cho các chữ ký Solana gốc. Mô hình 2-trong-2 của họ bao gồm khả năng xuất ví, cho phép người dùng trích xuất khóa đầy đủ nếu họ chọn tự quản lý.
+
+**Para** (trước đây là Capsule) phân phối các phần chia sẻ trên mạng MPC của họ với hỗ trợ nhiều phương thức xác thực. Kiến trúc của họ hỗ trợ EVM, Solana và Cosmos từ cùng một phân phối phần chia sẻ.
+
+**Turnkey** cung cấp cơ sở hạ tầng HSM và các giao thức ký nhưng để việc xác thực hoàn toàn cho các nhà phát triển. Bạn tự mang đến xác minh danh tính của mình; Turnkey cung cấp các hoạt động khóa an toàn.
+
+Mỗi nhà cung cấp thực hiện các đánh đổi khác nhau giữa các đảm bảo bảo mật, các tùy chọn khôi phục và sự linh hoạt cho nhà phát triển.
+
+<ArticleSection name="Tóm tắt khái niệm" id="conceptual-summary" level="h2" />
+
+MPC biến đổi bảo mật khóa từ vấn đề một điểm thất bại đơn lẻ thành vấn đề niềm tin phi tập trung:
+
+1. **Chia sẻ bí mật** chia khóa thành các phần để không có vị trí nào giữ toàn bộ bí mật
+2. **Chữ ký ngưỡng** tính toán chữ ký mà không cần tái tạo khóa
+3. **Phát sinh khóa phân tán** đảm bảo khóa không bao giờ tồn tại toàn bộ, ngay cả trong quá trình tạo
+4. **Giao thức khôi phục** cho phép khôi phục truy cập mà không làm giảm an ninh
+
+Các chữ ký được tạo ra là Ed25519 tiêu chuẩn. Blockchain không thấy gì bất thường. Tất cả các cải tiến bảo mật xảy ra ngoài chuỗi, không thể nhìn thấy đối với các trình xác thực và ứng dụng.
+
+Khi đánh giá các nhà cung cấp ví nhúng, các câu hỏi quan trọng là:
+- Họ sử dụng sơ đồ ngưỡng nào?
+- Việc tạo khóa được thực hiện như thế nào?
+- Các tùy chọn khôi phục tồn tại là gì?
+- Điều gì xảy ra nếu nhà cung cấp biến mất?
+
+Hiểu kiến trúc MPC giúp bạn đánh giá các đánh đổi này thay vì chỉ tin vào các tuyên bố có giá trị tiếp thị.

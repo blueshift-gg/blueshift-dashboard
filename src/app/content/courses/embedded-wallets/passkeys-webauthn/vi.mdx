@@ -1,0 +1,371 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Passkeys và WebAuthn
+
+![Passkeys and WebAuthn](/graphics/course-banners/embedded-wallets.png)
+
+Passkeys đại diện cho một sự thay đổi cơ bản trong xác thực. Khóa riêng không bao giờ rời khỏi phần cứng bảo mật trên thiết bị của bạn. FaceID, dấu vân tay hoặc mã PIN kiểm soát quyền truy cập. Lừa đảo trở nên không thể xảy ra về mặt toán học vì thông tin xác thực được ràng buộc với các miền cụ thể. Và quan trọng là đối với blockchain, passkeys sử dụng secp256r1, cùng một đường cong mà Solana hiện hỗ trợ một cách nguyên bản.
+
+Đây không phải là một giải pháp tạm thời hay một lớp thích ứng. Chữ ký passkey có thể ủy quyền các giao dịch Solana trực tiếp.
+
+<ArticleSection name="Vấn đề với mật khẩu và cụm từ khôi phục" id="password-problem" level="h2" />
+
+Xác thực truyền thống gặp phải một sự bất đồng cơ bản: các bí mật phải vừa dễ nhớ vừa an toàn.
+
+**Mật khẩu** thì dễ nhớ nhưng yếu:
+- Người dùng thường tái sử dụng chúng trên nhiều dịch vụ
+- Lừa đảo chiếm đoạt thông tin thông qua các thủ đoạn gian lận
+- Xâm phạm cơ sở dữ liệu tiết lộ hàng triệu mật khẩu cùng lúc
+- Yêu cầu về độ phức tạp dẫn đến các mẫu dễ đoán
+
+**Cụm từ khôi phục** thì an toàn nhưng khó quản lý:
+- 12-24 từ ngẫu nhiên vượt quá khả năng ghi nhớ của con người
+- Lưu trữ vật lý tạo ra rủi ro trộm cắp
+- Lưu trữ kỹ thuật số tạo ra rủi ro vi phạm
+- Một sai sót có nghĩa là mất mát vĩnh viễn, không thể đảo ngược
+
+Cả hai phương pháp đều yêu cầu con người phải là bảo quản bí mật hoàn hảo nhưng phải dễ nhớ. Con người không được tạo ra cho điều này.
+
+<ArticleSection name="Kiến trúc WebAuthn" id="webauthn-architecture" level="h2" />
+
+WebAuthn (Web Authentication) dùng một cách tiếp cận khác: chuyển các bí mật vào phần cứng bảo mật chuyên dụng và không bao giờ để chúng rời khỏi đó.
+
+### Thiết bị xác thực
+
+Mỗi điện thoại thông minh hiện đại đều chứa một vùng bảo mật (secure enclave) (iOS) hoặc Môi trường Thực thi Tin cậy (Trusted Execution Environment - TEE) (Android). Đây là phần cứng cô lập được thiết kế đặc biệt để giữ các khóa mật mã:
+
+- **Cô lập vật lý**: Bộ xử lý riêng, bộ nhớ riêng
+- **Không thể trích xuất**: Khóa không thể được đọc ra, chỉ được sử dụng để ký
+- **Kiểm soát sinh trắc học**: Các thao tác yêu cầu xác minh sự hiện diện của người dùng
+- **Chống giả mạo**: Các cuộc tấn công vật lý sẽ phá hủy dữ liệu được bảo vệ
+
+Khi bạn tạo một passkey, vùng bảo mật tạo ra một cặp khóa. Khóa riêng được sinh ra bên trong vùng bảo mật và ở lại đó vĩnh viễn. Chỉ có chữ ký được xuất ra.
+
+### Luồng của giao thức
+
+Xác thực bằng WebAuthn liên quan đến 3 bên:
+
+```
++-------------+        +------------------+        +----------------+
+|  Relying    | --1--> |  User's Device   | --2--> |  Authenticator |
+|  Party      |        |  (Browser/App)   |        |  (Secure HW)   |
+|  (Server)   | <--4-- |                  | <--3-- |                |
++-------------+        +------------------+        +----------------+
+
+1. Máy chủ gửi thử thách (chuỗi byte ngẫu nhiên)
+2. Thiết bị nhắc người dùng, chuyển thử thách đến thiết bị xác thực
+3. Thiết bị xác thực xác minh người dùng (sinh trắc học), ký thử thách
+4. Thiết bị trả về chữ ký và ID thông tin xác thực cho máy chủ
+```
+
+**Đăng ký** tạo một thông tin xác thực mới:
+1. Máy chủ tạo một thử thách ngẫu nhiên
+2. Thiết bị xác thực tạo một cặp khóa trong vùng bảo mật
+3. Khóa công khai và ID thông tin xác thực được gửi đến máy chủ
+4. Máy chủ lưu trữ chúng để xác thực trong tương lai
+
+**Xác thực** chứng minh quyền sở hữu:
+1. Máy chủ gửi một thử thách
+2. Thiết bị xác thực ký thử thách bằng khóa riêng đã lưu
+3. Máy chủ xác minh chữ ký với khóa công khai đã lưu
+
+Khóa riêng không bao giờ di chuyển. Chỉ có chữ ký được truyền đi.
+
+### Ràng buộc nguồn gốc
+
+Mỗi passkey được liên kết mật mã với một nguồn gốc cụ thể (tên miền). Một passkey được tạo cho `myapp.com` không thể được sử dụng trên `evil-myapp.com`, ngay cả khi người dùng bị lừa truy cập vào đó.
+
+Liên kết này xảy ra ở cấp phần cứng:
+- ID bên phụ thuộc (tên miền) được bao gồm trong dữ liệu được ký
+- Thiết bị xác thực thực thi kiểm tra này trước khi ký
+- Không có kỹ thuật xã hội nào có thể khiến passkey ký cho dữ liệu có nguồn gốc sai
+
+Các cuộc tấn công lừa đảo trở nên không thể về mặt cấu trúc. Ngay cả khi người dùng nhập sinh trắc học của họ trên một trang web giả mạo, passkey đơn giản sẽ không tạo ra chữ ký hợp lệ cho tên miền đó.
+
+<ArticleSection name="Đường cong Secp256r1" id="secp256r1-curve" level="h2" />
+
+WebAuthn được chuẩn hóa trên secp256r1 (còn được gọi là P-256 hoặc prime256v1) vì một số lý do:
+
+- **Hỗ trợ phần cứng**: Các vùng bảo mật đều triển khai nó
+- **Phê duyệt quy định**: NIST và các tiêu chuẩn bảo mật chính phủ yêu cầu nó
+- **Được kiểm chứng**: Hàng thập kỷ sử dụng trong TLS, ký mã, và HSM
+- **Hiệu năng**: Các triển khai tối ưu tồn tại trên mọi nền tảng
+
+### Tính chất toán học
+
+Secp256r1 là một đường cong elliptic trên trường số nguyên tố:
+
+`y² = x³ + ax + b (mod p)`
+
+Trong đó:
+- `p = 2^256 - 2^224 + 2^192 + 2^96 - 1` (một số nguyên tố pseudo-Mersenne cho phép giảm nhanh)
+- `a = -3` (cho phép tối ưu hóa các phép toán điểm)
+- `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
+
+Đường cong cung cấp khoảng 128 bit bảo mật. Việc tìm khóa riêng từ khóa công khai yêu cầu giải quyết vấn đề Logarit rời rạc trên Đường cong Elliptic (ECDLP), mà không có thuật toán hiệu quả nào được biết đến.
+
+### Định dạng chữ ký
+
+Chữ ký ECDSA trên secp256r1 tạo ra hai giá trị:
+- `r`: được tạo ra từ một điểm ngẫu nhiên trên đường cong
+- `s`: kết hợp băm thông điệp, khóa riêng, và giá trị ngẫu nhiên
+
+Chúng thường được mã hóa DER để truyền tải, mặc dù việc nối thô `(r, s)` cũng phổ biến.
+
+Phương trình xác minh chữ ký xác nhận rằng chỉ người biết khóa riêng mới có thể tạo ra `(r, s)` cho một thông điệp nhất định.
+
+<ArticleSection name="Hỗ trợ trên Solana" id="solana-native-support" level="h2" />
+
+Trước đây, Solana chỉ hỗ trợ chữ ký Ed25519 (đường cong được sử dụng bởi các ví Solana gốc). Chữ ký passkey không thể trực tiếp ủy quyền các giao dịch.
+
+SIMD-0075 đã thay đổi điều này bằng cách thêm một trình xác minh chữ ký secp256r1 được biên dịch sắn:
+
+```
+Program: Secp256r1SigVerify1111111111111111111111111
+```
+
+Trình xác minh được biên dịch sẵn này xác minh chữ ký secp256r1 một cách hiệu quả trên chuỗi, biến passkey thành công dân hạng nhất cho xác thực Solana.
+
+### Cách Xác Minh Hoạt Động
+
+Trình biên dịch sẵn chấp nhận dữ liệu lệnh chứa:
+- Giá trị chữ ký `(r, s)`
+- Khóa công khai (điểm trên secp256r1)
+- Thông điệp đã được ký
+
+Việc xác minh xác nhận rằng mối quan hệ toán học được giữ nguyên. Nếu vượt qua, chương trình trên chuỗi biết chủ sở hữu của khóa công khai đó đã ủy quyền cho thông điệp này.
+
+### Hiệu Quả Chi Phí
+
+Việc xác minh bằng trình biên dịch sẵn rẻ hơn rất nhiều so với việc xác minh tương đương trong một hợp đồng thông minh:
+
+| Phương pháp | Đơn vị tính toán | Chi phí |
+|-------------|------------------|---------|
+| Xác minh bằng trình biên dịch sẵn | ~750 CU | Tối thiểu |
+| Xác minh bằng hợp đồng thông minh | ~150,000+ CU | Đáng kể |
+
+Hiệu quả này làm cho ví được kiểm soát bằng passkey trở nên thực tế cho các ứng dụng thực tế.
+
+<ArticleSection name="Ví thông minh với Passkeys" id="smart-wallets" level="h2" />
+
+Việc hỗ trợ secp256r1 mở ra một một mô hình mạnh mẽ: Địa chỉ dẫn xuất chương trình (PDAs) được kiểm soát bởi chữ ký passkey.
+
+### Kiến trúc
+
+Thay vì một ví cặp khóa truyền thống, "ví" trở thành một PDA được dẫn xuất từ khóa công khai của passkey:
+
+```
++----------------+     +-------------------+     +-----------------+
+|  User Device   |     |  Solana Program   |     |  Smart Wallet   |
+|  (Passkey)     |     |  (Verifier)       |     |  (PDA)          |
++----------------+     +-------------------+     +-----------------+
+        |                      |                        |
+        |  1. Sign challenge   |                        |
+        +--------------------->|                        |
+        |                      |  2. Verify sig with    |
+        |                      |     secp256r1 precompile
+        |                      |                        |
+        |                      |  3. If valid, execute  |
+        |                      |     instruction on     |
+        |                      |     behalf of PDA      |
+        |                      +----------------------->|
+```
+
+### Các thuộc tính bảo mật
+
+Kiến trúc này cung cấp các đảm bảo độc đáo:
+
+**Không thể trích xuất khóa**: Khóa riêng của passkey không thể rời khỏi vùng an toàn. Không có cụm từ hạt giống để đánh cắp, không có tệp được mã hóa để bẻ khóa.
+
+**Ràng buộc phần cứng**: Passkey được liên kết với phần cứng vật lý. Việc sao chép yêu cầu truy cập vật lý và đánh bại các biện pháp bảo mật phần cứng.
+
+**Logic có thể lập trình**: Chương trình trên chuỗi có thể thực thi các chính sách:
+- Giới hạn chi tiêu cho mỗi giao dịch
+- Hạn chế theo thời gian
+- Yêu cầu nhiều passkey cho các chuyển khoản lớn
+- Danh sách các điểm đến được phép
+
+### Luồng Chữ Ký
+
+Khi người dùng muốn thực hiện một giao dịch:
+
+1. **Tạo ra thử thách**: Ứng dụng tạo ra một thử thách chứa chi tiết giao dịch
+2. **Xác minh người dùng**: Thiết bị yêu cầu xác thực sinh trắc học (FaceID, vân tay)
+3. **Ký passkey**: Vùng an toàn ký thử thách bằng khóa secp256r1
+4. **Gửi giao dịch**: Chữ ký được bao gồm trong giao dịch Solana
+5. **Xác minh trên chuỗi**: Chương trình sử dụng trình biên dịch sẵn secp256r1 để xác minh
+6. **Thực thi**: Nếu hợp lệ, chương trình thực thi các lệnh thay mặt cho PDA
+
+Toàn bộ quy trình cảm giác như "Ủy quyền với FaceID" đối với người dùng.
+
+<ArticleSection name="Cấu trúc Dữ liệu WebAuthn" id="webauthn-data" level="h2" />
+
+Hiểu được những gì passkey thực sự ký là rất quan trọng để xây dựng xác minh trên chuỗi.
+
+### Dữ liệu xác thực
+
+Mọi chữ ký passkey đều bao gồm dữ liệu xác thực:
+
+```
++------------+------------+-------------+-------------------+
+|   rpIdHash |   flags    |  signCount  |  extensions...    |
+|  (32 bytes)|  (1 byte)  |  (4 bytes)  |  (variable)       |
++------------+------------+-------------+-------------------+
+```
+
+- **rpIdHash**: SHA-256 của ID bên thứ ba (ràng buộc nguồn gốc)
+- **flags**: Cờ bit chỉ ra sự hiện diện của người dùng, xác minh người dùng, v.v.
+- **signCount**: Bộ đếm tăng lên mỗi lần sử dụng (bảo vệ chống phát lại)
+
+### Dữ liệu máy khách JSON
+
+Máy khách (trình duyệt/ứng dụng) cũng đóng góp dữ liệu:
+
+```json
+{
+  "type": "webauthn.get",
+  "challenge": "base64url-encoded-challenge",
+  "origin": "https://myapp.com",
+  "crossOrigin": false
+}
+```
+
+### Những gì được ký
+
+Passkey ký chuỗi kết hợp:
+
+```
+signedData = authenticatorData || SHA256(clientDataJSON)
+```
+
+Điều này có nghĩa là xác minh trên chuỗi phải:
+1. Tái tạo dữ liệu xác thực
+2. Băm dữ liệu máy khách JSON
+3. Nối và xác minh chữ ký
+
+Thử thách (dữ liệu giao dịch của bạn) được nhúng trong dữ liệu máy khách JSON, liên kết chữ ký passkey với giao dịch cụ thể của bạn.
+
+<ArticleSection name="Những cân nhắc khi triển khai" id="implementation" level="h2" />
+
+Sử dụng passkeys đòi hỏi phải hiểu một số ràng buộc hạn chế thực tiễn.
+
+### Nền tảng hỗ trợ
+
+| Nền tảng | Hỗ trợ Passkey | Phần cứng An toàn |
+|----------|----------------|-------------------|
+| iOS 16+ | Đầy đủ | Secure Enclave |
+| Android 9+ | Đầy đủ | TEE/StrongBox |
+| macOS 13+ | Đầy đủ | Secure Enclave |
+| Windows 11+ | Đầy đủ | TPM |
+| Linux | Hạn chế | Thay đổi |
+
+Thiết bị di động cung cấp trải nghiệm passkey nhất quán nhất.
+
+### Đồng bộ và tính di động
+
+Passkey hiện đại có thể đồng bộ giữa các thiết bị thông qua hệ sinh thái của nền tảng:
+
+- **Apple**: iCloud Keychain đồng bộ passkey trên các thiết bị Apple
+- **Google**: Google Password Manager đồng bộ trên Android/Chrome
+- **Cross-platform**: FIDO Alliance đang chuẩn hóa tính di động đa hệ sinh thái
+
+Điều này có nghĩa là mất một thiết bị không có nghĩa là mất quyền truy cập, nhưng nó cũng có nghĩa là bảo mật passkey kế thừa các thuộc tính bảo mật của tài khoản đám mây.
+
+### Chứng thực
+
+Passkeys có thể bao gồm chứng thực: bằng chứng mật mã về phần cứng đã tạo ra chúng. Điều này cho phép máy chủ xác minh:
+
+- Passkey được tạo ra trong phần cứng an toàn chính hãng
+- Thương hiệu/mẫu mã cụ thể của thiết bị xác thực
+- Mức độ chứng nhận bảo mật
+
+Đối với các ứng dụng có yêu cầu bảo mật cao, việc xác minh chứng thực có thể từ chối các passkey từ trình giả lập hoặc thiết bị bị xâm phạm.
+
+### Trải nghiệm người dùng
+
+Trải nghiệm người dùng với passkey mượt mà hơn nhiều so với các quy trình ví truyền thống:
+
+**Ví truyền thống:**
+1. Tải ứng dụng ví
+2. Tạo tài khoản
+3. Ghi lại 24 từ
+4. Xác nhận cụm từ khôi phục
+5. Quay lại ứng dụng gốc
+6. Kết nối ví
+7. Phê duyệt kết nối
+
+**Ví passkey:**
+1. Nhấn "Tạo tài khoản"
+2. Xác minh bằng FaceID
+3. Hoàn thành
+
+Sự phức tạp được ẩn trong phần cứng, không đẩy lên cho người dùng.
+
+<ArticleSection name="Các triển khai nhà cung cấp" id="providers" level="h2" />
+
+Các nhà cung cấp ví nhúng sử dụng passkey theo những cách khác nhau:
+
+**LazorKit** hoàn toàn là passkey-native. Mỗi ví thông minh là một PDA được kiểm soát bởi một passkey secp256r1. Không có MPC, không chia khóa. Passkey chính LÀ sự xác thực.
+
+**Turnkey** sử dụng passkey làm cơ chế xác thực để truy cập các khóa được lưu trữ trong HSM của họ. Passkey chứng minh bạn được ủy quyền; vùng an toàn của Turnkey thực hiện việc ký Solana thực tế.
+
+**Privy** và **Dynamic**  hỗ trợ passkey như một tùy chọn xác thực bên cạnh email, điện thoại và đăng nhập mạng xã hội. Passkey xác thực với hệ thống MPC của họ, hệ thống này sau đó tạo ra các chữ ký Solana.
+
+**Para** sử dụng passkey để xác thực, với ví cơ sở được bảo vệ bởi phân phối khóa MPC.
+
+Sự khác biệt quan trọng:
+- **Passkey-native** (LazorKit): Chữ ký passkey LÀ sự ủy quyền blockchain
+- **Passkey-authenticated** (những nhà cung cấp khác): passkey chứng minh rằng hệ thống được ủy quyền
+
+Cả hai đều là kiến trúc hợp lệ với các đánh đổi về bảo mật và trải nghiệm người dùng khác nhau.
+
+<ArticleSection name="Các cân nhắc về bảo mật" id="security" level="h2" />
+
+Passkeys cải thiện đáng kể bảo mật so với mật khẩu và cụm từ khôi phục, nhưng không phải không có những điểu cần cân nhắc.
+
+### Các passkey bảo vệ chống lại gì
+
+- **Phishing**: Liên kết với nguồn gốc khiến cho các trang giả mạo về mặt toán học không thể đánh cắp thông tin đăng nhập
+- **Xâm phạm cơ sở dữ liệu**: Máy chủ chỉ lưu trữ khóa công khai; không có gì hữu ích để đánh cắp
+- **Keyloggers**: Không có bí mật nào được nhập
+- **Tấn công phát lại**: Số lần ký ngăn chặn việc sử dụng lại các chữ ký cũ
+- **Trộm cắp từ xa**: Khóa riêng không thể bị trích xuất, ngay cả khi truy cập thiết bị với toàn quyền
+
+### Những gì Passkey không giải quyết
+
+- **Xâm nhập thiết bị vật lý**: Ai đó có thiết bị của bạn VÀ sinh trắc học có thể xác thực
+- **Xâm phạm tài khoản đám mây**: Passkey được đồng bộ kế thừa bảo mật tài khoản đám mây
+- **Ứng dụng độc hại**: Ứng dụng bị xâm phạm có thể yêu cầu chữ ký trên dữ liệu độc hại
+- **Lừa đảo người dùng**: Người dùng vẫn có thể bị lừa ký các giao dịch có hại
+
+### Kế hoạch khôi phục
+
+Các thông tin đăng nhập ràng buộc với phần cứng tạo ra những thách thức trong việc khôi phục:
+
+- Sẽ thế nào nếu người dùng mất tất cả các thiết bị có passkey của họ?
+- Sẽ thế nào nếu vùng an toàn bị lỗi?
+- Sẽ thế nào nếu đồng bộ đám mây bị tắt hoặc không khả dụng?
+
+Các chương trình ví thông minh có thể triển khai các cơ chế sao lưu:
+- Nhiều passkey được đăng ký (thiết bị thứ hai)
+- Khôi phục khóa thời gian đến một địa chỉ sao lưu
+- Khôi phục qua xã hội với những người giám hộ passkey
+
+Sự linh hoạt của chương trình trên chuỗi cho phép các tùy chọn khôi phục mà các cụm từ hạt giống thuần túy không thể sánh được.
+
+<ArticleSection name="Tổng kết khái niệm" id="summary" level="h2" />
+
+Passkeys chuyển đổi bảo mật xác thực từ kỷ luật con người sang phần cứng chuyên dụng:
+
+1. **Khu vực an toàn**  giữ các khóa riêng trong phần cứng cô lập, chống giả mạo
+2. **Sinh trắc học** kiểm soát truy cập mà không có bí mật nào được truyền đi
+3. **Ràng buộc nguồn gốc** làm cho việc lừa đảo về mặt toán học là không thể
+4. **Chữ ký secp256r1** hiện đã hỗ trợ trên Solana thông qua trình biên dịch sẵn
+
+Đối với ví nhúng, điều này cho phép:
+- **Các ví nhúng Passkey-native**: PDAs trực tiếp được kiểm soát bởi chữ ký passkey
+- **Các ví nhúng Passkey-authenticated**: Passkeys cũng cấp xác thực danh tính với hệ thống MPC hoặc hệ thống lưu ký
+
+Người dùng có trải nghiệm "Ủy quyền với FaceID" thay vì quản lý các cụm từ hạt giống. Mô hình bảo mật chuyển từ "đừng mắc lỗi" sang "bảo vệ được thực thi bởi phần cứng."
+
+Khi đánh giá các nhà cung cấp ví nhúng, hãy tìm hiểu liệu passkeys là cơ chế xác thực hay cơ chế ủy quyền. Cả hai đều hợp lệ, nhưng có các thuộc tính bảo mật khác nhau.
