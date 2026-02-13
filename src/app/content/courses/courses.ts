@@ -23,6 +23,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
     isFeatured: true,
     lessons: [
       { slug: "ethereum-programmable-money" },
+      { slug: "how-ethereum-works" },
       { slug: "scalability-challenge" },
       { slug: "solutions-landscape" },
     ],
