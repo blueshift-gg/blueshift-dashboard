@@ -1,0 +1,221 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mobile Wallet Adapter
+
+![Mobile Wallet Adapter](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+If you've built Solana dApps with wallet-adapter, you know the drill: user clicks Connect, browser extension pops up, user approves. Simple. But try this on a phone, and you'll discover that everything you know about wallet connections is wrong.
+
+There are no browser extensions on mobile. Users don't browse inside wallet dApp browsers. The familiar popup model doesn't translate to native apps. Mobile Wallet Adapter exists because the web model fundamentally cannot work on phones.
+
+> MWA isn't a mobile port of wallet-adapter. It's an entirely different architecture where your app communicates directly with wallet apps through secure, ephemeral sessions.
+
+<ArticleSection name="Why Mobile is Different" id="why-mobile-is-different" level="h2" />
+
+On the web, wallet extensions inject themselves into the browser's JavaScript context. Your dApp discovers them, requests a connection, and the extension handles signing. The wallet lives inside the same browser process as your dApp.
+
+Mobile operating systems don't work this way. iOS and Android isolate apps from each other for security. Your dApp cannot access another app's memory, call its functions, or share a JavaScript context. Each app is a fortress.
+
+This isolation creates a fundamental problem: how does your dApp ask a wallet app to sign something when they can't directly communicate?
+
+The answer is Mobile Wallet Adapter, a protocol that establishes encrypted communication channels between apps using the operating system's built-in inter-app messaging, combined with local WebSocket connections.
+
+### Key advantages
+
+- **Native UX**: Users stay in their familiar wallet apps instead of embedded browser experiences
+- **Enhanced Security**: Private keys never leave the wallet app, not even temporarily
+- **Universal Compatibility**: One implementation works with any MWA-compliant wallet (Phantom, Solflare, and others)
+
+<ArticleSection name="The Session Model" id="the-session-model" level="h2" />
+
+Web wallet-adapter maintains a persistent connection. You connect once, then sign transactions whenever needed throughout the session. The wallet remembers you're connected.
+
+MWA works differently. Each interaction is an atomic **session** that opens, performs operations, and closes. Think of it like making a phone call versus having an always-on chat connection.
+
+**Web wallet-adapter flow:**
+```
+Connect → [persistent connection] → Sign → Sign → Sign → Disconnect
+```
+
+**Mobile Wallet Adapter flow:**
+```
+Open Session → Authorize → Sign (one or more) → Close Session
+Open Session → Authorize → Sign (one or more) → Close Session
+...repeat for each interaction
+```
+
+Every time your app needs the wallet, it opens a new session. Within that session, you can authorize (or re-authorize with a cached token) and request multiple signatures. When the session closes, the wallet may return to the background.
+
+This might seem inefficient, but it's actually elegant:
+
+1. **No stale connections**: You never have to handle "wallet disconnected unexpectedly"
+2. **Clear user intent**: Each session is an explicit user action
+3. **Battery efficient**: No persistent WebSocket draining power
+
+<ArticleSection name="The transact Function" id="the-transact-function" level="h2" />
+
+The entire MWA SDK centers around one function: `transact()`. Everything happens inside its callback.
+
+```typescript
+import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+
+await transact(async (wallet: Web3MobileWallet) => {
+  // Session is now OPEN
+  // Wallet app is in foreground
+  // User can see your dApp's requests
+  
+  const { accounts } = await wallet.authorize({
+    identity: APP_IDENTITY,
+    chain: 'solana:devnet',
+  });
+  
+  // You now have the user's public key
+  // Request signatures, send transactions, etc.
+  
+}); // Session CLOSES when callback completes
+```
+
+When you call `transact()`:
+1. Your app generates an ephemeral keypair and creates an association URI
+2. The OS launches the wallet app via that URI
+3. Wallet starts a local WebSocket server
+4. Your app connects and performs an encrypted handshake
+5. Your callback executes with full wallet access
+6. When your callback returns (or throws), the session terminates
+
+The wallet app comes to the foreground during this process. The user sees your app's identity and can approve or reject requests. When finished, they return to your app.
+
+<ArticleSection name="Authorization vs Connection" id="authorization-vs-connection" level="h2" />
+
+On the web, "connecting" a wallet means the wallet agrees to share its public key with your dApp. Signing is a separate operation.
+
+MWA combines these concepts differently. The `authorize` method both establishes trust AND retrieves accounts:
+
+```typescript
+const authResult = await wallet.authorize({
+  identity: {
+    name: 'My Solana dApp',
+    uri: 'https://mydapp.com',
+    icon: 'favicon.ico',
+  },
+  chain: 'solana:devnet',
+});
+
+// authResult contains:
+// - accounts: the user's wallet addresses
+// - auth_token: save this for silent re-authorization
+// - wallet_uri_base: for future direct connections
+```
+
+The `identity` object is crucial. Wallets display this information to users so they know which app is requesting access. On Android, wallets can cryptographically verify that the request actually came from the app claiming this identity, not a malicious impersonator.
+
+### Silent re-authorization
+
+Nobody wants to approve wallet connections repeatedly. MWA solves this with auth tokens:
+
+```typescript
+// First time: user sees approval dialog
+const result = await wallet.authorize({
+  identity: APP_IDENTITY,
+  chain: 'solana:devnet',
+});
+
+// Save the token
+await AsyncStorage.setItem('auth_token', result.auth_token);
+
+// Later sessions: include the token
+const cachedToken = await AsyncStorage.getItem('auth_token');
+
+await transact(async (wallet) => {
+  const result = await wallet.authorize({
+    identity: APP_IDENTITY,
+    chain: 'solana:devnet',
+    auth_token: cachedToken, // Skip approval if valid
+  });
+  // If token is valid, no user prompt required
+});
+```
+
+Auth tokens are opaque strings; their format is wallet-specific. Your app just stores and passes them. If a token expires or becomes invalid, the wallet will prompt for fresh authorization.
+
+<ArticleSection name="Signing Transactions" id="signing-transactions" level="h2" />
+
+Once authorized within a session, you can request signatures. MWA provides two approaches:
+
+### signAndSendTransactions (Recommended)
+
+The wallet signs AND broadcasts the transaction. This is the preferred method because:
+- Wallet handles RPC endpoint selection
+- Better retry logic
+- Fewer network round-trips from your app
+
+```typescript
+await transact(async (wallet) => {
+  const { accounts } = await wallet.authorize({
+    identity: APP_IDENTITY,
+    chain: 'solana:devnet',
+  });
+  
+  const fromPubkey = new PublicKey(toByteArray(accounts[0].address));
+  
+  // Build your transaction
+  const tx = new VersionedTransaction(/* ... */);
+  
+  // Wallet signs and submits to network
+  const signatures = await wallet.signAndSendTransactions({
+    transactions: [tx],
+  });
+  
+  console.log('Transaction signature:', signatures[0]);
+});
+```
+
+### signTransactions
+
+If you need the signed transaction back (for simulation, custom submission, or multi-party signing), use this method instead:
+
+```typescript
+const signedTxs = await wallet.signTransactions({
+  transactions: [tx1, tx2],
+});
+
+// signedTxs are signed but NOT submitted
+// Your app must send them to the network
+await connection.sendTransaction(signedTxs[0]);
+```
+
+<ArticleSection name="What To Expect" id="what-to-expect" level="h2" />
+
+This course teaches you to build production-ready React Native dApps with Mobile Wallet Adapter. By the end, you'll have:
+
+1. A complete understanding of the MWA protocol and session lifecycle
+2. A working React Native project with proper polyfills and dependencies
+3. An AuthorizationProvider for managing wallet state across your app
+4. Error handling patterns for every failure mode
+5. A capstone app that sends tokens between wallets
+
+### Prerequisites
+
+- Basic React and TypeScript knowledge
+- Familiarity with Solana concepts (transactions, accounts, public keys)
+- Experience with `@solana/web3.js` is helpful but not required
+- An Android device with a Solana wallet installed (Phantom or Solflare recommended)
+
+**Note:** While emulators work for basic UI development, testing MWA requires a real device with an actual wallet app installed.
+
+<ArticleSection name="Course Structure" id="course-structure" level="h2" />
+
+| Lesson | Topic |
+|--------|-------|
+| 1 | Introduction (you are here) |
+| 2 | Protocol Deep Dive: How MWA actually works |
+| 3 | Environment Setup: React Native with Solana |
+| 4 | Connecting to Wallets: The transact pattern |
+| 5 | Signing Transactions: Building and sending |
+| 6 | Signing Messages: SIWS and off-chain proofs |
+| 7 | AuthorizationProvider: State management |
+| 8 | Error Handling: Building resilient dApps |
+| 9 | Real Device Testing: Debug workflow |
+| 10 | Capstone: Token sender app |
+
+Let's begin by understanding exactly what happens when your app opens that wallet connection.

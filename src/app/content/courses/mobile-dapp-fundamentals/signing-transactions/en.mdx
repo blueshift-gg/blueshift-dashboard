@@ -1,0 +1,498 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Signing Transactions
+
+![Signing Transactions](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+The moment of truth in any dApp: getting a user to sign a transaction. On mobile, this happens in the wallet app, but your code stays in control. You build the transaction, the wallet signs it, and either the wallet or your app broadcasts it to the network.
+
+MWA provides two paths: sign-and-send (wallet handles everything) or sign-only (you handle submission). Most apps should use sign-and-send, but understanding both gives you flexibility for advanced use cases.
+
+> `signAndSendTransactions` is the preferred method. The wallet handles RPC submission, retry logic, and confirmation, reducing failure modes in your app.
+
+In this lesson, you'll create utility functions for building transactions and a `useSendSol` hook that handles the complete send flow.
+
+<ArticleSection name="Building Transactions" id="building-transactions" level="h2" />
+
+Before you can sign anything, you need a transaction. The flow looks like this:
+
+1. Get a recent blockhash from the network
+2. Construct transaction instructions
+3. Set the fee payer (the authorized wallet address)
+4. Pass to the wallet for signing
+
+### Versioned Transactions (Recommended)
+
+Versioned transactions are the modern standard. They support address lookup tables and are required for many DeFi protocols.
+
+```typescript
+import { 
+  Connection, 
+  PublicKey, 
+  Keypair,
+  SystemProgram,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+async function buildTransferTransaction(
+  fromPubkey: PublicKey,
+  toPubkey: PublicKey,
+  lamports: number
+): Promise<VersionedTransaction> {
+  // Get recent blockhash
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  
+  // Build instructions
+  const instructions = [
+    SystemProgram.transfer({
+      fromPubkey,
+      toPubkey,
+      lamports,
+    }),
+  ];
+  
+  // Create versioned transaction message
+  const messageV0 = new TransactionMessage({
+    payerKey: fromPubkey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+  
+  // Create unsigned versioned transaction
+  return new VersionedTransaction(messageV0);
+}
+```
+
+### Legacy Transactions
+
+Some older programs or wallets may require legacy format:
+
+```typescript
+import { Transaction, SystemProgram } from '@solana/web3.js';
+
+async function buildLegacyTransfer(
+  fromPubkey: PublicKey,
+  toPubkey: PublicKey,
+  lamports: number
+): Promise<Transaction> {
+  const { blockhash } = await connection.getLatestBlockhash();
+  
+  const transaction = new Transaction({
+    recentBlockhash: blockhash,
+    feePayer: fromPubkey,
+  });
+  
+  transaction.add(
+    SystemProgram.transfer({
+      fromPubkey,
+      toPubkey,
+      lamports,
+    })
+  );
+  
+  return transaction;
+}
+```
+
+The SDK accepts both `Transaction` and `VersionedTransaction`.
+
+<ArticleSection name="Sign and Send" id="sign-and-send" level="h2" />
+
+The `signAndSendTransactions` method asks the wallet to sign your transactions AND submit them to the Solana network. The wallet handles:
+
+- Signing with the user's key
+- Choosing an RPC endpoint
+- Submitting to the network
+- Basic retry logic
+
+```typescript
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { toByteArray } from 'react-native-quick-base64';
+
+async function sendSol(
+  recipientAddress: string,
+  amountInSol: number
+): Promise<string> {
+  return await transact(async (wallet) => {
+    // Authorize and get the user's public key
+    const authResult = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
+    const toPubkey = new PublicKey(recipientAddress);
+    const lamports = amountInSol * 1_000_000_000; // SOL to lamports
+    
+    // Build the transaction
+    const transaction = await buildTransferTransaction(fromPubkey, toPubkey, lamports);
+    
+    // Sign and send
+    const signatures = await wallet.signAndSendTransactions({
+      transactions: [transaction],
+    });
+    
+    // signatures[0] is a base58 transaction signature
+    return signatures[0];
+  });
+}
+```
+
+The returned signature is a base58 string (the transaction ID). You can use it to:
+- Show the user a link to an explorer
+- Track confirmation status
+- Store for records
+
+### Confirming Transactions
+
+Even after `signAndSendTransactions` returns, the transaction may not be finalized. You should confirm it:
+
+```typescript
+async function sendAndConfirm(
+  recipientAddress: string,
+  amountInSol: number
+): Promise<string> {
+  const signature = await sendSol(recipientAddress, amountInSol);
+  
+  // Wait for confirmation
+  const confirmation = await connection.confirmTransaction(
+    signature,
+    'confirmed'
+  );
+  
+  if (confirmation.value.err) {
+    throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+  }
+  
+  console.log('Transaction confirmed:', signature);
+  return signature;
+}
+```
+
+### Sign and Send Options
+
+Control transaction behavior with options:
+
+```typescript
+const signatures = await wallet.signAndSendTransactions({
+  transactions: [transaction],
+  options: {
+    minContextSlot: slotNumber,          // Wait for this slot before preflight
+    commitment: 'confirmed',              // Confirmation level to wait for
+    skipPreflight: false,                 // Skip simulation (dangerous)
+    maxRetries: 3,                        // RPC retry attempts
+    waitForCommitmentToSendNextTransaction: true, // Sequential send
+  },
+});
+```
+
+The `waitForCommitmentToSendNextTransaction` option is important for batches; it ensures each transaction confirms before sending the next, preventing nonce/blockhash issues.
+
+<ArticleSection name="Sign Only" id="sign-only" level="h2" />
+
+Sometimes you need the signed transaction back without sending:
+
+- **Simulation**: Test if a transaction would succeed
+- **Custom submission**: Use your own RPC with specific parameters
+- **Multi-party signing**: Collect signatures from multiple wallets
+- **Offline signing**: Sign now, send later
+
+```typescript
+async function signWithoutSending(): Promise<VersionedTransaction> {
+  return await transact(async (wallet) => {
+    const authResult = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
+    const transaction = await buildTransferTransaction(fromPubkey, someRecipient, 1000);
+    
+    // Sign but don't send
+    const signedTransactions = await wallet.signTransactions({
+      transactions: [transaction],
+    });
+    
+    // signedTransactions[0] is now signed
+    return signedTransactions[0];
+  });
+}
+
+// Later, send manually
+const signedTx = await signWithoutSending();
+const signature = await connection.sendTransaction(signedTx);
+```
+
+**Warning**: `signTransactions` is deprecated in MWA 2.0 but still widely supported. New apps should prefer `signAndSendTransactions` unless you specifically need the unsigned flow.
+
+<ArticleSection name="Batching Transactions" id="batching-transactions" level="h2" />
+
+Both signing methods accept arrays of transactions:
+
+```typescript
+const signatures = await wallet.signAndSendTransactions({
+  transactions: [tx1, tx2, tx3],
+});
+
+// signatures[0] corresponds to tx1
+// signatures[1] corresponds to tx2
+// signatures[2] corresponds to tx3
+```
+
+The wallet shows users all transactions in a single approval prompt. This is better UX than three separate prompts.
+
+### Sequential vs Parallel Sending
+
+With `waitForCommitmentToSendNextTransaction: true`, transactions send one-by-one, each waiting for the previous to confirm:
+
+```
+tx1 sent → wait for confirm → tx2 sent → wait for confirm → tx3 sent
+```
+
+Without it (or set to false), all transactions may be sent in parallel:
+
+```
+tx1, tx2, tx3 sent simultaneously
+```
+
+Sequential is safer when transactions depend on each other's state changes. Parallel is faster when transactions are independent.
+
+### Respecting Wallet Limits
+
+Query capabilities to avoid sending too many at once:
+
+```typescript
+await transact(async (wallet) => {
+  const caps = await wallet.getCapabilities();
+  const maxBatch = caps.max_transactions_per_request ?? 10;
+  
+  // Split into batches if needed
+  const batches = chunk(allTransactions, maxBatch);
+  
+  for (const batch of batches) {
+    await wallet.signAndSendTransactions({ transactions: batch });
+  }
+});
+```
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+Transaction signing can fail in multiple ways:
+
+### User Rejection
+
+```typescript
+try {
+  await wallet.signAndSendTransactions({ transactions: [tx] });
+} catch (error: any) {
+  if (error.code === 4001) {
+    // User clicked "Reject" in wallet UI
+    console.log('User declined to sign');
+    return;
+  }
+  throw error;
+}
+```
+
+### Simulation Failure
+
+The wallet simulates transactions before signing. If simulation fails, you get an error:
+
+```typescript
+try {
+  await wallet.signAndSendTransactions({ transactions: [tx] });
+} catch (error: any) {
+  if (error.code === -32603) {
+    // Transaction simulation failed
+    console.error('Transaction would fail:', error.message);
+    // Common causes: insufficient balance, invalid instruction, wrong accounts
+    return;
+  }
+  throw error;
+}
+```
+
+### Network Errors
+
+After signing, the transaction might fail to send or confirm:
+
+```typescript
+try {
+  const [signature] = await wallet.signAndSendTransactions({ transactions: [tx] });
+  
+  // Signed and sent successfully
+  const result = await connection.confirmTransaction(signature, 'confirmed');
+  
+  if (result.value.err) {
+    console.error('Transaction failed on-chain:', result.value.err);
+  }
+} catch (error: any) {
+  // Could be wallet error, network error, or timeout
+  console.error('Transaction error:', error);
+}
+```
+
+### Complete Error Handler
+
+```typescript
+async function safeSignAndSend(tx: VersionedTransaction): Promise<string | null> {
+  try {
+    return await transact(async (wallet) => {
+      await wallet.authorize({ identity: APP_IDENTITY, chain: 'solana:devnet' });
+      
+      const [signature] = await wallet.signAndSendTransactions({
+        transactions: [tx],
+      });
+      
+      return signature;
+    });
+  } catch (error: any) {
+    switch (error.code) {
+      case 4001:
+        Alert.alert('Cancelled', 'You declined to sign the transaction.');
+        break;
+      case -32603:
+        Alert.alert('Transaction Failed', 'This transaction would fail. Please check your balance and try again.');
+        break;
+      case -32602:
+        Alert.alert('Invalid Transaction', 'The transaction was malformed.');
+        break;
+      default:
+        Alert.alert('Error', error.message ?? 'An unexpected error occurred.');
+    }
+    return null;
+  }
+}
+```
+
+<ArticleSection name="Fresh Blockhashes" id="fresh-blockhashes" level="h2" />
+
+Blockhashes expire after about 2 minutes. If you build a transaction and the user takes too long to sign, it will fail.
+
+Best practice: fetch the blockhash inside `transact()`, right before signing:
+
+```typescript
+await transact(async (wallet) => {
+  const authResult = await wallet.authorize({...});
+  const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
+  
+  // Fetch blockhash AFTER authorization, right before building tx
+  const { blockhash } = await connection.getLatestBlockhash();
+  
+  const tx = new VersionedTransaction(
+    new TransactionMessage({
+      payerKey: fromPubkey,
+      recentBlockhash: blockhash, // Fresh blockhash
+      instructions: [/* ... */],
+    }).compileToV0Message()
+  );
+  
+  await wallet.signAndSendTransactions({ transactions: [tx] });
+});
+```
+
+This minimizes the window between fetching the blockhash and signing.
+
+<ArticleSection name="Complete Example: SOL Transfer" id="complete-example" level="h2" />
+
+Here's a complete function combining everything:
+
+```typescript
+import { 
+  Connection, 
+  PublicKey, 
+  SystemProgram, 
+  TransactionMessage, 
+  VersionedTransaction,
+  LAMPORTS_PER_SOL,
+} from '@solana/web3.js';
+import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { toByteArray } from 'react-native-quick-base64';
+import { Alert } from 'react-native';
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+const APP_IDENTITY = {
+  name: 'My Solana dApp',
+  uri: 'https://mydapp.com',
+  icon: 'favicon.ico',
+};
+
+export async function transferSol(
+  recipientAddress: string,
+  amountInSol: number
+): Promise<string | null> {
+  try {
+    return await transact(async (wallet: Web3MobileWallet) => {
+      // Step 1: Authorize
+      const authResult = await wallet.authorize({
+        identity: APP_IDENTITY,
+        chain: 'solana:devnet',
+      });
+      
+      const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
+      const toPubkey = new PublicKey(recipientAddress);
+      
+      // Step 2: Get fresh blockhash
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      
+      // Step 3: Build transaction
+      const instructions = [
+        SystemProgram.transfer({
+          fromPubkey,
+          toPubkey,
+          lamports: amountInSol * LAMPORTS_PER_SOL,
+        }),
+      ];
+      
+      const messageV0 = new TransactionMessage({
+        payerKey: fromPubkey,
+        recentBlockhash: blockhash,
+        instructions,
+      }).compileToV0Message();
+      
+      const transaction = new VersionedTransaction(messageV0);
+      
+      // Step 4: Sign and send
+      const [signature] = await wallet.signAndSendTransactions({
+        transactions: [transaction],
+      });
+      
+      // Step 5: Confirm
+      const confirmation = await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+      
+      if (confirmation.value.err) {
+        throw new Error('Transaction failed on-chain');
+      }
+      
+      return signature;
+    });
+  } catch (error: any) {
+    if (error.code === 4001) {
+      Alert.alert('Cancelled', 'Transaction was cancelled.');
+    } else if (error.code === -32603) {
+      Alert.alert('Failed', 'Transaction simulation failed. Check your balance.');
+    } else {
+      Alert.alert('Error', error.message);
+    }
+    return null;
+  }
+}
+```
+
+Usage:
+
+```typescript
+const signature = await transferSol('RecipientAddressHere', 0.1);
+if (signature) {
+  console.log('Success! View on explorer:', `https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+}
+```
+
+In the next lesson, we'll explore message signing: authentication, off-chain attestations, and Sign In With Solana.

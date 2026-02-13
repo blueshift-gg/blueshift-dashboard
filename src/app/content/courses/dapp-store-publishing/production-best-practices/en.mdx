@@ -1,0 +1,592 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Production Best Practices
+
+Your app is published, secured, and users are onboarding. Now comes the long game: keeping it running smoothly, handling updates without breaking things, and scaling your operations.
+
+This final lesson covers the operational practices that separate weekend projects from production-quality applications.
+
+<ArticleSection name="Monitoring What Matters" id="monitoring-what-matters" level="h2" />
+
+You can't fix what you can't see. Set up monitoring from day one.
+
+### Crash reporting
+
+Crashes destroy user trust, especially in financial apps. Use a crash reporting service:
+
+```typescript
+// Using Sentry (works with React Native)
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'https://your-dsn@sentry.io/project',
+  tracesSampleRate: 0.2, // 20% of transactions for performance
+  environment: __DEV__ ? 'development' : 'production',
+});
+
+// Wrap your root component
+const App = () => {
+  return (
+    <Sentry.ErrorBoundary fallback={<ErrorScreen />}>
+      <YourApp />
+    </Sentry.ErrorBoundary>
+  );
+};
+
+// Add context for debugging
+Sentry.setUser({ id: userId });
+Sentry.setTag('wallet_connected', hasWallet.toString());
+```
+
+### Transaction monitoring
+
+For crypto apps, you need visibility into blockchain interactions:
+
+```typescript
+// Log transaction attempts with context
+const executeTransaction = async (tx: Transaction, type: string) => {
+  const startTime = Date.now();
+  
+  try {
+    const signature = await connection.sendTransaction(tx, [wallet]);
+    await connection.confirmTransaction(signature);
+    
+    // Log success
+    analytics.track('transaction_success', {
+      type,
+      duration: Date.now() - startTime,
+      signature,
+    });
+    
+    return signature;
+  } catch (error) {
+    // Log failure with details
+    analytics.track('transaction_failure', {
+      type,
+      duration: Date.now() - startTime,
+      error: error.message,
+      errorCode: error.code,
+    });
+    
+    Sentry.captureException(error, {
+      tags: { transaction_type: type },
+      extra: { tx: tx.serialize().toString('base64') }
+    });
+    
+    throw error;
+  }
+};
+```
+
+### Key metrics to track
+
+| Metric | Why It Matters |
+|--------|----------------|
+| Crash-free rate | Target 99.5%+ |
+| Transaction success rate | Identify RPC or network issues |
+| Transaction latency | User experience indicator |
+| Wallet connection success | Authentication health |
+| API error rate | Backend health |
+| Session duration | Engagement indicator |
+
+### Alerting thresholds
+
+Set up alerts for anomalies:
+
+- Crash rate > 1% in last hour → Page on-call
+- Transaction failure rate > 10% → Investigate immediately
+- API errors > 5% → Check backend/third-party services
+- Zero transactions for 30 minutes (if you expect steady usage) → Possible outage
+
+<ArticleSection name="RPC Management" id="rpc-management" level="h2" />
+
+Solana RPC endpoints are your lifeline to the blockchain. Manage them carefully.
+
+### Use multiple RPC providers
+
+Don't depend on a single provider:
+
+```typescript
+const RPC_ENDPOINTS = [
+  'https://your-primary.rpc.com',
+  'https://your-backup.rpc.com',
+  'https://api.mainnet-beta.solana.com', // Public fallback
+];
+
+let currentEndpointIndex = 0;
+
+const getConnection = () => {
+  return new Connection(RPC_ENDPOINTS[currentEndpointIndex], 'confirmed');
+};
+
+const rotateEndpoint = () => {
+  currentEndpointIndex = (currentEndpointIndex + 1) % RPC_ENDPOINTS.length;
+  console.log(`Switched to RPC: ${RPC_ENDPOINTS[currentEndpointIndex]}`);
+};
+
+const executeWithRetry = async <T>(
+  operation: (connection: Connection) => Promise<T>,
+  maxRetries = 3
+): Promise<T> => {
+  let lastError;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await operation(getConnection());
+    } catch (error) {
+      lastError = error;
+      
+      // Rotate on connection errors
+      if (error.message.includes('429') || error.message.includes('timeout')) {
+        rotateEndpoint();
+      }
+    }
+  }
+  
+  throw lastError;
+};
+```
+
+### Rate limiting awareness
+
+RPC providers have rate limits. Handle them gracefully:
+
+```typescript
+// Implement exponential backoff
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const fetchWithBackoff = async (fetchFn: () => Promise<any>, maxRetries = 5) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fetchFn();
+    } catch (error) {
+      if (error.message.includes('429') && attempt < maxRetries - 1) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+        console.log(`Rate limited, waiting ${delay}ms`);
+        await sleep(delay);
+      } else {
+        throw error;
+      }
+    }
+  }
+};
+```
+
+### WebSocket health
+
+For real-time updates, WebSocket connections can silently fail:
+
+```typescript
+const setupAccountSubscription = (publicKey: PublicKey) => {
+  let ws: number;
+  let heartbeatInterval: NodeJS.Timeout;
+  
+  const connect = () => {
+    ws = connection.onAccountChange(
+      publicKey,
+      (accountInfo) => {
+        handleAccountUpdate(accountInfo);
+      }
+    );
+    
+    // Heartbeat to detect silent disconnections
+    heartbeatInterval = setInterval(async () => {
+      try {
+        await connection.getSlot();
+      } catch {
+        console.log('WebSocket health check failed, reconnecting...');
+        cleanup();
+        connect();
+      }
+    }, 30000);
+  };
+  
+  const cleanup = () => {
+    if (ws) connection.removeAccountChangeListener(ws);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+  };
+  
+  connect();
+  
+  return cleanup;
+};
+```
+
+<ArticleSection name="Update Strategy" id="update-strategy" level="h2" />
+
+Mobile app updates require more planning than web deployments.
+
+### Version compatibility
+
+Your app will have multiple versions in the wild simultaneously. Design for this:
+
+```typescript
+// API versioning
+const API_VERSION = '2024.1';
+
+const apiRequest = async (endpoint: string, options: RequestInit) => {
+  return fetch(`https://api.yourapp.com/v1/${endpoint}`, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-App-Version': APP_VERSION,
+      'X-API-Version': API_VERSION,
+    }
+  });
+};
+
+// Backend can route or transform based on version
+```
+
+### Force update mechanism
+
+Sometimes you need users on the latest version (security fix, breaking API change):
+
+```typescript
+const checkForceUpdate = async () => {
+  const response = await fetch('https://api.yourapp.com/app-config');
+  const config = await response.json();
+  
+  const currentVersion = DeviceInfo.getVersion();
+  
+  if (compareVersions(currentVersion, config.minimumVersion) < 0) {
+    // Force update required
+    Alert.alert(
+      'Update Required',
+      'Please update to the latest version to continue.',
+      [
+        {
+          text: 'Update',
+          onPress: () => Linking.openURL(config.storeUrl)
+        }
+      ],
+      { cancelable: false }
+    );
+    return false;
+  }
+  
+  if (compareVersions(currentVersion, config.latestVersion) < 0) {
+    // Soft prompt for update
+    Alert.alert(
+      'Update Available',
+      'A new version is available with improvements.',
+      [
+        { text: 'Later', style: 'cancel' },
+        { text: 'Update', onPress: () => Linking.openURL(config.storeUrl) }
+      ]
+    );
+  }
+  
+  return true;
+};
+```
+
+### Feature flags
+
+Control feature rollout without app updates:
+
+```typescript
+interface FeatureFlags {
+  newSwapInterface: boolean;
+  enableNftGallery: boolean;
+  showPromotionalBanner: boolean;
+  maxTransactionRetries: number;
+}
+
+const defaultFlags: FeatureFlags = {
+  newSwapInterface: false,
+  enableNftGallery: true,
+  showPromotionalBanner: false,
+  maxTransactionRetries: 3,
+};
+
+const fetchFeatureFlags = async (): Promise<FeatureFlags> => {
+  try {
+    const response = await fetch('https://api.yourapp.com/feature-flags');
+    const serverFlags = await response.json();
+    return { ...defaultFlags, ...serverFlags };
+  } catch {
+    return defaultFlags; // Fallback to defaults if fetch fails
+  }
+};
+
+// Usage
+const FeatureFlagProvider: React.FC = ({ children }) => {
+  const [flags, setFlags] = useState<FeatureFlags>(defaultFlags);
+  
+  useEffect(() => {
+    fetchFeatureFlags().then(setFlags);
+  }, []);
+  
+  return (
+    <FeatureFlagContext.Provider value={flags}>
+      {children}
+    </FeatureFlagContext.Provider>
+  );
+};
+```
+
+### Over-the-air updates
+
+For React Native, tools like CodePush allow JavaScript updates without App Store review:
+
+```typescript
+import CodePush from 'react-native-code-push';
+
+// Check for updates on app launch
+const codePushOptions = {
+  checkFrequency: CodePush.CheckFrequency.ON_APP_START,
+  installMode: CodePush.InstallMode.ON_NEXT_RESTART,
+};
+
+const App = () => {
+  // ... your app
+};
+
+export default CodePush(codePushOptions)(App);
+```
+
+**Limitations:**
+- Cannot update native code (only JavaScript bundle)
+- Apple and Google have policies about OTA updates
+- Don't use to bypass review with policy-violating content
+
+<ArticleSection name="User Support and Feedback" id="user-support-and-feedback" level="h2" />
+
+Crypto apps have unique support challenges. Users lose money if things go wrong.
+
+### In-app support
+
+Make it easy to report issues with context:
+
+```typescript
+const reportIssue = async (userDescription: string) => {
+  const diagnostics = {
+    appVersion: DeviceInfo.getVersion(),
+    buildNumber: DeviceInfo.getBuildNumber(),
+    os: Platform.OS,
+    osVersion: DeviceInfo.getSystemVersion(),
+    deviceModel: DeviceInfo.getModel(),
+    walletConnected: !!currentWallet,
+    walletType: currentWallet?.type,
+    recentTransactions: await getRecentTransactionLogs(),
+    timestamp: new Date().toISOString(),
+  };
+  
+  await fetch('https://api.yourapp.com/support/issue', {
+    method: 'POST',
+    body: JSON.stringify({
+      description: userDescription,
+      diagnostics,
+      userId: currentUser?.id,
+    })
+  });
+};
+```
+
+### Transaction troubleshooting
+
+When users report stuck or failed transactions, you need the signature:
+
+```typescript
+// Store transaction history locally
+const logTransaction = async (tx: {
+  signature: string;
+  type: string;
+  status: 'pending' | 'confirmed' | 'failed';
+  timestamp: number;
+  error?: string;
+}) => {
+  const history = await getTransactionHistory();
+  history.unshift(tx);
+  
+  // Keep last 100 transactions
+  if (history.length > 100) history.pop();
+  
+  await AsyncStorage.setItem('txHistory', JSON.stringify(history));
+};
+
+// Expose in support/debug screen
+const TransactionHistory = () => {
+  const [history, setHistory] = useState([]);
+  
+  useEffect(() => {
+    getTransactionHistory().then(setHistory);
+  }, []);
+  
+  return (
+    <FlatList
+      data={history}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          onPress={() => {
+            Clipboard.setString(item.signature);
+            Alert.alert('Copied', 'Transaction signature copied');
+          }}
+        >
+          <Text>{item.type} - {item.status}</Text>
+          <Text style={styles.signature}>{item.signature.slice(0, 20)}...</Text>
+        </TouchableOpacity>
+      )}
+    />
+  );
+};
+```
+
+### FAQ and self-service
+
+Most support requests are predictable. Build self-service:
+
+1. **Transaction pending for too long?** → Show how to check on Solscan
+2. **Wallet won't connect?** → Troubleshooting steps for common wallets
+3. **Balance not updating?** → Pull-to-refresh, explain confirmation times
+4. **Lost access to wallet?** → Explain recovery options (or lack thereof for external wallets)
+
+<ArticleSection name="Scaling Considerations" id="scaling-considerations" level="h2" />
+
+As your user base grows, different parts of your system will strain.
+
+### RPC costs
+
+Public Solana RPC endpoints have low rate limits. Paid providers charge per request:
+
+```typescript
+// Optimize RPC usage
+
+// Bad: Polling every second
+setInterval(() => connection.getBalance(publicKey), 1000);
+
+// Better: Use WebSocket subscriptions
+connection.onAccountChange(publicKey, (accountInfo) => {
+  updateBalance(accountInfo.lamports);
+});
+
+// Even better: Batch requests when possible
+const [balance, tokenAccounts, recentTx] = await Promise.all([
+  connection.getBalance(publicKey),
+  connection.getParsedTokenAccountsByOwner(publicKey, { programId: TOKEN_PROGRAM_ID }),
+  connection.getSignaturesForAddress(publicKey, { limit: 5 })
+]);
+```
+
+### Backend costs
+
+If you proxy through a backend:
+
+- Cache responses where appropriate (token metadata, NFT images)
+- Rate limit per user to prevent abuse
+- Use edge functions (Cloudflare Workers, Vercel Edge) for low-latency global distribution
+
+### Database considerations
+
+Transaction history and user preferences grow over time:
+
+- Archive old transaction logs
+- Index frequently queried fields
+- Consider time-series databases for analytics data
+
+<ArticleSection name="Compliance and Legal" id="compliance-and-legal" level="h2" />
+
+This isn't legal advice, but awareness helps you ask the right questions.
+
+### Terms of Service
+
+Every app needs a ToS. For crypto apps, cover:
+
+- Self-custody disclaimer (you don't hold their keys)
+- No financial advice disclaimer
+- Geographic restrictions if any
+- Acceptable use policy
+
+### Privacy Policy
+
+Required by App Store and Play Store. For crypto apps:
+
+- What data you collect (wallet addresses, transaction history, device info)
+- How you use it
+- Third-party services you share with (analytics, RPC providers)
+- GDPR compliance if serving EU users
+
+### Geographic restrictions
+
+Some features require licensing in specific jurisdictions:
+
+- Trading/exchange features: Money transmitter licenses in US states
+- Fiat on/off ramps: Payment processor requirements
+- Securities: If your tokens might be securities, tread carefully
+
+Many apps simply block certain jurisdictions to avoid regulatory exposure.
+
+<ArticleSection name="Maintenance Checklist" id="maintenance-checklist" level="h2" />
+
+Ongoing tasks to keep your app healthy:
+
+### Weekly
+- [ ] Review crash reports and prioritize fixes
+- [ ] Check transaction success rates
+- [ ] Monitor RPC health and costs
+- [ ] Review user feedback/support tickets
+
+### Monthly
+- [ ] Update dependencies (check for security patches)
+- [ ] Review analytics for usage patterns
+- [ ] Test critical flows on latest OS versions
+- [ ] Review App Store/Play Store policy updates
+
+### Quarterly
+- [ ] Audit third-party dependencies for vulnerabilities
+- [ ] Review and rotate API keys/credentials
+- [ ] Test disaster recovery (can you restore from backups?)
+- [ ] Update documentation (API, user guides)
+
+### Yearly
+- [ ] Renew certificates (push notifications, SSL pins)
+- [ ] Review overall architecture for scaling needs
+- [ ] Audit security practices
+- [ ] Plan major version roadmap
+
+<ArticleSection name="Course Summary" id="course-summary" level="h2" />
+
+You've completed the final course in the Solana mobile development curriculum. Let's recap what we covered:
+
+**Lesson 1: Distribution landscape**
+- Three channels: Play Store, App Store, Solana dApp Store
+- Each has different policies and trade-offs
+- Crypto apps face unique challenges on traditional stores
+
+**Lesson 2: Solana dApp Store publishing**
+- NFT-based registry (Publisher → App → Release)
+- CLI tooling for minting and submission
+- Asset requirements and review process
+
+**Lesson 3: App Store review strategies**
+- Apple's 3.1.5 cryptocurrency guidelines
+- Google Play's blockchain content policy
+- Test accounts and demo modes for review
+- Handling rejections and appeals
+
+**Lesson 4: Mobile security**
+- Reverse engineering reality (everything can be extracted)
+- Secure storage with Keychain/Keystore
+- API security patterns (proxy, short-lived tokens)
+- Private key protection
+
+**Lesson 5: Production operations**
+- Monitoring and alerting
+- RPC management and fallbacks
+- Update strategies and feature flags
+- Support and maintenance routines
+
+<ArticleSection name="What's Next" id="whats-next" level="h2" />
+
+You now have the knowledge to build, secure, publish, and maintain a Solana mobile application across all distribution channels.
+
+The best next step is to build something. Pick a problem you care about, apply what you've learned, and ship it.
+
+Some ideas to explore:
+- A simple wallet UI with Privy embedded wallets
+- A token-gated mobile experience
+- An NFT gallery app
+- A dApp browser optimized for mobile
+
+The Solana mobile ecosystem is still young. There's room to build tools and apps that millions will use. Now you know how to get them there.

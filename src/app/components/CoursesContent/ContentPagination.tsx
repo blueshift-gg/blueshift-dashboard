@@ -108,7 +108,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 {t(
                   `courses.${props.course.slug}.lessons.${
                     props.course.lessons[props.currentLesson - 1].slug
-                  }`
+                  }.title`
                 )}
               </span>
               <button
@@ -171,7 +171,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                           )}
                         >
                           {t(
-                            `courses.${props.course.slug}.lessons.${lesson.slug}`
+                            `courses.${props.course.slug}.lessons.${lesson.slug}.title`
                           )}
                         </span>
                       </div>

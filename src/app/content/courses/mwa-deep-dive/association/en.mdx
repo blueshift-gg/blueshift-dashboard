@@ -1,0 +1,320 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Association
+
+Before a session can exist, the wallet needs to know where to connect and how to verify the dApp's identity. This is the *association* phase: the dApp communicates connection parameters to the wallet through a URI.
+
+<ArticleSection name="Association URI Structure" id="uri-structure" level="h2" />
+
+Every MWA connection begins with a URI that follows a specific format:
+
+```
+solana-wallet:/v1/associate/<scenario>?<parameters>
+```
+
+The components:
+
+| Part | Purpose |
+|------|---------|
+| `solana-wallet:` | URI scheme registered by MWA-compatible wallets |
+| `/v1` | Protocol version path |
+| `/associate` | Operation type |
+| `/<scenario>` | Connection scenario: `local` or `remote` |
+| `?<parameters>` | Query parameters for this scenario |
+
+<ArticleSection name="Association Scenarios" id="scenarios" level="h2" />
+
+### Local Association
+
+Both dApp and wallet on the same device:
+
+```
+solana-wallet:/v1/associate/local?association=<TOKEN>&port=<PORT>
+```
+
+Parameters:
+- `association`: Base64url-encoded P-256 public key (the *association public key*)
+- `port`: The TCP port number (49152-65535) where the dApp expects the wallet's WebSocket server
+
+Example:
+```
+solana-wallet:/v1/associate/local?association=BK7dJkEiT_a5GchXtVGAk_GFtA3h7z9oQlBr0h3NWTg&port=49200
+```
+
+### Remote Association
+
+dApp on one device, wallet on another (connected via reflector):
+
+```
+solana-wallet:/v1/associate/remote?association=<TOKEN>&id=<ID>&reflector=<HOST>
+```
+
+Parameters:
+- `association`: Same as local. The association public key
+- `id`: The base64url-encoded reflector ID (obtained from `REFLECTOR_ID` message)
+- `reflector`: The hostname and optional port of the reflector server
+
+Example:
+```
+solana-wallet:/v1/associate/remote?association=BK7dJkEiT_a5GchXtVGAk_GFtA3h7z9oQlBr0h3NWTg&id=abc123&reflector=reflect.example.com
+```
+
+<ArticleSection name="Version Negotiation" id="version-negotiation" level="h2" />
+
+The URI can include version hints:
+
+```
+solana-wallet:/v1/associate/local?association=...&port=...&v=2.0.0
+```
+
+The `v` parameter is optional. It tells the wallet the maximum protocol version the dApp supports. The wallet responds in `HELLO_RSP` with the actual protocol version it will use.
+
+Version negotiation rules:
+1. If `v` is absent, assume version 1.0.0 compatibility
+2. The wallet picks the highest version both support
+3. The negotiated version appears in the session properties
+
+<ArticleSection name="The Association Public Key" id="association-key" level="h2" />
+
+The association public key is critical to MWA security. Let's trace its generation and use:
+
+### Generation
+
+The dApp generates an ephemeral P-256 (secp256r1) keypair:
+
+```typescript
+// From the MWA SDK
+const associationKeypair = await crypto.subtle.generateKey(
+  {
+    name: 'ECDSA',
+    namedCurve: 'P-256'
+  },
+  true,  // extractable
+  ['sign', 'verify']
+);
+```
+
+The public key is exported and base64url-encoded:
+
+```typescript
+const publicKeyBuffer = await crypto.subtle.exportKey(
+  'raw',
+  associationKeypair.publicKey
+);
+// Encode as base64url (RFC 4648) without padding
+const associationToken = base64urlEncode(new Uint8Array(publicKeyBuffer));
+```
+
+### Format Details
+
+The exported P-256 public key in "raw" format is 65 bytes:
+- 1 byte: `0x04` (uncompressed point indicator)
+- 32 bytes: X coordinate
+- 32 bytes: Y coordinate
+
+After base64url encoding, this becomes approximately 87 characters.
+
+### Use in Session Establishment
+
+During session establishment, the dApp proves it controls the association private key by signing the HELLO_REQ message. The wallet verifies this signature using the association public key from the URI.
+
+Additionally, the association public key is used as a salt in key derivation (HKDF), binding the session key to this specific association.
+
+<ArticleSection name="URI Handling on Android" id="android-handling" level="h2" />
+
+On Android, the `solana-wallet:` scheme is registered by compatible wallets in their manifest:
+
+```text
+<intent-filter>
+  <action android:name="android.intent.action.VIEW" />
+  <category android:name="android.intent.category.DEFAULT" />
+  <category android:name="android.intent.category.BROWSABLE" />
+  <data android:scheme="solana-wallet" />
+</intent-filter>
+```
+
+When the dApp opens the URI:
+
+```typescript
+// In a React Native app
+Linking.openURL(associationUri);
+```
+
+Android's Intent system either:
+1. Launches the wallet directly (if only one wallet is installed)
+2. Shows a chooser dialog (if multiple wallets are installed)
+3. Fails if no compatible wallet exists
+
+The SDK's `transact()` function handles this automatically:
+
+```typescript
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol';
+
+const result = await transact(async (wallet) => {
+  // Association happens automatically before this callback runs
+  // The `wallet` object represents an established session
+});
+```
+
+<ArticleSection name="Multiple Wallet Handling" id="multiple-wallets" level="h2" />
+
+When multiple MWA-compatible wallets are installed, Android shows a disambiguation dialog. The user selects which wallet to use.
+
+For better UX, dApps can:
+
+1. **Remember the user's preference**: Store the chosen wallet package and use it for future connections
+2. **Use wallet-specific URIs**: Some wallets register additional schemes (e.g., `phantom-wallet:`) for direct invocation
+3. **Let the user configure**: Provide settings where users pick their default wallet
+
+The SDK doesn't automatically remember wallet choice. That's left to the dApp implementation.
+
+<ArticleSection name="Endpoint-Specific URIs" id="endpoint-uris" level="h2" />
+
+The spec defines additional URI formats for wallet-specific scenarios:
+
+### For Remote Scenarios
+
+Wallets can advertise their remote connection capability:
+
+```
+<wallet-scheme>:/v1/<endpoint>
+```
+
+Where:
+- `<wallet-scheme>` is the wallet's specific scheme
+- `<endpoint>` is the reflector path or direct connection info
+
+### Example Wallet-Specific URI
+
+```
+phantom-wallet:/v1/connect?reflector=reflect.phantom.app
+```
+
+This allows dApps to initiate remote connections with specific wallets without using the generic `solana-wallet:` scheme.
+
+<ArticleSection name="Association Flow Timeline" id="timeline" level="h2" />
+
+Let's trace a complete local association:
+
+```
+Time  │  dApp                          │  Wallet
+──────┼────────────────────────────────┼──────────────────────────────
+t₀    │  Generate association keypair  │
+t₁    │  Generate session keypair      │
+t₂    │  Build association URI         │
+t₃    │  Open URI via Intent           │  ─────────────────────►
+t₄    │                                │  Launch (Intent received)
+t₅    │                                │  Parse URI parameters
+t₆    │                                │  Start WebSocket server on port
+t₇    │  Connect to ws://127.0.0.1:port│  ◄─────────────────────
+t₈    │  WebSocket handshake complete  │
+t₉    │  (Transport established)       │
+t₁₀   │  Send HELLO_REQ                │  ─────────────────────►
+      │                                │  (Session establishment begins)
+```
+
+The association phase (t₀-t₇) establishes the connection parameters. Session establishment (t₁₀+) uses cryptography to secure the channel.
+
+<ArticleSection name="Security Properties" id="security" level="h2" />
+
+Association provides several security properties:
+
+### Freshness
+
+Each association uses a new keypair. Even if an attacker captures an old association URI, they can't use it; the dApp that generated it is no longer listening, and the private key has been discarded.
+
+### Authentication Binding
+
+The association public key binds the session to the original association. During session establishment, the dApp signs with the association private key. A man-in-the-middle can't impersonate the dApp without that key.
+
+### No Replay
+
+The association token is a public key, not a signature. It doesn't "replay" anything; it's a fresh identifier for this specific session attempt.
+
+### Limitations
+
+Association does *not* verify:
+- That the dApp is who it claims to be (that's identity verification, covered later)
+- That the wallet is legitimate (the user must trust their installed wallet)
+
+Association establishes *which* session is happening, not *who* is participating.
+
+<ArticleSection name="Common Association Errors" id="errors" level="h2" />
+
+**"No app found to handle intent"**: No MWA-compatible wallet installed. Prompt the user to install one.
+
+**"Connection refused after Intent"**: The wallet launched but didn't start its WebSocket server:
+- Wallet doesn't support the requested protocol version
+- Wallet crashed during initialization
+- Port conflict (rare on Android)
+
+**"Invalid association token"**: The URI contains a malformed public key:
+- Incorrect base64url encoding
+- Wrong key length
+- Not a valid P-256 point
+
+**"Timeout waiting for connection"**: The wallet launched but took too long:
+- User switched away from the wallet app
+- Wallet is showing onboarding flow
+- System resources constrained
+
+<ArticleSection name="Implementation in the SDK" id="sdk-implementation" level="h2" />
+
+Looking at the SDK source, association is handled in the early stages of `transact()`:
+
+```typescript
+// Simplified from transact.ts
+export async function transact<T>(
+  callback: (wallet: WalletAPI) => T | Promise<T>,
+  config?: TransactConfig
+): Promise<T> {
+  // Generate keypairs
+  const associationKeypair = await generateAssociationKeypair();
+  const sessionKeypair = await generateSessionKeypair();
+  
+  // Build URI
+  const port = selectPort();
+  const associationUri = buildAssociationUri({
+    associationPublicKey: associationKeypair.publicKey,
+    port,
+    scenario: 'local'
+  });
+  
+  // Open wallet via Intent
+  await openWalletApp(associationUri);
+  
+  // Wait for wallet to connect
+  const websocket = await waitForWalletConnection(port);
+  
+  // Proceed to session establishment...
+}
+```
+
+The actual implementation handles more edge cases (timeouts, errors, cleanup), but this shows the core flow.
+
+<ArticleSection name="Beyond Android: Other Platforms" id="other-platforms" level="h2" />
+
+While Android is the primary platform, the association mechanism is designed to be portable:
+
+### iOS
+
+iOS apps can register custom URL schemes similarly. The challenge is that iOS has stricter inter-app communication policies. MWA on iOS would likely use Universal Links or custom scheme handlers.
+
+### Web (via Remote)
+
+Web dApps use remote association:
+1. dApp connects to reflector, gets ID
+2. ID displayed as QR code
+3. User scans with wallet app on phone
+4. Wallet connects to same reflector
+5. Session proceeds over reflector
+
+This pattern enables any web browser to connect to a mobile wallet.
+
+### Desktop
+
+Desktop apps could use local networking (for a wallet app on the same machine) or remote association (for a phone wallet).
+
+The association URI format remains consistent. Only the mechanism for delivering the URI to the wallet changes.
+
+In the next lesson, we dive into session establishment: where the cryptographic handshake happens and the secure channel is created.

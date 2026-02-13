@@ -1,0 +1,246 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The Transport Layer
+
+The transport layer answers one question: how do bytes flow between your dApp and the wallet? The protocol supports multiple transports, but the spec carefully defines what any transport must provide.
+
+<ArticleSection name="Transport Requirements" id="requirements" level="h2" />
+
+Any MWA transport must guarantee:
+
+**Full-Duplex**: Both apps can send messages simultaneously. The wallet might need to push notifications while the dApp is still sending requests.
+
+**Message-Oriented**: Bytes arrive as discrete messages, not a continuous stream. The transport preserves message boundaries. When the dApp sends a 100-byte message, the wallet receives exactly 100 bytes as one unit.
+
+**Reliable, Ordered Delivery**: Messages arrive in the order sent, without corruption. TCP provides this; raw Bluetooth doesn't (so MWA over Bluetooth would need to add it).
+
+**App-to-App on Single Device**: For local connections, the transport must allow two apps on the same device to communicate.
+
+The spec currently defines one concrete transport: WebSocket over localhost. A future transport (Bluetooth LE) is outlined but not yet standardized.
+
+<ArticleSection name="WebSocket Transport" id="websocket" level="h2" />
+
+For local connections (both apps on the same Android device), MWA uses WebSocket:
+
+- **Server**: The wallet opens a WebSocket server on `ws://127.0.0.1:<port>`
+- **Client**: The dApp connects to that address
+- **Port Range**: 49152-65535 (ephemeral ports, specified by the dApp)
+
+The dApp specifies the port in the association URI:
+
+```
+solana-wallet:/v1/associate/local?association=<token>&port=49200
+```
+
+When the wallet receives this URI (via Android Intent), it starts its WebSocket server on port 49200 and waits for the dApp to connect.
+
+### Subprotocol Negotiation
+
+During the WebSocket handshake, the client and server negotiate a subprotocol via the `Sec-WebSocket-Protocol` header:
+
+| Subprotocol Name | Frame Type | Encoding |
+|-----------------|------------|----------|
+| `com.solana.mobilewalletadapter.v1` | Binary | Raw bytes |
+| `com.solana.mobilewalletadapter.v1.base64` | Text | Base64-encoded |
+
+The binary subprotocol is preferred for efficiency. The base64 variant exists for environments where binary WebSocket frames are problematic.
+
+```typescript
+// The MWA SDK negotiates this automatically
+const ws = new WebSocket(uri, [
+  'com.solana.mobilewalletadapter.v1',
+  'com.solana.mobilewalletadapter.v1.base64'
+]);
+```
+
+<ArticleSection name="Connection Lifecycle" id="lifecycle" level="h2" />
+
+The connection follows this sequence:
+
+```
++----------+                           +----------+
+|   dApp   |                           |  Wallet  |
++----+-----+                           +----+-----+
+     |                                      |
+     |  Intent: solana-wallet:/v1/...       |
+     |------------------------------------->|
+     |                                      |
+     |               (Wallet starts WS server on port)
+     |                                      |
+     |  WebSocket connect to 127.0.0.1:port |
+     |------------------------------------->|
+     |                                      |
+     |  WebSocket handshake (subprotocol)   |
+     |<-------------------------------------|
+     |                                      |
+     |  (Transport established)             |
+     |                                      |
+```
+
+### Timing Constraints
+
+The spec defines timeouts to prevent hanging connections:
+
+- **Wallet startup**: The wallet should start its WebSocket server within a reasonable time after receiving the Intent (implementation-defined)
+- **Session establishment**: After transport is established, the session must be established within a timeout (typically 30 seconds)
+- **Message acknowledgment**: For reflector connections, specific timeouts apply to half-open states
+
+### Graceful vs Abnormal Close
+
+A WebSocket close can be:
+
+- **Graceful**: One side sends a Close frame, the other acknowledges. This is the normal end-of-session.
+- **Abnormal**: The connection drops without a Close frame. This happens if the wallet is force-killed, the network fails, or the device sleeps.
+
+The dApp SDK handles both cases. When `transact()` completes normally, it sends a graceful close. If the connection drops unexpectedly, the SDK throws an error that your app should catch.
+
+<ArticleSection name="Local vs Remote Transport" id="local-vs-remote" level="h2" />
+
+The transport layer abstracts over connection topology:
+
+**Local Transport**: Both apps on the same device. WebSocket over localhost. Low latency (sub-millisecond). No network dependency.
+
+**Remote Transport**: dApp on one device (laptop), wallet on another (phone). WebSocket via a reflector server. Higher latency (network-dependent). Requires internet.
+
+The session and RPC layers above don't change between local and remote. The encryption ensures that even if traffic routes through a reflector, message content remains private.
+
+<ArticleSection name="The Reflector Server Protocol" id="reflector-protocol" level="h2" />
+
+For remote connections, both endpoints connect to a reflector:
+
+```
+wss://<reflector-host>/reflect
+```
+
+The protocol has specific message types. Note that messages in this protocol don't use type byte prefixes; instead, the message format and context determine the meaning:
+
+### Reflector-to-dApp Messages
+
+**`REFLECTOR_ID`**: Sent to the dApp immediately upon connection. Format: `<length><id_bytes>` where length is a varint-encoded byte length. This ID goes into the QR code that the wallet scans.
+
+**`APP_PING`**: An **empty message** (zero bytes). Sent by the reflector to both endpoints when the counterparty connects. The dApp should wait for this before sending `HELLO_REQ`.
+
+### Message Forwarding
+
+Once both clients are connected and `APP_PING` has been sent, the reflector enters forwarding mode. Every message from one client is **forwarded directly** to the other. No prefix or wrapper is added.
+
+```
+dApp sends: [HELLO_REQ bytes]
+Reflector forwards: [HELLO_REQ bytes] (unchanged)
+Wallet receives: [HELLO_REQ bytes]
+```
+
+The reflector is transparent for all data after session establishment begins.
+
+### Reflector Timeouts
+
+| State | Timeout | Action |
+|-------|---------|--------|
+| Waiting for wallet to connect | 30 seconds | Close connection |
+| Connected session | 90 seconds of inactivity | Close both connections |
+| Message size limit | 4096 bytes | Close connection |
+
+<ArticleSection name="Transport in the SDK" id="sdk-transport" level="h2" />
+
+Looking at the actual MWA SDK source, the transport logic lives in `transact.ts`. Here's the state machine that manages connections:
+
+```typescript
+type State =
+  | { __type: 'connecting' }
+  | { __type: 'connected'; ws: WebSocket }
+  | { __type: 'hello_req_sent'; ws: WebSocket }
+  | { __type: 'hello_rsp_received'; 
+      associationPublicKey: CryptoKey;
+      ecdhPrivateKey: CryptoKey;
+      sessionKeyPair: Readonly<{
+        aes_key: Uint8Array;
+        hmac_key: Uint8Array;
+      }>;
+      sequenceNumber: number;
+      ws: WebSocket; 
+    }
+  | { __type: 'connected_and_authorized'; /* ... */ }
+  | { __type: 'disconnected' }
+  | { __type: 'error'; message: string };
+```
+
+The state machine transitions:
+
+1. `connecting` → `connected`: WebSocket opened
+2. `connected` → `hello_req_sent`: Sent the HELLO_REQ message
+3. `hello_req_sent` → `hello_rsp_received`: Received HELLO_RSP, derived session keys
+4. `hello_rsp_received` → `connected_and_authorized`: Successfully authorized (or reauthorized)
+5. Any state → `disconnected`: Normal close
+6. Any state → `error`: Abnormal close or protocol violation
+
+<ArticleSection name="Port Selection Strategy" id="port-selection" level="h2" />
+
+The dApp chooses the port. Why? Because:
+
+1. The dApp initiates; it knows when it needs a wallet session
+2. The dApp can retry with different ports if one is occupied
+3. The Intent system doesn't have a return channel for the wallet to communicate a port
+
+The SDK typically picks a port from the ephemeral range (49152-65535) and checks if it's available. If the wallet can't bind to that port (rare but possible), the connection fails and the SDK can retry.
+
+```typescript
+// From the SDK: port selection in transact()
+const port = 49152 + Math.floor(Math.random() * 16383);
+```
+
+<ArticleSection name="Message Framing" id="framing" level="h2" />
+
+WebSocket handles framing, so MWA doesn't need length prefixes. But messages do have structure:
+
+**Unencrypted messages** (during session establishment):
+```
++-----------------------------------------+
+|  Message Type (1 byte)  |  Payload      |
++-----------------------------------------+
+```
+
+**Encrypted messages** (after session establishment):
+```
++------------------------------------------------------+
+|  Sequence Number (4 bytes)  |  AES-GCM Ciphertext   |
+|       (big-endian)          |  (includes auth tag)  |
++------------------------------------------------------+
+```
+
+The sequence number prevents replay attacks. Each side maintains their own counter, incrementing with each message sent.
+
+<ArticleSection name="Debugging Transport Issues" id="debugging" level="h2" />
+
+Common transport-level problems:
+
+**"Connection refused"**: The wallet hasn't started its server yet. This can happen if:
+- The wallet app took too long to launch
+- The wallet doesn't support MWA
+- The port is already in use by another process
+
+**"Connection reset"**: The wallet closed unexpectedly. Check if:
+- The wallet crashed
+- The user force-closed the wallet
+- The wallet rejected the connection during session establishment
+
+**"WebSocket timeout"**: No response from the wallet. Possible causes:
+- The wallet is frozen or extremely slow
+- On reflector connections, network issues
+- The wallet UI is blocking (user hasn't interacted)
+
+**"Invalid subprotocol"**: The wallet accepted the connection but didn't agree on a subprotocol. This indicates a version mismatch. The wallet might be running an older MWA implementation.
+
+<ArticleSection name="Transport Security Considerations" id="security" level="h2" />
+
+The transport layer itself provides minimal security:
+
+- **Localhost only**: Local WebSocket connections are to `127.0.0.1`, which can't be reached from other devices
+- **No TLS locally**: `ws://` (not `wss://`) because TLS to localhost is unnecessary and complicates certificate management
+- **TLS for reflector**: Remote connections use `wss://` to the reflector
+
+Real security comes from the session layer. Transport security assumptions:
+1. Localhost traffic is reasonably isolated from other apps (OS enforcement)
+2. The reflector connection uses TLS to prevent eavesdropping on ciphertext
+3. All message content is encrypted regardless of transport
+
+In the next lesson, we examine the association mechanism: how the dApp tells the wallet where to connect and proves its identity.

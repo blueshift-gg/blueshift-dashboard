@@ -1,0 +1,371 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Passkeys and WebAuthn
+
+![Passkeys and WebAuthn](/graphics/course-banners/embedded-wallets.png)
+
+Passkeys represent a fundamental shift in authentication. The private key never leaves your device's secure hardware. FaceID, fingerprint, or PIN gates access. Phishing becomes mathematically impossible because credentials are bound to specific domains. And crucially for blockchain, passkeys use secp256r1, the same curve Solana now supports natively.
+
+This isn't a workaround or an adaptation layer. Passkey signatures can authorize Solana transactions directly.
+
+<ArticleSection name="The Problem with Passwords and Seeds" id="password-problem" level="h2" />
+
+Traditional authentication suffers from a fundamental mismatch: secrets must be both memorable and secure.
+
+**Passwords** are memorable but weak:
+- Users reuse them across services
+- Phishing extracts them through deception
+- Database breaches expose millions at once
+- Complexity requirements lead to predictable patterns
+
+**Seed phrases** are secure but unmanageable:
+- 12-24 random words exceed human memory capacity
+- Physical storage creates theft risk
+- Digital storage creates breach risk
+- One mistake means permanent, irreversible loss
+
+Both approaches ask humans to be perfect custodians of secrets they must regularly recall. Humans are not built for this.
+
+<ArticleSection name="WebAuthn Architecture" id="webauthn-architecture" level="h2" />
+
+WebAuthn (Web Authentication) takes a different approach: move secrets into dedicated security hardware and never let them out.
+
+### The Authenticator
+
+Every modern smartphone contains a secure enclave (iOS) or Trusted Execution Environment (TEE) (Android). This is isolated hardware designed specifically to hold cryptographic keys:
+
+- **Physical isolation**: Separate processor, separate memory
+- **No extraction**: Keys cannot be read out, only used for signing
+- **Biometric gating**: Operations require user presence verification
+- **Tamper resistance**: Physical attacks destroy the protected data
+
+When you create a passkey, the secure enclave generates a keypair. The private key is born inside the enclave and stays there permanently. Only signatures come out.
+
+### The Protocol Flow
+
+WebAuthn authentication involves three parties:
+
+```
++-------------+        +------------------+        +----------------+
+|  Relying    | --1--> |  User's Device   | --2--> |  Authenticator |
+|  Party      |        |  (Browser/App)   |        |  (Secure HW)   |
+|  (Server)   | <--4-- |                  | <--3-- |                |
++-------------+        +------------------+        +----------------+
+
+1. Server sends challenge (random bytes)
+2. Device prompts user, passes challenge to authenticator
+3. Authenticator verifies user (biometric), signs challenge
+4. Device returns signature and credential ID to server
+```
+
+**Registration** creates a new credential:
+1. Server generates a random challenge
+2. Authenticator creates a keypair in the secure enclave
+3. Public key and credential ID are sent to the server
+4. Server stores these for future authentication
+
+**Authentication** proves possession:
+1. Server sends a challenge
+2. Authenticator signs the challenge with the stored private key
+3. Server verifies the signature against the stored public key
+
+The private key never moves. Only signatures travel.
+
+### Origin Binding
+
+Every passkey is cryptographically bound to a specific origin (domain). A passkey created for `myapp.com` cannot be used on `evil-myapp.com`, even if the user is tricked into visiting it.
+
+This binding happens at the hardware level:
+- The relying party ID (domain) is included in data that gets signed
+- The authenticator enforces this check before signing
+- No amount of social engineering can make a passkey sign for the wrong origin
+
+Phishing attacks become structurally impossible. Even if a user types their biometric on a fake site, the passkey simply won't produce a valid signature for that domain.
+
+<ArticleSection name="The Secp256r1 Curve" id="secp256r1-curve" level="h2" />
+
+WebAuthn standardized on secp256r1 (also known as P-256 or prime256v1) for several reasons:
+
+- **Hardware support**: Secure enclaves universally implement it
+- **Regulatory approval**: NIST and government security standards require it
+- **Battle-tested**: Decades of production use in TLS, code signing, and HSMs
+- **Performance**: Optimized implementations exist for every platform
+
+### Mathematical Properties
+
+Secp256r1 is an elliptic curve over a prime field:
+
+`y² = x³ + ax + b (mod p)`
+
+Where:
+- `p = 2^256 - 2^224 + 2^192 + 2^96 - 1` (a pseudo-Mersenne prime enabling fast reduction)
+- `a = -3` (enables optimized point operations)
+- `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
+
+The curve provides approximately 128 bits of security. Finding a private key from a public key requires solving the Elliptic Curve Discrete Logarithm Problem (ECDLP), which has no known efficient algorithm.
+
+### Signature Format
+
+ECDSA signatures on secp256r1 produce two values:
+- `r`: derived from a random point on the curve
+- `s`: combines the message hash, private key, and random value
+
+These are typically DER-encoded for transport, though raw `(r, s)` concatenation is also common.
+
+The signature verification equation confirms that only someone knowing the private key could have produced `(r, s)` for a given message.
+
+<ArticleSection name="Solana Native Support" id="solana-native-support" level="h2" />
+
+Historically, Solana only supported Ed25519 signatures (the curve used by native Solana wallets). Passkey signatures couldn't directly authorize transactions.
+
+SIMD-0075 changed this by adding a secp256r1 signature verification precompile:
+
+```
+Program: Secp256r1SigVerify1111111111111111111111111
+```
+
+This native precompile verifies secp256r1 signatures efficiently on-chain, making passkeys first-class citizens for Solana authentication.
+
+### How Verification Works
+
+The precompile accepts instruction data containing:
+- The signature `(r, s)` values
+- The public key (the point on secp256r1)
+- The message that was signed
+
+Verification confirms the mathematical relationship holds. If it passes, the on-chain program knows the owner of that public key authorized this message.
+
+### Cost Efficiency
+
+Precompile verification is dramatically cheaper than equivalent verification in a smart contract:
+
+| Method | Compute Units | Cost |
+|--------|--------------|------|
+| Precompile verification | ~750 CU | Minimal |
+| Smart contract verification | ~150,000+ CU | Significant |
+
+This efficiency makes passkey-controlled wallets practical for real applications.
+
+<ArticleSection name="Smart Wallets with Passkeys" id="smart-wallets" level="h2" />
+
+Native secp256r1 support enables a powerful pattern: Program Derived Addresses (PDAs) controlled by passkey signatures.
+
+### The Architecture
+
+Instead of a traditional keypair wallet, the "wallet" becomes a PDA derived from the passkey's public key:
+
+```
++----------------+     +-------------------+     +-----------------+
+|  User Device   |     |  Solana Program   |     |  Smart Wallet   |
+|  (Passkey)     |     |  (Verifier)       |     |  (PDA)          |
++----------------+     +-------------------+     +-----------------+
+        |                      |                        |
+        |  1. Sign challenge   |                        |
+        +--------------------->|                        |
+        |                      |  2. Verify sig with    |
+        |                      |     secp256r1 precompile
+        |                      |                        |
+        |                      |  3. If valid, execute  |
+        |                      |     instruction on     |
+        |                      |     behalf of PDA      |
+        |                      +----------------------->|
+```
+
+### Security Properties
+
+This architecture provides unique guarantees:
+
+**No key extraction possible**: The passkey private key cannot leave the secure enclave. There's no seed phrase to steal, no encrypted file to crack.
+
+**Hardware binding**: The passkey is tied to physical hardware. Cloning requires physical access and defeating hardware security measures.
+
+**Programmable logic**: The on-chain program can enforce policies:
+- Spending limits per transaction
+- Time-based restrictions
+- Multi-passkey requirements for large transfers
+- Whitelisted destinations
+
+### The Signature Flow
+
+When a user wants to execute a transaction:
+
+1. **Challenge generation**: The app creates a challenge containing the transaction details
+2. **User verification**: Device prompts for biometric (FaceID, fingerprint)
+3. **Passkey signing**: Secure enclave signs the challenge with the secp256r1 key
+4. **Transaction submission**: Signature is included in the Solana transaction
+5. **On-chain verification**: Program uses secp256r1 precompile to verify
+6. **Execution**: If valid, program executes instructions on behalf of the PDA
+
+The entire flow feels like "Authorize with FaceID" to the user.
+
+<ArticleSection name="WebAuthn Data Structures" id="webauthn-data" level="h2" />
+
+Understanding what passkeys actually sign is crucial for building on-chain verification.
+
+### Authenticator Data
+
+Every passkey signature includes authenticator data:
+
+```
++------------+------------+-------------+-------------------+
+|   rpIdHash |   flags    |  signCount  |  extensions...    |
+|  (32 bytes)|  (1 byte)  |  (4 bytes)  |  (variable)       |
++------------+------------+-------------+-------------------+
+```
+
+- **rpIdHash**: SHA-256 of the relying party ID (origin binding)
+- **flags**: Bit flags indicating user presence, user verification, etc.
+- **signCount**: Counter that increments on each use (replay protection)
+
+### Client Data JSON
+
+The client (browser/app) also contributes data:
+
+```json
+{
+  "type": "webauthn.get",
+  "challenge": "base64url-encoded-challenge",
+  "origin": "https://myapp.com",
+  "crossOrigin": false
+}
+```
+
+### What Gets Signed
+
+The passkey signs the concatenation:
+
+```
+signedData = authenticatorData || SHA256(clientDataJSON)
+```
+
+This means on-chain verification must:
+1. Reconstruct the authenticator data
+2. Hash the client data JSON
+3. Concatenate and verify the signature
+
+The challenge (your transaction data) is embedded in the client data JSON, binding the passkey signature to your specific transaction.
+
+<ArticleSection name="Implementation Considerations" id="implementation" level="h2" />
+
+Building with passkeys requires understanding several practical constraints.
+
+### Platform Support
+
+| Platform | Passkey Support | Secure Hardware |
+|----------|----------------|-----------------|
+| iOS 16+ | Full | Secure Enclave |
+| Android 9+ | Full | TEE/StrongBox |
+| macOS 13+ | Full | Secure Enclave |
+| Windows 11+ | Full | TPM |
+| Linux | Limited | Varies |
+
+Mobile devices provide the most consistent passkey experience.
+
+### Syncing and Portability
+
+Modern passkeys can sync across devices through platform ecosystems:
+
+- **Apple**: iCloud Keychain syncs passkeys across Apple devices
+- **Google**: Google Password Manager syncs across Android/Chrome
+- **Cross-platform**: FIDO Alliance is standardizing cross-ecosystem portability
+
+This means losing one device doesn't mean losing access, but it also means passkey security inherits cloud account security properties.
+
+### Attestation
+
+Passkeys can include attestation: cryptographic proof of what hardware created them. This allows servers to verify:
+
+- The passkey was created in genuine secure hardware
+- The specific make/model of authenticator
+- The security certification level
+
+For high-security applications, attestation verification can reject passkeys from emulators or compromised devices.
+
+### User Experience
+
+Passkey UX is significantly smoother than traditional wallet flows:
+
+**Traditional wallet:**
+1. Download wallet app
+2. Create account
+3. Write down 24 words
+4. Confirm seed phrase
+5. Return to original app
+6. Connect wallet
+7. Approve connection
+
+**Passkey wallet:**
+1. Tap "Create Account"
+2. Verify with FaceID
+3. Done
+
+The complexity is hidden in hardware, not pushed onto users.
+
+<ArticleSection name="Provider Implementations" id="providers" level="h2" />
+
+Embedded wallet providers use passkeys differently:
+
+**LazorKit** is fully passkey-native. Every smart wallet is a PDA controlled by a secp256r1 passkey. There's no MPC, no key splitting. The passkey IS the authentication.
+
+**Turnkey** uses passkeys as the authentication mechanism to access keys stored in their HSMs. The passkey proves you're authorized; Turnkey's enclave does the actual Solana signing.
+
+**Privy** and **Dynamic** support passkeys as one authentication option alongside email, phone, and social login. The passkey authenticates to their MPC system, which then produces Solana signatures.
+
+**Para** uses passkeys for authentication, with the underlying wallet secured by MPC key distribution.
+
+The distinction matters:
+- **Passkey-native** (LazorKit): The passkey signature IS the blockchain authorization
+- **Passkey-authenticated** (others): The passkey proves identity to a system that then authorizes
+
+Both are valid architectures with different security and UX tradeoffs.
+
+<ArticleSection name="Security Considerations" id="security" level="h2" />
+
+Passkeys dramatically improve security over passwords and seed phrases, but aren't without considerations.
+
+### What Passkeys Protect Against
+
+- **Phishing**: Origin binding makes fake sites mathematically unable to capture credentials
+- **Database breaches**: Servers store public keys only; nothing useful to steal
+- **Keyloggers**: No secrets are typed
+- **Replay attacks**: Sign counts prevent reusing old signatures
+- **Remote theft**: Private keys cannot be extracted, even with full device access
+
+### What Passkeys Don't Solve
+
+- **Physical device compromise**: Someone with your device AND biometric can authenticate
+- **Cloud account compromise**: Synced passkeys inherit cloud account security
+- **Malicious applications**: A compromised app can request signatures on malicious data
+- **User deception**: Users can still be tricked into signing harmful transactions
+
+### Recovery Planning
+
+Hardware-bound credentials create recovery challenges:
+
+- What if the user loses all devices with their passkey?
+- What if the secure enclave malfunctions?
+- What if cloud sync is disabled or unavailable?
+
+Smart wallet programs can implement backup mechanisms:
+- Multiple registered passkeys (second device)
+- Time-locked recovery to a backup address
+- Social recovery with guardian passkeys
+
+The on-chain program's flexibility enables recovery options that pure seed phrases can't match.
+
+<ArticleSection name="Conceptual Summary" id="summary" level="h2" />
+
+Passkeys move authentication security from human discipline to dedicated hardware:
+
+1. **Secure enclaves** hold private keys in isolated, tamper-resistant hardware
+2. **Biometrics** gate access without transmittable secrets
+3. **Origin binding** makes phishing mathematically impossible
+4. **secp256r1** signatures are now Solana-native through the precompile
+
+For embedded wallets, this enables:
+- **Passkey-native wallets**: PDAs directly controlled by passkey signatures
+- **Passkey-authenticated wallets**: Passkeys proving identity to MPC or custodial systems
+
+The user experience becomes "Authorize with FaceID" instead of managing seed phrases. The security model shifts from "don't make mistakes" to "hardware-enforced protection."
+
+When evaluating embedded wallet providers, understand whether passkeys are the authentication mechanism or the authorization mechanism. Both are valid, but the security properties differ.

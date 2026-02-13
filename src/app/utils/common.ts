@@ -10,6 +10,7 @@ export const languages = {
   Typescript: "TypeScript",
   Assembly: "Assembly",
   General: "General",
+  Mobile: "Mobile",
 } as const;
 
 export const languageColors = {
@@ -18,6 +19,7 @@ export const languageColors = {
   Typescript: BRAND_COLOURS.typescript,
   Assembly: BRAND_COLOURS.assembly,
   General: BRAND_COLOURS.general,
+  Mobile: BRAND_COLOURS.mobile,
 } as const;
 
 export const difficulty = {
@@ -44,6 +46,7 @@ export const languageFilterMap: Record<string, Language> = {
   general: "General",
   rust: "Rust",
   typescript: "Typescript",
+  mobile: "Mobile",
 };
 
 export const reverseLanguageFilterMap = Object.fromEntries(

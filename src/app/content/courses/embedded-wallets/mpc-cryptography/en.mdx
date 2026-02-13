@@ -1,0 +1,264 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Multi-Party Computation
+
+![MPC Cryptography](/graphics/course-banners/embedded-wallets.png)
+
+Every traditional wallet has a fatal flaw: the private key exists in one place. Whether it's a seed phrase on paper, an encrypted file on your phone, or a hardware wallet in your drawer, compromise that single location and everything is lost.
+
+Multi-Party Computation (MPC) eliminates this architectural weakness. The private key is split into shares distributed across multiple parties. No single party ever holds the complete key. To sign a transaction, the parties collaborate through cryptographic protocols that produce valid signatures without ever reconstructing the original key.
+
+This isn't security through obscurity. It's a fundamental restructuring of where secrets live.
+
+<ArticleSection name="The Single Point of Failure Problem" id="single-point-of-failure" level="h2" />
+
+Traditional key storage creates a binary security model: either the attacker has your key, or they don't. There's no middle ground.
+
+Consider the attack surface of a conventional mobile wallet:
+
+- **Device compromise**: Malware, physical theft, or forensic extraction
+- **Backup compromise**: Cloud storage breach, physical theft of seed phrase
+- **User error**: Phishing, clipboard hijacking, fake apps
+- **Custodial compromise**: If a third party holds your key, you inherit all their security risks
+
+Each of these represents complete, irreversible fund loss. The entire security model depends on preventing every possible attack vector simultaneously.
+
+MPC changes the equation. Even if an attacker compromises one share, they gain nothing usable. The threshold requirement (typically 2-of-2 or 2-of-3) means multiple independent systems must fail for funds to be at risk.
+
+<ArticleSection name="Secret Sharing Foundations" id="secret-sharing" level="h2" />
+
+Before understanding MPC signatures, we need to understand how secrets can be split.
+
+### Shamir's Secret Sharing
+
+In 1979, Adi Shamir published a scheme that allows splitting any secret into `n` shares where any `t` shares (the threshold) can reconstruct it, but `t-1` shares reveal nothing.
+
+The mathematical insight is elegant: a polynomial of degree `t-1` is uniquely determined by `t` points. To split a secret:
+
+1. Choose a random polynomial of degree `t-1` where the secret is the constant term
+2. Evaluate the polynomial at `n` different points
+3. Each point becomes a share
+
+For example, to create a 2-of-3 scheme for secret `S`:
+- Choose random coefficient `a`
+- Define polynomial: `f(x) = S + ax`
+- Share 1: `f(1) = S + a`
+- Share 2: `f(2) = S + 2a`
+- Share 3: `f(3) = S + 3a`
+
+Any two shares can reconstruct the line and find `S = f(0)`. One share alone reveals nothing because infinitely many lines pass through a single point.
+
+### From Sharing to Computing
+
+Shamir's scheme splits secrets, but reconstruction requires bringing shares together, recreating the single point of failure at signing time.
+
+MPC protocols go further: they compute on shared secrets without ever combining them. The shares interact through carefully designed protocols that produce results (like signatures) without exposing the underlying secret.
+
+<ArticleSection name="Threshold Signatures" id="threshold-signatures" level="h2" />
+
+A threshold signature scheme extends secret sharing to the signing operation itself. Instead of reconstructing the private key to sign, each share holder computes a partial signature. These partial signatures combine into a valid signature that's indistinguishable from one produced by a single signer.
+
+### The 2-of-2 Model
+
+Most embedded wallet providers use 2-of-2 threshold signatures:
+
+```
++------------------+        +------------------+
+|   User Device    |        |  Provider HSMs   |
+|                  |        |                  |
+|   Share A        |        |   Share B        |
+|   (encrypted)    |        |   (isolated)     |
++------------------+        +------------------+
+         |                           |
+         |    MPC Signing Protocol   |
+         +------------+--------------+
+                      |
+              +----------------+
+              | Valid Signature|
+              +----------------+
+```
+
+Neither party can sign alone. The user's device share requires biometric unlock. The provider's share sits in Hardware Security Modules (HSMs) that enforce authentication policies.
+
+An attacker must simultaneously compromise:
+- The user's device AND bypass biometrics
+- The provider's infrastructure AND bypass HSM protections
+
+This is dramatically harder than compromising a single location.
+
+### Why Not Just Multi-Sig?
+
+Solana supports native multi-signature accounts, so why use MPC?
+
+**Multi-sig limitations:**
+- Signatures are public: everyone can see the signing structure on-chain
+- Higher fees: multiple signatures mean larger transactions
+- Different addresses: multi-sig accounts have different addresses than single-sig
+- Protocol complexity: applications must understand and support the multi-sig structure
+
+**MPC advantages:**
+- Single signature output: standard transaction size and fees
+- Privacy: the threshold structure is invisible on-chain
+- Address compatibility: MPC wallets look identical to regular wallets
+- Protocol transparency: applications don't need special MPC support
+
+From the blockchain's perspective, an MPC signature is indistinguishable from a regular signature. The complexity is entirely off-chain.
+
+<ArticleSection name="EdDSA and FROST" id="eddsa-frost" level="h2" />
+
+Solana uses Ed25519 signatures (EdDSA over Curve25519). Creating threshold signatures for EdDSA requires specialized protocols because the signing algorithm doesn't split as naturally as ECDSA.
+
+### The FROST Protocol
+
+FROST (Flexible Round-Optimized Schnorr Threshold) is a threshold signature scheme designed for Schnorr-like signatures, including EdDSA.
+
+**Key generation** distributes the private key into shares:
+1. Each party generates random polynomials
+2. Parties exchange commitments and verify consistency
+3. Each party computes their share from the combined polynomials
+4. The public key is derived from the combined commitments
+
+**Signing** requires two communication rounds:
+1. **Commitment round**: Each participant generates random nonces and shares commitments
+2. **Signature round**: Participants compute partial signatures using their shares and the aggregated commitment. Partial signatures combine into the final signature.
+
+The security guarantee: no coalition smaller than the threshold can forge signatures or learn the private key, even if they behave maliciously.
+
+### Native Ed25519 Output
+
+FROST produces signatures that are mathematically identical to standard Ed25519 signatures. When your Solana transaction includes an MPC-generated signature:
+
+- Validators verify it with standard Ed25519 verification
+- Explorers display it as a normal signature
+- Smart contracts can't distinguish it from hardware wallet signatures
+
+This compatibility is crucial. MPC is purely an off-chain security enhancement that requires no blockchain protocol changes.
+
+<ArticleSection name="Key Generation Without Trust" id="distributed-key-generation" level="h2" />
+
+A critical question: who creates the initial key that gets split?
+
+If one party generates the key and distributes shares, that party knows the complete key during generation. This undermines the entire security model.
+
+### Distributed Key Generation (DKG)
+
+DKG protocols create keys collaboratively so no single party ever knows the complete key:
+
+1. Each party generates random data and commits to it
+2. Parties exchange encrypted contributions
+3. Mathematical combination produces shares where the underlying key was never computed whole
+
+The key literally never exists in one place, not even during creation.
+
+### Trust Assumptions
+
+Different providers make different trust assumptions:
+
+**Full DKG**: The user's device and provider jointly generate the key. Neither could have seen the complete key.
+
+**Provider generation with immediate split**: The provider generates in an HSM and immediately splits. The HSM is trusted not to leak.
+
+**User generation with backup**: The user generates locally, splits, and sends one share to the provider. The user briefly held the complete key.
+
+These represent different points on the security/convenience spectrum. Full DKG is most secure but requires more complex setup flows.
+
+<ArticleSection name="Recovery Without Reconstruction" id="recovery" level="h2" />
+
+What happens when a user loses their device?
+
+Traditional wallets have a brutal answer: restore from seed phrase or lose everything. MPC enables more sophisticated recovery options.
+
+### Provider-Assisted Recovery
+
+The provider's share is never lost. Recovery requires proving identity to generate a new device share:
+
+1. User authenticates through verified channels (email, phone, identity verification)
+2. Provider's HSM holds the unchanged provider share
+3. New device share is generated and paired with the existing provider share
+4. The old device share is invalidated
+
+The key itself doesn't change. Only the share distribution updates.
+
+### Social Recovery
+
+Some protocols support `t-of-n` schemes where multiple parties hold backup shares:
+
+- Trusted friends hold encrypted recovery shares
+- Recovery requires `t` of them to participate
+- None of them can access funds alone
+
+This eliminates the provider as a central point of trust while maintaining recovery capability.
+
+### Key Rotation
+
+MPC enables proactive security through share refresh:
+
+1. Parties run a protocol that generates new shares for the same key
+2. Old shares become invalid
+3. An attacker who stole a share before rotation gains nothing
+
+Regular rotation limits the window of vulnerability. Even if shares are compromised, rotation can invalidate them before exploitation.
+
+<ArticleSection name="Security Considerations" id="security-considerations" level="h2" />
+
+MPC doesn't eliminate all risk. It changes the threat model.
+
+### What MPC Protects Against
+
+- **Single-point compromise**: An attacker must breach multiple independent systems
+- **Insider threats**: Provider employees can't access user funds even with database access
+- **Key extraction**: The complete key never exists to be extracted
+- **Backup theft**: Stealing one share reveals nothing
+
+### What MPC Doesn't Solve
+
+- **Compromised signing requests**: If your device is compromised, attackers can request signatures on malicious transactions
+- **Social engineering**: Users can still be tricked into approving harmful transactions
+- **Provider collusion**: In 2-of-2 schemes, a malicious provider colluding with an attacker is equivalent to key theft
+- **Protocol bugs**: Implementation flaws in MPC protocols can compromise security
+
+### The Trust Spectrum
+
+MPC shifts trust, not eliminates it:
+
+| Model | User Trust | Provider Trust |
+|-------|-----------|----------------|
+| Self-custody | Full control, full responsibility | None |
+| MPC 2-of-2 | Controls one share | Controls one share, can't steal alone |
+| MPC 2-of-3 | Controls one share | Controls shares, needs two to sign |
+| Full custody | None | Complete |
+
+For most users, MPC's trust model is more realistic than expecting perfect seed phrase management.
+
+<ArticleSection name="Provider Implementations" id="provider-implementations" level="h2" />
+
+Different embedded wallet providers implement MPC with varying architectures:
+
+**Privy** uses 2-of-2 threshold signatures with shares split between the user's device and Privy's HSM infrastructure. Key generation happens in secure enclaves with immediate splitting.
+
+**Dynamic** implements EdDSA FROST for native Solana signatures. Their 2-of-2 model includes wallet export capability, allowing users to extract the full key if they choose self-custody.
+
+**Para** (formerly Capsule) distributes shares across their MPC network with support for multiple authentication methods. Their architecture supports EVM, Solana, and Cosmos from the same share distribution.
+
+**Turnkey** provides the HSM infrastructure and signing protocols but leaves authentication entirely to developers. You bring your own identity verification; Turnkey provides secure key operations.
+
+Each makes different tradeoffs between security guarantees, recovery options, and developer flexibility.
+
+<ArticleSection name="Conceptual Summary" id="conceptual-summary" level="h2" />
+
+MPC transforms key security from a single-point-of-failure problem into a distributed trust problem:
+
+1. **Secret sharing** splits keys so no single location holds the complete secret
+2. **Threshold signatures** compute signatures without reconstructing the key
+3. **Distributed key generation** ensures the key never exists whole, even during creation
+4. **Recovery protocols** enable access restoration without compromising security
+
+The signatures produced are standard Ed25519. The blockchain sees nothing unusual. All the security enhancement happens off-chain, invisible to validators and applications.
+
+When evaluating embedded wallet providers, the critical questions are:
+- What threshold scheme do they use?
+- How is key generation performed?
+- What recovery options exist?
+- What happens if the provider disappears?
+
+Understanding MPC architecture helps you evaluate these tradeoffs rather than taking marketing claims at face value.

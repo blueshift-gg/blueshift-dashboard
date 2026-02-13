@@ -101,7 +101,9 @@ export default function CourseFooter({
                   Next Lesson
                 </span>
                 <span className="font-medium text-shade-primary">
-                  {t(`courses.${courseMetadata.slug}.lessons.${nextLessonSlug}`)}
+                  {t(
+                    `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`
+                  )}
                 </span>
               </div>
               <Icon

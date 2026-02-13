@@ -1,0 +1,415 @@
+---
+title: "Token Operations"
+description: "Build mobile token functionality: transfers, token accounts, and SPL token integration with wallet signing."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Tokens on Solana" id="tokens-on-solana" level="h2" />
+
+Everything on Solana is an account. Tokens follow the same model, but with extra structure. Understanding this model is essential before you write mobile token code.
+
+A token has three key accounts:
+
+- **Mint Account**: Defines the token (decimals, supply, authorities)
+- **Token Account**: Holds a user's balance of that token
+- **Metadata Account**: Stores name, symbol, image (via Token Metadata program)
+
+When a user wants to hold USDC, they need a Token Account that links their wallet to the USDC Mint Account. This is called an Associated Token Account (ATA).
+
+```
+Wallet → Token Account → Mint Account
+(owner)   (balance)      (token definition)
+```
+
+<ArticleSection name="Setting Up SPL Token" id="setting-up-spl-token" level="h2" />
+
+Install the SPL Token library:
+
+```shellscript
+yarn add @solana/spl-token
+```
+
+The library provides instructions for all token operations. On mobile, you'll typically:
+
+1. Build the instruction
+2. Create a transaction
+3. Sign with MWA
+4. Send and confirm
+
+```typescript
+import {
+  getAssociatedTokenAddress,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  TransactionMessage,
+  VersionedTransaction,
+} from "@solana/web3.js";
+```
+
+<ArticleSection name="Checking Token Balances" id="checking-token-balances" level="h2" />
+
+Before any transfer, check the user's balance:
+
+```typescript
+async function getTokenBalance(
+  connection: Connection,
+  walletAddress: PublicKey,
+  mintAddress: PublicKey
+): Promise<number> {
+  // Derive the Associated Token Account address
+  const ata = await getAssociatedTokenAddress(
+    mintAddress,
+    walletAddress
+  );
+
+  try {
+    const accountInfo = await connection.getTokenAccountBalance(ata);
+    return parseFloat(accountInfo.value.uiAmountString || "0");
+  } catch (error) {
+    // Account doesn't exist = zero balance
+    return 0;
+  }
+}
+
+// Usage
+const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+const balance = await getTokenBalance(connection, userWallet, USDC_MINT);
+console.log(`USDC Balance: ${balance}`);
+```
+
+### Fetching All Token Balances
+
+For a portfolio view, fetch all tokens at once:
+
+```typescript
+async function getAllTokenBalances(
+  connection: Connection,
+  walletAddress: PublicKey
+): Promise<TokenBalance[]> {
+  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+    walletAddress,
+    { programId: TOKEN_PROGRAM_ID }
+  );
+
+  return tokenAccounts.value.map((account) => {
+    const info = account.account.data.parsed.info;
+    return {
+      mint: info.mint,
+      balance: info.tokenAmount.uiAmount,
+      decimals: info.tokenAmount.decimals,
+      address: account.pubkey.toBase58(),
+    };
+  });
+}
+```
+
+<ArticleSection name="Building Transfer Transactions" id="building-transfer-transactions" level="h2" />
+
+Here's how to build a token transfer that you'll sign with MWA:
+
+```typescript
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+
+async function transferToken(
+  connection: Connection,
+  fromWallet: PublicKey,
+  toWallet: PublicKey,
+  mintAddress: PublicKey,
+  amount: number,
+  decimals: number
+): Promise<string> {
+  // 1. Derive token accounts
+  const fromAta = await getAssociatedTokenAddress(mintAddress, fromWallet);
+  const toAta = await getAssociatedTokenAddress(mintAddress, toWallet);
+
+  // 2. Check if recipient has a token account
+  const toAtaInfo = await connection.getAccountInfo(toAta);
+  
+  // 3. Build instructions
+  const instructions = [];
+  
+  // Create recipient's ATA if it doesn't exist
+  if (!toAtaInfo) {
+    instructions.push(
+      createAssociatedTokenAccountInstruction(
+        fromWallet,  // payer
+        toAta,       // ATA address
+        toWallet,    // owner
+        mintAddress  // mint
+      )
+    );
+  }
+
+  // Add transfer instruction
+  const rawAmount = Math.floor(amount * Math.pow(10, decimals));
+  instructions.push(
+    createTransferInstruction(
+      fromAta,    // source
+      toAta,      // destination
+      fromWallet, // owner/signer
+      rawAmount   // amount in smallest units
+    )
+  );
+
+  // 4. Build transaction
+  const { blockhash, lastValidBlockHeight } = 
+    await connection.getLatestBlockhash("confirmed");
+
+  const messageV0 = new TransactionMessage({
+    payerKey: fromWallet,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const transaction = new VersionedTransaction(messageV0);
+
+  // 5. Sign with MWA
+  const signedTx = await transact(async (wallet) => {
+    const authResult = await wallet.authorize({
+      cluster: "mainnet-beta",
+      identity: {
+        name: "My Token App",
+        uri: "https://myapp.com",
+        icon: "favicon.ico",
+      },
+    });
+
+    const [signedTransaction] = await wallet.signTransactions({
+      transactions: [transaction],
+    });
+
+    return signedTransaction;
+  });
+
+  // 6. Send and confirm
+  const signature = await connection.sendTransaction(signedTx);
+  
+  await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight,
+  }, "confirmed");
+
+  return signature;
+}
+```
+
+<ArticleSection name="Creating Token Accounts" id="creating-token-accounts" level="h2" />
+
+Sometimes you need to explicitly create a token account before receiving:
+
+```typescript
+import {
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddress,
+} from "@solana/spl-token";
+
+async function createTokenAccountIfNeeded(
+  connection: Connection,
+  payer: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey
+): Promise<PublicKey> {
+  const ata = await getAssociatedTokenAddress(mint, owner);
+  
+  const ataInfo = await connection.getAccountInfo(ata);
+  
+  if (ataInfo) {
+    // Already exists
+    return ata;
+  }
+
+  // Need to create it
+  const instruction = createAssociatedTokenAccountInstruction(
+    payer,  // Who pays for the account creation
+    ata,    // The ATA address
+    owner,  // Who will own this token account
+    mint    // The token mint
+  );
+
+  // Build and sign transaction...
+  // (similar to transfer flow)
+
+  return ata;
+}
+```
+
+### Cost Considerations
+
+Creating an ATA costs ~0.002 SOL (rent exemption). In a transfer to a new recipient:
+
+1. You might pay to create their token account
+2. This is often expected in apps, good UX
+3. Consider showing users this cost before confirming
+
+```typescript
+const RENT_EXEMPT_MINIMUM = 0.00203928; // SOL for a token account
+
+// Show user the total cost
+const transferCost = recipientNeedsAta 
+  ? RENT_EXEMPT_MINIMUM + transactionFee 
+  : transactionFee;
+```
+
+<ArticleSection name="Token-2022 (Token Extensions)" id="token-2022" level="h2" />
+
+Solana has a newer token program with additional features. Check which program a mint uses:
+
+```typescript
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+async function getTokenProgram(
+  connection: Connection,
+  mintAddress: PublicKey
+): Promise<PublicKey> {
+  const mintInfo = await connection.getAccountInfo(mintAddress);
+  
+  if (!mintInfo) {
+    throw new Error("Mint not found");
+  }
+
+  // Check which program owns the mint
+  if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    return TOKEN_2022_PROGRAM_ID;
+  }
+  
+  return TOKEN_PROGRAM_ID;
+}
+
+// Use the correct program in your instructions
+const tokenProgram = await getTokenProgram(connection, mintAddress);
+
+const transferIx = createTransferInstruction(
+  sourceAta,
+  destAta,
+  owner,
+  amount,
+  [],
+  tokenProgram  // Pass the correct program
+);
+```
+
+<ArticleSection name="Mobile UX Patterns" id="mobile-ux-patterns" level="h2" />
+
+### Loading States
+
+Token operations take time. Show meaningful progress:
+
+```typescript
+const [status, setStatus] = useState<
+  "idle" | "building" | "signing" | "sending" | "confirming" | "done" | "error"
+>("idle");
+
+async function handleTransfer() {
+  try {
+    setStatus("building");
+    const tx = await buildTransferTransaction(/* ... */);
+    
+    setStatus("signing");
+    const signedTx = await signWithMwa(tx);
+    
+    setStatus("sending");
+    const signature = await connection.sendTransaction(signedTx);
+    
+    setStatus("confirming");
+    await connection.confirmTransaction(signature, "confirmed");
+    
+    setStatus("done");
+  } catch (error) {
+    setStatus("error");
+    // Handle specific errors
+  }
+}
+```
+
+### Amount Input
+
+Always handle decimal precision carefully:
+
+```typescript
+function parseTokenAmount(
+  input: string,
+  decimals: number
+): bigint | null {
+  // Remove anything except digits and decimal
+  const cleaned = input.replace(/[^\d.]/g, "");
+  
+  // Validate format
+  const parts = cleaned.split(".");
+  if (parts.length > 2) return null;
+  
+  const wholePart = parts[0] || "0";
+  const decimalPart = (parts[1] || "").padEnd(decimals, "0").slice(0, decimals);
+  
+  try {
+    return BigInt(wholePart + decimalPart);
+  } catch {
+    return null;
+  }
+}
+
+// Usage
+const rawAmount = parseTokenAmount("10.5", 6); // USDC has 6 decimals
+// Result: 10500000n
+```
+
+### Max Button
+
+Let users easily send their full balance:
+
+```typescript
+function getMaxTransferAmount(
+  balance: number,
+  decimals: number,
+  estimatedFee: number = 0.00005 // Conservative transaction fee
+): number {
+  // Leave a small buffer for fees
+  // Note: token transfers don't cost tokens, but the user needs SOL for gas
+  return Math.max(0, balance);
+}
+```
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+Token operations have specific failure modes:
+
+```typescript
+try {
+  await transferToken(/* ... */);
+} catch (error) {
+  const message = error.message || "";
+  
+  if (message.includes("insufficient funds")) {
+    // Not enough tokens
+    showError("Insufficient token balance");
+  } else if (message.includes("insufficient lamports")) {
+    // Not enough SOL for fees
+    showError("Not enough SOL for transaction fees");
+  } else if (message.includes("Account not found")) {
+    // Token account doesn't exist
+    showError("Token account not found");
+  } else if (message.includes("owner does not match")) {
+    // Wrong owner for the token account
+    showError("Token account ownership mismatch");
+  } else {
+    showError("Transfer failed. Please try again.");
+  }
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+- **Token Account model**: Users need ATAs to hold tokens. Check if they exist before transfers.
+- **Decimals matter**: USDC is 6 decimals, SOL is 9. Always convert properly.
+- **ATA creation costs SOL**: Factor this into UX when sending to new recipients.
+- **Check the token program**: Token-2022 mints need the right program ID.
+- **Show progress**: Token operations have multiple steps; keep users informed.
+
+Next, we'll build on these patterns to handle NFTs: tokens with supply of 1 and rich metadata.

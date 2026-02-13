@@ -1,0 +1,424 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Session Establishment
+
+![MWA Deep Dive](/graphics/course-banners/mwa-deep-dive.png)
+
+<ArticleSection name="Overview" id="overview" level="h2" />
+
+Once transport is established, the dApp and wallet must create a secure channel. This happens through a cryptographic handshake using Elliptic Curve Diffie-Hellman (ECDH) key exchange. By the end, both parties share a symmetric encryption key that no eavesdropper can derive.
+
+<ArticleSection name="The Handshake Messages" id="handshake" level="h2" />
+
+Session establishment uses two messages:
+
+**`HELLO_REQ`**: Sent by the dApp to the wallet
+**`HELLO_RSP`**: Sent by the wallet to the dApp
+
+These are the only unencrypted protocol messages. Everything after is encrypted.
+
+<ArticleSection name="HELLO_REQ Structure" id="hello-req" level="h2" />
+
+The dApp sends `HELLO_REQ` immediately after the WebSocket connection is established:
+
+```
++------------------------------------------------------------------+
+|  Qd (session public key)      |  Sa (signature)                  |
+|      (65 bytes)               |    (64 bytes)                    |
++------------------------------------------------------------------+
+```
+
+Total size: 129 bytes
+
+Components:
+
+**Qd (65 bytes)**: The dApp's *session* public key (P-256, uncompressed format). This is different from the association public key. The dApp generates two keypairs.
+
+**Sa (64 bytes)**: An ECDSA signature over Qd using the *association* private key. This proves the dApp controls the association key from the URI.
+
+### Why Two Keypairs?
+
+The dApp uses two distinct P-256 keypairs:
+
+| Keypair | Used For | Algorithm |
+|---------|----------|-----------|
+| Association keypair | Authenticating the dApp (signing HELLO_REQ) | ECDSA |
+| Session keypair | Key exchange (deriving shared secret) | ECDH |
+
+This separation follows cryptographic best practice: don't reuse keys for different purposes.
+
+<ArticleSection name="HELLO_REQ Generation" id="hello-req-generation" level="h2" />
+
+Let's trace the exact steps from the SDK:
+
+```typescript
+// From createHelloReq.ts (simplified)
+async function createHelloReq(
+  associationPrivateKey: CryptoKey,
+  sessionPublicKey: CryptoKey
+): Promise<Uint8Array> {
+  // Export the session public key in raw format (65 bytes)
+  const sessionPublicKeyBuffer = await crypto.subtle.exportKey(
+    'raw',
+    sessionPublicKey
+  );
+  const Qd = new Uint8Array(sessionPublicKeyBuffer);
+
+  // Sign Qd with the association private key
+  const signature = await crypto.subtle.sign(
+    {
+      name: 'ECDSA',
+      hash: 'SHA-256'
+    },
+    associationPrivateKey,
+    Qd
+  );
+  
+  // Convert signature from DER to raw format (64 bytes: r || s)
+  const Sa = derToRaw(new Uint8Array(signature));
+
+  // Construct the message (no message type byte - just Qd and Sa)
+  const message = new Uint8Array(65 + 64);
+  message.set(Qd, 0);
+  message.set(Sa, 65);
+  
+  return message;
+}
+```
+
+### Signature Format Note
+
+ECDSA signatures can be in DER format (variable length) or raw format (fixed 64 bytes for P-256). MWA uses raw format: the 32-byte `r` value concatenated with the 32-byte `s` value.
+
+The SDK includes conversion functions because Web Crypto API returns DER format:
+
+```typescript
+// DER signature structure:
+// 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
+// Raw signature structure:
+// [r (32 bytes)] [s (32 bytes)]
+```
+
+<ArticleSection name="HELLO_RSP Structure" id="hello-rsp" level="h2" />
+
+The wallet responds with `HELLO_RSP`:
+
+```
++------------------------------------------------------------------+
+|  Qw (wallet session key)      |  Session Props                   |
+|      (65 bytes)               |  (variable JSON)                 |
++------------------------------------------------------------------+
+```
+
+Components:
+
+**Qw (65 bytes)**: The wallet's session public key (P-256, uncompressed).
+
+**Session Props (variable)**: A JSON object encoded as UTF-8, containing session properties:
+
+```json
+{
+  "protocol_version": "2.0.0"
+}
+```
+
+### Why No Signature from Wallet?
+
+Notice the wallet doesn't sign `HELLO_RSP`. This is intentional:
+
+1. The dApp already trusts the wallet (the user installed it)
+2. The wallet proves knowledge of its private key during ECDH; if it has the wrong key, encryption fails
+3. Wallet identity verification (for UI purposes) happens at a higher layer via Digital Asset Links
+
+<ArticleSection name="Key Derivation" id="key-derivation" level="h2" />
+
+After exchanging hello messages, both parties can derive the shared secret and session keys.
+
+### ECDH Shared Secret
+
+The dApp computes:
+```
+shared_secret = ECDH(dApp_session_private_key, wallet_session_public_key)
+```
+
+The wallet computes:
+```
+shared_secret = ECDH(wallet_session_private_key, dApp_session_public_key)
+```
+
+Both arrive at the same 32-byte value (the x-coordinate of the ECDH result point).
+
+### HKDF Key Derivation
+
+The shared secret alone isn't used directly. Instead, MWA uses HKDF (HMAC-based Key Derivation Function) to derive the AES-128-GCM session key:
+
+```
+session_key = HKDF-SHA256(
+  IKM: shared_secret,      // 32 bytes from ECDH
+  salt: Qa,                // 65 bytes - the association public key
+  L: 16                    // Output length in bytes (128 bits for AES-128)
+)
+```
+
+Note: There is no `info` parameter in this HKDF application. Just IKM, salt, and the output length.
+
+<ArticleSection name="HKDF in Detail" id="hkdf-detail" level="h2" />
+
+HKDF has two phases:
+
+**Extract**: Combine the input key material (IKM) with the salt to produce a pseudorandom key (PRK).
+
+```
+PRK = HMAC-SHA256(salt, IKM)
+    = HMAC-SHA256(Qa, shared_secret)
+```
+
+**Expand**: Use the PRK to generate the desired amount of key material.
+
+```
+T(1) = HMAC-SHA256(PRK, 0x01)
+OKM = first 16 bytes of T(1)
+```
+
+Since we only need 16 bytes and SHA-256 produces 32 bytes, a single expansion step suffices.
+
+The SDK implements this:
+
+```typescript
+// From parseHelloRsp.ts (simplified)
+async function deriveSessionKey(
+  ecdhPrivateKey: CryptoKey,
+  walletPublicKey: CryptoKey,
+  associationPublicKey: CryptoKey
+): Promise<Uint8Array> {
+  // Step 1: ECDH to get shared secret
+  const sharedSecret = await crypto.subtle.deriveBits(
+    {
+      name: 'ECDH',
+      public: walletPublicKey
+    },
+    ecdhPrivateKey,
+    256 // bits
+  );
+
+  // Step 2: Export association public key as salt
+  const salt = await crypto.subtle.exportKey('raw', associationPublicKey);
+
+  // Step 3: HKDF Extract - import shared secret as HKDF input
+  const hkdfKey = await crypto.subtle.importKey(
+    'raw',
+    sharedSecret,
+    'HKDF',
+    false,
+    ['deriveBits']
+  );
+
+  // Step 4: HKDF Expand - derive session key (no info parameter)
+  const sessionKeyBits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(salt),
+      info: new Uint8Array(0) // Empty - MWA spec uses no info parameter
+    },
+    hkdfKey,
+    128 // AES-128 key size in bits
+  );
+
+  return new Uint8Array(sessionKeyBits);
+}
+```
+
+<ArticleSection name="Why This Design?" id="design-rationale" level="h2" />
+
+Several cryptographic decisions deserve explanation:
+
+### Why P-256 (secp256r1)?
+
+Not secp256k1 (Bitcoin/Ethereum curve). Reasons:
+1. **Hardware support**: P-256 is supported by Android's hardware security module and iOS Secure Enclave
+2. **Web Crypto API**: Built-in support for P-256, no external libraries needed
+3. **NIST standardization**: Widely audited and trusted
+
+### Why Not Just Use TLS?
+
+TLS would work for encryption but doesn't solve:
+1. **App-level authentication**: TLS authenticates servers, not mobile apps
+2. **Localhost certificates**: No certificate authority issues certs for 127.0.0.1
+3. **Platform constraints**: Native apps don't have the same TLS integration as browsers
+
+### Why ECDH + HKDF Instead of Direct Key Use?
+
+1. **Key separation**: HKDF ensures the session key is cryptographically independent of the raw ECDH output
+2. **Salt binding**: Using the association public key as salt binds the session to this specific association
+3. **Flexibility**: HKDF can derive multiple keys if needed (e.g., separate encryption and MAC keys)
+
+<ArticleSection name="State Machine After Hello" id="state-after-hello" level="h2" />
+
+After successful hello exchange, the session state includes:
+
+```typescript
+{
+  __type: 'hello_rsp_received',
+  ws: WebSocket,                    // Active connection
+  associationPublicKey: CryptoKey,  // For verification
+  ecdhPrivateKey: CryptoKey,        // dApp's session private key
+  sessionKey: Uint8Array,           // Derived AES-128 key (16 bytes)
+  sequenceNumber: 1                 // Starts at 1, not 0
+}
+```
+
+From this point, all messages are encrypted with AES-GCM using `sessionKey`.
+
+<ArticleSection name="Handshake Timing" id="timing" level="h2" />
+
+The handshake is fast, typically under 50ms on modern devices. Timing breakdown:
+
+| Operation | Typical Time |
+|-----------|--------------|
+| Generate session keypair | 2-5ms |
+| Sign Qd with association key | 1-2ms |
+| Send HELLO_REQ | &lt;1ms (local) |
+| Wallet generate keypair | 2-5ms |
+| Wallet send HELLO_RSP | &lt;1ms (local) |
+| ECDH derivation | 2-5ms |
+| HKDF derivation | &lt;1ms |
+
+Total: ~10-20ms on modern hardware.
+
+For remote connections via reflector, add network latency (typically 50-200ms round-trip).
+
+<ArticleSection name="Session Establishment Failures" id="failures" level="h2" />
+
+What can go wrong?
+
+### Signature Verification Failed
+
+The wallet couldn't verify Sa over Qd using the association public key from the URI.
+
+Causes:
+- URI was tampered with
+- dApp implementation bug (signing wrong data)
+- Key format mismatch
+
+### Invalid Public Key Format
+
+Qd or Qw isn't a valid P-256 point.
+
+Causes:
+- Malformed message
+- Wrong curve (e.g., secp256k1 key sent as P-256)
+- Corrupted transmission (rare with WebSocket)
+
+### Session Timeout
+
+The wallet didn't respond to HELLO_REQ within the timeout.
+
+Causes:
+- Wallet not fully launched
+- User distracted by wallet onboarding
+- Wallet bug
+
+### Protocol Version Mismatch
+
+The wallet's `protocol_version` in session props indicates incompatibility.
+
+Causes:
+- Very old wallet version
+- Very new wallet with breaking changes
+
+<ArticleSection name="Complete Handshake Example" id="example" level="h2" />
+
+Let's trace byte-by-byte (with realistic but not real values):
+
+**1. dApp generates association keypair**
+```
+Association public key (Qa): 04 a1b2c3... (65 bytes)
+Association private key (da): stored securely
+```
+
+**2. dApp generates session keypair**
+```
+Session public key (Qd): 04 d4e5f6... (65 bytes)
+Session private key (dd): stored securely
+```
+
+**3. dApp signs Qd**
+```
+Sa = ECDSA-Sign(da, Qd) = 7a8b9c... (64 bytes)
+```
+
+**4. dApp sends HELLO_REQ**
+```
+00 04d4e5f6...(65 bytes)... 7a8b9c...(64 bytes)...
+│   └─── Qd ───────────────┘ └─── Sa ──────────┘
+└─ message type (HELLO_REQ)
+```
+
+**5. Wallet receives HELLO_REQ**
+```
+- Extract Qd (bytes 1-65)
+- Extract Sa (bytes 66-129)
+- Import Qa from URI
+- Verify: ECDSA-Verify(Qa, Qd, Sa) == true
+```
+
+**6. Wallet generates session keypair**
+```
+Session public key (Qw): 04 1a2b3c... (65 bytes)
+Session private key (dw): stored securely
+```
+
+**7. Wallet sends HELLO_RSP**
+```
+01 041a2b3c...(65 bytes)... {"protocol_version":"2.0.0"}
+│   └─── Qw ───────────────┘ └─── session props (JSON) ──┘
+└─ message type (HELLO_RSP)
+```
+
+**8. Both derive shared secret**
+```
+dApp:   shared = ECDH(dd, Qw) = 5f6a7b... (32 bytes)
+Wallet: shared = ECDH(dw, Qd) = 5f6a7b... (32 bytes)
+```
+
+**9. Both derive session key**
+```
+session_key = HKDF(shared, Qa, "session_key") = 9d8e7f... (16 bytes)
+```
+
+**10. Session established**
+
+Both now have `session_key` and can encrypt/decrypt messages.
+
+<ArticleSection name="Verifying the Implementation" id="verifying" level="h2" />
+
+If you're implementing MWA or debugging issues, verify each step:
+
+1. **Keypair generation**: Log the public keys in hex. They should be 65 bytes, starting with `04`.
+
+2. **Signature**: Verify manually using an online P-256 verifier. The message is Qd, the key is Qa.
+
+3. **ECDH**: Both sides should derive the same shared secret. If not, check key formats.
+
+4. **HKDF**: Use a test vector. The Python `cryptography` library has HKDF support for comparison.
+
+<ArticleSection name="Security Analysis" id="security" level="h2" />
+
+The session establishment provides:
+
+**Forward Secrecy**: Each session uses fresh ECDH keys. Compromising one session doesn't compromise others.
+
+**Authentication**: The dApp proves it controls the association key by signing HELLO_REQ.
+
+**Key Binding**: HKDF with the association key as salt ensures the derived key is bound to this association.
+
+**No Replay**: Session keys are ephemeral. An attacker can't replay an old HELLO_REQ to establish a session; they'd need the current association private key.
+
+Limitations:
+
+**No Wallet Authentication**: The wallet doesn't cryptographically prove its identity. The dApp trusts that the responding endpoint is a legitimate wallet.
+
+**Side Channel Risks**: On compromised devices, private keys might be extractable from memory.
+
+In the next lesson, we examine how messages are encrypted after session establishment: the AES-GCM protocol and sequence number handling.

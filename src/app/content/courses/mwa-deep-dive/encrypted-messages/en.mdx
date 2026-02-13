@@ -1,0 +1,390 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# The Encrypted Message Protocol
+
+After session establishment, every message between the dApp and wallet is encrypted. This lesson examines the encryption scheme: AES-128-GCM with sequence numbers for replay protection.
+
+<ArticleSection name="Why AES-GCM?" id="why-aes-gcm" level="h2" />
+
+MWA uses AES-128-GCM (Galois/Counter Mode) because it provides:
+
+**Confidentiality**: Only the holder of the session key can read message contents.
+
+**Integrity**: Any modification to the ciphertext is detected. Tampered messages fail authentication.
+
+**Authentication**: The authentication tag proves the message came from someone who knows the key.
+
+GCM is an *authenticated encryption with associated data* (AEAD) mode. It's efficient, widely supported in hardware, and available in the Web Crypto API.
+
+<ArticleSection name="Encrypted Message Structure" id="message-structure" level="h2" />
+
+Every encrypted message follows this format:
+
+```
++------------------------------------------------------------+
+|  Sequence Number  |  IV  |  Ciphertext  |  Auth Tag        |
+|    (4 bytes)      | (12) |   (variable) |   (16 bytes)     |
++------------------------------------------------------------+
+```
+
+**Sequence Number (4 bytes)**: Big-endian unsigned integer. Starts at 1 (not 0), increments with each message sent.
+
+**IV (Initialization Vector, 12 bytes)**: Random bytes generated for this message. Never reuse an IV with the same key.
+
+**Ciphertext (variable)**: The encrypted payload. Same length as the plaintext.
+
+**Auth Tag (16 bytes)**: The GCM authentication tag. Verifies integrity and authenticity.
+
+<ArticleSection name="Additional Authenticated Data (AAD)" id="aad" level="h2" />
+
+MWA uses the sequence number as Additional Authenticated Data (AAD) in the AES-GCM encryption. This means:
+
+1. The sequence number is **not encrypted** (it's sent in plaintext at the start of the message)
+2. The sequence number **is authenticated** via the GCM tag
+3. Any tampering with the sequence number causes decryption to fail
+
+This design prevents an attacker from modifying the sequence number to cause replay or reordering attacks; the authentication tag verification will fail.
+
+<ArticleSection name="Encryption Process" id="encryption" level="h2" />
+
+To encrypt a message:
+
+```typescript
+// From encryptedMessage.ts (simplified)
+async function encryptMessage(
+  sessionKey: CryptoKey,
+  sequenceNumber: number,
+  plaintext: Uint8Array
+): Promise<Uint8Array> {
+  // Generate random IV
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  // Prepare sequence number as big-endian bytes (used as AAD)
+  const seqBytes = new Uint8Array(4);
+  new DataView(seqBytes.buffer).setUint32(0, sequenceNumber, false);
+
+  // Encrypt with AES-GCM, using sequence number as AAD
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+      additionalData: seqBytes,  // AAD: authenticates the sequence number
+      tagLength: 128  // 16 bytes
+    },
+    sessionKey,
+    plaintext
+  );
+
+  // Web Crypto returns ciphertext || tag
+  const ciphertextAndTag = new Uint8Array(encrypted);
+
+  // Construct the wire format: seq || iv || ciphertext || tag
+  const message = new Uint8Array(4 + 12 + ciphertextAndTag.length);
+  message.set(seqBytes, 0);
+  message.set(iv, 4);
+  message.set(ciphertextAndTag, 16);
+
+  return message;
+}
+```
+
+<ArticleSection name="Decryption Process" id="decryption" level="h2" />
+
+To decrypt:
+
+```typescript
+async function decryptMessage(
+  sessionKey: CryptoKey,
+  expectedSequenceNumber: number,
+  message: Uint8Array
+): Promise<Uint8Array> {
+  // Parse the wire format
+  const seqBytes = message.slice(0, 4);
+  const iv = message.slice(4, 16);
+  const ciphertextAndTag = message.slice(16);
+
+  // Verify sequence number
+  const receivedSeq = new DataView(seqBytes.buffer).getUint32(0, false);
+  if (receivedSeq !== expectedSequenceNumber) {
+    throw new Error(`Sequence number mismatch: expected ${expectedSequenceNumber}, got ${receivedSeq}`);
+  }
+
+  // Decrypt with AES-GCM, using sequence number as AAD
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+      additionalData: seqBytes,  // AAD must match what was used for encryption
+      tagLength: 128
+    },
+    sessionKey,
+    ciphertextAndTag
+  );
+
+  return new Uint8Array(decrypted);
+}
+```
+
+<ArticleSection name="Sequence Number Mechanics" id="sequence-numbers" level="h2" />
+
+Each endpoint maintains two counters:
+
+- **Send counter**: Incremented after each message sent
+- **Receive counter**: The expected sequence number of the next received message
+
+Both start at **1** after session establishment (not 0).
+
+```
+      dApp                              Wallet
+  +-----------+                    +--------------+
+  | sendSeq=1 |---- seq 1 -------->| recvSeq: 1->2|
+  | recvSeq=1 |                    | sendSeq=1    |
+  |           |                    |              |
+  | sendSeq=2 |<--- seq 1 ---------| sendSeq: 1->2|
+  | recvSeq=2 |                    | recvSeq=2    |
+  |           |                    |              |
+  | sendSeq=3 |---- seq 2 -------->| recvSeq: 2->3|
+  +-----------+                    +--------------+
+```
+
+### Why Sequence Numbers?
+
+**Replay attack prevention**: An attacker who captures a signed transaction response can't replay it; the sequence number won't match.
+
+**Out-of-order detection**: If messages arrive out of order (shouldn't happen with TCP, but defense in depth), they're rejected.
+
+**Duplicate detection**: A duplicated message has a stale sequence number.
+
+### Sequence Number Overflow
+
+The spec doesn't explicitly address overflow. With 32 bits, you have 4 billion messages per session. Given MWA sessions are ephemeral (typically lasting seconds), overflow is not a practical concern.
+
+If a session somehow approached overflow, the implementation should close and re-establish.
+
+<ArticleSection name="AES-GCM Internals" id="aes-gcm-internals" level="h2" />
+
+Understanding GCM helps debug issues:
+
+### Counter Mode
+
+GCM builds on CTR (Counter) mode:
+1. Start with IV and a counter (initially 1)
+2. Encrypt counter blocks with AES: `E(K, IV || counter)`
+3. XOR the encrypted counter with plaintext blocks
+
+This produces the ciphertext. The counter increments for each block.
+
+### GHASH Authentication
+
+GCM adds authentication via GHASH:
+1. Hash the ciphertext with a special polynomial multiplication
+2. The result, combined with the encrypted counter, produces the tag
+
+```
+Tag = GHASH(H, AAD || Ciphertext || lengths) ⊕ E(K, IV || 0)
+```
+
+Where H = E(K, 0) is the hash key.
+
+### Why 12-Byte IV?
+
+With a 12-byte IV, GCM is most efficient. The IV is directly used as the counter's initial value. Longer IVs require additional processing.
+
+<ArticleSection name="Plaintext Contents" id="plaintext" level="h2" />
+
+After decryption, the plaintext is a JSON-RPC message:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "authorize",
+  "params": {
+    "identity": { /* ... */ },
+    "cluster": "mainnet-beta"
+  }
+}
+```
+
+Or a response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "accounts": [ /* ... */ ],
+    "auth_token": "base64..."
+  }
+}
+```
+
+The encryption layer doesn't interpret these; it just encrypts/decrypts bytes.
+
+<ArticleSection name="Message Size Limits" id="size-limits" level="h2" />
+
+The spec defines limits:
+
+- **Reflector**: 4096 bytes maximum message size
+- **Local**: Implementation-defined, typically much larger
+
+For practical purposes:
+- Transaction payloads can be large (multiple transactions, each up to 1232 bytes)
+- Base64 encoding inflates size by ~33%
+- Stay under 3KB for reflector compatibility
+
+The SDK handles chunking for `sign_and_send_transactions` with many transactions.
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+Encryption/decryption failures should be handled carefully:
+
+### Decryption Failed
+
+The Web Crypto API throws an error if:
+- The auth tag doesn't match (message tampered or key mismatch)
+- The IV or ciphertext is malformed
+
+Response: Close the session. Don't try to recover. A decryption failure indicates a serious problem (key mismatch, corruption, or attack).
+
+### Sequence Mismatch
+
+The received sequence number doesn't match expected.
+
+Response: Close the session. Out-of-order or replayed messages indicate protocol violation.
+
+### Malformed JSON
+
+After successful decryption, the plaintext isn't valid JSON-RPC.
+
+Response: Return a JSON-RPC error response. This is a protocol-level error, not a crypto error.
+
+<ArticleSection name="Security Properties" id="security" level="h2" />
+
+The encrypted message protocol provides:
+
+**Confidentiality**: Without the session key, an attacker sees only ciphertext.
+
+**Integrity**: Any modification (to IV, ciphertext, or tag) causes decryption to fail.
+
+**Replay Protection**: Sequence numbers prevent message replay within a session.
+
+**Forward Secrecy** (from session establishment): Compromising one session doesn't help with others.
+
+<ArticleSection name="What It Doesn't Provide" id="limitations" level="h2" />
+
+**Non-repudiation**: GCM is symmetric; both parties can create valid messages. You can't prove a message came from one specific party.
+
+**Traffic Analysis Protection**: Message timing and sizes are visible to observers (on local transport) or the reflector (on remote transport).
+
+**Metadata Protection**: The sequence number is plaintext. An observer knows how many messages have been exchanged.
+
+<ArticleSection name="Implementation in the SDK" id="sdk-implementation" level="h2" />
+
+The actual SDK code in `encryptedMessage.ts`:
+
+```typescript
+// Actual SDK structure (excerpt)
+const INITIALIZATION_VECTOR_SIZE_BYTES = 12;
+const SEQUENCE_NUMBER_SIZE_BYTES = 4;
+const AUTH_TAG_SIZE_BYTES = 16;
+
+export async function encryptJsonRpcMessage(
+  jsonRpcMessage: object,
+  sharedSecret: CryptoKey,
+  sequenceNumber: number
+): Promise<Uint8Array> {
+  const plaintext = new TextEncoder().encode(JSON.stringify(jsonRpcMessage));
+  const iv = crypto.getRandomValues(new Uint8Array(INITIALIZATION_VECTOR_SIZE_BYTES));
+  
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+      tagLength: AUTH_TAG_SIZE_BYTES * 8,
+    },
+    sharedSecret,
+    plaintext,
+  );
+
+  // Build the complete encrypted message
+  const seqNumBuffer = new ArrayBuffer(SEQUENCE_NUMBER_SIZE_BYTES);
+  new DataView(seqNumBuffer).setUint32(0, sequenceNumber);
+  
+  return new Uint8Array([
+    ...new Uint8Array(seqNumBuffer),
+    ...iv,
+    ...new Uint8Array(ciphertext),
+  ]);
+}
+```
+
+Note how the SDK:
+1. JSON-encodes the RPC message
+2. Generates a fresh IV for each message
+3. Uses `AES-GCM` with 128-bit tag
+4. Prepends sequence number
+
+<ArticleSection name="Debugging Encryption Issues" id="debugging" level="h2" />
+
+### "Decryption failed" / "Operation error"
+
+The most common issue. Check:
+
+1. **Same session key on both sides**: Log the derived key (carefully, in development only)
+2. **Sequence numbers match**: Log send/receive counters
+3. **Message not truncated**: Verify the full message is received
+4. **IV present**: The first 16 bytes after sequence number are IV
+
+### Debugging with Tools
+
+You can manually decrypt a captured message:
+
+```typescript
+// Given: sessionKey, encryptedMessage (Uint8Array)
+const seq = encryptedMessage.slice(0, 4);
+const iv = encryptedMessage.slice(4, 16);
+const ciphertext = encryptedMessage.slice(16);
+
+console.log('Sequence:', new DataView(seq.buffer).getUint32(0, false));
+console.log('IV:', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''));
+console.log('Ciphertext length:', ciphertext.length);
+```
+
+### Common Mistakes
+
+1. **Reusing IV**: Each message must have a unique IV. Using the same IV twice with the same key is catastrophic; it allows XORing ciphertexts to recover plaintexts.
+
+2. **Wrong sequence number**: Incrementing before vs after sending can cause mismatch.
+
+3. **Endianness**: Sequence number is big-endian. Using little-endian breaks compatibility.
+
+4. **Tag length**: GCM supports different tag lengths. MWA uses 128 bits (16 bytes).
+
+<ArticleSection name="Performance Considerations" id="performance" level="h2" />
+
+AES-GCM is fast:
+
+| Operation | Time (typical mobile device) |
+|-----------|------------------------------|
+| Encrypt 1KB | < 0.1ms |
+| Decrypt 1KB | < 0.1ms |
+| IV generation | < 0.01ms |
+
+The overhead is negligible compared to network latency or transaction processing.
+
+For very large payloads (many transactions), the SDK processes them efficiently. The bottleneck is usually Solana network latency, not encryption.
+
+<ArticleSection name="Specification Reference" id="spec-reference" level="h2" />
+
+From the MWA spec, encrypted messages:
+
+> "All JSON-RPC messages exchanged after the session is established are encrypted using AES-128-GCM. The shared secret derived from ECDH is used as the encryption key."
+
+Key spec points:
+- 12-byte IV (randomly generated)
+- 4-byte sequence number (big-endian)
+- 128-bit (16-byte) authentication tag
+- Session key from HKDF derivation
+
+In the next lesson, we examine the JSON-RPC methods available once the encrypted session is established: the actual operations your dApp can request from the wallet.

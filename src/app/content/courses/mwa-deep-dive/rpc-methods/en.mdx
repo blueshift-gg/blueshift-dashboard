@@ -1,0 +1,558 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# JSON-RPC Methods Reference
+
+Once a secure session is established, the dApp communicates with the wallet using JSON-RPC 2.0 over the encrypted channel. This lesson documents every method, their parameters, and response formats.
+
+<ArticleSection name="Method Categories" id="categories" level="h2" />
+
+MWA defines two categories of methods:
+
+**Non-privileged Methods**: Can be called at any time after session establishment.
+- `authorize`
+- `deauthorize`
+- `get_capabilities`
+
+**Privileged Methods**: Require prior successful `authorize` call.
+- `sign_and_send_transactions`
+- `sign_messages`
+- `clone_authorization`
+
+<ArticleSection name="authorize" id="authorize" level="h2" />
+
+Requests user authorization for the dApp.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "authorize",
+  "params": {
+    "identity": {
+      "uri": "https://myapp.com",
+      "icon": "favicon.ico",
+      "name": "My dApp"
+    },
+    "cluster": "mainnet-beta",
+    "auth_token": "previous_token_for_reauthorization",
+    "features": ["sign_and_send_transactions:2", "sign_messages"],
+    "addresses": ["base64_encoded_addresses"]
+  }
+}
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `identity` | object | Yes | Information about the dApp for display |
+| `identity.uri` | string | Yes | URI for identity verification |
+| `identity.icon` | string | No | Relative path to icon from identity.uri |
+| `identity.name` | string | No | Display name for the dApp |
+| `cluster` | string | No | Solana cluster: `mainnet-beta`, `testnet`, `devnet`, or custom URL |
+| `auth_token` | string | No | Previous auth token for silent reauthorization |
+| `features` | string[] | No | List of features/versions the dApp requires |
+| `addresses` | string[] | No | Specific account addresses to authorize |
+
+### Response (Success)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "accounts": [
+      {
+        "address": "base64_encoded_pubkey",
+        "display_address": "7xKXt...",
+        "display_address_format": "base58",
+        "label": "Main Wallet",
+        "icon": "data:image/png;base64,...",
+        "chains": ["solana:mainnet"],
+        "features": ["solana:signAndSendTransaction"]
+      }
+    ],
+    "auth_token": "new_or_refreshed_token",
+    "wallet_uri_base": "https://phantom.app/ul/v1/",
+    "sign_in_result": { /* if sign-in was requested */ }
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `accounts` | array | Authorized accounts |
+| `accounts[].address` | string | Base64-encoded public key |
+| `accounts[].display_address` | string | Human-readable address |
+| `accounts[].display_address_format` | string | Format: `base58` |
+| `accounts[].label` | string | Optional account name |
+| `accounts[].icon` | string | Optional account icon (data URI) |
+| `accounts[].chains` | string[] | Chain identifiers (CAIP-2 format) |
+| `accounts[].features` | string[] | Account-supported features |
+| `auth_token` | string | Token for future reauthorization |
+| `wallet_uri_base` | string | Base URI for wallet-specific deep links |
+
+### Reauthorization Flow
+
+If `auth_token` is provided and still valid, the wallet may skip user interaction:
+
+```
+dApp                                     Wallet
+  │                                        │
+  │ authorize(auth_token="abc123")         │
+  │──────────────────────────────────────►│
+  │                                        │ Token valid?
+  │                                        │ Yes → silent success
+  │◄──────────────────────────────────────│
+  │ result: { accounts, auth_token }       │
+```
+
+If the token is invalid or expired:
+```
+  │ authorize(auth_token="expired")        │
+  │──────────────────────────────────────►│
+  │                                        │ Token invalid
+  │                                        │ Show authorization UI
+  │                                        │ User approves
+  │◄──────────────────────────────────────│
+  │ result: { accounts, new_auth_token }   │
+```
+
+<ArticleSection name="deauthorize" id="deauthorize" level="h2" />
+
+Invalidates a previous authorization.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "2",
+  "method": "deauthorize",
+  "params": {
+    "auth_token": "token_to_invalidate"
+  }
+}
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `auth_token` | string | Yes | The auth token to invalidate |
+
+### Response (Success)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "2",
+  "result": {}
+}
+```
+
+### Use Cases
+
+1. **User logout**: When the user explicitly disconnects their wallet
+2. **Security**: After detecting suspicious activity
+3. **Token rotation**: Before requesting fresh authorization
+
+<ArticleSection name="get_capabilities" id="get-capabilities" level="h2" />
+
+Queries the wallet's supported features.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3",
+  "method": "get_capabilities"
+}
+```
+
+No parameters required.
+
+### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3",
+  "result": {
+    "supports_clone_authorization": true,
+    "supports_sign_and_send_transactions": true,
+    "max_transactions_per_request": 10,
+    "max_messages_per_request": 10,
+    "supported_transaction_versions": ["legacy", 0]
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `supports_clone_authorization` | boolean | Whether `clone_authorization` is available |
+| `supports_sign_and_send_transactions` | boolean | Whether the wallet can sign and broadcast |
+| `max_transactions_per_request` | number | Maximum transactions in one request |
+| `max_messages_per_request` | number | Maximum messages in one request |
+| `supported_transaction_versions` | array | `"legacy"`, `0` (versioned), etc. |
+
+### Why Check Capabilities?
+
+Different wallets have different limits and features. Check capabilities before:
+- Sending large transaction batches
+- Using versioned transactions
+- Assuming `clone_authorization` support
+
+<ArticleSection name="sign_and_send_transactions" id="sign-and-send" level="h2" />
+
+Signs transactions and broadcasts them to the network.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "method": "sign_and_send_transactions",
+  "params": {
+    "payloads": [
+      "base64_encoded_transaction_1",
+      "base64_encoded_transaction_2"
+    ],
+    "options": {
+      "min_context_slot": 150000000,
+      "commitment": "confirmed",
+      "skip_preflight": false,
+      "max_retries": 3
+    }
+  }
+}
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `payloads` | string[] | Yes | Base64-encoded serialized transactions |
+| `options` | object | No | Transaction sending options |
+| `options.min_context_slot` | number | No | Minimum slot for context |
+| `options.commitment` | string | No | `processed`, `confirmed`, `finalized` |
+| `options.skip_preflight` | boolean | No | Skip preflight simulation |
+| `options.max_retries` | number | No | Number of send retries |
+
+### Transaction Payload Format
+
+Each payload is a Solana transaction, serialized according to its version:
+
+- **Legacy transactions**: Standard serialization
+- **Versioned transactions (v0)**: Include version prefix and address lookup tables
+
+The transaction must:
+1. Have `recentBlockhash` set (or `null` for the wallet to fill)
+2. Leave the fee payer signature empty (wallet fills this)
+3. Include all other required signatures
+
+### Response (Success)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "result": {
+    "signatures": [
+      "base64_encoded_signature_1",
+      "base64_encoded_signature_2"
+    ]
+  }
+}
+```
+
+### Response (Partial Failure)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "error": {
+    "code": -3,
+    "message": "Some transactions were not signed",
+    "data": {
+      "valid": [0],
+      "invalid": [1]
+    }
+  }
+}
+```
+
+Error codes for this method:
+- `-1`: Authorization failed
+- `-2`: Invalid payloads (malformed transactions)
+- `-3`: Not all transactions signed (user declined some)
+- `-4`: Not submitted (broadcast failed)
+- `-6`: Too many payloads (exceeds `max_transactions_per_request`)
+
+<ArticleSection name="sign_messages" id="sign-messages" level="h2" />
+
+Signs arbitrary messages (not transactions).
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5",
+  "method": "sign_messages",
+  "params": {
+    "payloads": [
+      "base64_encoded_message"
+    ],
+    "addresses": [
+      "base64_encoded_pubkey"
+    ]
+  }
+}
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `payloads` | string[] | Yes | Base64-encoded messages to sign |
+| `addresses` | string[] | No | Specific accounts to sign with (must be authorized) |
+
+### Response (Success)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5",
+  "result": {
+    "signed_payloads": [
+      "base64_encoded_signed_message"
+    ]
+  }
+}
+```
+
+### Message Signing Format
+
+Messages are signed as-is (raw bytes). For human-readable messages, encode as UTF-8 first.
+
+Common patterns:
+- **Authentication**: Sign a nonce to prove wallet ownership
+- **Off-chain data**: Sign structured data for protocols like Sign-In With Solana
+
+<ArticleSection name="clone_authorization" id="clone-authorization" level="h2" />
+
+Creates a new authorization from an existing one.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "6",
+  "method": "clone_authorization",
+  "params": {}
+}
+```
+
+No parameters (uses the current session's authorization).
+
+### Response (Success)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "6",
+  "result": {
+    "auth_token": "new_cloned_token"
+  }
+}
+```
+
+### Use Cases
+
+1. **Multi-session apps**: Clone authorization to use in background services
+2. **Token refresh**: Get a new token while the current session is still valid
+
+This method may not be supported by all wallets (check `get_capabilities`).
+
+<ArticleSection name="Error Response Format" id="errors" level="h2" />
+
+All methods return errors in JSON-RPC format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "error": {
+    "code": -1,
+    "message": "Human-readable error message",
+    "data": { /* optional additional data */ }
+  }
+}
+```
+
+### Standard Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| `-32700` | Parse error | Invalid JSON |
+| `-32600` | Invalid request | Not valid JSON-RPC |
+| `-32601` | Method not found | Unknown method name |
+| `-32602` | Invalid params | Invalid method parameters |
+| `-32603` | Internal error | Wallet internal error |
+
+### MWA-Specific Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| `-1` | `ERROR_AUTHORIZATION_FAILED` | User declined or authorization invalid |
+| `-2` | `ERROR_INVALID_PAYLOADS` | Transaction/message payloads malformed |
+| `-3` | `ERROR_NOT_SIGNED` | User declined to sign (some or all) |
+| `-4` | `ERROR_NOT_SUBMITTED` | Transaction send failed |
+| `-5` | `ERROR_NOT_CLONED` | Authorization cloning failed |
+| `-6` | `ERROR_TOO_MANY_PAYLOADS` | Exceeds wallet limit |
+| `-7` | `ERROR_CHAIN_NOT_SUPPORTED` | Requested chain not supported by wallet |
+| `-100` | `ERROR_ATTEST_ORIGIN_ANDROID` | Android attestation required but failed |
+
+<ArticleSection name="Feature Strings" id="features" level="h2" />
+
+Feature strings use a namespaced format to identify capabilities and versions:
+
+| Feature | Description |
+|---------|-------------|
+| `solana:signTransactions` | Sign transactions without submitting |
+| `solana:signAndSendTransaction` | Sign and broadcast a single transaction |
+| `solana:signAndSendTransaction:2` | Version 2 with additional options support |
+| `solana:signMessages` | Message signing support |
+| `solana:cloneAuthorization` | Authorization cloning support |
+
+When calling `authorize`, specify required features:
+
+```json
+{
+  "method": "authorize",
+  "params": {
+    "features": ["solana:signAndSendTransaction:2", "solana:signMessages"]
+  }
+}
+```
+
+The wallet will error if it can't support requested features.
+
+<ArticleSection name="Chain Identifiers" id="chains" level="h2" />
+
+Account responses include chain identifiers in CAIP-2 format:
+
+| Chain | CAIP-2 Identifier |
+|-------|-------------------|
+| Mainnet Beta | `solana:mainnet` |
+| Devnet | `solana:devnet` |
+| Testnet | `solana:testnet` |
+| Localnet | `solana:localnet` |
+
+<ArticleSection name="Request/Response Flow" id="flow" level="h2" />
+
+A complete session with multiple operations:
+
+```
+dApp                                        Wallet
+  │                                           │
+  │ ──── HELLO_REQ ─────────────────────────► │
+  │ ◄─── HELLO_RSP ───────────────────────── │
+  │                                           │
+  │ ──── authorize ──────────────────────────► │
+  │                                           │ [User approves]
+  │ ◄─── result: accounts, auth_token ─────── │
+  │                                           │
+  │ ──── sign_and_send_transactions ─────────► │
+  │                                           │ [User reviews]
+  │ ◄─── result: signatures ───────────────── │
+  │                                           │
+  │ ──── deauthorize ────────────────────────► │
+  │ ◄─── result: {} ──────────────────────── │
+  │                                           │
+  │ ──── [WebSocket close] ──────────────────► │
+```
+
+<ArticleSection name="Best Practices" id="best-practices" level="h2" />
+
+### 1. Always Check Authorization
+
+Before privileged methods:
+
+```typescript
+if (!authToken) {
+  const authResult = await wallet.authorize(identity);
+  authToken = authResult.auth_token;
+}
+```
+
+### 2. Handle Partial Signing
+
+Check for error code `-3` which indicates partial signing:
+
+```typescript
+try {
+  const result = await wallet.signAndSendTransactions(payloads);
+} catch (error) {
+  if (error.code === -3 && error.data) {
+    console.log('Signed:', error.data.valid);
+    console.log('Declined:', error.data.invalid);
+  }
+}
+```
+
+### 3. Respect Wallet Limits
+
+Query capabilities and batch accordingly:
+
+```typescript
+const caps = await wallet.getCapabilities();
+const batchSize = caps.max_transactions_per_request || 1;
+
+for (let i = 0; i < transactions.length; i += batchSize) {
+  const batch = transactions.slice(i, i + batchSize);
+  await wallet.signAndSendTransactions(batch);
+}
+```
+
+### 4. Use Reauthorization
+
+Store and reuse `auth_token`:
+
+```typescript
+// On app start
+const savedToken = await AsyncStorage.getItem('auth_token');
+
+// In transact()
+const result = await wallet.authorize({
+  identity,
+  auth_token: savedToken
+});
+
+// Save for next time
+await AsyncStorage.setItem('auth_token', result.auth_token);
+```
+
+### 5. Validate Responses
+
+Check response structure before accessing fields:
+
+```typescript
+if (result.accounts && result.accounts.length > 0) {
+  const address = result.accounts[0].address;
+  // Use address...
+}
+```
+
+In the next lesson, we examine identity verification: how wallets confirm the dApp is who it claims to be.

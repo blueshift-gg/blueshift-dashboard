@@ -1,0 +1,422 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Solana dApp Store Publishing
+
+The Solana dApp Store uses a fundamentally different model than traditional app stores. Instead of a database controlled by a company, your app's registry entry is an NFT on the Solana blockchain. You own it. No corporation can remove it without your private key.
+
+This lesson covers the complete publishing flow: from minting your Publisher identity to submitting your first release.
+
+<ArticleSection name="Understanding the NFT Hierarchy" id="understanding-the-nft-hierarchy" level="h2" />
+
+The dApp Store uses three layers of NFTs, built on Metaplex's Certified Collection standard:
+
+```
+Publisher NFT (your identity)
+    └── App NFT (your application)
+            └── Release NFT (each version)
+```
+
+### Publisher NFT
+
+This is your identity as a developer or organization. You mint it once and use it for all your apps.
+
+The Publisher NFT contains:
+- Your name/brand
+- Contact information
+- Website
+- An icon representing you (or your company)
+
+Think of it as your developer account, except you own it cryptographically.
+
+### App NFT
+
+Each application you publish gets its own App NFT, linked to your Publisher NFT via the Certified Collection standard. This proves that you (the Publisher) created this app.
+
+The App NFT contains:
+- App name
+- Category (Games, DeFi, NFT, etc.)
+- Localized descriptions
+- Screenshots and promotional images
+- Links to your privacy policy and license
+
+### Release NFT
+
+Each version of your app is a Release NFT linked to its App NFT. This contains:
+- The actual APK file (stored on distributed storage)
+- Version information
+- What's new in this release
+- Compatibility information
+
+When you push an update, you mint a new Release NFT. The previous versions remain on-chain as historical record.
+
+<ArticleSection name="Setting Up for Publishing" id="setting-up-for-publishing" level="h2" />
+
+There are two ways to publish to the Solana dApp Store:
+
+1. **Publisher Portal (Recommended)**: A web-based interface at [publish.solanamobile.com](https://publish.solanamobile.com)
+2. **CLI**: For automation and CI/CD integration
+
+### Publisher Portal (Recommended)
+
+The Publisher Portal is the easiest way to submit your first app:
+
+1. **Sign up** at [publish.solanamobile.com](https://publish.solanamobile.com)
+2. **Complete KYC/KYB verification** (required for all publishers)
+3. **Connect your publisher wallet** (Phantom, Solflare, etc.)
+4. **Ensure ~0.2 SOL** in your wallet for transaction fees and ArDrive storage costs
+5. **Select a storage provider** (ArDrive is recommended)
+
+> **Important**: Your publisher wallet is required for all future submissions. Do not lose access to it.
+
+### CLI Setup (Advanced)
+
+For automated publishing or CI/CD pipelines, use the dapp-store CLI.
+
+```shellscript
+# Check Node version - must be 18-21
+node --version
+
+# Create a directory for publishing
+mkdir my-app-publishing
+cd my-app-publishing
+
+# Initialize and install
+npm init -y
+npm install --save-dev @solana-mobile/dapp-store-cli
+
+# Initialize config
+npx dapp-store init
+```
+
+This creates a `config.yaml` with the proper structure for your app metadata.
+
+You'll need a keypair with SOL for minting NFTs. You can use your existing wallet or generate a dedicated publishing keypair.
+
+<ArticleSection name="Preparing Your APK" id="preparing-your-apk" level="h2" />
+
+The dApp Store requires a properly signed release APK. Debug builds won't work.
+
+### Generate a signing key
+
+```shellscript
+keytool -genkey -v -keystore my-release-key.keystore -alias my-key-alias -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Save this keystore file securely. If you lose it, you cannot update your app.
+
+### Configure Gradle for release signing
+
+In your Android project's `android/app/build.gradle`:
+
+```typescript
+// Add this inside the android block
+signingConfigs {
+    release {
+        storeFile file("my-release-key.keystore")
+        storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+        keyAlias "my-key-alias"
+        keyPassword System.getenv("KEY_PASSWORD") ?: ""
+    }
+}
+
+buildTypes {
+    release {
+        signingConfig signingConfigs.release
+        minifyEnabled true
+        proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    }
+}
+```
+
+### Build the release APK
+
+```shellscript
+cd android
+
+# Set your passwords
+export KEYSTORE_PASSWORD="your-secure-password"
+export KEY_PASSWORD="your-secure-password"
+
+# Build release APK
+./gradlew assembleRelease
+
+# Your APK will be at:
+# android/app/build/outputs/apk/release/app-release.apk
+```
+
+### APK Requirements
+
+The dApp Store has specific requirements:
+
+| Requirement | Value |
+|-------------|-------|
+| Target SDK | Minimum Android API 33 (Android 13) |
+| Build Type | Release (signed, not debug) |
+| Min Size | No limit, but be reasonable |
+| Architecture | arm64-v8a recommended (can include x86_64 for emulators) |
+
+<ArticleSection name="Asset Requirements" id="asset-requirements" level="h2" />
+
+You'll need several visual assets for your listing.
+
+### Required images
+
+| Asset | Size | Format | Purpose |
+|-------|------|--------|---------|
+| App Icon | 512 × 512 px | PNG | Main store listing |
+| Banner Graphic | 1200 × 600 px | PNG/JPG | Promotional banner (required) |
+| Screenshots | Min 1080 × 1080 px | PNG/JPG | App functionality showcase |
+
+### Screenshot requirements
+
+- Minimum **4 screenshots or videos** required
+- All images must be at least **1080px** in width and height
+- Must show actual app functionality
+- Videos supported for showcasing app features
+
+### Optional assets
+
+| Asset | Size | Purpose |
+|-------|------|---------|
+| Feature Graphic | 1200 × 1200 px | Editor's Choice consideration |
+
+### Create an assets folder
+
+```shellscript
+mkdir -p assets/screenshots
+# Place your images:
+# assets/app-icon.png (512x512)
+# assets/banner.png (1200x600)
+# assets/screenshots/screen1.png (min 1080x1080)
+# assets/screenshots/screen2.png
+# assets/screenshots/screen3.png
+# assets/screenshots/screen4.png
+# ... etc
+```
+
+<ArticleSection name="Creating Your Publisher NFT" id="creating-your-publisher-nft" level="h2" />
+
+With everything prepared, let's create your Publisher identity.
+
+### Via Publisher Portal (Recommended)
+
+1. Go to [publish.solanamobile.com](https://publish.solanamobile.com)
+2. Sign up and complete KYC/KYB verification
+3. Connect your wallet (Phantom, Solflare, etc.)
+4. Fill out your publisher profile (name, website, contact)
+5. The portal handles NFT minting automatically
+
+### Via CLI
+
+```shellscript
+# Validate your config first
+npx dapp-store validate -k /path/to/keypair.json -b /path/to/android/build/tools
+
+# Create publisher NFT
+npx dapp-store create publisher -k /path/to/keypair.json
+```
+
+The CLI will:
+1. Upload your publisher icon to ArDrive (decentralized storage)
+2. Create the Publisher NFT metadata
+3. Mint the Publisher NFT to your wallet
+
+After minting, save your Publisher NFT address; you'll need it for creating apps.
+
+<ArticleSection name="Creating Your App NFT" id="creating-your-app-nft" level="h2" />
+
+With your Publisher NFT created, you can now register your app.
+
+### Via Publisher Portal
+
+1. In the portal sidebar, click "Add a dApp" > "New dApp"
+2. Fill out app details (name, description, category, etc.)
+3. Upload your icon, banner, and screenshots
+4. Save the form
+
+### Via CLI
+
+```shellscript
+# Create app under your publisher
+npx dapp-store create app -k /path/to/keypair.json -u https://api.mainnet-beta.solana.com
+```
+
+The CLI validates that your app icon matches the icon in your APK, ensuring consistency.
+
+### App Categories
+
+Choose the category that best fits your app:
+
+- **Games**: Gaming apps with Solana integration
+- **DeFi**: Decentralized finance applications
+- **NFT**: NFT marketplaces, galleries, minting apps
+- **Social**: Social media and communication
+- **Utility**: Tools and utilities
+- **Other**: Anything else
+
+<ArticleSection name="Submitting Your Release" id="submitting-your-release" level="h2" />
+
+Finally, submit your actual APK as a Release NFT.
+
+### Via Publisher Portal
+
+1. Navigate to your app's Home menu in the sidebar
+2. Click "New Version" in the top-right
+3. Upload your release APK
+4. Fill in version info and release notes
+5. Click "Submit" and approve the wallet signing requests
+
+> **Important**: Ensure you approve each signing request. Skipping any could result in missing assets.
+
+### Via CLI
+
+```shellscript
+# Create and submit release
+npx dapp-store create release \
+  -k /path/to/keypair.json \
+  -b /path/to/android/build/tools \
+  -u https://api.mainnet-beta.solana.com
+
+# Final submission with required attestations
+npx dapp-store publish submit \
+  -k /path/to/keypair.json \
+  -u https://api.mainnet-beta.solana.com \
+  --requestor-is-authorized \
+  --complies-with-solana-dapp-store-policies
+```
+
+The `--requestor-is-authorized` and `--complies-with-solana-dapp-store-policies` flags are legal attestations required for submission.
+
+### What happens during review?
+
+The dApp Store team manually reviews each submission to ensure:
+- The app functions as described
+- No malware or malicious behavior
+- Compliance with the Publisher Policy
+- Screenshots accurately represent the app
+
+Review typically takes **2-5 business days**. You'll receive email notification of approval or rejection.
+
+<ArticleSection name="Updating Your App" id="updating-your-app" level="h2" />
+
+When you release a new version, you mint a new Release NFT.
+
+### Via Publisher Portal
+
+1. Go to your app in the sidebar
+2. Click "New Version"
+3. Upload the new APK with incremented version code
+4. Fill in release notes
+5. Submit and approve signing requests
+
+### Via CLI
+
+```shellscript
+# Build new APK with incremented version code
+./gradlew assembleRelease
+
+# Submit new release
+npx dapp-store create release \
+  -k /path/to/keypair.json \
+  -b /path/to/android/build/tools \
+  -u https://api.mainnet-beta.solana.com
+```
+
+The previous version remains on-chain, but the dApp Store displays the latest release to users.
+
+### Version code requirements
+
+Each release must have a higher `versionCode` than the previous release. This is enforced at the APK level:
+
+```typescript
+// In android/app/build.gradle
+android {
+    defaultConfig {
+        versionCode 2  // Increment this for each release
+        versionName "1.1.0"
+    }
+}
+```
+
+<ArticleSection name="The Publisher Policy" id="the-publisher-policy" level="h2" />
+
+The dApp Store has policies, but they're designed to protect users rather than extract rent.
+
+### Restricted content
+
+These are not allowed:
+- Apps that facilitate illegal activity
+- Malware, spyware, or apps that abuse user data
+- Impersonation of other apps or developers
+- Apps that deceive users about their purpose
+
+### Required disclosures
+
+If your app:
+- Handles user funds → disclose how keys are managed
+- Collects user data → provide a privacy policy
+- Connects to external services → disclose what data is shared
+
+### What IS allowed
+
+Unlike traditional app stores:
+- Direct crypto payments (no platform fee)
+- Token reward mechanisms
+- NFT minting and trading
+- DeFi protocol integration
+- Any lawful Solana program interaction
+
+<ArticleSection name="Monitoring Your Listing" id="monitoring-your-listing" level="h2" />
+
+After your app is approved, you can verify it on-chain and monitor downloads.
+
+### Verify on-chain
+
+Your App NFT is viewable on any Solana explorer:
+
+```shellscript
+# Get your app NFT address
+npx dapp-store list apps
+
+# View on Solscan
+open "https://solscan.io/token/YOUR_APP_NFT_ADDRESS"
+```
+
+### Download analytics
+
+The dApp Store provides basic analytics through the Publisher Dashboard (coming soon) or by querying on-chain data directly.
+
+<ArticleSection name="Common Issues and Solutions" id="common-issues-and-solutions" level="h2" />
+
+### "Package name mismatch"
+
+Your APK's package name must match what you registered in the App NFT. Check your `build.gradle`:
+
+```typescript
+android {
+    defaultConfig {
+        applicationId "com.yourcompany.yourapp"
+    }
+}
+```
+
+### "APK is not release signed"
+
+You're submitting a debug build. Make sure you're building with `assembleRelease` and that your signing config is correct.
+
+### "Version code must be higher"
+
+You're trying to submit the same or lower version code. Increment `versionCode` in your `build.gradle`.
+
+### "Icon mismatch"
+
+The icon in your APK doesn't match the icon you provided for the App NFT. Ensure consistency:
+- Update your APK's launcher icon
+- Rebuild the APK
+- Resubmit
+
+<ArticleSection name="Next Steps" id="next-steps" level="h2" />
+
+You've now published to the Solana dApp Store: the most crypto-friendly distribution channel available.
+
+But you probably also want to reach users on traditional app stores. The next lesson covers how to navigate Apple and Google's crypto-specific policies and get your app approved.

@@ -1,7 +1,11 @@
 "use client";
 
 import { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
-import { difficulty as difficultyMap } from "@/app/utils/common";
+import {
+  difficulty as difficultyMap,
+  languageColors,
+  Language,
+} from "@/app/utils/common";
 import React, { useRef, useState } from "react";
 import classNames from "classnames";
 import { Link } from "@/i18n/navigation";
@@ -61,6 +65,16 @@ export default function CourseCard({
 
   const badgeDifficulty = difficultyMap[difficulty ?? 1];
 
+  // Map language to a valid BRAND_COLOURS key (handles "Mobile" -> "general")
+  const brandColorKey = (
+    language.toLowerCase() in BRAND_COLOURS
+      ? language.toLowerCase()
+      : "general"
+  ) as keyof typeof BRAND_COLOURS;
+
+  // Get the language color from languageColors (which properly maps Mobile -> general)
+  const langColor = languageColors[language as Language] || BRAND_COLOURS.general;
+
   return (
     <div
       ref={cardRef}
@@ -92,14 +106,14 @@ export default function CourseCard({
         ></img> */}
         <AsciiAnimation
           textPath={courseSlug || ""}
-          color={language.toLowerCase() as keyof typeof BRAND_COLOURS}
+          color={brandColorKey}
         />
 
         <Avatar
           icon={{ name: language }}
           className="mt-auto"
           thickness={1.5}
-          variant={language.toLowerCase() as keyof typeof BRAND_COLOURS}
+          variant={brandColorKey}
           crosshair={{
             variant: "bordered",
             animationDelay: 0,
@@ -133,10 +147,7 @@ export default function CourseCard({
               >
                 <span
                   style={{
-                    color:
-                      BRAND_COLOURS[
-                        language.toLowerCase() as keyof typeof BRAND_COLOURS
-                      ],
+                    color: langColor,
                   }}
                   className={classNames("font-mono leading-[100%]")}
                 >
@@ -208,14 +219,7 @@ export default function CourseCard({
                     : t("lessons.continue_learning")
               }
               children={
-                completedLessonsCount ===
-                0 ? // <div className="flex items-center gap-x-2 order-last">
-                //   {/* <Divider direction="vertical" className="h-[20px]!" /> */}
-                //   {/* <span className="text-sm font-medium bg-clip-text text-transparent bg-xp-gradient"> */}
-                //     {/* 50 XP */}
-                //   {/* </span> */}
-                // </div>
-                null : (
+                completedLessonsCount === 0 ? null : (
                   <div className="flex items-center gap-x-2 order-last">
                     <Divider direction="vertical" className="h-[20px]!" />
                     <ProgressCircle

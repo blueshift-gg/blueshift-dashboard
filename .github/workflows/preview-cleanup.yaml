@@ -1,0 +1,56 @@
+name: Preview Cleanup
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Derive preview identifiers
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          PR_NUMBER="${PR_NUMBER}"
+          echo "WORKER_NAME=blueshift-preview-pr-${PR_NUMBER}" >> "$GITHUB_ENV"
+          echo "CONTENT_PREFIX=compiled-mdx-preview/pr-${PR_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Delete preview worker
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # https://github.com/cloudflare/wrangler-action/releases/tag/v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >
+            delete --name ${{ env.WORKER_NAME }}
+
+      - name: Delete preview content
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_MAX_ATTEMPTS: "5"
+          AWS_RETRY_MODE: "standard"
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/${{ env.CONTENT_PREFIX }}"
+          attempts=0
+          max_attempts=3
+
+          until [ "$attempts" -ge "$max_attempts" ]; do
+            attempts=$((attempts + 1))
+            echo "Attempt ${attempts}/${max_attempts}: deleting ${S3_PREFIX}"
+
+            if aws s3 rm "$S3_PREFIX" --recursive --endpoint-url "$ENDPOINT" --only-show-errors; then
+              exit 0
+            fi
+
+            sleep $((attempts * 2))
+          done
+
+          echo "Failed to delete preview content after ${max_attempts} attempts."
+          exit 1

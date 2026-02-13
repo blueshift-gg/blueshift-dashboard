@@ -4,6 +4,7 @@ import { generateBannerData } from "@/lib/banners/banner-generator";
 import sharp from "sharp";
 import { courses } from "@/app/content/courses/courses";
 import { challenges } from "@/app/content/challenges/challenges";
+import { paths } from "@/app/content/paths/paths";
 
 const COURSE_BANNERS_DIR = path.join(
   process.cwd(),
@@ -17,10 +18,16 @@ const CHALLENGE_BANNERS_DIR = path.join(
   "graphics",
   "challenge-banners",
 );
+const PATH_BANNERS_DIR = path.join(
+  process.cwd(),
+  "public",
+  "graphics",
+  "path-banners",
+);
 
 async function generateBannersFor(
   items: any[],
-  type: "course" | "challenge",
+  type: "course" | "challenge" | "path",
   outputDir: string,
   options: { force: boolean },
 ) {
@@ -95,6 +102,7 @@ async function main() {
   await generateBannersFor(challenges, "challenge", CHALLENGE_BANNERS_DIR, {
     force,
   });
+  await generateBannersFor(paths, "path", PATH_BANNERS_DIR, { force });
 
   console.log("Banner generation process complete.");
 }

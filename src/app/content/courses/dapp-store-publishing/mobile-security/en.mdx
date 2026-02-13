@@ -1,0 +1,501 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Mobile Security Essentials
+
+Your app is published. Users are downloading it. But here's the uncomfortable truth: every APK you ship can be reverse engineered. Every API key embedded in your code can be extracted. Every authentication flow can be analyzed.
+
+This isn't theoretical. A developer recently documented hacking their own Flutter app in under an hour, extracting API keys using nothing more than the `strings` command on their APK file.
+
+This lesson covers the security realities of mobile crypto apps and practical defenses.
+
+<ArticleSection name="The Reverse Engineering Reality" id="the-reverse-engineering-reality" level="h2" />
+
+When you ship an APK, you're shipping your entire codebase to attackers. Here's what they can do:
+
+### APK extraction
+
+Any user can pull your APK from their device:
+
+```shellscript
+# Connect device via ADB
+adb devices
+
+# Find your app's package
+adb shell pm list packages | grep yourapp
+
+# Pull the APK
+adb shell pm path com.yourcompany.yourapp
+adb pull /data/app/com.yourcompany.yourapp/base.apk
+```
+
+### Decompilation
+
+Tools like `jadx` or `apktool` convert your APK back to readable code:
+
+```shellscript
+# Install jadx
+brew install jadx
+
+# Decompile APK to Java source
+jadx -d output/ yourapp.apk
+
+# Now you have readable source code in output/
+```
+
+### String extraction
+
+Even without decompilation, strings embedded in your binary are trivially extractable:
+
+```shellscript
+# Extract all strings from an APK
+unzip -p yourapp.apk classes.dex | strings | grep -i "api\|key\|secret\|token"
+```
+
+This command will find:
+- Hardcoded API keys
+- API endpoint URLs
+- Error messages that reveal internal structure
+- Environment variable names
+- Any string literal in your code
+
+### What obfuscation actually protects
+
+Proguard/R8 (Android's built-in obfuscator) renames classes and methods:
+
+```typescript
+// Before obfuscation
+class WalletManager {
+  async sendTransaction(tx) { ... }
+}
+
+// After obfuscation
+class a {
+  async b(c) { ... }
+}
+```
+
+This makes **control flow** harder to understand. But it does **nothing** for string literals. Your API key is still there, just in a class called `a` instead of `WalletManager`.
+
+<ArticleSection name="What Secrets Can You Actually Protect?" id="what-secrets-can-you-actually-protect" level="h2" />
+
+Understanding what you can and cannot protect is crucial for designing secure apps.
+
+### Cannot protect: Static secrets
+
+These will be extracted no matter what you do:
+- API keys embedded in code
+- Hardcoded URLs
+- Static configuration values
+- Client IDs for OAuth
+
+### Can protect: User-specific secrets
+
+With proper implementation, you can protect:
+- User authentication tokens
+- Private keys (with hardware backing)
+- Session data
+- Encrypted user data
+
+### The key insight
+
+**Don't put server-side secrets in client-side code.**
+
+If a secret gives access to something valuable, it should never exist in the APK. Instead:
+- Authenticate users to your backend
+- Backend holds the real API keys
+- Backend proxies requests or issues limited-scope tokens
+
+<ArticleSection name="Secure Storage on Mobile" id="secure-storage-on-mobile" level="h2" />
+
+Mobile platforms provide hardware-backed secure storage. Use it.
+
+### iOS: Keychain Services
+
+iOS Keychain is backed by the Secure Enclave on modern devices. It's designed specifically for storing secrets like:
+- Authentication tokens
+- Private keys
+- Passwords
+
+With React Native, use `expo-secure-store`:
+
+```typescript
+import * as SecureStore from 'expo-secure-store';
+
+// Store a value
+await SecureStore.setItemAsync('authToken', token, {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+});
+
+// Retrieve a value
+const token = await SecureStore.getItemAsync('authToken');
+
+// Delete a value
+await SecureStore.deleteItemAsync('authToken');
+```
+
+The `WHEN_UNLOCKED_THIS_DEVICE_ONLY` option means:
+- Value is only accessible when device is unlocked
+- Value doesn't sync to other devices via iCloud
+- Value is deleted if device is wiped
+
+### Android: Keystore + EncryptedSharedPreferences
+
+Android's Keystore provides hardware-backed key storage. For general secrets, use EncryptedSharedPreferences:
+
+```typescript
+import * as SecureStore from 'expo-secure-store';
+
+// expo-secure-store uses Android Keystore on Android
+await SecureStore.setItemAsync('authToken', token);
+```
+
+Under the hood, `expo-secure-store` on Android:
+1. Generates an encryption key in Android Keystore
+2. Uses that key to encrypt your value
+3. Stores encrypted value in SharedPreferences
+4. Key extraction requires breaking Keystore (extremely difficult)
+
+### What NOT to use for secrets
+
+```typescript
+// NEVER store secrets in these:
+import AsyncStorage from '@react-native-async-storage/async-storage';
+await AsyncStorage.setItem('authToken', token); // ❌ Not encrypted
+
+// Or in-memory global state that persists:
+global.authToken = token; // ❌ Can be extracted via memory dumps
+```
+
+<ArticleSection name="Private Key Security" id="private-key-security" level="h2" />
+
+Crypto apps have a unique challenge: they handle private keys that control real money.
+
+### Never store raw private keys
+
+If you're implementing a non-custodial wallet, the private key should:
+- Be encrypted before storage
+- Use hardware-backed encryption keys
+- Require user authentication to access
+
+```typescript
+import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
+
+// Encrypt private key with user's PIN-derived key
+const encryptPrivateKey = async (privateKey: Uint8Array, userPin: string) => {
+  // Derive encryption key from PIN
+  const salt = await Crypto.getRandomBytesAsync(16);
+  const derivedKey = await deriveKey(userPin, salt);
+  
+  // Encrypt private key
+  const encrypted = await encrypt(privateKey, derivedKey);
+  
+  // Store encrypted key and salt
+  await SecureStore.setItemAsync('encryptedPrivateKey', 
+    JSON.stringify({ encrypted, salt: Array.from(salt) }),
+    { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }
+  );
+};
+
+// Decrypt when needed for signing
+const getPrivateKey = async (userPin: string): Promise<Uint8Array> => {
+  const stored = await SecureStore.getItemAsync('encryptedPrivateKey');
+  const { encrypted, salt } = JSON.parse(stored);
+  
+  const derivedKey = await deriveKey(userPin, new Uint8Array(salt));
+  return await decrypt(encrypted, derivedKey);
+};
+```
+
+### Prefer embedded wallet providers
+
+Services like Privy handle the complexity of secure key management:
+- Keys are encrypted and sharded
+- Hardware security modules on the backend
+- No raw key ever exists in your code
+- You focus on UX, they handle key security
+
+<ArticleSection name="API Security Patterns" id="api-security-patterns" level="h2" />
+
+Your app needs to communicate with backends: your own and third-party services. Here's how to do it securely.
+
+### Pattern 1: Backend proxy
+
+Instead of calling third-party APIs directly from your app:
+
+```typescript
+// ❌ Direct call exposes API key
+const response = await fetch('https://api.thirdparty.com/data', {
+  headers: {
+    'Authorization': 'Bearer sk_live_YOUR_API_KEY' // Extractable!
+  }
+});
+
+// ✅ Proxy through your backend
+const response = await fetch('https://yourbackend.com/api/data', {
+  headers: {
+    'Authorization': `Bearer ${userAuthToken}` // User-specific token
+  }
+});
+```
+
+Your backend:
+1. Validates the user's auth token
+2. Makes the request to the third-party API with the real key
+3. Returns the result to the app
+
+### Pattern 2: Short-lived tokens
+
+Instead of long-lived API keys, use short-lived tokens issued by your backend:
+
+```typescript
+// Get a short-lived token (valid for 5 minutes)
+const getUploadToken = async () => {
+  const response = await fetch('https://yourbackend.com/upload-token', {
+    headers: { 'Authorization': `Bearer ${userAuthToken}` }
+  });
+  return response.json(); // { token: 'short_lived_xxx', expires: 300 }
+};
+
+// Use the short-lived token directly with the service
+const uploadFile = async (file: File) => {
+  const { token } = await getUploadToken();
+  await fetch('https://storage.service.com/upload', {
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: file
+  });
+};
+```
+
+Even if the short-lived token is extracted, it expires quickly and is tied to that specific user's permissions.
+
+### Pattern 3: Request signing
+
+For sensitive operations, sign requests to prove they came from your app:
+
+```typescript
+import * as Crypto from 'expo-crypto';
+
+const signRequest = async (payload: object, timestamp: number) => {
+  const message = JSON.stringify(payload) + timestamp.toString();
+  const signature = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    message + APP_SECRET // This secret is still extractable, but raises the bar
+  );
+  return signature;
+};
+
+// Request includes signature
+const response = await fetch('https://yourbackend.com/api/sensitive', {
+  method: 'POST',
+  headers: {
+    'X-Timestamp': timestamp.toString(),
+    'X-Signature': await signRequest(payload, timestamp)
+  },
+  body: JSON.stringify(payload)
+});
+```
+
+Your backend validates the signature and timestamp (rejecting old timestamps to prevent replay attacks).
+
+<ArticleSection name="Network Security" id="network-security" level="h2" />
+
+The network between your app and servers is another attack surface.
+
+### SSL/TLS is not optional
+
+All network requests must use HTTPS. React Native enforces this by default on iOS. On Android, ensure your network security config doesn't allow cleartext:
+
+```typescript
+// android/app/src/main/res/xml/network_security_config.xml
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+```
+
+### Certificate pinning
+
+SSL certificates can be forged if an attacker controls the network (e.g., malicious WiFi). Certificate pinning ensures your app only trusts your specific server certificate:
+
+```typescript
+// Using react-native-ssl-pinning
+import { fetch } from 'react-native-ssl-pinning';
+
+const response = await fetch('https://yourbackend.com/api/data', {
+  method: 'GET',
+  sslPinning: {
+    certs: ['your-cert'] // Certificate stored in app bundle
+  }
+});
+```
+
+**Caution:** Certificate pinning requires careful management. When your certificate expires, you need to ship an app update or users can't connect.
+
+### RPC endpoint security
+
+Solana RPC calls should also use HTTPS:
+
+```typescript
+import { Connection } from '@solana/web3.js';
+
+// ✅ Always use HTTPS
+const connection = new Connection('https://api.mainnet-beta.solana.com');
+
+// Many private RPC providers require authentication
+const connection = new Connection('https://your-rpc.example.com', {
+  httpHeaders: {
+    'Authorization': `Bearer ${rpcToken}` // Should be user-specific or short-lived
+  }
+});
+```
+
+<ArticleSection name="Protecting Against Common Attacks" id="protecting-against-common-attacks" level="h2" />
+
+### Jailbreak/Root detection
+
+Jailbroken (iOS) and rooted (Android) devices have weakened security boundaries. Consider detecting these states:
+
+```typescript
+import JailMonkey from 'jail-monkey';
+
+const isDeviceCompromised = () => {
+  return JailMonkey.isJailBroken() || JailMonkey.isOnExternalStorage();
+};
+
+// Decide what to do
+if (isDeviceCompromised()) {
+  // Option 1: Warn user
+  Alert.alert('Security Warning', 
+    'This device may be compromised. Proceed with caution.'
+  );
+  
+  // Option 2: Restrict sensitive features
+  // Option 3: Refuse to run (may frustrate legitimate power users)
+}
+```
+
+**Balance UX and security:** Power users legitimately jailbreak/root their devices. Consider warning rather than blocking.
+
+### Debug detection
+
+Apps can be attached to debuggers to inspect runtime behavior. React Native's `__DEV__` flag helps:
+
+```typescript
+if (__DEV__) {
+  console.log('Development build - not for production');
+} else {
+  // Production build - disable debug features
+  console.log = () => {}; // Disable logging
+}
+```
+
+For additional protection, use native debug detection:
+
+```typescript
+// Check if debugger is attached (Android)
+import { NativeModules } from 'react-native';
+
+const isDebuggerAttached = async () => {
+  return await NativeModules.SecurityModule?.isDebuggerAttached();
+};
+```
+
+### Screenshot prevention
+
+For screens showing sensitive data (seed phrases, private keys), prevent screenshots:
+
+```typescript
+import { useIsFocused } from '@react-navigation/native';
+import { useEffect } from 'react';
+import { Platform } from 'react-native';
+import RNPreventScreenshot from 'react-native-prevent-screenshot';
+
+const SensitiveScreen = () => {
+  const isFocused = useIsFocused();
+  
+  useEffect(() => {
+    if (isFocused) {
+      if (Platform.OS === 'android') {
+        RNPreventScreenshot.enabled(true);
+      }
+      // iOS uses FLAG_SECURE equivalent
+    }
+    return () => {
+      RNPreventScreenshot.enabled(false);
+    };
+  }, [isFocused]);
+  
+  return (
+    // ... sensitive content
+  );
+};
+```
+
+<ArticleSection name="Security Checklist" id="security-checklist" level="h2" />
+
+Before shipping, verify:
+
+### Secrets management
+- [ ] No API keys hardcoded in client code
+- [ ] Backend proxies calls to third-party APIs
+- [ ] Short-lived tokens where possible
+- [ ] Secure storage used for user secrets
+
+### Network security
+- [ ] All connections use HTTPS
+- [ ] Certificate pinning for critical endpoints (optional but recommended)
+- [ ] RPC endpoints authenticated or rate-limited
+
+### Key management
+- [ ] Private keys encrypted at rest
+- [ ] Hardware-backed encryption (Keychain/Keystore)
+- [ ] User authentication required for signing
+
+### Platform security
+- [ ] ProGuard/R8 enabled for release builds
+- [ ] Debug logging disabled in production
+- [ ] Jailbreak/root detection (warn or restrict)
+- [ ] Screenshot prevention for sensitive screens
+
+### Operational security
+- [ ] Monitoring for unusual API usage patterns
+- [ ] Incident response plan for key compromise
+- [ ] Regular dependency updates for security patches
+
+<ArticleSection name="When Security is Breached" id="when-security-is-breached" level="h2" />
+
+Even with good security, incidents happen. Have a plan.
+
+### Incident response basics
+
+1. **Detect:** Monitor for unusual patterns (API abuse, failed auth spikes)
+2. **Assess:** What's compromised? API keys? User data? Private keys?
+3. **Contain:** Revoke compromised credentials immediately
+4. **Communicate:** Be transparent with users about what happened
+5. **Remediate:** Fix the vulnerability, ship update
+6. **Learn:** Post-mortem to prevent recurrence
+
+### Credential rotation
+
+Design your system to support credential rotation without breaking the app:
+- Backend API keys: Rotate server-side, no app update needed
+- RPC endpoints: Support multiple endpoints, switch via feature flag
+- User tokens: Short-lived with automatic refresh
+
+If you build with rotation in mind, responding to incidents is much easier.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Mobile security for crypto apps is about layered defense:
+
+1. **Accept that client-side secrets will be extracted**: design accordingly
+2. **Use platform-provided secure storage**: Keychain, Keystore
+3. **Proxy sensitive API calls through your backend**: keep real keys server-side
+4. **Encrypt private keys with user-derived keys**: or use embedded wallet providers
+5. **Prepare for incidents**: have rotation and response plans ready
+
+The next lesson covers production best practices: monitoring, updates, and maintaining a live crypto app.

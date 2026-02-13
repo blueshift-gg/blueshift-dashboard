@@ -1,0 +1,576 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Reflector Protocol & Debugging
+
+This final lesson covers two critical topics: the reflector protocol for remote connections, and practical debugging techniques for MWA sessions.
+
+<ArticleSection name="Reflector Architecture" id="reflector-architecture" level="h2" />
+
+The reflector enables dApps on one device (laptop, desktop) to connect to wallets on another (phone). It's a WebSocket relay server that forwards encrypted messages between endpoints.
+
+```
++---------------+        +----------------+        +---------------+
+|  Web dApp     |------->|  Reflector     |<-------|  Mobile       |
+|  (laptop)     |   WSS  |  Server        |   WSS  |  Wallet       |
++---------------+        +----------------+        +---------------+
+```
+
+### Design Principles
+
+The reflector is intentionally simple:
+
+1. **Untrusted**: All message content is encrypted. The reflector sees only ciphertext.
+2. **Stateless**: No user accounts, no persistent storage of messages.
+3. **Limited**: Enforces timeouts and size limits.
+4. **Replaceable**: Any standards-compliant reflector works.
+
+<ArticleSection name="Reflector Protocol Messages" id="reflector-messages" level="h2" />
+
+The reflector uses a simple message format. Unlike some protocols, messages don't all have type prefixes; the format depends on context:
+
+### Reflector-to-dApp Messages
+
+| Message | Format | Description |
+|---------|--------|-------------|
+| `REFLECTOR_ID` | `<length><id_bytes>` | Your assigned session ID (length is varint-encoded) |
+| `APP_PING` | Empty (0 bytes) | Both endpoints connected, proceed with handshake |
+
+### Message Formats
+
+**REFLECTOR_ID** (reflector -> dApp):
+```
++------------------------------------------------+
+|  varint length  |  ID bytes (opaque)           |
++------------------------------------------------+
+```
+
+The ID is an opaque byte sequence, base64url-encoded when placed in the association URI.
+
+**APP_PING** (reflector -> both endpoints):
+```
++--------------------------------------+
+|  (empty message - 0 bytes)           |
++--------------------------------------+
+```
+
+Sent to both endpoints when the counterparty connects. The dApp should wait for this before sending `HELLO_REQ`.
+
+### Message Forwarding
+
+After `APP_PING`, the reflector becomes transparent. Messages are forwarded without any wrapper:
+
+```
+dApp sends: [encrypted message bytes]
+Reflector forwards: [encrypted message bytes] (unchanged)
+Wallet receives: [encrypted message bytes]
+```
+
+<ArticleSection name="Reflector Connection Flow" id="reflector-flow" level="h2" />
+
+Complete flow for a remote connection:
+
+```text
+Time  | dApp                    | Reflector               | Wallet
+------+-------------------------+-------------------------+------------------
+t0    | Connect to              |                         |
+      | wss://reflector/reflect |                         |
+      |------------------------>|                         |
+      |                         |                         |
+t1    |<------------------------|                         |
+      | REFLECTOR_ID: <len><id> |                         |
+      |                         |                         |
+t2    | Generate QR code with:  |                         |
+      | - association token     |                         |
+      | - id=<base64url(id)>    |                         |
+      | - reflector hostname    |                         |
+      |                         |                         |
+t3    |                         |                         | User scans QR
+      |                         |                         |
+t4    |                         |<------------------------|  Connect to
+      |                         | wss://reflector/reflect |
+      |                         | ?id=<base64url(id)>     |
+      |                         |                         |
+t5    |<------------------------|------------------------>|
+      | APP_PING (empty)        | APP_PING (empty)        |
+      |                         |                         |
+t6    | Send HELLO_REQ          |                         |
+      |------------------------>|                         |
+      |                         | Forward (transparent)   |
+      |                         |------------------------>|
+      |                         |                         | Parse HELLO_REQ
+t7    |                         |<------------------------|  Send HELLO_RSP
+      |                         | Forward (transparent)   |
+      |<------------------------|                         |
+      |                         |                         |
+t8    | (Session established)   |                         |
+      | (Encrypted from here)   |                         |
+```
+
+<ArticleSection name="Reflector Timeouts" id="reflector-timeouts" level="h2" />
+
+| State | Timeout | Action |
+|-------|---------|--------|
+| dApp connected, waiting for wallet | 30 seconds | Close dApp connection |
+| Session active, no messages | 90 seconds | Close both connections |
+| Single message size | 4096 bytes | Close connection |
+
+### Handling Timeouts
+
+```typescript
+// The SDK handles timeouts internally, but you can configure
+await transact(async (wallet) => {
+  // Your operations here
+}, {
+  // Some SDKs allow timeout configuration
+  sessionTimeout: 30000 // milliseconds
+});
+```
+
+If a timeout occurs, you'll receive an error:
+```typescript
+try {
+  await transact(...);
+} catch (error) {
+  if (error.message.includes('timeout')) {
+    // User took too long or network issues
+  }
+}
+```
+
+<ArticleSection name="QR Code Format" id="qr-code" level="h2" />
+
+For remote connections, the dApp displays a QR code containing the association URI:
+
+```
+solana-wallet:/v1/associate/remote
+  ?association=BASE64URL_ENCODED_PUBLIC_KEY
+  &id=BASE64URL_ENCODED_REFLECTOR_ID
+  &reflector=reflect.myapp.com
+```
+
+### Rendering the QR Code
+
+```typescript
+import QRCode from 'react-qr-code';
+
+function WalletConnectQR({ uri }: { uri: string }) {
+  return (
+    <div style={{ background: 'white', padding: 16 }}>
+      <QRCode value={uri} size={256} />
+    </div>
+  );
+}
+```
+
+### Security Considerations
+
+- The QR code contains the association public key; keep it visible only to the intended user
+- The reflector ID is not secret but helps pair the connection
+- Anyone who scans the QR can attempt to connect (race condition possible)
+
+<ArticleSection name="Running Your Own Reflector" id="own-reflector" level="h2" />
+
+The official reflector runs at `wss://reflect.solanamobile.com`. You can run your own:
+
+### Why Run Your Own?
+
+1. **Reliability**: Not dependent on third-party service
+2. **Latency**: Deploy close to your users
+3. **Privacy**: Your traffic doesn't go through external servers
+4. **Customization**: Adjust timeouts, logging, limits
+
+### Reference Implementation
+
+The Solana Mobile team provides a reference reflector. Key components:
+
+```typescript
+// Simplified reflector logic
+class ReflectorSession {
+  id: string;
+  dAppSocket: WebSocket | null;
+  walletSocket: WebSocket | null;
+  createdAt: number;
+
+  forward(from: WebSocket, message: Buffer) {
+    const other = from === this.dAppSocket 
+      ? this.walletSocket 
+      : this.dAppSocket;
+    
+    if (other) {
+      const forwarded = Buffer.concat([
+        Buffer.from([0x02]), // FORWARDED_MESSAGE
+        message
+      ]);
+      other.send(forwarded);
+    }
+  }
+}
+```
+
+<ArticleSection name="Debugging MWA Sessions" id="debugging" level="h2" />
+
+When something goes wrong, systematic debugging helps isolate the issue.
+
+### Debug Layers
+
+```
++-----------------------------------------+
+| 4. Application Layer                    | <- Your dApp code
+|    - Transaction construction           |
+|    - Response handling                  |
++-----------------------------------------+
+| 3. RPC Layer                            | <- JSON-RPC methods
+|    - Method parameters                  |
+|    - Error codes                        |
++-----------------------------------------+
+| 2. Session Layer                        | <- Encryption, keys
+|    - Handshake success                  |
+|    - Decrypt/encrypt                    |
++-----------------------------------------+
+| 1. Transport Layer                      | <- WebSocket, reflector
+|    - Connection establishment           |
+|    - Message delivery                   |
++-----------------------------------------+
+```
+
+Debug from the bottom up: verify transport, then session, then RPC, then your application logic.
+
+<ArticleSection name="Transport Layer Debugging" id="debug-transport" level="h2" />
+
+### Symptoms
+
+- "Connection failed"
+- "Connection refused"
+- "WebSocket error"
+
+### Checks
+
+1. **Is the wallet app running?**
+   ```shellscript
+   # Check if wallet is listening on Android
+   adb shell netstat -tlnp | grep <port>
+   ```
+
+2. **Can you reach the reflector?**
+   ```shellscript
+   curl -v https://reflect.solanamobile.com
+   ```
+
+3. **Is the port in use?**
+   ```shellscript
+   # On the device
+   adb shell netstat -tlnp | grep 49200
+   ```
+
+### Logging WebSocket Events
+
+```typescript
+const ws = new WebSocket(uri);
+
+ws.onopen = () => console.log('[WS] Connected');
+ws.onclose = (e) => console.log('[WS] Closed', e.code, e.reason);
+ws.onerror = (e) => console.log('[WS] Error', e);
+ws.onmessage = (e) => {
+  console.log('[WS] Message', e.data.byteLength, 'bytes');
+};
+```
+
+<ArticleSection name="Session Layer Debugging" id="debug-session" level="h2" />
+
+### Symptoms
+
+- "Session establishment failed"
+- "Decryption error"
+- "Invalid signature"
+
+### Checks
+
+1. **Log the HELLO_REQ structure**
+   ```typescript
+   console.log('HELLO_REQ:', {
+     type: message[0],
+     QdLength: 65,
+     SaLength: 64,
+     totalLength: message.length
+   });
+   ```
+
+2. **Verify key formats**
+   ```typescript
+   // P-256 public key should be 65 bytes, starting with 0x04
+   console.log('Qd first byte:', Qd[0]); // Should be 4
+   console.log('Qd length:', Qd.length); // Should be 65
+   ```
+
+3. **Check signature verification manually**
+   ```typescript
+   const isValid = await crypto.subtle.verify(
+     { name: 'ECDSA', hash: 'SHA-256' },
+     associationPublicKey,
+     signature,
+     Qd
+   );
+   console.log('Signature valid:', isValid);
+   ```
+
+4. **Compare derived keys**
+   ```typescript
+   // Log session key (DEVELOPMENT ONLY!)
+   console.log('Session key:', 
+     Array.from(sessionKey).map(b => b.toString(16)).join(''));
+   ```
+
+<ArticleSection name="RPC Layer Debugging" id="debug-rpc" level="h2" />
+
+### Symptoms
+
+- "Method not found"
+- "Invalid params"
+- Specific error codes (-1 through -5)
+
+### Checks
+
+1. **Log raw JSON-RPC messages**
+   ```typescript
+   const request = {
+     jsonrpc: '2.0',
+     id: '1',
+     method: 'authorize',
+     params: { identity }
+   };
+   console.log('Request:', JSON.stringify(request, null, 2));
+   ```
+
+2. **Validate transaction payloads**
+   ```typescript
+   import { Transaction } from '@solana/web3.js';
+   
+   payloads.forEach((payload, i) => {
+     try {
+       const tx = Transaction.from(Buffer.from(payload, 'base64'));
+       console.log(`Transaction ${i}:`, {
+         signatures: tx.signatures.length,
+         instructions: tx.instructions.length,
+         recentBlockhash: tx.recentBlockhash
+       });
+     } catch (e) {
+       console.error(`Transaction ${i} invalid:`, e);
+     }
+   });
+   ```
+
+3. **Check capabilities before methods**
+   ```typescript
+   const caps = await wallet.getCapabilities();
+   console.log('Wallet capabilities:', caps);
+   
+   if (transactions.length > caps.max_transactions_per_request) {
+     console.warn('Too many transactions!');
+   }
+   ```
+
+<ArticleSection name="Application Layer Debugging" id="debug-application" level="h2" />
+
+### Common Issues
+
+**Transaction simulation failed**
+```typescript
+// Pre-simulate before sending to wallet
+const simulation = await connection.simulateTransaction(transaction);
+if (simulation.value.err) {
+  console.error('Simulation failed:', simulation.value.err);
+  console.log('Logs:', simulation.value.logs);
+}
+```
+
+**Wrong account authorized**
+```typescript
+// Check you're using the right account
+const result = await wallet.authorize(...);
+console.log('Authorized accounts:', result.accounts.map(a => ({
+  address: a.display_address,
+  label: a.label
+})));
+```
+
+**Stale blockhash**
+```typescript
+// Get fresh blockhash right before signing
+const { blockhash, lastValidBlockHeight } = 
+  await connection.getLatestBlockhash();
+transaction.recentBlockhash = blockhash;
+```
+
+<ArticleSection name="Debug Tools" id="debug-tools" level="h2" />
+
+### Android Debug Bridge (ADB)
+
+```shellscript
+# View MWA-related logs
+adb logcat | grep -i "mwa\|wallet\|solana"
+
+# Check network connections
+adb shell netstat -tlnp
+
+# Force-kill wallet to test reconnection
+adb shell am force-stop com.phantom.wallet
+```
+
+### React Native Debugger
+
+```typescript
+// Enable network inspection in React Native Debugger
+// Or use Flipper for network logs
+```
+
+### Charles Proxy / mitmproxy
+
+For reflector connections, proxy HTTPS traffic:
+
+```shellscript
+mitmproxy --mode upstream:https://reflect.solanamobile.com
+```
+
+Note: You'll see encrypted MWA payloads, but can verify transport-level issues.
+
+### Custom Logging Wrapper
+
+```typescript
+function wrapWithLogging<T extends (...args: any[]) => any>(
+  fn: T,
+  name: string
+): T {
+  return (async (...args) => {
+    console.log(`[MWA] ${name} called with:`, args);
+    try {
+      const result = await fn(...args);
+      console.log(`[MWA] ${name} returned:`, result);
+      return result;
+    } catch (error) {
+      console.error(`[MWA] ${name} threw:`, error);
+      throw error;
+    }
+  }) as T;
+}
+
+// Use it
+wallet.authorize = wrapWithLogging(wallet.authorize, 'authorize');
+```
+
+<ArticleSection name="Error Recovery Patterns" id="error-recovery" level="h2" />
+
+### Retry with Backoff
+
+```typescript
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries = 3,
+  baseDelay = 1000
+): Promise<T> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === maxRetries - 1) throw error;
+      
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`Retry ${attempt + 1} after ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error('Unreachable');
+}
+
+// Usage
+const result = await withRetry(() => 
+  transact(wallet => wallet.authorize(identity))
+);
+```
+
+### Session Recovery
+
+```typescript
+let authToken: string | null = null;
+
+async function ensureConnected() {
+  return transact(async (wallet) => {
+    try {
+      // Try reauthorization first
+      const result = await wallet.authorize({
+        identity,
+        auth_token: authToken
+      });
+      authToken = result.auth_token;
+      return result;
+    } catch (error) {
+      // Token invalid, clear and retry
+      authToken = null;
+      const result = await wallet.authorize({ identity });
+      authToken = result.auth_token;
+      return result;
+    }
+  });
+}
+```
+
+<ArticleSection name="Production Monitoring" id="monitoring" level="h2" />
+
+Track MWA health in production:
+
+### Metrics to Collect
+
+1. **Connection success rate**: % of `transact()` calls that succeed
+2. **Session establishment time**: Time from Intent to encrypted session
+3. **Authorization rate**: % of authorization requests approved
+4. **Error distribution**: Which error codes occur most often
+
+### Example Analytics
+
+```typescript
+async function trackedTransact<T>(
+  callback: (wallet: WalletAPI) => Promise<T>
+): Promise<T> {
+  const startTime = Date.now();
+  
+  try {
+    const result = await transact(callback);
+    
+    analytics.track('mwa_session_success', {
+      duration: Date.now() - startTime
+    });
+    
+    return result;
+  } catch (error) {
+    analytics.track('mwa_session_error', {
+      error: error.message,
+      code: error.code,
+      duration: Date.now() - startTime
+    });
+    
+    throw error;
+  }
+}
+```
+
+<ArticleSection name="Course Summary" id="summary" level="h2" />
+
+You've now explored the MWA protocol from the bottom up:
+
+1. **Architecture**: Three layers (transport, session, RPC) and two roles (dApp, wallet)
+2. **Transport**: WebSocket over localhost or via reflector
+3. **Association**: URI format, version negotiation, keypair purposes
+4. **Session Establishment**: ECDH handshake, HKDF key derivation
+5. **Encrypted Messages**: AES-128-GCM with sequence numbers
+6. **JSON-RPC Methods**: authorize, sign_and_send_transactions, and more
+7. **Identity Verification**: Digital Asset Links and attestation
+8. **Reflector & Debugging**: Remote connections and troubleshooting
+
+With this knowledge, you can:
+- Debug MWA issues at any layer
+- Implement wallet-side MWA support
+- Audit MWA implementations for security
+- Extend the protocol for custom use cases
+
+The [official MWA specification](https://solana-mobile.github.io/mobile-wallet-adapter/spec/spec.html) is your definitive reference. Now you can read it with full understanding.
+
+Happy building on Solana Mobile.

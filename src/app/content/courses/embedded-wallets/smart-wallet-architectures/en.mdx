@@ -1,0 +1,430 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Smart Wallet Architectures
+
+![Smart Wallet Architectures](/graphics/course-banners/embedded-wallets.png)
+
+Traditional wallets are keypairs. The public key is your address, the private key is your authority. Lose the private key, lose everything. Share the private key, share everything. The security model is binary and unforgiving.
+
+Smart wallets invert this relationship. The wallet becomes a program-controlled account with configurable authorization logic. Who can spend, how much, under what conditions: all defined in code, all enforceable on-chain.
+
+<ArticleSection name="From Keypairs to Programs" id="keypairs-to-programs" level="h2" />
+
+A native Solana account is controlled by whoever holds its private key. There's no nuance:
+
+```
++------------------+
+|  Native Account  |
+|                  |
+|  Owner: System   |
+|  Signer: Ed25519 |
++------------------+
+        |
+    [private key]
+        |
+   Full control
+```
+
+A smart wallet replaces direct key control with program logic:
+
+```
++------------------+     +------------------+
+|  Smart Wallet    |     |   Wallet Program |
+|  (PDA)           |<----|                  |
+|                  |     |   Authorization  |
+|  Owner: Program  |     |   Logic          |
++------------------+     +------------------+
+        |                        |
+        |              +---------+---------+
+        |              |         |         |
+        |          [passkey] [guardian] [timelock]
+        |              |         |         |
+        +---------- Multiple authorization paths
+```
+
+The program decides what constitutes valid authorization. This could be a single passkey, multiple signatures, time-based conditions, or any combination.
+
+<ArticleSection name="Program Derived Addresses" id="pdas" level="h2" />
+
+PDAs are the foundation of smart wallets on Solana. They're addresses that no private key can sign for, meaning they can only be controlled through program logic.
+
+### How PDAs Work
+
+PDAs are derived by hashing seeds together with a program ID, then finding a point that doesn't lie on the Ed25519 curve:
+
+```
+PDA = findProgramDerivedAddress([seed1, seed2, ...], programId)
+```
+
+The critical property: no private key exists for this address. The only way to sign for a PDA is through the program that derived it, using `invoke_signed`.
+
+### Smart Wallet Derivation
+
+For passkey-controlled smart wallets, the PDA is typically derived from the passkey's public key:
+
+```
+smartWalletPDA = findProgramDerivedAddress(
+  ["smart_wallet", passkeyPublicKey],
+  walletProgramId
+)
+```
+
+This creates a unique wallet address for each passkey. The on-chain program can authorize actions on this PDA whenever it verifies a valid passkey signature.
+
+### The Authorization Flow
+
+When a user wants to transfer funds from their smart wallet:
+
+1. User signs a message containing transfer details with their passkey
+2. Transaction is submitted containing the passkey signature
+3. Wallet program verifies the passkey signature (via secp256r1 precompile)
+4. If valid, program invokes the transfer using `invoke_signed` with PDA seeds
+5. Transfer executes as if the PDA itself signed
+
+From the perspective of the receiving account or any other program, it looks like a normal transfer from the smart wallet address.
+
+<ArticleSection name="Authorization Models" id="authorization-models" level="h2" />
+
+Smart wallets enable authorization schemes impossible with raw keypairs.
+
+### Single Passkey
+
+The simplest model: one passkey controls the wallet.
+
+```
+Authorization: Verify secp256r1 signature from registered passkey
+```
+
+This is what LazorKit implements. The passkey in your device's secure enclave is the sole authority.
+
+### Multi-Passkey
+
+Register multiple passkeys (e.g., phone and laptop) with any one able to authorize:
+
+```
+Authorization: Verify secp256r1 signature from ANY registered passkey
+```
+
+This provides redundancy without reducing security. Losing one device doesn't lock you out.
+
+### Threshold Passkey
+
+Require multiple passkeys to authorize high-value operations:
+
+```
+Authorization:
+  - Under $100: Any single registered passkey
+  - Over $100: 2 of 3 registered passkeys
+```
+
+This mirrors multi-sig but with hardware-backed passkeys instead of software keys.
+
+### Guardian Recovery
+
+Designate recovery addresses that can restore access under specific conditions:
+
+```
+Authorization:
+  - Normal: Passkey signature
+  - Recovery: Guardian signature + 7-day timelock
+```
+
+If you lose all passkeys, guardians can initiate recovery. The timelock gives you time to cancel if the recovery request is malicious.
+
+### Session Keys
+
+Generate temporary keys with limited permissions:
+
+```
+Authorization:
+  - Full access: Passkey signature
+  - Session key: Limited to specific programs, expires after 24h
+```
+
+This enables better dApp UX without compromising security. Games can execute rapid transactions with session keys while high-value operations still require passkey authorization.
+
+<ArticleSection name="Account Abstraction Patterns" id="account-abstraction" level="h2" />
+
+Smart wallets enable account abstraction: separating who pays for transactions from who authorizes them.
+
+### Gas Sponsorship
+
+Traditional Solana transactions require the signer to pay fees. Smart wallets break this constraint:
+
+```
++-------------+     +---------------+     +--------------+
+|   User      |     |   Paymaster   |     |  Smart       |
+|   (passkey) |     |   (pays gas)  |     |  Wallet      |
++-------------+     +---------------+     +--------------+
+      |                    |                     |
+      | 1. Sign action     |                     |
+      +------------------->|                     |
+      |                    | 2. Wrap + pay fees  |
+      |                    +-------------------->|
+      |                    |                     |
+      |                    |    3. Execute       |
+      |                    |<--------------------+
+```
+
+The user signs the action with their passkey. A paymaster wraps this into a transaction, pays the fees, and submits it. The smart wallet verifies the passkey signature and executes.
+
+Users can interact with Solana without owning SOL.
+
+### Alternative Fee Tokens
+
+Paymasters can accept fee payment in tokens other than SOL:
+
+1. User signs action + agrees to pay 0.01 USDC for fees
+2. Paymaster verifies USDC payment is included
+3. Paymaster pays SOL fees, receives USDC from smart wallet
+4. Action executes
+
+This removes the "I need SOL to do anything" friction that blocks new users.
+
+### Batched Operations
+
+Smart wallets can batch multiple operations into atomic transactions:
+
+```
+Transaction:
+  1. Verify passkey signature once
+  2. Execute: Swap USDC to SOL
+  3. Execute: Stake SOL
+  4. Execute: Update profile metadata
+```
+
+One passkey verification authorizes multiple instructions. This reduces user friction and enables complex flows that would otherwise require multiple approval prompts.
+
+<ArticleSection name="Security Architecture" id="security-architecture" level="h2" />
+
+Smart wallets shift security from "protect the key" to "design the rules."
+
+### Defense in Depth
+
+Multiple layers can protect against different threats:
+
+**Layer 1 - Hardware**
+Passkey private key in secure enclave, inaccessible even to compromised software.
+
+**Layer 2 - Origin Binding**
+Passkey only signs for legitimate origins, blocking phishing.
+
+**Layer 3 - On-chain Verification**
+Program verifies passkey signature; invalid signatures are rejected.
+
+**Layer 4 - Policy Enforcement**
+Program enforces spending limits, whitelists, timelocks.
+
+An attacker must bypass all layers. Compromising the app isn't enough if the passkey won't sign for the wrong origin. Forging signatures isn't possible without the secure enclave.
+
+### Upgradeability Considerations
+
+Smart wallet programs can be upgradeable or immutable:
+
+**Upgradeable:**
+- Bugs can be fixed
+- Features can be added
+- But: upgrade authority is a point of trust/failure
+
+**Immutable:**
+- Behavior is permanent and auditable
+- No future fixes possible
+- Maximum trustlessness
+
+Some wallets use timelocked upgradeability: changes require a waiting period, giving users time to exit if they disagree.
+
+### State Attacks
+
+Smart wallets must protect against state manipulation:
+
+**Replay attacks**: Each authorization should include a nonce or recent blockhash to prevent reuse.
+
+**State desynchronization**: If off-chain state (registered passkeys) disagrees with on-chain state, users could be locked out or unauthorized parties could access.
+
+**Upgrade front-running**: Malicious upgrades could be front-run by users withdrawing funds.
+
+Well-designed smart wallets include protections for each vector.
+
+<ArticleSection name="Crossmint's Approach" id="crossmint" level="h2" />
+
+Crossmint implements smart wallets with a modular signer architecture. The wallet itself is a smart contract that can be controlled by various "signers":
+
+### Signer Types
+
+**Passkey Signer**: User's device passkey authorizes transactions directly.
+
+**Email/Phone Signer**: Authentication through email or SMS OTP, with keys managed in Crossmint's infrastructure.
+
+**Social Signer**: OAuth authentication (Google, Apple) creates wallet access.
+
+**External Wallet Signer**: Existing crypto wallets (Phantom, MetaMask) can control the smart wallet.
+
+**API Key Signer**: Server-side automation for custodial or semi-custodial flows.
+
+### Composability
+
+Multiple signers can be attached to the same wallet:
+
+```
+Smart Wallet
+├── Primary: Passkey (user's phone)
+├── Backup: Email (recovery option)
+└── Automated: API Key (for subscriptions)
+```
+
+Users start with one signer and add more as needed. This flexibility lets applications evolve their security model without users creating new wallets.
+
+### Cross-Chain Identity
+
+Crossmint's smart wallets maintain consistent identity across chains. The same authentication creates wallets on Solana, Ethereum, Polygon, and others, all linked to the same user identity.
+
+<ArticleSection name="LazorKit's Architecture" id="lazorkit" level="h2" />
+
+LazorKit takes a Solana-native approach with passkeys as the sole authorization mechanism.
+
+### The Smart Wallet Program
+
+LazorKit's on-chain program maintains wallet state:
+
+```
+SmartWalletAccount {
+  passkey_pubkey: [u8; 33],    // secp256r1 public key
+  wallet_bump: u8,             // PDA bump seed
+  created_at: i64,             // Timestamp
+  // ... additional state
+}
+```
+
+The PDA is derived from the passkey public key, creating a deterministic address for each passkey.
+
+### Transaction Flow
+
+1. **Client builds transaction**: Instructions for what the wallet should do
+2. **Challenge creation**: Transaction data is hashed into a challenge
+3. **Passkey signing**: User's device signs the challenge with secp256r1
+4. **Verification instruction**: Transaction includes secp256r1 precompile verification
+5. **Execution**: If verification passes, program executes instructions via CPI
+
+The passkey signature in step 3 happens in the secure enclave. The verification in step 4 uses Solana's native precompile for efficiency.
+
+### Paymaster Integration
+
+LazorKit includes paymaster support for gas abstraction:
+
+```
+PaymasterConfig {
+  paymasterUrl: string,  // Service that sponsors transactions
+  apiKey?: string,       // Authentication for paymaster
+}
+```
+
+The paymaster wraps user-signed operations into fee-paid transactions. Users interact with Solana applications without needing SOL.
+
+<ArticleSection name="Trade-off Analysis" id="tradeoffs" level="h2" />
+
+Different smart wallet architectures make different trade-offs:
+
+### Passkey-Only (LazorKit)
+
+**Advantages:**
+- Simplest trust model: only hardware security matters
+- No server dependencies for signing
+- True self-custody
+
+**Disadvantages:**
+- Recovery requires pre-planned backup passkeys
+- No fallback if all devices lost
+- Passkey-capable devices required
+
+### MPC + Smart Wallet (Privy, Dynamic)
+
+**Advantages:**
+- Multiple auth methods (email, social, passkey)
+- Provider-assisted recovery
+- Works on devices without passkey support
+
+**Disadvantages:**
+- Provider is a trust dependency
+- More complex security model
+- Provider infrastructure required for signing
+
+### Modular Signers (Crossmint)
+
+**Advantages:**
+- Maximum flexibility in auth methods
+- Gradual security upgrades possible
+- Good for diverse user bases
+
+**Disadvantages:**
+- Complexity in signer management
+- Multiple potential attack surfaces
+- Requires understanding signer trust levels
+
+### The Right Choice Depends On
+
+**User base:**
+- Crypto-native? Passkey-only might be acceptable.
+- Mainstream? Need email/social fallbacks.
+
+**Recovery requirements:**
+- High-value? Need robust recovery options.
+- Disposable? Simpler is better.
+
+**Regulatory environment:**
+- Compliance needs? May require custody options.
+- Maximum decentralization? Pure passkey.
+
+<ArticleSection name="Implementation Considerations" id="implementation" level="h2" />
+
+Building on smart wallet infrastructure requires understanding the boundaries.
+
+### What You Control
+
+- User authentication flows
+- UI/UX for transaction approval
+- Business logic using the wallet
+- Integration with your backend
+
+### What the Protocol Controls
+
+- Signature verification
+- PDA derivation and authorization
+- On-chain state management
+- Upgrade mechanisms (if any)
+
+### What Hardware Controls
+
+- Private key generation and storage
+- Biometric verification
+- Origin enforcement
+- Tamper resistance
+
+Understanding these boundaries helps you design secure applications. You can't strengthen hardware security from your app, but you can build UX that leverages it properly.
+
+### Testing Considerations
+
+Smart wallet testing requires real devices:
+
+- Emulators don't have secure enclaves
+- Passkey operations fail or behave differently in simulation
+- Device-specific quirks (iOS vs Android) matter
+
+Plan for physical device testing in your development workflow.
+
+<ArticleSection name="Conceptual Summary" id="summary" level="h2" />
+
+Smart wallets transform Solana accounts from key-controlled to program-controlled:
+
+1. **PDAs** create addresses controllable only through program logic
+2. **Authorization rules** can require passkeys, multiple signatures, timelocks, or any combination
+3. **Gas abstraction** lets users interact without holding SOL
+4. **Modular signers** enable flexible authentication strategies
+
+The security model shifts from "don't lose your key" to "design secure authorization rules." Hardware-backed passkeys provide strong authentication. On-chain programs enforce policies. Multiple authorization paths enable recovery.
+
+When choosing a smart wallet provider:
+- **LazorKit**: Pure passkey, maximum simplicity, Solana-native
+- **Crossmint**: Modular signers, cross-chain, flexible custody models
+- **MPC providers**: Threshold signatures with provider infrastructure
+
+The right choice depends on your users, your security requirements, and how much infrastructure you want to manage versus delegate.

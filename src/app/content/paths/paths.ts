@@ -14,7 +14,22 @@ export const paths: PathMetadata[] = [
       { type: "course", slug: "evolution-programmable-blockchains" },
       { type: "course", slug: "understanding-solana" },
       { type: "course", slug: "tokens-on-solana" },
-      { type: "course", slug: "nfts-on-solana" }
+      { type: "course", slug: "nfts-on-solana" },
+    ],
+  },
+  {
+    slug: "solana-mobile-mastery",
+    language: "Mobile",
+    color: BRAND_COLOURS.mobile,
+    difficulty: 2,
+    isFeatured: true,
+    estimatedHours: 18,
+    steps: [
+      { type: "course", slug: "mobile-dapp-fundamentals" },
+      { type: "course", slug: "mwa-deep-dive" },
+      { type: "course", slug: "embedded-wallets" },
+      { type: "course", slug: "solana-mobile-client" },
+      { type: "course", slug: "dapp-store-publishing" },
     ],
   },
 ];

@@ -1,0 +1,386 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Protocol Deep Dive
+
+![MWA Protocol](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+The Mobile Wallet Adapter specification is one of the most elegant solutions in the Solana ecosystem. Understanding how it works under the hood will make you a better mobile developer, and help you debug the weird edge cases you'll inevitably encounter.
+
+Most developers never read protocol specs. They call `transact()`, it works, and they move on. But when a connection silently fails, when authorization times out, when a wallet doesn't respond, you need to understand the machinery.
+
+> MWA establishes encrypted peer-to-peer channels using WebSockets, ECDH key exchange, and AES-GCM encryption. No plaintext ever crosses the wire, even on localhost.
+
+<ArticleSection name="Architecture Overview" id="architecture-overview" level="h2" />
+
+When your dApp connects to a wallet, two apps on the same device establish a WebSocket connection:
+
+```
++-----------------+                           +-----------------+
+|                 |      solana-wallet://     |                 |
+|   Your dApp     | -------- URI intent ----> |   Wallet App    |
+|   (Client)      |                           |   (Server)      |
+|                 |      ws://localhost       |                 |
+|                 | <------ WebSocket ------> |   :random_port  |
++-----------------+                           +-----------------+
+```
+
+Your dApp is always the client. The wallet app is always the server. This asymmetry is fundamental to the protocol.
+
+But here's what makes MWA clever: the wallet app doesn't run a WebSocket server all the time. That would drain battery and create security risks. Instead, the wallet only starts its server when your app explicitly requests a connection.
+
+<ArticleSection name="Association: Finding the Wallet" id="association" level="h2" />
+
+When you call `transact()`, the SDK performs these steps before any WebSocket connection exists:
+
+### Step 1: Generate an Association Keypair
+
+Your app generates an ephemeral P-256 EC keypair (not Ed25519 like Solana keys; this is for ECDH key exchange).
+
+```typescript
+// This happens inside the SDK automatically
+const associationKeypair = generateP256Keypair();
+const associationToken = base64url(associationKeypair.publicKey);
+// e.g., "BGUNPbYRiwz6G2K..."
+```
+
+This `associationToken` is a one-time identifier for this specific session. It's included in the URI and used during the cryptographic handshake.
+
+### Step 2: Build the Association URI
+
+The SDK constructs a URI that will launch the wallet app:
+
+```
+solana-wallet:/v1/associate/local
+  ?association=<association_token>
+  &port=<random_port>
+  &v=2
+```
+
+Breaking this down:
+- `solana-wallet:`: The URI scheme registered by MWA wallets
+- `/v1/associate/local`: Local connection (same device)
+- `association`: The base64url-encoded public key from Step 1
+- `port`: A random port (49152-65535) where your app will connect
+- `v=2`: Protocol version (MWA 2.0)
+
+### Step 3: Launch the Wallet
+
+On Android, opening this URI triggers an Intent. If multiple wallets are installed, the OS prompts the user to choose. The selected wallet launches and receives the URI parameters.
+
+```typescript
+// Simplified view of what happens
+await Linking.openURL(associationUri);
+// Wallet app comes to foreground
+```
+
+### Step 4: Wallet Starts Server
+
+The wallet app:
+1. Parses the `port` parameter
+2. Starts a WebSocket server on that port
+3. Begins listening for exactly one connection
+4. Times out after 10 seconds if no connection arrives
+
+### Step 5: dApp Connects
+
+Your app attempts to connect to `ws://localhost:<port>/solana-wallet`:
+
+```typescript
+// SDK handles this automatically
+const socket = new WebSocket(`ws://localhost:${port}/solana-wallet`);
+```
+
+If the wallet isn't ready yet, the connection fails. The SDK retries for up to 30 seconds before giving up.
+
+<ArticleSection name="Session Establishment: The Handshake" id="session-establishment" level="h2" />
+
+Once the WebSocket connects, the real cryptographic magic begins. Both parties need to establish a shared secret for encrypting all further communication, without ever sending that secret over the wire.
+
+### The ECDH Key Exchange
+
+Elliptic Curve Diffie-Hellman (ECDH) lets two parties derive the same secret by exchanging only public keys. The math ensures that even if someone intercepts the public keys, they cannot derive the shared secret.
+
+```
+dApp                                       Wallet
+  │                                          │
+  │─────── HELLO_REQ ───────────────────────>│
+  │        (dApp's ECDH public key Qd)       │
+  │        (Signature with association key)  │
+  │                                          │
+  │<─────── HELLO_RSP ───────────────────────│
+  │         (Wallet's ECDH public key Qw)    │
+  │         (Session properties)             │
+  │                                          │
+  │       Both compute shared secret K       │
+  │                                          │
+  │<══════ Encrypted JSON-RPC ══════════════>│
+  │         (AES-128-GCM with key K)         │
+```
+
+### HELLO_REQ: dApp Introduces Itself
+
+Your dApp generates another ephemeral keypair (for ECDH, separate from the association keypair) and sends:
+
+```
+Qd || Signature(Qd, association_private_key)
+```
+
+Where:
+- `Qd`: X9.62-encoded ECDH public key (65 bytes)
+- `Signature`: ECDSA-SHA256 proof that this comes from the same app that created the association URI
+
+The wallet verifies the signature using the association token (public key) from the URI. This prevents man-in-the-middle attacks: only the app that generated the original URI can complete the handshake.
+
+### HELLO_RSP: Wallet Responds
+
+The wallet generates its own ECDH keypair and sends back:
+
+```
+Qw || EncryptedSessionProperties
+```
+
+Now both parties have `Qd` and `Qw`. Using ECDH math:
+
+```typescript
+// dApp computes:
+const sharedSecret = ecdh(dAppPrivateKey, Qw);
+
+// Wallet computes (arrives at same value):
+const sharedSecret = ecdh(walletPrivateKey, Qd);
+```
+
+The SDK then derives the AES-128 encryption key using HKDF:
+
+```typescript
+const encryptionKey = hkdf({
+  ikm: sharedSecret,          // 32 bytes from ECDH
+  salt: associationPublicKey, // 65 bytes (X9.62 format)
+  length: 16,                 // 128-bit AES key
+});
+```
+
+### Why This Complexity?
+
+Every session uses fresh ephemeral keys. Even if an attacker:
+- Intercepts the association URI
+- Monitors the WebSocket traffic
+- Records the entire handshake
+
+They still cannot decrypt past or future sessions. This is forward secrecy at work.
+
+<ArticleSection name="Encrypted Messaging" id="encrypted-messaging" level="h2" />
+
+After the handshake, all JSON-RPC messages are encrypted with AES-128-GCM. Each message has this structure:
+
+```
++--------------------------------------------------------------+
+| Sequence (4 bytes) | IV (12 bytes) | Ciphertext | Tag (16 bytes) |
++--------------------------------------------------------------+
+```
+
+- **Sequence Number**: Monotonically increasing counter (prevents replay attacks)
+- **IV**: Random initialization vector (different for each message)
+- **Ciphertext**: The encrypted JSON-RPC payload
+- **Tag**: Authentication tag (ensures message wasn't tampered with)
+
+The sequence number is included as Additional Authenticated Data (AAD). If an attacker tries to replay an old message, the sequence number won't match and decryption fails.
+
+```typescript
+// Inside the SDK (simplified)
+function encryptMessage(payload: string): Uint8Array {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sequenceBytes = uint32ToBytes(this.sequenceNumber++);
+  
+  const { ciphertext, tag } = aesGcmEncrypt({
+    key: this.encryptionKey,
+    iv,
+    plaintext: new TextEncoder().encode(payload),
+    aad: sequenceBytes,
+  });
+  
+  return concat(sequenceBytes, iv, ciphertext, tag);
+}
+```
+
+<ArticleSection name="The JSON-RPC Interface" id="json-rpc-interface" level="h2" />
+
+With encryption established, your dApp sends JSON-RPC 2.0 requests. The wallet responds with JSON-RPC results or errors.
+
+### Non-Privileged Methods
+
+These work immediately after session establishment:
+
+| Method | Purpose |
+|--------|---------|
+| `authorize` | Request account access and/or re-authorize with cached token |
+| `deauthorize` | Invalidate an auth token |
+| `get_capabilities` | Query wallet features and limits |
+
+### Privileged Methods
+
+These require a successful `authorize` first:
+
+| Method | Purpose |
+|--------|---------|
+| `sign_and_send_transactions` | Sign and broadcast transactions |
+| `sign_transactions` | Sign transactions (without sending) |
+| `sign_messages` | Sign arbitrary byte payloads |
+| `clone_authorization` | Create a new auth token from existing one |
+
+If you call a privileged method without authorizing, you get:
+
+```json
+{
+  "error": {
+    "code": -32003,
+    "message": "Not authorized"
+  }
+}
+```
+
+### The authorize Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "authorize",
+  "params": {
+    "identity": {
+      "name": "My dApp",
+      "uri": "https://mydapp.com",
+      "icon": "favicon.ico"
+    },
+    "chain": "solana:devnet",
+    "auth_token": "cached_token_if_any"
+  }
+}
+```
+
+### The authorize Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "auth_token": "new_opaque_token",
+    "accounts": [
+      {
+        "address": "base64_encoded_pubkey",
+        "display_address": "base58_encoded_pubkey",
+        "display_address_format": "base58",
+        "label": "Main Wallet",
+        "chains": ["solana:mainnet", "solana:devnet"],
+        "features": ["solana:signAndSendTransaction"]
+      }
+    ],
+    "wallet_uri_base": "https://phantom.app/ul/v1/"
+  }
+}
+```
+
+Notice that `address` is base64-encoded, while `display_address` is base58 (human-readable). The SDK handles this conversion for you.
+
+<ArticleSection name="Identity Verification" id="identity-verification" level="h2" />
+
+When wallets show "App X wants to connect", how do they know the request really came from App X?
+
+### Android Native Apps
+
+On Android, the wallet can query the calling app's package signature using the `CallingActivity` from the Intent. The wallet:
+
+1. Gets the package name of the calling app
+2. Retrieves the app's signing certificate hash
+3. Compares against known legitimate apps (or displays the hash to the user)
+
+This means a malicious app cannot impersonate your dApp. Even if they copy your `identity.uri`, the package signature won't match.
+
+### Web dApps
+
+Browser-based dApps have weaker verification. The wallet receives a `referrer` header, but this can be spoofed. Wallets typically display the claimed URI and warn users to verify it.
+
+### Remote Connections (QR Codes)
+
+For remote sessions (desktop to mobile via QR code), the connection goes through a reflector server. The protocol remains encrypted end-to-end, but identity verification is even harder. The user must manually verify they're connecting to the right dApp.
+
+<ArticleSection name="Error Codes" id="error-codes" level="h2" />
+
+MWA uses JSON-RPC error codes. Knowing these helps you write better error handling:
+
+| Code | Name | Meaning |
+|------|------|---------|
+| -32700 | Parse Error | Invalid JSON |
+| -32600 | Invalid Request | Not a valid JSON-RPC request |
+| -32601 | Method Not Found | Unknown method name |
+| -32602 | Invalid Params | Wrong parameter types |
+| -32603 | Internal Error | Transaction simulation failed |
+| -32000 | Server Error | Generic wallet error |
+| -32001 | Not Authorized | Call `authorize` first |
+| -32002 | Too Many Requests | Rate limited |
+| 4001 | User Rejected | User declined the request |
+
+The most common error you'll handle is `4001`: the user pressed "Cancel" or "Reject" in the wallet UI.
+
+<ArticleSection name="Session Lifecycle" id="session-lifecycle" level="h2" />
+
+Understanding when sessions start and end prevents subtle bugs:
+
+```typescript
+await transact(async (wallet) => {
+  // ← Session STARTS here
+  //   Wallet app is foregrounded
+  //   WebSocket connected
+  //   Encryption established
+  
+  await wallet.authorize(/* ... */);
+  await wallet.signAndSendTransactions(/* ... */);
+  
+  // ← Session ENDS when callback returns
+});
+// Wallet may background itself
+// WebSocket disconnected
+// Encryption keys discarded
+```
+
+**Critical insight**: If your callback throws an error, the session still closes. If you need to retry something, you need a new `transact()` call, which means a new session entirely.
+
+```typescript
+// Wrong: trying to reuse a failed session
+await transact(async (wallet) => {
+  try {
+    await wallet.signAndSendTransactions(/* ... */);
+  } catch (e) {
+    // Session is ending, can't retry here
+    await wallet.signAndSendTransactions(/* ... */); // This won't work
+  }
+});
+
+// Right: new session for retry
+for (let attempt = 0; attempt < 3; attempt++) {
+  try {
+    await transact(async (wallet) => {
+      await wallet.authorize(/* ... */);
+      await wallet.signAndSendTransactions(/* ... */);
+    });
+    break; // Success
+  } catch (e) {
+    if (e.code === 4001) throw e; // User cancelled, don't retry
+    // Otherwise, try again with a fresh session
+  }
+}
+```
+
+<ArticleSection name="Reference" id="reference" level="h2" />
+
+For the complete protocol specification, see the official [MWA 2.0 Specification](https://solana-mobile.github.io/mobile-wallet-adapter/spec/spec.html). The spec includes:
+
+- Exact byte layouts for handshake messages
+- Full JSON-RPC schemas for all methods
+- Transport layer requirements (WebSocket subprotocols)
+- Reflector protocol for remote connections
+- Bluetooth LE transport (specified but not yet implemented)
+
+The specification was designed by [Solana Mobile](https://solanamobile.com) and is implemented by major wallets including Phantom and Solflare.
+
+Now that you understand the protocol, let's set up a React Native project to use it.

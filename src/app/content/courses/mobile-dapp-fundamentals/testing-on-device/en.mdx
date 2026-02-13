@@ -1,0 +1,462 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Testing on Device
+
+![Testing on Device](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+While the core MWA protocol is designed for physical Android devices and relies on intents, local sockets, and a real wallet app, you can use [Mock MWA](https://github.com/solana-mobile/mock-mwa-wallet) to simulate MWA interactions on an emulator.
+
+> First-time setup takes 30 minutes. After that, you can hot-reload and test in seconds.
+
+<ArticleSection name="Requirements" id="requirements" level="h2" />
+
+You need:
+
+| Item | Notes |
+|------|-------|
+| Android device | Android 8.0+ (API 26+). Saga or any Android phone works. |
+| USB cable | Data-capable cable, not charge-only |
+| Wallet app installed | Phantom, Solflare, or any MWA-compatible wallet |
+| Developer mode enabled | Settings → About Phone → Tap Build Number 7 times |
+| USB Debugging enabled | Settings → Developer Options → USB Debugging |
+| Devnet SOL | For testing transactions |
+
+**Emulator Note**: Mock MWA requires the emulator to have an authentication of some kind (PIN/biometric). Connecting the wallet fails without authentication.
+
+**iOS Note**: MWA is Android-only. The protocol requires Android Intents to launch wallet apps and local WebSocket servers for communication, neither of which have iOS equivalents. The official spec notes: "iOS support is planned for a future version." For iOS users, embedded wallets (Course 3) or Phantom deeplinks provide alternatives.
+
+<ArticleSection name="Android Device Setup" id="device-setup" level="h2" />
+
+### Enable Developer Mode
+
+1. Go to **Settings** → **About Phone**
+2. Find **Build Number**
+3. Tap it 7 times until you see "You are now a developer"
+4. Go back to Settings, find **Developer Options**
+5. Enable **USB Debugging**
+
+### Connect to Computer
+
+1. Connect USB cable
+2. On phone: Allow USB debugging when prompted
+3. Check "Always allow from this computer"
+
+Verify the connection:
+
+```shellscript
+adb devices
+```
+
+You should see your device listed:
+
+```
+List of devices attached
+XXXXXXXXX    device
+```
+
+If it says `unauthorized`, check your phone for the permission prompt.
+
+<ArticleSection name="Running the App" id="running" level="h2" />
+
+### React Native CLI
+
+```shellscript
+# Start Metro bundler in one terminal
+npx react-native start
+
+# In another terminal, build and run on device
+npx react-native run-android
+```
+
+### Expo Development Build
+
+Since MWA requires native code, you need a development build (not Expo Go):
+
+```shellscript
+# Create development build
+npx expo run:android
+```
+
+This builds and installs the app on your device. Subsequent runs use:
+
+```shellscript
+# Start development server
+npx expo start --dev-client
+```
+
+Scan the QR code with your device's camera to connect.
+
+<ArticleSection name="Install a Wallet" id="install-wallet" level="h2" />
+
+Install a wallet app that supports MWA:
+
+**Phantom**: [play.google.com/store/apps/details?id=app.phantom](https://play.google.com/store/apps/details?id=app.phantom)
+
+**Solflare**: [play.google.com/store/apps/details?id=com.solflare.mobile](https://play.google.com/store/apps/details?id=com.solflare.mobile)
+
+After installing:
+1. Create or import a wallet
+2. Switch to Devnet (Settings → Developer Settings → Devnet)
+3. Get devnet SOL from a faucet
+
+<ArticleSection name="Getting Devnet SOL" id="devnet-sol" level="h2" />
+
+Fund your wallet for testing:
+
+**Web Faucet**: [faucet.solana.com](https://faucet.solana.com)
+
+**CLI**:
+```shellscript
+solana airdrop 2 YOUR_WALLET_ADDRESS --url devnet
+```
+
+**Programmatic** (from your app):
+```typescript
+const connection = new Connection('https://api.devnet.solana.com');
+const signature = await connection.requestAirdrop(
+  walletPublicKey,
+  2 * LAMPORTS_PER_SOL
+);
+await connection.confirmTransaction(signature);
+```
+
+<ArticleSection name="Testing the Connection" id="testing-connection" level="h2" />
+
+Create a minimal test screen:
+
+```typescript
+// TestScreen.tsx
+import React, { useState } from 'react';
+import { View, Text, Button, StyleSheet, ScrollView } from 'react-native';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { PublicKey } from '@solana/web3.js';
+import { toByteArray } from 'react-native-quick-base64';
+
+const APP_IDENTITY = {
+  name: 'MWA Test',
+  uri: 'https://test.app',
+  icon: 'favicon.ico',
+};
+
+export function TestScreen() {
+  const [logs, setLogs] = useState<string[]>([]);
+
+  const log = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs((prev) => [...prev, `[${timestamp}] ${message}`]);
+  };
+
+  const testConnect = async () => {
+    log('Starting transact...');
+    
+    try {
+      await transact(async (wallet) => {
+        log('Session established');
+        
+        const result = await wallet.authorize({
+          identity: APP_IDENTITY,
+          chain: 'solana:devnet',
+        });
+        
+        const address = new PublicKey(
+          toByteArray(result.accounts[0].address)
+        );
+        
+        log(`Authorized: ${address.toBase58()}`);
+        log(`Auth token: ${result.auth_token.slice(0, 20)}...`);
+        log(`Accounts: ${result.accounts.length}`);
+      });
+      
+      log('Session closed successfully');
+    } catch (error) {
+      log(`ERROR: ${error}`);
+    }
+  };
+
+  const clearLogs = () => setLogs([]);
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>MWA Connection Test</Text>
+      
+      <View style={styles.buttons}>
+        <Button title="Test Connect" onPress={testConnect} />
+        <Button title="Clear Logs" onPress={clearLogs} />
+      </View>
+      
+      <ScrollView style={styles.logContainer}>
+        {logs.map((log, index) => (
+          <Text key={index} style={styles.log}>{log}</Text>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 16 },
+  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 16 },
+  buttons: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  logContainer: { flex: 1, backgroundColor: '#1a1a1a', padding: 8, borderRadius: 8 },
+  log: { color: '#0f0', fontFamily: 'monospace', fontSize: 12, marginBottom: 4 },
+});
+```
+
+When you tap "Test Connect":
+1. Your app opens the wallet
+2. Wallet shows authorization prompt
+3. You approve
+4. Control returns to your app
+5. Logs show the result
+
+<ArticleSection name="Debugging Tips" id="debugging" level="h2" />
+
+### View Logs
+
+Use `adb logcat` filtered to React Native:
+
+```shellscript
+adb logcat *:S ReactNative:V ReactNativeJS:V
+```
+
+Or use Flipper for a nicer interface:
+
+```shellscript
+npx react-native-flipper
+```
+
+### Common Issues
+
+**"Found no installed wallet"**
+- Check that Phantom/Solflare is installed
+- Verify the wallet app is the correct MWA version
+
+**"Session timeout"**
+- The wallet was backgrounded too long
+- Android killed the wallet process
+- Try keeping the wallet in the foreground
+
+**"Authorization failed" immediately**
+- Your auth token is stale
+- Clear cached token and try again
+- Check that identity URI matches your app
+
+**App crashes on transact()**
+- Missing polyfills (check entry file order)
+- Metro bundler needs restart
+- Run `npx react-native start --reset-cache`
+
+**Transaction signing fails but no error**
+- Check wallet is on devnet (if testing with devnet)
+- Verify transaction is valid (simulate first)
+- Check sufficient SOL for fees
+
+### Inspect Network Requests
+
+For RPC debugging, log all Solana requests:
+
+```typescript
+// Patch Connection for logging (development only)
+if (__DEV__) {
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options) => {
+    if (typeof url === 'string' && url.includes('solana')) {
+      console.log('[RPC]', options?.body);
+    }
+    return originalFetch(url, options);
+  };
+}
+```
+
+<ArticleSection name="Hot Reloading" id="hot-reload" level="h2" />
+
+Metro's hot reload works with MWA development:
+
+1. Make code changes
+2. Save the file
+3. App reloads automatically
+4. Test MWA flow again
+
+For faster iteration, create a test wallet connection at the top of your test screen and keep logging enabled.
+
+**Fast Refresh Caveat**: If you change the component that calls `transact()`, you may need to restart the app for clean state.
+
+<ArticleSection name="Testing Transaction Signing" id="test-transactions" level="h2" />
+
+Add a transaction test to your debug screen:
+
+```typescript
+import { 
+  Connection, 
+  PublicKey, 
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+} from '@solana/web3.js';
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+async function testSendTransaction(log: (msg: string) => void) {
+  log('Building transaction...');
+  
+  await transact(async (wallet) => {
+    const result = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const publicKey = new PublicKey(
+      toByteArray(result.accounts[0].address)
+    );
+    
+    log(`Using account: ${publicKey.toBase58()}`);
+    
+    // Check balance
+    const balance = await connection.getBalance(publicKey);
+    log(`Balance: ${balance / 1e9} SOL`);
+    
+    if (balance < 0.001 * 1e9) {
+      log('ERROR: Insufficient balance for test');
+      return;
+    }
+    
+    // Build transaction (send 0.001 SOL to self)
+    const { blockhash } = await connection.getLatestBlockhash();
+    
+    const transaction = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: publicKey,
+        recentBlockhash: blockhash,
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: publicKey, // Send to self
+            lamports: 0.001 * 1e9,
+          }),
+        ],
+      }).compileToV0Message()
+    );
+    
+    log('Signing transaction...');
+    
+    const [signature] = await wallet.signAndSendTransactions({
+      transactions: [transaction],
+    });
+    
+    log(`Signature: ${signature}`);
+    
+    // Confirm
+    log('Waiting for confirmation...');
+    const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+    
+    if (confirmation.value.err) {
+      log(`ERROR: ${JSON.stringify(confirmation.value.err)}`);
+    } else {
+      log('Transaction confirmed!');
+    }
+  });
+}
+```
+
+<ArticleSection name="Testing Message Signing" id="test-messages" level="h2" />
+
+Test message signing separately:
+
+```typescript
+import nacl from 'tweetnacl';
+
+async function testSignMessage(log: (msg: string) => void) {
+  const testMessage = 'Hello from MWA test!';
+  const messageBytes = new TextEncoder().encode(testMessage);
+  
+  log(`Signing message: "${testMessage}"`);
+  
+  await transact(async (wallet) => {
+    const result = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const publicKey = new PublicKey(
+      toByteArray(result.accounts[0].address)
+    );
+    
+    const signResult = await wallet.signMessages({
+      addresses: [result.accounts[0].address],
+      payloads: [messageBytes],
+    });
+    
+    const signature = signResult[0];
+    log(`Signature: ${Buffer.from(signature).toString('hex').slice(0, 40)}...`);
+    
+    // Verify
+    const isValid = nacl.sign.detached.verify(
+      messageBytes,
+      signature,
+      publicKey.toBytes()
+    );
+    
+    log(`Verification: ${isValid ? 'PASSED ✓' : 'FAILED ✗'}`);
+  });
+}
+```
+
+<ArticleSection name="Multi-Device Testing" id="multi-device" level="h2" />
+
+If you have multiple Android devices:
+
+```shellscript
+# List devices
+adb devices
+
+# Run on specific device
+npx react-native run-android --deviceId DEVICE_SERIAL
+```
+
+Test with different wallets on different devices to ensure compatibility:
+- Phantom (most popular)
+- Solflare (good MWA support)
+- Backpack (if available)
+
+<ArticleSection name="Release Build Testing" id="release-testing" level="h2" />
+
+Test release builds before publishing:
+
+```shellscript
+# Build release APK
+cd android
+./gradlew assembleRelease
+
+# Install on device
+adb install app/build/outputs/apk/release/app-release.apk
+```
+
+For Expo:
+
+```shellscript
+npx eas build --platform android --profile preview
+```
+
+Release builds may behave differently:
+- No debug logs
+- Optimized code paths
+- Different error messages
+
+Always test MWA flows in release mode before shipping.
+
+<ArticleSection name="Checklist" id="checklist" level="h2" />
+
+Before considering MWA integration complete:
+
+- [ ] Connect flow works with Phantom
+- [ ] Connect flow works with Solflare
+- [ ] Transaction signing succeeds
+- [ ] Message signing succeeds
+- [ ] Error handling shows user-friendly messages
+- [ ] "No wallet installed" case handled
+- [ ] User cancellation doesn't show error
+- [ ] Auth token caching works (reconnect is fast)
+- [ ] Works on release build
+- [ ] Works on Android 8.0 (API 26) device if supporting older phones
+
+With your dApp tested on real hardware, you're ready to build a complete application. The final lesson brings everything together with a capstone project.

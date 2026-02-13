@@ -1,0 +1,336 @@
+---
+title: "RPC Fundamentals for Mobile"
+description: "Learn how to connect to Solana's network from mobile, handle RPC requests efficiently, and choose the right providers."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="The Mobile RPC Challenge" id="the-mobile-rpc-challenge" level="h2" />
+
+Mobile apps don't connect to Solana directly. They speak to RPC nodes: intermediaries that accept your JSON requests and relay them to validators. On desktop browsers, RPC calls feel instant. On mobile, every millisecond matters. Network latency, cellular connections, and battery constraints change how you think about RPC.
+
+> "RPC quality really matters. A good RPC setup forwards transactions quickly, handles load and retries, and stays well connected to the network."
+
+The Solana network produces blocks roughly every 400 milliseconds. Your mobile app needs to fetch blockhashes, submit transactions, and confirm results, all while the user might be on a spotty 4G connection.
+
+<ArticleSection name="Setting Up Connection" id="setting-up-connection" level="h2" />
+
+The `@solana/web3.js` library provides the `Connection` class: your gateway to Solana's JSON-RPC API.
+
+```typescript
+import { Connection, clusterApiUrl } from "@solana/web3.js";
+
+// For development
+const devnetConnection = new Connection(
+  clusterApiUrl("devnet"),
+  "confirmed"
+);
+
+// For production with a dedicated RPC provider
+const mainnetConnection = new Connection(
+  "https://your-provider.com/rpc",
+  {
+    commitment: "confirmed",
+    confirmTransactionInitialTimeout: 60000, // 60 seconds for mobile
+  }
+);
+```
+
+### Commitment Levels
+
+Commitment tells Solana how "final" you need the data to be:
+
+- **`processed`**: The node processed it. Fast, but might get reverted.
+- **`confirmed`**: 66%+ of validators confirmed. The sweet spot for most apps.
+- **`finalized`**: Absolute certainty. Slower, but the transaction will never be reverted.
+
+For mobile, `confirmed` is usually the right choice. It balances speed with reliability.
+
+### Required Polyfills
+
+React Native doesn't include certain APIs that `@solana/web3.js` expects. Add these to your `index.js`:
+
+```typescript
+// index.js - MUST be at the top
+import "react-native-get-random-values";
+import { Buffer } from "buffer";
+global.Buffer = Buffer;
+```
+
+Install them:
+
+```shellscript
+yarn add @solana/web3.js react-native-get-random-values buffer
+```
+
+<ArticleSection name="Essential RPC Methods" id="essential-rpc-methods" level="h2" />
+
+### Reading Account Data
+
+```typescript
+// Get SOL balance
+const balance = await connection.getBalance(publicKey);
+const solBalance = balance / LAMPORTS_PER_SOL;
+
+// Get account info (for any account)
+const accountInfo = await connection.getAccountInfo(publicKey);
+if (accountInfo) {
+  console.log("Owner:", accountInfo.owner.toBase58());
+  console.log("Data length:", accountInfo.data.length);
+  console.log("Lamports:", accountInfo.lamports);
+}
+```
+
+### Fetching Token Balances
+
+```typescript
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+// Get all token accounts owned by a wallet
+const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  walletPublicKey,
+  { programId: TOKEN_PROGRAM_ID }
+);
+
+tokenAccounts.value.forEach((account) => {
+  const parsed = account.account.data.parsed.info;
+  console.log("Mint:", parsed.mint);
+  console.log("Balance:", parsed.tokenAmount.uiAmount);
+});
+```
+
+### Getting the Latest Blockhash
+
+Every transaction needs a recent blockhash; it acts as a timestamp and prevents replay attacks:
+
+```typescript
+const { blockhash, lastValidBlockHeight } = 
+  await connection.getLatestBlockhash("confirmed");
+
+// This blockhash is valid for ~60-90 seconds
+// If your transaction takes longer, you'll need a fresh one
+```
+
+<ArticleSection name="Mobile-Optimized Patterns" id="mobile-optimized-patterns" level="h2" />
+
+### Batch Requests
+
+Instead of making five separate calls, batch them:
+
+```typescript
+// DON'T do this on mobile
+const balance1 = await connection.getBalance(addr1);
+const balance2 = await connection.getBalance(addr2);
+const balance3 = await connection.getBalance(addr3);
+// 3 round trips = slow on cellular
+
+// DO this instead
+const balances = await connection.getMultipleAccountsInfo([
+  addr1, addr2, addr3
+]);
+// 1 round trip = much faster
+```
+
+### Caching Strategies
+
+```typescript
+// Simple cache for account data
+const accountCache = new Map<string, {
+  data: AccountInfo<Buffer> | null;
+  timestamp: number;
+}>();
+
+const CACHE_TTL = 5000; // 5 seconds
+
+async function getCachedAccountInfo(
+  connection: Connection,
+  pubkey: PublicKey
+): Promise<AccountInfo<Buffer> | null> {
+  const key = pubkey.toBase58();
+  const cached = accountCache.get(key);
+  
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  
+  const data = await connection.getAccountInfo(pubkey);
+  accountCache.set(key, { data, timestamp: Date.now() });
+  return data;
+}
+```
+
+### Retry Logic
+
+Mobile networks are unreliable. Build in retries:
+
+```typescript
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxAttempts = 3,
+  delayMs = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      console.log(`Attempt ${attempt} failed:`, error);
+      
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => 
+          setTimeout(resolve, delayMs * attempt)
+        );
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// Usage
+const balance = await withRetry(() => 
+  connection.getBalance(publicKey)
+);
+```
+
+<ArticleSection name="Choosing an RPC Provider" id="choosing-an-rpc-provider" level="h2" />
+
+For production mobile apps, you need a dedicated RPC provider. The public endpoints (`api.mainnet-beta.solana.com`) are rate-limited and unreliable for production use.
+
+### Provider Options
+
+| Provider | Strengths | Mobile Consideration |
+|----------|-----------|---------------------|
+| **Helius** | Fast, DAS API for NFTs, webhooks | Excellent for NFT-heavy apps |
+| **QuickNode** | Global edge network, consistent | Good latency worldwide |
+| **Triton** | High throughput, competitive pricing | Great for high-volume apps |
+| **Alchemy** | Multi-chain, good debugging tools | If you need EVM too |
+
+### Environment Configuration
+
+Never hardcode RPC URLs. Use environment variables:
+
+```typescript
+// config/rpc.ts
+import Config from "react-native-config";
+
+export const getRpcEndpoint = () => {
+  const endpoint = Config.SOLANA_RPC_URL;
+  
+  if (!endpoint) {
+    // Fallback for development only
+    console.warn("No RPC URL configured, using devnet");
+    return clusterApiUrl("devnet");
+  }
+  
+  return endpoint;
+};
+
+// .env (not committed to git)
+SOLANA_RPC_URL=https://your-provider.com/your-api-key
+```
+
+<ArticleSection name="WebSocket Subscriptions" id="websocket-subscriptions" level="h2" />
+
+For real-time updates, use WebSocket subscriptions:
+
+```typescript
+// Subscribe to account changes
+const subscriptionId = connection.onAccountChange(
+  publicKey,
+  (accountInfo) => {
+    console.log("Account changed:", accountInfo.lamports);
+  },
+  "confirmed"
+);
+
+// Subscribe to transaction confirmations
+connection.onSignature(
+  transactionSignature,
+  (result) => {
+    if (result.err) {
+      console.error("Transaction failed:", result.err);
+    } else {
+      console.log("Transaction confirmed!");
+    }
+  },
+  "confirmed"
+);
+
+// IMPORTANT: Clean up when component unmounts
+connection.removeAccountChangeListener(subscriptionId);
+```
+
+### Mobile WebSocket Considerations
+
+WebSockets on mobile can be tricky:
+
+1. **Background state**: iOS/Android may kill WebSocket connections when the app backgrounds
+2. **Reconnection**: Build in automatic reconnection logic
+3. **Battery**: Long-running subscriptions drain battery; use sparingly
+
+```typescript
+// React hook for managed subscription
+function useAccountBalance(publicKey: PublicKey | null) {
+  const [balance, setBalance] = useState<number | null>(null);
+  const connection = useConnection();
+  
+  useEffect(() => {
+    if (!publicKey) return;
+    
+    // Initial fetch
+    connection.getBalance(publicKey).then(setBalance);
+    
+    // Subscribe to changes
+    const subId = connection.onAccountChange(
+      publicKey,
+      (info) => setBalance(info.lamports),
+      "confirmed"
+    );
+    
+    // Cleanup on unmount
+    return () => {
+      connection.removeAccountChangeListener(subId);
+    };
+  }, [publicKey, connection]);
+  
+  return balance;
+}
+```
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+RPC calls can fail in many ways. Handle them gracefully:
+
+```typescript
+try {
+  const balance = await connection.getBalance(publicKey);
+} catch (error) {
+  if (error.message.includes("429")) {
+    // Rate limited - back off and retry
+    console.log("Rate limited, waiting...");
+  } else if (error.message.includes("Network request failed")) {
+    // Network issue
+    console.log("Network unavailable");
+  } else if (error.message.includes("Invalid param")) {
+    // Bad input
+    console.log("Invalid public key");
+  } else {
+    // Unknown error
+    console.error("RPC error:", error);
+  }
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+- **Batch requests** when possible; every round trip costs time on mobile
+- **Use `confirmed` commitment** for the speed/reliability balance
+- **Add polyfills** before importing `@solana/web3.js`
+- **Choose a dedicated RPC provider** for production
+- **Build retry logic** into all network operations
+- **Clean up subscriptions** to prevent memory leaks and battery drain
+
+In the next lesson, we'll use these RPC fundamentals to build actual transactions: starting with token transfers.

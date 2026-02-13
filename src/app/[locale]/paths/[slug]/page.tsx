@@ -25,6 +25,7 @@ export async function generateMetadata({
   });
 
   const title = `${t("metadata.title")} | ${t(`paths.${slug}.title`)}`;
+  const ogImageUrl = `/graphics/path-banners/${slug}.png`;
 
   return {
     title: title,
@@ -35,6 +36,14 @@ export async function generateMetadata({
       description: t(`paths.${slug}.description`),
       siteName: title,
       url: pathname,
+      images: [
+        {
+          url: ogImageUrl,
+          width: 1200,
+          height: 630,
+          alt: t(`paths.${slug}.title`),
+        },
+      ],
     },
   };
 }

@@ -3,6 +3,7 @@
 import { memo, useCallback } from "react"
 import { getResearchForCourse, type CourseId } from "@/lib/cross-linking"
 import { CrosshairCorners, Button } from "@blueshift-gg/ui-components"
+import Link from "next/link"
 
 interface Props {
   courseId: CourseId
@@ -42,7 +43,7 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
   const handleClick = useCallback(
     (articleId: string) => {
       if (typeof window !== "undefined" && (window as any).analytics) {
-        ;(window as any).analytics.track("research_link_clicked", {
+        ; (window as any).analytics.track("research_link_clicked", {
           source: "course_conclusion",
           course: courseId,
           article: articleId,
@@ -104,15 +105,15 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
         </div>
 
         <div className="mt-8 flex justify-center">
-          <Button
-            href="https://blueshift.gg/research"
-            label="Explore All Research"
-            variant="secondary"
-            size="md"
-            icon={{ name: "External", size: 18 }}
-            iconPosition="right"
-            target="_blank"
-          />
+          <Link href="https://blueshift.gg/research" target="_blank">
+            <Button
+              label="Explore All Research"
+              variant="secondary"
+              size="md"
+              icon={{ name: "External", size: 18 }}
+              iconPosition="right"
+            />
+          </Link>
         </div>
       </div>
     </aside>

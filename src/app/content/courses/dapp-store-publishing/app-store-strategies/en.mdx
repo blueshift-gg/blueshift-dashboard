@@ -1,0 +1,280 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# App Store Review Strategies
+
+Publishing a crypto app to Apple's App Store or Google Play is navigating hostile territory. These platforms have policies specifically targeting cryptocurrency apps, some reasonable, some designed to protect their payment monopolies.
+
+This lesson gives you the specific policies you need to know and the strategies that actually work for getting your Solana app approved.
+
+<ArticleSection name="Apple App Store: The Stricter Gatekeeper" id="apple-app-store-the-stricter-gatekeeper" level="h2" />
+
+Apple's App Store Review Guidelines dedicate an entire subsection to cryptocurrency: **3.1.5 Cryptocurrencies**.
+
+### The key rules
+
+**Wallets are allowed, but only from organizations:**
+
+> Apps may facilitate virtual currency storage, provided they are offered by developers enrolled as an organization.
+
+This means:
+- Individual developer accounts ($99/year) **cannot** publish wallet apps
+- You must enroll as an organization through Apple's enrollment process
+- This requires a D-U-N-S number for your business
+
+If you're building a wallet or any app with self-custody features, you need the organization enrollment before you can even submit.
+
+**Exchanges have geographic restrictions:**
+
+> Apps may facilitate transactions or transmissions of cryptocurrency on an approved exchange, provided they are offered only in countries or regions where the app has appropriate licensing.
+
+If your app connects to exchanges or facilitates trading, you need to:
+- Limit availability to jurisdictions where you're licensed
+- Provide documentation of licensing if requested
+- Be prepared for additional scrutiny
+
+**NFT experiences must use in-app purchase for certain features:**
+
+Apple's position on NFTs has evolved. Currently:
+- Displaying NFTs the user owns: allowed
+- Buying NFTs with crypto in your app: allowed
+- Buying NFTs that unlock app features: requires in-app purchase
+
+The last point is where it gets tricky. If an NFT gives the user something **within your app** (like premium features), Apple considers that a digital good subject to their 30% cut.
+
+### Test account requirements
+
+This is the requirement that trips up most crypto developers:
+
+> Apps should provide test accounts for review purposes.
+
+Apple's reviewers need to test your app's functionality. But how do you give them a "test account" for a wallet that uses real blockchain addresses?
+
+<ArticleSection name="Solving the Test Account Problem" id="solving-the-test-account-problem" level="h2" />
+
+Apple reviewers are not going to create their own Solana wallet, fund it with SOL, and test your app. You need to provide them a way to test without understanding crypto.
+
+### Option 1: Demo mode
+
+Build a demo mode into your app that simulates blockchain interactions:
+
+```typescript
+// Check for demo mode flag
+const isDemoMode = process.env.DEMO_MODE === 'true';
+
+const executeTransaction = async (tx: Transaction) => {
+  if (isDemoMode) {
+    // Simulate successful transaction
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    return {
+      signature: 'DEMO_' + Math.random().toString(36).substring(7),
+      success: true
+    };
+  }
+  
+  // Real transaction
+  return await connection.sendTransaction(tx, [wallet]);
+};
+```
+
+Provide Apple with:
+- Instructions to enable demo mode
+- A pre-configured test account
+- Clear documentation of what's simulated vs real
+
+### Option 2: Privy test accounts
+
+If you're using Privy for embedded wallets, they provide a test account system designed specifically for App Store review.
+
+**Enable test accounts in Privy Dashboard:**
+1. Go to User Management → Authentication → Advanced
+2. Enable "Test accounts"
+3. Note the test account format
+
+**Test account format:**
+- Email: `test-XXXX@privy.io` (where XXXX is 4+ characters)
+- OTP code: always `XXXXXX` (six X's)
+
+Tell Apple reviewers:
+> To test authentication, use email `test-review@privy.io` with verification code `XXXXXX`.
+
+The account will be fully functional, with a real embedded wallet, but doesn't require real email verification.
+
+### Option 3: Pre-funded test wallet
+
+For apps that connect to external wallets (via MWA on Android or WalletConnect):
+
+1. Create a dedicated test wallet
+2. Fund it with small amounts of real SOL and tokens
+3. Export the seed phrase
+4. Provide Apple with:
+   - Phantom (or other wallet) download instructions
+   - Seed phrase to import
+   - Instructions to connect to your app
+
+**Risks:**
+- Reviewers might not follow complex instructions
+- Seed phrase could be compromised (use burner wallet with minimal funds)
+- Multiple reviewers might conflict with each other
+
+### The key principle
+
+Whichever approach you choose, the goal is the same: **make your entire app testable without requiring the reviewer to understand crypto**. Every screen, every flow, every feature should be accessible through your test account or demo mode.
+
+In your App Review Notes, provide clear step-by-step instructions for testing each major feature. Assume the reviewer has never used a crypto app before.
+
+<ArticleSection name="Google Play: Different Challenges" id="google-play-different-challenges" level="h2" />
+
+Google Play's policies are found in their "Families Policy" and "Financial Services" sections. For crypto apps, the key document is the **Blockchain-based content policy**.
+
+### Cryptocurrency exchanges and wallets
+
+From Google's policy:
+
+> Apps that facilitate cryptocurrency transactions must:
+> - Be from certified services operating in regulated jurisdictions
+> - Comply with all applicable regulations
+> - Declare "Financial Features" in the app content declaration
+
+The "certified services" language is vague, but in practice means:
+- Money transmission licenses where required
+- Compliance with local financial regulations
+- Clear terms of service
+
+### The Financial Features declaration
+
+When you submit to Google Play Console, you must declare if your app has "Financial Features":
+
+1. Go to App Content → Financial Features
+2. Select "Yes" if your app handles cryptocurrency
+3. Provide additional information about:
+   - What financial services you offer
+   - What jurisdictions you operate in
+   - Licensing information
+
+Being honest here is important. If you declare "No" and Google's automated systems detect crypto functionality, you'll face delays or rejection.
+
+### Google's NFT position
+
+Google has been more permissive than Apple on NFTs:
+- Buying/selling NFTs with crypto: allowed
+- NFTs that unlock in-app features: allowed **if** users can also earn/access them without purchase
+
+The last point matters. If an NFT is the **only** way to access a feature, Google may push back. But if it's an accelerator or alternative path, you're usually fine.
+
+<ArticleSection name="Avoiding Common Rejection Reasons" id="avoiding-common-rejection-reasons" level="h2" />
+
+Based on real rejection experiences from Solana developers:
+
+### Rejection: "Insufficient information about how the app works"
+
+**Why:** Reviewers don't understand blockchain/crypto
+**Fix:** Over-explain in your App Review Notes. Assume zero crypto knowledge.
+
+### Rejection: "App requires additional resources to function"
+
+**Why:** Your app requires a connected wallet, and reviewers don't have one
+**Fix:** Implement demo mode or provide test accounts as described above
+
+### Rejection: "Guideline 3.1.5 - Business - Payments - Cryptocurrencies"
+
+**Why:** You're enrolled as individual, not organization
+**Fix:** Re-enroll as organization. This takes 2-4 weeks and requires business documentation.
+
+### Rejection: "App doesn't function as advertised"
+
+**Why:** Reviewers couldn't complete a flow because it needed real crypto
+**Fix:** Either implement testnet mode for review or provide pre-funded test credentials
+
+### Rejection: "Binary rejected due to financial services concerns"
+
+**Why:** App description or metadata mentioned features that require licensing
+**Fix:** Soften language. Instead of "trade crypto" say "view your portfolio and transfer to supported wallets"
+
+<ArticleSection name="Metadata Strategies" id="metadata-strategies" level="h2" />
+
+Your App Store listing affects both discoverability and review outcome.
+
+### Keywords to be careful with
+
+These words can trigger additional scrutiny:
+- "Trade" / "Trading" 
+- "Exchange"
+- "Investment" / "Invest"
+- "Earn" (in context of yields)
+- "Banking"
+- "Financial services"
+
+### Safer alternatives
+
+- "Manage your digital assets"
+- "Send and receive crypto"
+- "View your portfolio"
+- "Access decentralized applications"
+- "Connect to Web3"
+
+### Category selection
+
+Choose carefully:
+- **Finance** - triggers financial services review but is often the right category
+- **Utilities** - lower scrutiny, works for wallets and tools
+- **Lifestyle** - can work for NFT apps focused on collecting
+
+<ArticleSection name="Handling Rejections" id="handling-rejections" level="h2" />
+
+Rejections happen. How you respond determines your outcome.
+
+### Don't argue, educate
+
+Reviewers often reject because they don't understand. Your appeal should:
+1. Acknowledge their concern
+2. Explain exactly how your app addresses it
+3. Provide clear testing steps
+4. Offer to get on a call if needed (Apple offers this for complex cases)
+
+Be specific to your app and the exact rejection reason. Generic appeals don't work.
+
+### When to pivot
+
+Sometimes a feature just won't get approved. Consider:
+- Removing the problematic feature for App Store version
+- Offering full functionality on dApp Store
+- Using deep links to push users to web for certain features
+
+Many successful apps have a "lite" App Store version and full version on dApp Store or as a PWA.
+
+<ArticleSection name="Keeping Your App Listed" id="keeping-your-app-listed" level="h2" />
+
+Getting approved is just the beginning. Apps can be removed post-approval.
+
+### Monitor policy changes
+
+Both Apple and Google update their crypto policies regularly. Subscribe to:
+- Apple Developer News
+- Google Play Policy Updates
+- Solana Mobile updates (they track platform policy changes)
+
+### Respond to compliance requests quickly
+
+If you get an email about policy compliance:
+1. Respond within 24-48 hours
+2. Acknowledge the concern
+3. Provide a timeline for addressing it
+4. Actually follow through
+
+Slow responses or ignoring compliance requests can lead to removal.
+
+### Don't update metadata carelessly
+
+Changing your app description to be more aggressive about features can trigger re-review. Keep approved language consistent unless you're intentionally accepting the re-review risk.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Getting a Solana app through App Store and Play Store review requires:
+
+1. **Organization enrollment** for Apple (if you have wallet features)
+2. **Test accounts** that don't require reviewers to understand crypto
+3. **Careful metadata** that doesn't trigger unnecessary scrutiny
+4. **Financial Features declaration** for Google Play
+5. **Patient appeals** when rejections happen
+
+The next lesson covers what happens after you're published: protecting your app from reverse engineering and other security threats.

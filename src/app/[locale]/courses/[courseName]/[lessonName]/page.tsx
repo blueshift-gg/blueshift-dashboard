@@ -40,22 +40,17 @@ export async function generateMetadata({
     height: 630,
   };
 
-  // Get lesson-specific title and description
-  const lessonTitle = t(`courses.${courseName}.lessons.${lessonName}`);
-  const lessonValueProp = t(`courses.${courseName}.lessonValueProps.${lessonName}`, { default: "" });
-  const lessonDescription = t(`courses.${courseName}.lessonDescriptions.${lessonName}`, { default: t("metadata.description") });
-
-  // Optimized title pattern: Lesson Title: Value Prop | Blueshift
-  const title = lessonValueProp
-    ? `${lessonTitle}: ${lessonValueProp} | Blueshift`
-    : `${lessonTitle} | ${t(`courses.${courseName}.title`)} | Blueshift`;
+  // SEO-optimized: Lesson | Course | Brand (keywords first)
+  const lessonTitle = t(`courses.${courseName}.lessons.${lessonName}.title`);
+  const courseTitle = t(`courses.${courseName}.title`);
+  const title = `${lessonTitle} | ${courseTitle} | Blueshift`;
 
   // Build the relative path without locale for alternates
   const basePath = `/courses/${courseName}/${lessonName}`;
 
   return {
     title: title,
-    description: lessonDescription,
+    description: t(`courses.${courseName}.lessons.${lessonName}.description`),
     alternates: {
       canonical: `/${locale}${basePath}`,
       languages: {
@@ -70,16 +65,17 @@ export async function generateMetadata({
       },
     },
     openGraph: {
-      title: title,
-      type: "website",
-      description: lessonDescription,
-      siteName: title,
+      title: lessonTitle, // Shorter for social sharing
+      type: "article", // More accurate for lesson content
+      description: t(`courses.${courseName}.lessons.${lessonName}.description`),
+      siteName: "Blueshift Education",
       url: pathname,
       images: [
         {
           url: ogImage.src,
           width: ogImage.width,
           height: ogImage.height,
+          alt: `${courseTitle} course banner`,
         },
       ],
     },
@@ -191,7 +187,9 @@ export default async function LessonPage({ params }: LessonPageProps) {
   };
 
   // Generate LearningResource JSON-LD Schema for the individual lesson
-  const lessonTitle = t(`courses.${courseMetadata.slug}.lessons.${lessonName}`);
+  const lessonTitle = t(
+    `courses.${courseMetadata.slug}.lessons.${lessonName}.title`
+  );
   const learningResourceSchema = {
     "@context": "https://schema.org",
     "@type": "LearningResource",

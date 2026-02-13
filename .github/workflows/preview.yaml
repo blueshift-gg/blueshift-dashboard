@@ -1,0 +1,235 @@
+name: Preview
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+concurrency:
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Abort for draft PRs
+        if: github.event.pull_request.draft == true
+        run: |
+          echo "Draft PRs do not get previews. Skipping preview deployment."
+          exit 0
+
+      - name: Resolve workers.dev subdomain
+        id: workers_dev
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "Missing Cloudflare credentials; cannot resolve workers.dev subdomain." >&2
+            exit 1
+          fi
+
+          response=$(curl -sSL \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")
+
+          success=$(echo "$response" | jq -r '.success // false')
+          if [ "$success" != "true" ]; then
+            echo "workers.dev subdomain lookup failed" >&2
+            exit 1
+          fi
+
+          subdomain=$(echo "$response" | jq -r '.result.subdomain // empty')
+          if [ -z "$subdomain" ]; then
+            echo "workers.dev subdomain missing in response" >&2
+            exit 1
+          fi
+
+          echo "subdomain=$subdomain" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # https://github.com/actions/checkout/releases/tag/v6.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # https://github.com/pnpm/action-setup/releases/tag/v4.2.0
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # https://github.com/actions/setup-node/releases/tag/v6.0.0
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Cache Next.js
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # https://github.com/actions/cache/releases/tag/v4.3.0
+        with:
+          path: ${{ github.workspace }}/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+      - name: Cache Compiled MDX
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # https://github.com/actions/cache/releases/tag/v4.3.0
+        with:
+          path: ${{ github.workspace }}/.compiled-mdx
+          key: ${{ runner.os }}-compiled-mdx-${{ hashFiles('src/app/content/**/*.mdx', 'src/lib/shiki/*.json') }}
+          restore-keys: |
+            ${{ runner.os }}-compiled-mdx-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Precompile MDX
+        run: pnpm precompile-mdx
+
+      - name: Tune AWS CLI transfers
+        run: |
+          aws configure set default.s3.max_concurrent_requests 100
+          aws configure set default.s3.max_queue_size 1000
+          aws configure set default.s3.multipart_threshold 100MB
+          aws configure set default.s3.multipart_chunksize 100MB
+
+      - name: Derive preview identifiers
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKERS_DEV_SUBDOMAIN: ${{ steps.workers_dev.outputs.subdomain }}
+        run: |
+          PR_NUMBER="${PR_NUMBER}"
+          echo "WORKER_NAME=blueshift-preview-pr-${PR_NUMBER}" >> "$GITHUB_ENV"
+          echo "CONTENT_PREFIX=compiled-mdx-preview/pr-${PR_NUMBER}" >> "$GITHUB_ENV"
+          if [ -n "${WORKERS_DEV_SUBDOMAIN:-}" ]; then
+            echo "PREVIEW_URL=https://blueshift-preview-pr-${PR_NUMBER}.${WORKERS_DEV_SUBDOMAIN}.workers.dev" >> "$GITHUB_ENV"
+          fi
+
+      - name: Seed preview content from production
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          PROD_CONTENT_PREFIX: compiled-mdx
+        run: |
+          SOURCE_PREFIX="s3://${{ secrets.R2_BUCKET }}/$PROD_CONTENT_PREFIX"
+          DEST_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
+          aws s3 sync "$SOURCE_PREFIX" "$DEST_PREFIX" \
+            --endpoint-url "$ENDPOINT" \
+            --quiet \
+            --size-only \
+            --delete
+
+      - name: Upload Compiled MDX to R2 (preview)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          COMPILED_DIR: .compiled-mdx
+          CONTENT_DIR: src/app/content
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
+
+          aws s3 sync "$COMPILED_DIR/" "$S3_PREFIX" \
+            --endpoint-url "$ENDPOINT" \
+            --quiet \
+            --size-only \
+            --delete \
+            --content-type "application/json"
+
+          # Force-upload any files changed in this PR (catches same-size content edits)
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            git fetch --no-tags --depth=1 "https://github.com/${BASE_REPO}.git" "$BASE_SHA"
+          fi
+
+          changed_files=$(git diff --name-only --diff-filter=ACM "$BASE_SHA...$HEAD_SHA" "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
+
+          for file in $changed_files; do
+            relative_path="${file#$CONTENT_DIR/}"
+            json_path="${relative_path%.mdx}.json"
+            compiled_file="$COMPILED_DIR/$json_path"
+
+            if [ -f "$compiled_file" ]; then
+              aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
+                --endpoint-url "$ENDPOINT" \
+                --quiet \
+                --content-type "application/json"
+            fi
+          done
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_CHALLENGE_SECRET: ${{ secrets.NEXT_PUBLIC_CHALLENGE_SECRET }}
+          NEXT_PUBLIC_CHALLENGE_RPC_ENDPOINT: ${{ secrets.NEXT_PUBLIC_CHALLENGE_RPC_ENDPOINT }}
+          NEXT_PUBLIC_MAINNET_RPC_ENDPOINT: ${{ secrets.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT }}
+          NEXT_PUBLIC_DEVNET_RPC_ENDPOINT: ${{ secrets.NEXT_PUBLIC_DEVNET_RPC_ENDPOINT }}
+        run: pnpm exec opennextjs-cloudflare build
+
+      - name: Deploy Preview (workers.dev)
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # https://github.com/cloudflare/wrangler-action/releases/tag/v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >
+            deploy --env preview
+            --name ${{ env.WORKER_NAME }}
+            --var CONTENT_PREFIX:${{ env.CONTENT_PREFIX }}
+
+      - name: Comment preview URL
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_URL: ${{ env.PREVIEW_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PREVIEW_URL:-}" ]; then
+            echo "No preview URL available. Skipping comment."
+            exit 0
+          fi
+
+          marker='<!-- preview-link -->'
+          body=$(printf '%s\n✅ Preview deployed: %s' "$marker" "$PREVIEW_URL")
+          payload=$(jq -n --arg body "$body" '{body: $body}')
+
+          comments_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
+          comments=$(curl -sSL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$comments_url")
+
+          comment_id=$(echo "$comments" | jq -r --arg marker "$marker" 'map(select(.body | contains($marker))) | .[0].id // empty')
+
+          if [ -n "$comment_id" ]; then
+            curl -sSL -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$payload" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" > /dev/null
+            exit 0
+          fi
+
+          curl -sSL -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$comments_url" > /dev/null

@@ -1,0 +1,512 @@
+---
+title: "NFT Operations on Mobile"
+description: "Fetch, display, and transfer NFTs from your mobile app. Work with metadata, collections, and marketplace APIs."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="NFTs Are Just Tokens" id="nfts-are-just-tokens" level="h2" />
+
+An NFT on Solana is a token with specific properties:
+
+- **Supply of 1**: Only one token exists
+- **0 decimals**: Can't have 0.5 of an NFT
+- **No mint authority**: Can't create more
+
+What makes NFTs *useful* is the metadata: the name, image, attributes, and collection information. This metadata lives in a separate account managed by the Token Metadata program.
+
+```
+Mint Account (Supply=1, Decimals=0)
+    ↓ PDA derivation
+Metadata Account (Name, Symbol, URI)
+    ↓ URI points to
+Off-chain JSON (Image, Attributes, etc.)
+```
+
+The `URI` in the metadata account points to a JSON file (usually on Arweave or IPFS) that contains the actual content.
+
+<ArticleSection name="Fetching NFT Data" id="fetching-nft-data" level="h2" />
+
+### Using DAS API
+
+The Digital Asset Standard (DAS) API is the modern way to fetch NFT data. Providers like Helius, QuickNode, and Triton support it:
+
+```typescript
+interface DasNft {
+  id: string;
+  content: {
+    metadata: {
+      name: string;
+      symbol: string;
+    };
+    links: {
+      image: string;
+    };
+    json_uri: string;
+  };
+  ownership: {
+    owner: string;
+  };
+  grouping: Array<{
+    group_key: string;
+    group_value: string;
+  }>;
+}
+
+async function fetchWalletNfts(
+  dasEndpoint: string,
+  walletAddress: string
+): Promise<DasNft[]> {
+  const response = await fetch(dasEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "my-app",
+      method: "getAssetsByOwner",
+      params: {
+        ownerAddress: walletAddress,
+        page: 1,
+        limit: 50,
+        displayOptions: {
+          showFungible: false,
+          showNativeBalance: false,
+        },
+      },
+    }),
+  });
+
+  const data = await response.json();
+  return data.result.items;
+}
+```
+
+### Marketplace APIs
+
+For richer data (floor prices, listings, rarity), use marketplace APIs:
+
+```typescript
+// Tensor API example
+async function fetchNftFromTensor(
+  mintAddress: string,
+  apiKey: string
+): Promise<any> {
+  const response = await fetch(
+    `https://api.mainnet.tensordev.io/api/v1/mint?mints=${mintAddress}`,
+    {
+      headers: {
+        "x-tensor-api-key": apiKey,
+      },
+    }
+  );
+
+  const data = await response.json();
+  return data[0];
+}
+
+// Magic Eden API example
+async function fetchCollectionFloor(
+  collectionSymbol: string
+): Promise<number> {
+  const response = await fetch(
+    `https://api-mainnet.magiceden.dev/v2/collections/${collectionSymbol}/stats`
+  );
+  
+  const data = await response.json();
+  return data.floorPrice / 1_000_000_000; // Convert lamports to SOL
+}
+```
+
+<ArticleSection name="Displaying NFTs" id="displaying-nfts" level="h2" />
+
+### Image Loading
+
+NFT images can be large. Handle them efficiently:
+
+```typescript
+import FastImage from "react-native-fast-image";
+
+function NftImage({ uri, size = 200 }: { uri: string; size?: number }) {
+  const [error, setError] = useState(false);
+
+  // Fix common URI issues
+  const fixedUri = useMemo(() => {
+    if (!uri) return null;
+    
+    // Convert IPFS to gateway URL
+    if (uri.startsWith("ipfs://")) {
+      return uri.replace("ipfs://", "https://ipfs.io/ipfs/");
+    }
+    
+    // Convert Arweave
+    if (uri.startsWith("ar://")) {
+      return uri.replace("ar://", "https://arweave.net/");
+    }
+    
+    return uri;
+  }, [uri]);
+
+  if (error || !fixedUri) {
+    return <PlaceholderImage size={size} />;
+  }
+
+  return (
+    <FastImage
+      style={{ width: size, height: size, borderRadius: 8 }}
+      source={{ uri: fixedUri, priority: FastImage.priority.normal }}
+      resizeMode={FastImage.resizeMode.cover}
+      onError={() => setError(true)}
+    />
+  );
+}
+```
+
+### Grid Display
+
+```typescript
+import { FlatList, Dimensions } from "react-native";
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
+const NUM_COLUMNS = 3;
+const ITEM_SIZE = (SCREEN_WIDTH - 32 - (NUM_COLUMNS - 1) * 8) / NUM_COLUMNS;
+
+function NftGrid({ nfts }: { nfts: DasNft[] }) {
+  const renderItem = useCallback(({ item }: { item: DasNft }) => (
+    <TouchableOpacity
+      style={styles.gridItem}
+      onPress={() => navigateToNftDetail(item)}
+    >
+      <NftImage uri={item.content.links.image} size={ITEM_SIZE} />
+      <Text numberOfLines={1} style={styles.nftName}>
+        {item.content.metadata.name}
+      </Text>
+    </TouchableOpacity>
+  ), []);
+
+  return (
+    <FlatList
+      data={nfts}
+      renderItem={renderItem}
+      keyExtractor={(item) => item.id}
+      numColumns={NUM_COLUMNS}
+      contentContainerStyle={styles.gridContainer}
+      showsVerticalScrollIndicator={false}
+    />
+  );
+}
+```
+
+<ArticleSection name="Transferring NFTs" id="transferring-nfts" level="h2" />
+
+NFT transfers are token transfers with amount=1:
+
+```typescript
+import { 
+  getAssociatedTokenAddress,
+  createTransferInstruction,
+  createAssociatedTokenAccountInstruction,
+} from "@solana/spl-token";
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+
+async function transferNft(
+  connection: Connection,
+  nftMint: PublicKey,
+  fromWallet: PublicKey,
+  toWallet: PublicKey
+): Promise<string> {
+  // 1. Get token accounts
+  const fromAta = await getAssociatedTokenAddress(nftMint, fromWallet);
+  const toAta = await getAssociatedTokenAddress(nftMint, toWallet);
+
+  // 2. Build instructions
+  const instructions = [];
+
+  // Check if recipient needs an ATA
+  const toAtaInfo = await connection.getAccountInfo(toAta);
+  if (!toAtaInfo) {
+    instructions.push(
+      createAssociatedTokenAccountInstruction(
+        fromWallet, // payer
+        toAta,
+        toWallet,
+        nftMint
+      )
+    );
+  }
+
+  // NFT transfer = amount of 1
+  instructions.push(
+    createTransferInstruction(
+      fromAta,
+      toAta,
+      fromWallet,
+      1 // NFTs have no decimals, so amount is always 1
+    )
+  );
+
+  // 3. Build transaction
+  const { blockhash, lastValidBlockHeight } = 
+    await connection.getLatestBlockhash();
+
+  const message = new TransactionMessage({
+    payerKey: fromWallet,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const transaction = new VersionedTransaction(message);
+
+  // 4. Sign with MWA and send
+  const signature = await transact(async (wallet) => {
+    await wallet.authorize({
+      cluster: "mainnet-beta",
+      identity: { name: "NFT App" },
+    });
+
+    const [signedTx] = await wallet.signTransactions({
+      transactions: [transaction],
+    });
+
+    return await connection.sendTransaction(signedTx);
+  });
+
+  // 5. Confirm
+  await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight,
+  });
+
+  return signature;
+}
+```
+
+<ArticleSection name="Compressed NFTs" id="compressed-nfts" level="h2" />
+
+Compressed NFTs (cNFTs) use state compression; they're stored in Merkle trees, not individual accounts. This makes them 1000x cheaper to mint but requires different handling.
+
+### Identifying Compressed NFTs
+
+```typescript
+function isCompressedNft(nft: DasNft): boolean {
+  return nft.compression?.compressed === true;
+}
+```
+
+### Transferring cNFTs
+
+Compressed NFT transfers require proof data from the DAS API:
+
+```typescript
+import { transfer } from "@metaplex-foundation/mpl-bubblegum";
+
+async function transferCompressedNft(
+  dasEndpoint: string,
+  nftMint: string,
+  fromWallet: PublicKey,
+  toWallet: PublicKey
+): Promise<string> {
+  // Get asset with Merkle proof from DAS API
+  const response = await fetch(dasEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "get-proof",
+      method: "getAssetProof",
+      params: { id: nftMint },
+    }),
+  });
+
+  const { result: proof } = await response.json();
+
+  // Build transfer instruction using Bubblegum
+  // This requires the Merkle tree address, proof path, etc.
+  // The exact implementation depends on your setup
+  
+  // ... build and sign transaction with MWA
+}
+```
+
+> **Note**: cNFT transfers are more complex. Consider using `@metaplex-foundation/mpl-bubblegum` with Umi, or delegating to a marketplace API.
+
+<ArticleSection name="Marketplace Integration" id="marketplace-integration" level="h2" />
+
+### Listing for Sale
+
+Most apps don't build their own marketplace; they integrate with existing ones:
+
+```typescript
+// Open Magic Eden listing page
+import { Linking } from "react-native";
+
+function listOnMagicEden(mintAddress: string) {
+  const url = `https://magiceden.io/item-details/${mintAddress}`;
+  Linking.openURL(url);
+}
+
+// Open Tensor listing page
+function listOnTensor(mintAddress: string) {
+  const url = `https://www.tensor.trade/item/${mintAddress}`;
+  Linking.openURL(url);
+}
+```
+
+### Building Transactions via APIs
+
+Some marketplaces provide APIs to build transactions:
+
+```typescript
+// Tensor buy transaction example
+async function buildTensorBuyTx(
+  mintAddress: string,
+  buyerAddress: string,
+  maxPrice: number,
+  apiKey: string
+): Promise<VersionedTransaction> {
+  const response = await fetch(
+    "https://api.mainnet.tensordev.io/api/v1/tx/buy",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tensor-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        buyer: buyerAddress,
+        mint: mintAddress,
+        maxPrice: maxPrice * 1_000_000_000, // Convert to lamports
+      }),
+    }
+  );
+
+  const data = await response.json();
+  
+  // Deserialize the transaction
+  const txBuffer = Buffer.from(data.tx.data, "base64");
+  return VersionedTransaction.deserialize(txBuffer);
+}
+```
+
+<ArticleSection name="Metaplex Core" id="metaplex-core" level="h2" />
+
+Metaplex Core is a newer NFT standard that's simpler and more gas-efficient than Token Metadata:
+
+```typescript
+import { 
+  fetchAsset, 
+  transfer as mplTransfer 
+} from "@metaplex-foundation/mpl-core";
+import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
+
+// Create Umi instance
+const umi = createUmi(rpcEndpoint);
+
+// Fetch a Core asset
+const asset = await fetchAsset(umi, assetAddress);
+
+// Transfer (returns a transaction builder)
+const tx = mplTransfer(umi, {
+  asset: assetAddress,
+  newOwner: recipientAddress,
+});
+
+// Build and serialize for MWA signing
+const builtTx = await tx.buildAndSign(umi);
+```
+
+<ArticleSection name="Mobile UX Patterns" id="mobile-ux-patterns" level="h2" />
+
+### Loading Skeletons
+
+NFT images take time to load. Use skeletons:
+
+```typescript
+function NftSkeleton() {
+  return (
+    <View style={styles.skeleton}>
+      <Animated.View 
+        style={[styles.shimmer, { opacity: shimmerOpacity }]} 
+      />
+    </View>
+  );
+}
+
+function NftCard({ nft, isLoading }: Props) {
+  if (isLoading) {
+    return <NftSkeleton />;
+  }
+  
+  return (
+    <View style={styles.card}>
+      <NftImage uri={nft.content.links.image} />
+      <Text>{nft.content.metadata.name}</Text>
+    </View>
+  );
+}
+```
+
+### Pull to Refresh
+
+```typescript
+function NftCollection() {
+  const [refreshing, setRefreshing] = useState(false);
+  
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetchNfts();
+    setRefreshing(false);
+  }, []);
+
+  return (
+    <FlatList
+      data={nfts}
+      refreshControl={
+        <RefreshControl 
+          refreshing={refreshing} 
+          onRefresh={onRefresh} 
+        />
+      }
+      // ...
+    />
+  );
+}
+```
+
+### Confirmation Dialog
+
+Always confirm before transferring valuable assets:
+
+```typescript
+function TransferConfirmation({ nft, recipient, onConfirm, onCancel }) {
+  return (
+    <Modal visible={true} transparent>
+      <View style={styles.modalContainer}>
+        <NftImage uri={nft.image} size={120} />
+        <Text style={styles.title}>Transfer NFT?</Text>
+        <Text style={styles.nftName}>{nft.name}</Text>
+        <Text style={styles.recipient}>
+          To: {shortenAddress(recipient)}
+        </Text>
+        <Text style={styles.warning}>
+          This action cannot be undone.
+        </Text>
+        <View style={styles.buttons}>
+          <Button title="Cancel" onPress={onCancel} secondary />
+          <Button title="Confirm" onPress={onConfirm} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+```
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+- **Use DAS API** for fetching NFTs; it handles both regular and compressed NFTs
+- **Fix image URIs** before displaying (IPFS, Arweave gateways)
+- **Compressed NFTs need proofs**; transfers require Merkle proof data
+- **Consider marketplace APIs** for buying/selling instead of building your own
+- **Always confirm transfers**; NFTs are often valuable
+
+Next, we'll explore Blinks and Actions: how to get ready-to-sign transactions from HTTP APIs.

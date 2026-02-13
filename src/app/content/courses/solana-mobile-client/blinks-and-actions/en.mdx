@@ -1,0 +1,520 @@
+---
+title: "Blinks and Actions"
+description: "Build mobile experiences using Solana Actions: HTTP APIs that return ready-to-sign transactions. No SDKs required."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="The SDK Problem" id="the-sdk-problem" level="h2" />
+
+Every protocol has its own SDK. Jupiter has one. Kamino has one. Tensor has one. Each with its own patterns, versions, and dependencies. On mobile, this creates problems:
+
+- Bundle size explodes
+- Version conflicts between SDKs
+- Each SDK might have React Native compatibility issues
+- Updates require rebuilding your app
+
+What if protocols just gave you transactions?
+
+That's exactly what Solana Actions do. An Action is an HTTP endpoint that accepts a wallet address and returns a ready-to-sign transaction. No SDK installation. No dependency management. Just HTTP.
+
+> "Blinks don't just remove the need of SDKs in most cases, but also ensure that the implementation of your service follows your design principles and best practices."
+
+<ArticleSection name="How Actions Work" id="how-actions-work" level="h2" />
+
+The flow is simple:
+
+```
+1. GET  → Metadata (title, description, buttons)
+2. POST → Transaction (base64 encoded, ready to sign)
+3. Sign → User approves in wallet
+4. Send → Transaction goes on-chain
+```
+
+### GET Request: What Can I Do?
+
+```typescript
+const response = await fetch(
+  "https://jupiter.dial.to/api/v0/swap/SOL-USDC"
+);
+
+const action = await response.json();
+// {
+//   title: "Swap SOL to USDC",
+//   description: "Swap SOL for USDC using Jupiter",
+//   icon: "https://...",
+//   label: "Swap",
+//   links: {
+//     actions: [
+//       { label: "Swap 0.1 SOL", href: "/api/v0/swap/SOL-USDC?amount=0.1" },
+//       { label: "Swap 0.5 SOL", href: "/api/v0/swap/SOL-USDC?amount=0.5" },
+//       { label: "Swap 1 SOL", href: "/api/v0/swap/SOL-USDC?amount=1" },
+//       { 
+//         label: "Swap",
+//         href: "/api/v0/swap/SOL-USDC?amount={amount}",
+//         parameters: [
+//           { name: "amount", label: "SOL amount", type: "number" }
+//         ]
+//       }
+//     ]
+//   }
+// }
+```
+
+### POST Request: Give Me a Transaction
+
+```typescript
+const txResponse = await fetch(
+  "https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account: userWalletAddress // The user's public key
+    })
+  }
+);
+
+const { transaction } = await txResponse.json();
+// { 
+//   transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAkP..." 
+// }
+```
+
+That `transaction` field is a base64-encoded, serialized transaction ready for signing.
+
+<ArticleSection name="Executing Actions on Mobile" id="executing-actions-on-mobile" level="h2" />
+
+Here's a complete flow:
+
+```typescript
+import { VersionedTransaction, TransactionMessage } from "@solana/web3.js";
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+
+async function executeAction(
+  actionUrl: string,
+  userAddress: string,
+  connection: Connection
+): Promise<string> {
+  // 1. POST to get transaction (per Solana Actions spec, only account is required)
+  const response = await fetch(actionUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account: userAddress
+    })
+  });
+
+  const { transaction: txBase64 } = await response.json();
+
+  // 2. Deserialize the transaction
+  const txBuffer = Buffer.from(txBase64, "base64");
+  const transaction = VersionedTransaction.deserialize(txBuffer);
+
+  // 3. Check if blockhash needs updating (optional but recommended)
+  // Note: VersionedTransaction.message is read-only, so we need to rebuild
+  // if the blockhash is stale. Most well-implemented Actions return
+  // transactions with fresh blockhashes, so this step is often unnecessary.
+  const { blockhash, lastValidBlockHeight } = 
+    await connection.getLatestBlockhash();
+
+  // 4. Sign with MWA
+  const signedTx = await transact(async (wallet) => {
+    await wallet.authorize({
+      cluster: "mainnet-beta",
+      identity: { name: "My Blink App" }
+    });
+
+    const [signed] = await wallet.signTransactions({
+      transactions: [transaction]
+    });
+
+    return signed;
+  });
+
+  // 5. Send and confirm
+  const signature = await connection.sendTransaction(signedTx);
+  
+  await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight
+  });
+
+  return signature;
+}
+```
+
+<ArticleSection name="Popular Action Endpoints" id="popular-action-endpoints" level="h2" />
+
+Here are real endpoints you can use today:
+
+### Token Transfers (SPL)
+
+```shellscript
+# Transfer any SPL token
+POST https://solana.dial.to/api/actions/transfer
+?toWallet=D1ALECTfeCZt9bAbPWtJk7ntv24vDYGPmyS7swp7DY5h
+&token=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  # USDC mint
+&amount=25
+```
+
+### Jupiter Swaps
+
+```shellscript
+# Swap SOL to USDC
+POST https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1
+
+# Swap with slippage
+POST https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1&slippageBps=50
+```
+
+### Kamino Deposits
+
+```shellscript
+# Deposit into USDC lending vault
+POST https://kamino.dial.to/api/v0/lend/{reserve}/deposit?amount=100
+```
+
+### Lulo Deposits
+
+```shellscript
+# Deposit and earn
+POST https://blink.lulo.fi/actions?amount=100&symbol=USDC
+```
+
+### Meteora Token Launch
+
+```shellscript
+# Launch a token on bonding curve
+POST https://meteora.dial.to/api/actions/bonding-curve/launch-token
+?name=MyToken
+&symbol=MTK
+&description=My%20awesome%20token
+```
+
+<ArticleSection name="Building a Blink UI" id="building-a-blink-ui" level="h2" />
+
+Fetch the action metadata and render appropriate UI:
+
+```typescript
+interface ActionMetadata {
+  title: string;
+  description: string;
+  icon: string;
+  label: string;
+  links?: {
+    actions: LinkedAction[];
+  };
+}
+
+interface LinkedAction {
+  label: string;
+  href: string;
+  parameters?: ActionParameter[];
+}
+
+interface ActionParameter {
+  name: string;
+  label: string;
+  type?: "text" | "number" | "email" | "url";
+  required?: boolean;
+}
+
+function BlinkCard({ actionUrl }: { actionUrl: string }) {
+  const [metadata, setMetadata] = useState<ActionMetadata | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [executing, setExecuting] = useState(false);
+  const [params, setParams] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    async function fetchMetadata() {
+      const response = await fetch(actionUrl);
+      const data = await response.json();
+      setMetadata(data);
+      setLoading(false);
+    }
+    fetchMetadata();
+  }, [actionUrl]);
+
+  const handleAction = async (action: LinkedAction) => {
+    setExecuting(true);
+    try {
+      // Replace parameter placeholders
+      let href = action.href;
+      for (const [key, value] of Object.entries(params)) {
+        href = href.replace(`{${key}}`, encodeURIComponent(value));
+      }
+
+      // Make absolute URL if relative
+      const fullUrl = href.startsWith("http") 
+        ? href 
+        : new URL(href, actionUrl).toString();
+
+      const signature = await executeAction(fullUrl, walletAddress, connection);
+      showSuccess(`Transaction confirmed: ${signature}`);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  if (loading) return <ActivityIndicator />;
+  if (!metadata) return <Text>Failed to load action</Text>;
+
+  return (
+    <View style={styles.card}>
+      <Image source={{ uri: metadata.icon }} style={styles.icon} />
+      <Text style={styles.title}>{metadata.title}</Text>
+      <Text style={styles.description}>{metadata.description}</Text>
+
+      {metadata.links?.actions.map((action, index) => (
+        <View key={index} style={styles.actionContainer}>
+          {/* Render parameter inputs if needed */}
+          {action.parameters?.map((param) => (
+            <TextInput
+              key={param.name}
+              placeholder={param.label}
+              keyboardType={param.type === "number" ? "numeric" : "default"}
+              value={params[param.name] || ""}
+              onChangeText={(text) => 
+                setParams({ ...params, [param.name]: text })
+              }
+              style={styles.input}
+            />
+          ))}
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleAction(action)}
+            disabled={executing}
+          >
+            <Text style={styles.actionLabel}>{action.label}</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+```
+
+<ArticleSection name="Action Chaining" id="action-chaining" level="h2" />
+
+Some actions return `next` links for multi-step flows:
+
+```typescript
+const response = await fetch(actionUrl, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ account: walletAddress })
+});
+
+const data = await response.json();
+
+// Execute the transaction...
+await signAndSend(data.transaction);
+
+// Check for next action
+if (data.links?.next) {
+  if (data.links.next.type === "inline") {
+    // Next action metadata is already included
+    showNextAction(data.links.next.action);
+  } else if (data.links.next.type === "post") {
+    // Fetch next action from callback URL
+    const nextResponse = await fetch(data.links.next.href, {
+      method: "POST",
+      body: JSON.stringify({
+        account: walletAddress,
+        signature: txSignature // Include the previous signature
+      })
+    });
+    const nextAction = await nextResponse.json();
+    showNextAction(nextAction);
+  }
+}
+```
+
+<ArticleSection name="Using Dialect's Blinks SDK" id="dialects-blinks-sdk" level="h2" />
+
+For React Native, Dialect provides a ready-made SDK:
+
+```shellscript
+yarn add @dialectlabs/blinks-react-native
+```
+
+```typescript
+import { Blink, useAction } from "@dialectlabs/blinks-react-native";
+
+function BlinkScreen({ url }: { url: string }) {
+  const { action, isLoading } = useAction({ url });
+
+  if (isLoading) return <ActivityIndicator />;
+  if (!action) return <Text>Action not found</Text>;
+
+  return (
+    <Blink
+      action={action}
+      websiteText={new URL(url).hostname}
+      adapter={myBlinkAdapter} // Your wallet integration
+    />
+  );
+}
+```
+
+The SDK handles:
+- Action fetching and parsing
+- UI rendering (buttons, inputs)
+- Parameter validation
+- Response handling
+
+You just need to provide a `BlinkAdapter` that connects to your wallet.
+
+<ArticleSection name="L0STE's Philosophy" id="lostes-philosophy" level="h2" />
+
+Consider what L0STE shared:
+
+> "Most of the UX is read-only, so once you know what is the wallet of the user (and you can let them sign a message) you don't need any wallet component inside. Just store the wallet address. Then if the user needs an action just send them to Phantom or Solflare."
+
+For some apps, you don't need embedded wallets at all:
+
+```typescript
+// Store wallet address after initial sign-in
+async function signInWithMessage(walletAddress: string) {
+  const message = `Sign in to MyApp: ${Date.now()}`;
+  
+  // Open wallet app to sign
+  const signature = await requestSignatureFromWallet(message);
+  
+  // Verify and store
+  const isValid = verifySignature(message, signature, walletAddress);
+  if (isValid) {
+    await AsyncStorage.setItem("userWallet", walletAddress);
+  }
+}
+
+// For actions, open wallet directly
+async function performAction(actionUrl: string) {
+  // Deep link to wallet with Action URL
+  const walletUrl = `solana-wallet://blink?url=${encodeURIComponent(actionUrl)}`;
+  await Linking.openURL(walletUrl);
+}
+```
+
+This pattern:
+- Zero wallet SDK in your app
+- User's wallet handles all signing
+- Your app is just a UI layer
+
+<ArticleSection name="Security Considerations" id="security-considerations" level="h2" />
+
+Actions return transactions you didn't build. Be careful:
+
+### Verify the Source
+
+```typescript
+// Only accept actions from trusted domains
+const TRUSTED_DOMAINS = [
+  "dial.to",
+  "jupiter.dial.to",
+  "kamino.dial.to",
+  "tensor.dial.to",
+];
+
+function isTrustedAction(url: string): boolean {
+  const hostname = new URL(url).hostname;
+  return TRUSTED_DOMAINS.some(domain => 
+    hostname === domain || hostname.endsWith(`.${domain}`)
+  );
+}
+```
+
+### Dialect's Registry
+
+Actions go through Dialect's registry for verification:
+
+```typescript
+// Check if an action is verified
+const registryResponse = await fetch(
+  `https://api.dial.to/v1/blink?apiUrl=${encodeURIComponent(actionUrl)}`
+);
+
+const registryData = await registryResponse.json();
+// registryData.isRegistered = true/false
+// registryData.status = "trusted" | "unknown" | "malicious"
+```
+
+### Transaction Simulation
+
+Before signing, simulate to see what will happen:
+
+```typescript
+async function simulateAction(
+  connection: Connection,
+  transaction: VersionedTransaction
+) {
+  const simulation = await connection.simulateTransaction(transaction);
+  
+  if (simulation.value.err) {
+    throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+  }
+  
+  // Log what accounts will change
+  console.log("Accounts modified:", simulation.value.accounts);
+  console.log("Logs:", simulation.value.logs);
+}
+```
+
+<ArticleSection name="Building Your Own Actions" id="building-your-own-actions" level="h2" />
+
+If you're building your own Action endpoint (not just consuming them), there are critical requirements:
+
+### CORS Headers
+
+Actions must include CORS headers for wallet compatibility:
+
+```typescript
+// Express.js example
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  next();
+});
+```
+
+### actions.json File
+
+For your Actions to unfurl as Blinks on social media (Twitter, etc.), you must host an `actions.json` file at `/.well-known/actions.json`:
+
+```json
+{
+  "rules": [
+    {
+      "pathPattern": "/api/actions/**",
+      "apiPath": "/api/actions/**"
+    },
+    {
+      "pathPattern": "/my-action",
+      "apiPath": "/api/actions/my-action"
+    }
+  ]
+}
+```
+
+This tells wallets and Blink renderers which URLs on your domain are valid Action endpoints.
+
+<ArticleSection name="Key Takeaways" id="key-takeaways" level="h2" />
+
+- **Actions are HTTP APIs** that return transactions; no SDKs required
+- **GET for metadata**, POST for transactions
+- **Always update blockhash** before signing; API responses might be stale
+- **Check the registry** for trusted actions
+- **Action chaining** enables multi-step flows
+- **Consider the minimal approach**: store address, let wallet apps handle signing
+
+In the next lesson, we'll cover program interaction: building custom transactions that call any on-chain program.
