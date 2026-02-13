@@ -1,0 +1,589 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Operational Patterns
+
+![Anchor in Production](/graphics/course-banners/anchor-in-production.png)
+
+A deployed program is the beginning, not the end. Programs need periodic execution, abuse prevention, fee collection, error recovery, and configuration management. The operational layer around a program determines whether it survives contact with real users and real money.
+
+This lesson covers the patterns that keep programs running: cranks for automated execution, rate limiting for spam protection, fee structures for revenue, recovery instructions for when things break, configuration accounts for runtime parameters, and runbooks for human operators.
+
+<ArticleSection name="Cranks and Keepers" id="cranks-and-keepers" level="h2" />
+
+Solana programs cannot execute themselves. There is no `setTimeout` or cron job on-chain. If a program needs periodic work done (liquidating undercollateralized positions, matching orders, advancing epochs), an off-chain process must submit transactions to trigger that work. This off-chain process is called a crank or keeper.
+
+A keeper monitors on-chain state and submits transactions when conditions are met. The pattern has three parts: a condition check, a permissionless instruction, and an off-chain bot.
+
+The on-chain instruction should be callable by anyone, not just an admin. A permissionless crank means anyone can run a keeper bot. If only a single operator can crank, you have a single point of failure.
+
+Here is a liquidation instruction that anyone can call when a position is undercollateralized:
+
+```rust
+#[derive(Accounts)]
+pub struct Liquidate<'info> {
+    #[account(
+        mut,
+        constraint = position.collateral_ratio() < config.min_collateral_ratio
+            @ ProtocolError::PositionHealthy
+    )]
+    pub position: Account<'info, Position>,
+
+    #[account(has_one = oracle)]
+    pub config: Account<'info, ProtocolConfig>,
+
+    /// CHECK: Verified by config
+    pub oracle: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub liquidator: Signer<'info>,
+}
+
+pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    let reward = position.collateral
+        .checked_mul(5)
+        .unwrap()
+        .checked_div(100)
+        .unwrap(); // 5% reward
+
+    // Transfer reward to liquidator
+    position.collateral = position.collateral.checked_sub(reward).unwrap();
+
+    **ctx.accounts.position.to_account_info().try_borrow_mut_lamports()? -= reward;
+    **ctx.accounts.liquidator.to_account_info().try_borrow_mut_lamports()? += reward;
+
+    // Close or reduce position
+    position.debt = 0;
+
+    Ok(())
+}
+```
+
+The constraint `position.collateral_ratio() < config.min_collateral_ratio` ensures the instruction only succeeds when the position is unhealthy. The 5% reward incentivizes third-party keepers to monitor and liquidate.
+
+The off-chain keeper polls accounts and submits transactions when conditions trigger:
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { Protocol } from "../target/types/protocol";
+import { ComputeBudgetProgram } from "@solana/web3.js";
+
+const provider = anchor.AnchorProvider.env();
+anchor.setProvider(provider);
+const program = anchor.workspace.Protocol as Program<Protocol>;
+
+async function runKeeper() {
+  const config = await program.account.protocolConfig.fetch(CONFIG_PDA);
+  const positions = await program.account.position.all();
+
+  for (const pos of positions) {
+    const ratio = pos.account.collateral / pos.account.debt;
+    if (ratio < config.minCollateralRatio) {
+      try {
+        const tx = await program.methods
+          .liquidate()
+          .accounts({
+            position: pos.publicKey,
+            config: CONFIG_PDA,
+            oracle: config.oracle,
+            liquidator: provider.wallet.publicKey,
+          })
+          .preInstructions([
+            ComputeBudgetProgram.setComputeUnitPrice({
+              microLamports: 50_000, // Priority fee for time-sensitive operations
+            }),
+          ])
+          .rpc();
+        console.log(`Liquidated ${pos.publicKey.toBase58()}: ${tx}`);
+      } catch (e) {
+        console.error(`Failed to liquidate ${pos.publicKey.toBase58()}:`, e);
+      }
+    }
+  }
+}
+
+// Poll every 10 seconds
+setInterval(runKeeper, 10_000);
+```
+
+The keeper fetches all positions, checks each against the collateral ratio threshold, and submits a liquidation transaction with a priority fee. Priority fees matter for time-sensitive operations because they increase the probability of block inclusion during congestion. A liquidation that arrives one slot late might find the position already liquidated by another keeper.
+
+For high-frequency cranking (order matching, epoch transitions), consider using websocket subscriptions with `onAccountChange` instead of polling. Subscriptions deliver updates within 400ms of state changes, compared to the 10-second polling interval above.
+
+<ArticleSection name="Rate Limiting and Access Control" id="rate-limiting" level="h2" />
+
+Programs on mainnet receive unexpected traffic. Bots spam instructions to extract MEV. Users accidentally double-submit. Attackers probe for vulnerabilities. Rate limiting prevents abuse without blocking legitimate use.
+
+On-chain rate limiting uses timestamps. Store the last action time in the user's account and reject actions that happen too soon:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct UserAccount {
+    pub owner: Pubkey,
+    pub last_action_ts: i64,
+    pub actions_this_epoch: u16,
+    pub current_epoch: u64,
+    pub bump: u8,
+}
+
+pub fn handler(ctx: Context<PerformAction>) -> Result<()> {
+    let user = &mut ctx.accounts.user_account;
+    let clock = Clock::get()?;
+
+    // Cooldown: 2 seconds between actions
+    let elapsed = clock.unix_timestamp - user.last_action_ts;
+    require!(elapsed >= 2, ProtocolError::RateLimited);
+
+    // Per-epoch limit: 100 actions per epoch
+    let current_epoch = clock.epoch;
+    if current_epoch != user.current_epoch {
+        user.current_epoch = current_epoch;
+        user.actions_this_epoch = 0;
+    }
+    require!(user.actions_this_epoch < 100, ProtocolError::EpochLimitReached);
+
+    user.last_action_ts = clock.unix_timestamp;
+    user.actions_this_epoch += 1;
+
+    // ... perform action ...
+
+    Ok(())
+}
+```
+
+The 2-second cooldown prevents rapid-fire transactions from a single user. The per-epoch limit of 100 actions caps total throughput per user per epoch (roughly 2-3 days on Solana). These numbers are protocol-specific; a DEX might allow higher frequency than a governance system.
+
+Emergency access control gives administrators the ability to pause the protocol when something goes wrong. The pause pattern stores a boolean in the config and checks it at instruction entry:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct ProtocolConfig {
+    pub admin: Pubkey,
+    pub paused: bool,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct PauseProtocol<'info> {
+    #[account(mut, has_one = admin)]
+    pub config: Account<'info, ProtocolConfig>,
+    pub admin: Signer<'info>,
+}
+
+pub fn pause(ctx: Context<PauseProtocol>) -> Result<()> {
+    ctx.accounts.config.paused = true;
+    Ok(())
+}
+
+pub fn unpause(ctx: Context<PauseProtocol>) -> Result<()> {
+    ctx.accounts.config.paused = false;
+    Ok(())
+}
+```
+
+Every user-facing instruction checks the pause flag before proceeding:
+
+```rust
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    require!(!ctx.accounts.config.paused, ProtocolError::ProtocolPaused);
+
+    // ... deposit logic ...
+
+    Ok(())
+}
+```
+
+The admin can pause all user operations in a single transaction. Admin-only instructions (like emergency withdrawals) should skip the pause check so the team can respond to incidents even while the protocol is frozen.
+
+<ArticleSection name="Fee Collection" id="fee-collection" level="h2" />
+
+Most protocols charge fees for sustainability. The fee structure needs to be transparent, configurable, and resistant to extraction attacks.
+
+A fee collection pattern with a configurable rate and treasury account:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct FeeConfig {
+    pub admin: Pubkey,
+    pub treasury: Pubkey,
+    pub fee_basis_points: u16,    // 0-10000 (0% to 100%)
+    pub total_collected: u64,
+    pub bump: u8,
+}
+
+pub fn collect_fee(ctx: Context<CollectFee>, amount: u64) -> Result<u64> {
+    let config = &ctx.accounts.fee_config;
+
+    let fee = (amount as u128)
+        .checked_mul(config.fee_basis_points as u128)
+        .unwrap()
+        .checked_div(10_000)
+        .unwrap() as u64;
+
+    // Transfer fee to treasury
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.user_token_account.to_account_info(),
+        to: ctx.accounts.treasury_token_account.to_account_info(),
+        authority: ctx.accounts.user.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts,
+    );
+    transfer(cpi_ctx, fee)?;
+
+    // Track total collected
+    let config = &mut ctx.accounts.fee_config;
+    config.total_collected = config.total_collected.checked_add(fee).unwrap();
+
+    // Return the net amount after fee
+    Ok(amount.checked_sub(fee).unwrap())
+}
+```
+
+The fee calculation uses u128 intermediates to prevent overflow. For a 250 basis point fee (2.5%) on a 1,000,000 token transfer, the math is: `1_000_000 * 250 / 10_000 = 25_000` tokens as fee, `975_000` net.
+
+Revenue withdrawal requires admin access control. The treasury is a token account owned by the protocol PDA, and only the admin can withdraw:
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawRevenue<'info> {
+    #[account(has_one = admin, has_one = treasury)]
+    pub fee_config: Account<'info, FeeConfig>,
+
+    #[account(mut)]
+    pub treasury: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+
+    pub admin: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+pub fn withdraw_revenue(ctx: Context<WithdrawRevenue>, amount: u64) -> Result<()> {
+    let seeds = &[b"fee_config".as_ref(), &[ctx.accounts.fee_config.bump]];
+    let signer = &[&seeds[..]];
+
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.treasury.to_account_info(),
+        to: ctx.accounts.destination.to_account_info(),
+        authority: ctx.accounts.fee_config.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts,
+        signer,
+    );
+    transfer(cpi_ctx, amount)?;
+
+    Ok(())
+}
+```
+
+The treasury token account's authority is the fee config PDA, so withdrawals require PDA signing. The `has_one = treasury` constraint ensures the admin cannot redirect funds to an arbitrary token account by swapping the treasury parameter.
+
+<ArticleSection name="Error Recovery" id="error-recovery" level="h2" />
+
+Programs encounter unexpected state: a failed migration leaves accounts half-updated, a bug creates invalid data, or a CPI succeeds but the outer instruction reverts, leaving orphaned state in the called program. Recovery instructions let administrators fix these problems without redeploying.
+
+A recovery instruction that can fix corrupted account state:
+
+```rust
+#[derive(Accounts)]
+pub struct RecoverAccount<'info> {
+    #[account(mut, has_one = admin)]
+    pub config: Account<'info, ProtocolConfig>,
+
+    #[account(mut)]
+    pub corrupted_account: Account<'info, UserPosition>,
+
+    pub admin: Signer<'info>,
+}
+
+pub fn recover_account(
+    ctx: Context<RecoverAccount>,
+    new_collateral: u64,
+    new_debt: u64,
+) -> Result<()> {
+    let position = &mut ctx.accounts.corrupted_account;
+
+    // Log the recovery for audit trail
+    msg!(
+        "RECOVERY: position {} collateral {} -> {}, debt {} -> {}",
+        position.key(),
+        position.collateral,
+        new_collateral,
+        position.debt,
+        new_debt
+    );
+
+    position.collateral = new_collateral;
+    position.debt = new_debt;
+
+    Ok(())
+}
+```
+
+The `msg!` macro logs the old and new values on-chain, creating an audit trail that anyone can verify by reading transaction logs. Recovery instructions are powerful and dangerous, so the on-chain record is important for accountability.
+
+For critical vulnerabilities where funds are at risk, an emergency drain instruction moves all assets to a safe address:
+
+```rust
+#[derive(Accounts)]
+pub struct EmergencyDrain<'info> {
+    #[account(has_one = admin)]
+    pub config: Account<'info, ProtocolConfig>,
+
+    #[account(mut)]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub safe_destination: Account<'info, TokenAccount>,
+
+    pub admin: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+pub fn emergency_drain(ctx: Context<EmergencyDrain>) -> Result<()> {
+    require!(ctx.accounts.config.paused, ProtocolError::MustBePaused);
+
+    let balance = ctx.accounts.vault_token_account.amount;
+
+    let seeds = &[b"config".as_ref(), &[ctx.accounts.config.bump]];
+    let signer = &[&seeds[..]];
+
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault_token_account.to_account_info(),
+        to: ctx.accounts.safe_destination.to_account_info(),
+        authority: ctx.accounts.config.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts,
+        signer,
+    );
+    transfer(cpi_ctx, balance)?;
+
+    msg!("EMERGENCY DRAIN: {} tokens moved to {}", balance, ctx.accounts.safe_destination.key());
+
+    Ok(())
+}
+```
+
+The `require!(ctx.accounts.config.paused)` check forces the admin to pause the protocol before draining, preventing accidental drains during normal operation and enforcing a two-step process: pause first, then drain. Users monitoring the pause event have time to observe the protocol state change before funds move.
+
+Emergency drain instructions are controversial. They give the admin the power to take all user funds. Transparent programs document this capability, and mature protocols eventually remove it by transferring admin authority to a DAO or multisig with a timelock.
+
+<ArticleSection name="Configuration Management" id="configuration-management" level="h2" />
+
+Hard-coded values require redeployment to change. On-chain configuration accounts let operators adjust protocol parameters at runtime without upgrading the program.
+
+A config PDA pattern with typed parameters:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct ProtocolConfig {
+    pub admin: Pubkey,
+    pub pending_admin: Pubkey,       // For two-step admin transfer
+    pub oracle: Pubkey,
+    pub fee_basis_points: u16,
+    pub min_collateral_ratio: u64,   // Basis points (15000 = 150%)
+    pub max_position_size: u64,
+    pub deposits_enabled: bool,
+    pub withdrawals_enabled: bool,
+    pub version: u8,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct InitializeConfig<'info> {
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ProtocolConfig::INIT_SPACE,
+        seeds = [b"config"],
+        bump
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_config(
+    ctx: Context<InitializeConfig>,
+    oracle: Pubkey,
+    fee_basis_points: u16,
+    min_collateral_ratio: u64,
+    max_position_size: u64,
+) -> Result<()> {
+    require!(fee_basis_points <= 1_000, ProtocolError::FeeTooHigh); // Max 10%
+    require!(min_collateral_ratio >= 11_000, ProtocolError::RatioTooLow); // Min 110%
+
+    let config = &mut ctx.accounts.config;
+    config.admin = ctx.accounts.admin.key();
+    config.pending_admin = Pubkey::default();
+    config.oracle = oracle;
+    config.fee_basis_points = fee_basis_points;
+    config.min_collateral_ratio = min_collateral_ratio;
+    config.max_position_size = max_position_size;
+    config.deposits_enabled = true;
+    config.withdrawals_enabled = true;
+    config.version = 1;
+    config.bump = ctx.bumps.config;
+
+    Ok(())
+}
+```
+
+The config uses a single-seed PDA (`[b"config"]`), creating exactly one config account per program. Every instruction that reads protocol parameters includes this account.
+
+Updating configuration without redeploying:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(mut, has_one = admin)]
+    pub config: Account<'info, ProtocolConfig>,
+    pub admin: Signer<'info>,
+}
+
+pub fn update_fee(ctx: Context<UpdateConfig>, new_fee: u16) -> Result<()> {
+    require!(new_fee <= 1_000, ProtocolError::FeeTooHigh);
+    ctx.accounts.config.fee_basis_points = new_fee;
+    Ok(())
+}
+
+pub fn update_oracle(ctx: Context<UpdateConfig>, new_oracle: Pubkey) -> Result<()> {
+    ctx.accounts.config.oracle = new_oracle;
+    Ok(())
+}
+
+pub fn toggle_deposits(ctx: Context<UpdateConfig>, enabled: bool) -> Result<()> {
+    ctx.accounts.config.deposits_enabled = enabled;
+    Ok(())
+}
+```
+
+Separate update instructions for each parameter are safer than a single "update everything" instruction. A single update instruction risks accidentally overwriting fields the admin did not intend to change. With separate instructions, the admin modifies exactly one parameter per transaction.
+
+Admin transfer uses a two-step pattern to prevent accidental lockout:
+
+```rust
+pub fn propose_admin(ctx: Context<UpdateConfig>, new_admin: Pubkey) -> Result<()> {
+    ctx.accounts.config.pending_admin = new_admin;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct AcceptAdmin<'info> {
+    #[account(
+        mut,
+        constraint = config.pending_admin == new_admin.key()
+            @ ProtocolError::NotPendingAdmin
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub new_admin: Signer<'info>,
+}
+
+pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    config.admin = config.pending_admin;
+    config.pending_admin = Pubkey::default();
+    Ok(())
+}
+```
+
+The current admin proposes a new admin. The new admin must accept by signing a transaction. If the proposed address is wrong (typo, invalid key), the transfer never completes because the wrong address cannot sign—a safeguard against accidentally transferring admin authority to an address nobody controls.
+
+<ArticleSection name="Operational Runbooks" id="operational-runbooks" level="h2" />
+
+Runbooks document the exact steps for common operations. When a protocol is live and handling real value, operators need tested procedures, not improvised debugging sessions.
+
+A runbook is a step-by-step document for a specific operation. Each step includes the exact command, the expected output, and what to do if the output is unexpected. Here is a template for a program upgrade runbook:
+
+```
+RUNBOOK: Program Upgrade
+========================
+Preconditions:
+- New program version built and tested on devnet
+- Build hash verified: anchor build --verifiable
+- Changelog reviewed by 2 team members
+- Devnet deployment tested for 48 hours minimum
+
+Step 1: Pause the protocol
+  Command: anchor invoke pause --provider.cluster mainnet
+  Expected: Transaction confirmed, config.paused = true
+  Verify: solana account <CONFIG_PDA> | grep paused
+  Rollback: This step is safe, unpause with same command
+
+Step 2: Wait for in-flight transactions to settle
+  Wait: 60 seconds (covers 2 epoch boundaries)
+  Verify: No pending transactions in recent slots
+
+Step 3: Deploy the upgrade
+  Command: anchor upgrade target/deploy/protocol.so
+           --provider.cluster mainnet
+           --program-id <PROGRAM_ID>
+  Expected: "Deploy success" with transaction signature
+  Rollback: If deploy fails, unpause and investigate
+
+Step 4: Verify the deployed bytecode
+  Command: anchor verify <PROGRAM_ID> --provider.cluster mainnet
+  Expected: "Verification successful"
+  Rollback: If verification fails, do NOT unpause.
+            Investigate bytecode mismatch.
+
+Step 5: Run smoke tests against mainnet
+  Command: ts-node scripts/smoke-test.ts --cluster mainnet
+  Expected: All 12 smoke tests pass
+  Rollback: If tests fail, keep paused and investigate
+
+Step 6: Unpause the protocol
+  Command: anchor invoke unpause --provider.cluster mainnet
+  Expected: Transaction confirmed, config.paused = false
+  Verify: Submit a small test transaction
+
+Post-deployment:
+- Monitor error rates for 4 hours
+- Check indexer is processing new events
+- Update public changelog
+```
+
+The value of a runbook is not the individual commands. It is the ordering, the verification steps, and the rollback procedures. When an operator is responding to an incident at 3 AM, they should not need to figure out the correct sequence from memory.
+
+Key operations that need runbooks:
+
+- **Deploying upgrades**: Pause, deploy, verify, smoke test, unpause
+- **Rotating admin keys**: Propose new admin, verify acceptance, revoke old key
+- **Responding to security incidents**: Pause, assess impact, drain if necessary, communicate, patch, redeploy
+- **Draining stuck funds**: Identify stuck accounts, build recovery transaction, execute with admin authority, verify balances
+- **Oracle migration**: Deploy new oracle config, verify price feeds, update config, monitor for 24 hours
+
+Each runbook should be tested on devnet before the situation requires it on mainnet. An untested runbook is a guess. A tested runbook is a procedure. The difference between the two determines how fast a team recovers from incidents.
+
+Store runbooks in version control alongside the program source. When the program changes, update the runbooks. A runbook that references instructions from a previous version is worse than no runbook at all because it creates false confidence.
+
+<ArticleSection name="Bringing It All Together" id="bringing-it-together" level="h2" />
+
+Operational patterns are first-class design concerns that belong in the initial architecture, not afterthoughts bolted on after deployment.
+
+A production Anchor program includes, at minimum: a config PDA for runtime parameters, a pause mechanism for emergencies, admin access control with two-step transfers, fee collection with a treasury, and documented runbooks for every operation that touches mainnet. These patterns add approximately 200-300 lines of code to a program, but they determine whether the protocol can survive the operational realities of a live system.
+
+The patterns in this lesson compose with every program architecture. A lending protocol adds cranks for liquidations and oracles for price feeds. A DEX adds rate limiting for order spam and fee tiers for market makers. A governance system adds timelocks for configuration changes and emergency overrides for critical votes. The domain logic differs, but the operational patterns remain the same.
+
+---
+
+The vulnerability classes that these operational patterns defend against are cataloged in the Securing Anchor Programs course, which covers the common attack vectors and how to prevent them at the code level. To validate that your operational safeguards actually hold, the Testing Anchor Programs course's Testing Security lesson covers writing security-focused tests that simulate adversarial conditions.
+
+Congratulations on completing the Anchor Developer learning path. You have worked through Anchor fundamentals, program architecture, security, testing, and production operations. The final step is the Anchor AMM challenge, a capstone project where you build a constant-product automated market maker from scratch. It combines every pattern from every course in this path into a single working protocol.

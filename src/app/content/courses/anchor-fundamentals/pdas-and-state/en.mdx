@@ -1,0 +1,357 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# PDAs and State
+
+![Anchor Fundamentals - PDAs and program state](/graphics/course-banners/anchor-fundamentals.png)
+
+Differently from the EVM architecture, Programs on Solana are stateless. This means that they need to store data and control assets, but since they have no private key they can't sign transactions. 
+
+That's what Program Derived Addresses are for: a PDA is an address derived deterministically from seeds and a program ID, guaranteed to have no corresponding private key becuase it's off-curve.
+
+<ArticleSection name="How PDAs Are Derived" id="derivation" level="h2" />
+
+Solana uses the Ed25519 elliptic curve for its keypairs. Every valid Ed25519 public key lies on this curve. A PDA is a 32-byte address that deliberately falls off the curve—meaning no private key can exist for it.
+
+The derivation works like this. You take a program ID and a collection of seeds (arbitrary byte arrays), hash them together, and check if the resulting address is on the curve. If it is, increment a bump value and try again. The bump is a single byte (0-255) appended to the seeds before hashing.
+
+Here's the low-level Solana function:
+
+```rust
+let (pda, bump) = Pubkey::find_program_address(&[seeds], &program_id);
+```
+
+This function tries bump values starting at 255 and counting down. The first bump that produces an off-curve address is the canonical bump. The function returns both the derived address and the bump that generated it.
+
+Why start at 255? Convention. The highest valid bump is considered canonical. Most programs store this bump to avoid re-deriving it later (re-derivation costs about 3,200 compute units).
+
+An example. Your program is at address `Fg6P...qAo8`. You want a PDA derived from the seed `b"vault"`:
+
+```rust
+let program_id = Pubkey::from_str("Fg6P...qAo8")?;
+let seeds = &[b"vault"];
+let (vault_pda, bump) = Pubkey::find_program_address(seeds, &program_id);
+// vault_pda might be: 7x2Y...3kL9
+// bump might be: 254
+```
+
+For these seeds and this program ID, the bump is 254 because 255 produced an on-curve address (invalid). Now `7x2Y...3kL9` is your PDA. No private key exists for it. Only your program can derive it and use it in signed operations.
+
+Change the program ID or the seeds by even one byte, and you get a completely different PDA.
+
+<ArticleSection name="Seeds in Anchor" id="seeds-in-anchor" level="h2" />
+
+Anchor exposes PDA derivation through the `seeds` and `bump` constraints in your account validation struct. You declare what seeds compose a PDA, and Anchor derives the address and verifies it matches.
+
+Seeds can be:
+
+- Static byte strings: `b"config"`, `b"vault"`, `b"user_profile"`
+- Account public keys: `user.key().as_ref()`, `mint.key().as_ref()`
+- Instruction data: numbers, strings, or other parameters passed to the instruction
+
+Here's a simple example. A PDA for a user profile, seeded by the word "profile" and the user's public key:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateProfile<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 100,
+        seeds = [b"profile", user.key().as_ref()],
+        bump
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct UserProfile {
+    pub authority: Pubkey,  // 32 bytes
+    pub name: String,       // 4 + up to 96 bytes
+    pub bump: u8,           // 1 byte
+}
+```
+
+The `seeds` constraint tells Anchor: this account's address must be derived from `[b"profile", user.key()]` and this program. The `bump` constraint (without a value) means Anchor will find the canonical bump and verify the PDA.
+
+Each unique combination of seeds produces one unique PDA. If Alice's public key is `AbC1...`, her profile PDA is derived from `[b"profile", AbC1...]`. If Bob's is `XyZ9...`, his is `[b"profile", XyZ9...]`. Same seed template, different PDAs.
+
+You can add more seeds for finer granularity:
+
+```rust
+seeds = [b"listing", nft_mint.key().as_ref(), seller.key().as_ref()]
+```
+
+This creates one PDA per NFT per seller. The same NFT listed by two different sellers would be two different PDAs.
+
+The order of seeds matters. `[b"vault", user.key()]` produces a different address than `[user.key(), b"vault"]`.
+
+<ArticleSection name="Creating PDA Accounts" id="creating-pdas" level="h2" />
+
+Deriving an address is one thing. Creating an account at that address is another. The `init` constraint does this.
+
+When you combine `init` with `seeds` and `bump`, Anchor:
+
+1. Derives the PDA from the seeds and program ID
+2. Generates a CPI to the System Program to create an account at that address
+3. Allocates `space` bytes and sets the owner to your program
+4. Initializes the account with the discriminator
+
+Back to the profile example. The instruction:
+
+```rust
+pub fn create_profile(ctx: Context<CreateProfile>, name: String) -> Result<()> {
+    let profile = &mut ctx.accounts.profile;
+    profile.authority = ctx.accounts.user.key();
+    profile.name = name;
+    profile.bump = ctx.bumps.profile;
+    Ok(())
+}
+```
+
+When a user calls this instruction, Anchor:
+
+- Derives the PDA from `[b"profile", user.key()]`
+- Creates an account at that address, owned by your program
+- Initializes it with the `UserProfile` discriminator
+- Lets your instruction set the data fields
+
+The `ctx.bumps.profile` gives you the canonical bump Anchor found. Store it in the account so you don't have to re-derive it later.
+
+The user pays for account creation via the `payer = user` constraint. They sign the transaction and provide the lamports for rent exemption.
+
+After this instruction runs, a new account exists on-chain at the derived address, owned by your program, storing the user's profile data.
+
+<ArticleSection name="Reading PDA Accounts" id="reading-pdas" level="h2" />
+
+Creating a PDA once is useful. Accessing it in later instructions is essential.
+
+Loading an existing PDA uses the same `seeds` and `bump` constraints, but without `init`:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateProfile<'info> {
+    #[account(
+        mut,
+        seeds = [b"profile", user.key().as_ref()],
+        bump = profile.bump
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    pub user: Signer<'info>,
+}
+
+pub fn update_profile(ctx: Context<UpdateProfile>, new_name: String) -> Result<()> {
+    let profile = &mut ctx.accounts.profile;
+    require!(profile.authority == ctx.accounts.user.key(), ErrorCode::Unauthorized);
+    profile.name = new_name;
+    Ok(())
+}
+```
+
+Notice the difference: `bump = profile.bump`. Instead of letting Anchor find the bump, you're providing it from the account data. Anchor derives the address using this bump and verifies it matches the account passed in the instruction.
+
+This is why you saved the bump earlier. Re-deriving it (trying bumps from 255 down) costs compute units. Using the stored bump costs almost nothing.
+
+The flow:
+
+1. Client reads the profile account from the blockchain and sees `bump = 254`
+2. Client builds the instruction, passing the profile account
+3. Anchor derives `[b"profile", user.key(), &[254]]` and checks it equals the account address
+4. If it matches, the account is valid; if not, the instruction fails
+
+This pattern means PDAs don't need to be passed as separate instruction parameters. The seeds and bump in the account constraints are the parameters. Anchor reconstructs the address and verifies everything matches.
+
+<ArticleSection name="PDA Signing" id="pda-signing" level="h2" />
+
+PDAs can also "sign" Cross-Program Invocations. When invoking another program, you provide the seeds and bump that derive the PDA. The Solana runtime verifies these seeds produce the PDA's address and, if they match, treats the PDA as a signer for that CPI.
+
+Consider a vault where users deposit SOL and the program later needs to transfer it out. The System Program's transfer requires a sender signature—here's how a PDA provides it:
+
+```rust
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        seeds = [b"vault", authority.key().as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+
+    pub authority: Signer<'info>,
+
+    /// CHECK: recipient can be any account
+    #[account(mut)]
+    pub recipient: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+The withdrawal instruction:
+
+```rust
+pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+    let vault = &ctx.accounts.vault;
+
+    // Verify the authority
+    require!(vault.authority == ctx.accounts.authority.key(), ErrorCode::Unauthorized);
+
+    // Prepare signer seeds
+    let authority_key = ctx.accounts.authority.key();
+    let seeds = &[
+        b"vault",
+        authority_key.as_ref(),
+        &[vault.bump]
+    ];
+    let signer_seeds = &[&seeds[..]];
+
+    // CPI with PDA signing
+    let cpi_context = CpiContext::new_with_signer(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.recipient.clone(),
+        },
+        signer_seeds
+    );
+
+    transfer(cpi_context, amount)?;
+    Ok(())
+}
+```
+
+The key part: `CpiContext::new_with_signer`. The third parameter is signer seeds—a slice of slices where each inner slice is the complete set of seeds (including bump) that derives a PDA. The runtime verifies these seeds produce the account's address and, if they do, treats the PDA as a signer for that CPI.
+
+<ArticleSection name="Common PDA Patterns" id="common-patterns" level="h2" />
+
+A few PDA patterns come up repeatedly.
+
+**Per-user state.** Profiles, preferences, or game state—one PDA per user:
+
+```rust
+seeds = [b"profile", user.key().as_ref()]
+```
+
+**Per-asset state.** Listings, metadata, or locks—one PDA per NFT or token mint:
+
+```rust
+seeds = [b"listing", nft_mint.key().as_ref()]
+```
+
+**Global config.** A single PDA for program-wide settings (admin keys, fee rates):
+
+```rust
+seeds = [b"config"]
+```
+
+**Counters.** Track incrementing IDs, then use the count as part of item seeds:
+
+```rust
+seeds = [b"counter"]
+
+#[account]
+pub struct Counter {
+    pub count: u64,
+    pub bump: u8,
+}
+```
+
+**Escrow and vaults.** Hold assets temporarily; the program uses signer seeds to release them:
+
+```rust
+seeds = [b"escrow", trade_id.to_le_bytes().as_ref()]
+```
+
+These patterns compose. A marketplace might have per-user profiles, per-NFT listings, a global config, and per-trade escrows—all PDAs, all with different seed structures.
+
+A single instruction can work with multiple PDAs—just give each its own `seeds` and `bump` constraints. Anchor validates all of them before your instruction runs. For example, an instruction might `init` a new listing PDA while also updating a global counter PDA, each with independent seeds.
+
+<ArticleSection name="Seeds from Instruction Data" id="seeds-from-instruction-data" level="h2" />
+
+Seeds can also come from instruction parameters. The `#[instruction]` attribute makes function arguments available in constraints:
+
+```rust
+#[derive(Accounts)]
+#[instruction(note_id: u64)]
+pub struct CreateNote<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 8 + 200 + 1,
+        seeds = [b"note", user.key().as_ref(), note_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub note: Account<'info, Note>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct Note {
+    pub id: u64,
+    pub content: String,
+    pub bump: u8,
+}
+
+pub fn create_note(ctx: Context<CreateNote>, note_id: u64, content: String) -> Result<()> {
+    let note = &mut ctx.accounts.note;
+    note.id = note_id;
+    note.content = content;
+    note.bump = ctx.bumps.note;
+    Ok(())
+}
+```
+
+`#[instruction(note_id: u64)]` tells Anchor that `note_id` is an instruction parameter, making it available in `seeds`. Each user can create many notes (note 0, note 1, note 2), each at a different PDA. Use `init` to ensure the account doesn't already exist and prevent collisions.
+
+<ArticleSection name="Closing PDAs" id="closing-pdas" level="h2" />
+
+PDAs are accounts. Accounts cost rent (though rent-exempt accounts are standard now). When you no longer need a PDA, you can close it and reclaim the lamports.
+
+Anchor provides the `close` constraint:
+
+```rust
+#[derive(Accounts)]
+pub struct CloseProfile<'info> {
+    #[account(
+        mut,
+        close = user,
+        seeds = [b"profile", user.key().as_ref()],
+        bump = profile.bump
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+
+pub fn close_profile(ctx: Context<CloseProfile>) -> Result<()> {
+    // Profile is automatically closed
+    // Lamports are transferred to `user`
+    Ok(())
+}
+```
+
+The `close = user` constraint tells Anchor: at the end of this instruction, transfer all lamports from `profile` to `user` and mark the account as closed (zero out the data and set the owner to the System Program).
+
+After closing, the PDA address is free. You could recreate an account at the same address in a future transaction (same seeds, same program). Be careful with this: if your program assumes an account's data persists, closing and reopening can introduce bugs or security issues.
+
+Best practice: if an account should be permanent, don't allow closing. If it's temporary (like an escrow or a trade), close it when done to refund rent to users.
+
+<ArticleSection name="What You've Learned" id="what-youve-learned" level="h2" />
+
+You now know how to derive PDAs, create and read PDA accounts in Anchor, store bumps for efficiency, sign CPIs with signer seeds, and close accounts when done. For advanced seed schemas and multi-level PDA architectures, see the PDA Architecture lesson in Building with Anchor. For PDA-specific attack vectors, see the PDA Vulnerabilities lesson in Securing Anchor Programs.

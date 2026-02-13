@@ -197,6 +197,28 @@ export const challenges: ChallengeMetadata[] = [
     collectionMintAddress: "FW9LJEjJwGL1fkAjfM9HxuJuftTU9KrRvPBgP5ZzJx3D",
   },
   {
+    slug: "anchor-amm",
+    language: "Anchor",
+    color: BRAND_COLOURS.anchor,
+    difficulty: 3,
+    isFeatured: true,
+    unitName: "Anchor AMM",
+    apiPath: "/v1/verify/anchor/amm",
+    tags: ["Anchor", "AMM", "DeFi", "Swap"],
+    pages: [
+      { slug: "initialize" },
+      { slug: "deposit" },
+      { slug: "withdraw" },
+      { slug: "swap" },
+    ],
+    requirements: [
+      { instructionKey: "initialize" },
+      { instructionKey: "deposit" },
+      { instructionKey: "withdraw" },
+      { instructionKey: "swap" },
+    ],
+  },
+  {
     slug: "pinocchio-quantum-vault",
     language: "Rust",
     color: BRAND_COLOURS.rust,

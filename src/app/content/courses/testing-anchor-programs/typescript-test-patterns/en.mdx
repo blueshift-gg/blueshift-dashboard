@@ -1,0 +1,604 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# TypeScript Test Patterns
+
+![Testing Anchor Programs](/graphics/course-banners/testing-anchor-programs.png)
+
+Anchor generates a TypeScript client from your program's IDL. This client is the foundation for integration tests — sending real instructions to a local validator and verifying the results.
+
+<ArticleSection name="The Anchor Test Scaffold" id="test-scaffold" level="h2" />
+
+When you initialize an Anchor project, you get a test file in the `tests/` directory. This file contains the basic structure for integration tests:
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { VaultProgram } from "../target/types/vault_program";
+
+describe("vault-program", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.VaultProgram as Program<VaultProgram>;
+
+  it("Initializes a vault", async () => {
+    // Test logic goes here
+  });
+});
+```
+
+The `anchor.workspace` object provides access to your program's TypeScript client. The type comes from the generated IDL file in `target/types/`. The `AnchorProvider.env()` call reads configuration from `Anchor.toml` and connects to your local validator.
+
+This setup works because `anchor test` starts a local validator, deploys your program, and runs the test suite automatically. The test has access to a funded wallet from the local validator's keypair.
+
+<ArticleSection name="Generating Test Keypairs" id="generating-keypairs" level="h2" />
+
+Most tests need to create accounts and sign transactions. You generate keypairs using Solana's web3.js library:
+
+```typescript
+import { Keypair } from "@solana/web3.js";
+
+const user = Keypair.generate();
+const vault = Keypair.generate();
+```
+
+These keypairs start with zero SOL balance. If you need a funded account, you can airdrop SOL from the local validator:
+
+```typescript
+const user = Keypair.generate();
+
+await provider.connection.confirmTransaction(
+  await provider.connection.requestAirdrop(
+    user.publicKey,
+    1_000_000_000 // 1 SOL in lamports
+  )
+);
+```
+
+The `requestAirdrop` method returns a transaction signature. Calling `confirmTransaction` waits for the transaction to finalize before proceeding, preventing race conditions where your test tries to use an account that has not been funded yet.
+
+<ArticleSection name="Sending Instructions" id="sending-instructions" level="h2" />
+
+The Anchor client provides a fluent interface for building and sending transactions. Each instruction becomes a method on `program.methods`:
+
+```typescript
+const tx = await program.methods
+  .initialize()
+  .accounts({
+    vault: vault.publicKey,
+    user: user.publicKey,
+    systemProgram: anchor.web3.SystemProgram.programId,
+  })
+  .signers([vault, user])
+  .rpc();
+
+console.log("Transaction signature:", tx);
+```
+
+The `rpc()` method builds the transaction, sends it to the validator, and returns the transaction signature. The transaction is confirmed before `rpc()` resolves.
+
+If your instruction takes arguments, pass them to the method call:
+
+```typescript
+await program.methods
+  .deposit(new anchor.BN(100_000))
+  .accounts({
+    vault: vaultAddress,
+    user: user.publicKey,
+  })
+  .rpc();
+```
+
+Numeric arguments use the `BN` (big number) type from the `bn.js` library, which handles Solana's u64 values safely in JavaScript.
+
+<ArticleSection name="Account Resolution" id="account-resolution" level="h2" />
+
+Anchor can automatically resolve some accounts based on your program's constraints. If an account is derived from a PDA or has a relationship defined in your program, you might not need to specify it:
+
+```typescript
+// If 'vault' is a PDA derived from 'user'
+await program.methods
+  .withdraw(new anchor.BN(50_000))
+  .accounts({
+    user: user.publicKey,
+  })
+  .rpc();
+```
+
+When auto-resolution fails or you want explicit control, use `accountsStrict()` instead:
+
+```typescript
+await program.methods
+  .withdraw(new anchor.BN(50_000))
+  .accountsStrict({
+    vault: vaultAddress,
+    user: user.publicKey,
+    authority: authority.publicKey,
+    systemProgram: anchor.web3.SystemProgram.programId,
+  })
+  .rpc();
+```
+
+The strict mode requires all accounts and will error if any are missing, catching silent failures from incorrect auto-resolution.
+
+<ArticleSection name="Adding Signers" id="adding-signers" level="h2" />
+
+By default, the provider's wallet signs transactions. If additional accounts need to sign, add them with `.signers()`:
+
+```typescript
+const vault = Keypair.generate();
+
+await program.methods
+  .initialize()
+  .accounts({
+    vault: vault.publicKey,
+    user: provider.wallet.publicKey,
+  })
+  .signers([vault]) // vault must sign because it's being created
+  .rpc();
+```
+
+Forgetting to add required signers is a common error. If your instruction creates a new account or requires a specific authority signature, that keypair must be in the signers array.
+
+<ArticleSection name="Fetching Account State" id="fetching-accounts" level="h2" />
+
+After sending an instruction, you verify the program created or modified accounts correctly. The Anchor client provides typed accessors for each account type:
+
+```typescript
+const vaultAccount = await program.account.vault.fetch(vaultAddress);
+
+console.log("Vault balance:", vaultAccount.balance.toString());
+console.log("Vault authority:", vaultAccount.authority.toString());
+```
+
+The returned object matches your program's account structure. Fields use their Rust types converted to TypeScript: `u64` becomes `BN`, `Pubkey` becomes `PublicKey`, and so on.
+
+For multiple accounts, use `fetchMultiple`:
+
+```typescript
+const [vault1, vault2, vault3] = await program.account.vault.fetchMultiple([
+  vault1Address,
+  vault2Address,
+  vault3Address,
+]);
+```
+
+This batches the RPC calls for better performance. If an account doesn't exist, the result is `null` at that index.
+
+<ArticleSection name="Asserting Account Values" id="asserting-values" level="h2" />
+
+Tests verify account state using assertions. The Mocha test framework provides `assert`, or you can use Chai for more readable assertions:
+
+```typescript
+import { assert } from "chai";
+
+const vaultAccount = await program.account.vault.fetch(vaultAddress);
+
+assert.equal(vaultAccount.balance.toNumber(), 100_000);
+assert.equal(
+  vaultAccount.authority.toString(),
+  authority.publicKey.toString()
+);
+assert.isFalse(vaultAccount.locked);
+```
+
+When comparing `PublicKey` objects, convert both to strings. Direct comparison of objects checks reference equality, not value equality:
+
+```typescript
+// Wrong: compares object references
+assert.equal(vaultAccount.authority, authority.publicKey);
+
+// Correct: compares the actual public key values
+assert.equal(
+  vaultAccount.authority.toString(),
+  authority.publicKey.toString()
+);
+```
+
+For BN values, use `toNumber()` for small values or `toString()` for large ones:
+
+```typescript
+// Small values
+assert.equal(vaultAccount.count.toNumber(), 5);
+
+// Large values (bigger than JavaScript's Number.MAX_SAFE_INTEGER)
+assert.equal(vaultAccount.totalLamports.toString(), "1000000000000");
+```
+
+<ArticleSection name="Checking Balances" id="checking-balances" level="h2" />
+
+Many tests verify that SOL or token balances change correctly. Check balances before and after the transaction:
+
+```typescript
+const balanceBefore = await provider.connection.getBalance(user.publicKey);
+
+await program.methods
+  .withdraw(new anchor.BN(100_000))
+  .accounts({
+    vault: vaultAddress,
+    user: user.publicKey,
+  })
+  .rpc();
+
+const balanceAfter = await provider.connection.getBalance(user.publicKey);
+
+assert.equal(balanceAfter - balanceBefore, 100_000);
+```
+
+Account for transaction fees when verifying balance changes. The actual change might be slightly less than expected:
+
+```typescript
+const expectedChange = 100_000;
+const actualChange = balanceAfter - balanceBefore;
+
+// Allow for transaction fees
+assert.isAtLeast(actualChange, expectedChange - 10_000);
+assert.isAtMost(actualChange, expectedChange);
+```
+
+<ArticleSection name="Testing Error Cases" id="testing-errors" level="h2" />
+
+Good tests verify that your program rejects invalid operations. Use try/catch to assert that an instruction fails:
+
+```typescript
+it("Rejects unauthorized withdrawal", async () => {
+  const attacker = Keypair.generate();
+  await fundWallet(attacker);
+
+  try {
+    await program.methods
+      .withdraw(new anchor.BN(100_000))
+      .accounts({
+        vault: vaultAddress,
+        user: attacker.publicKey,
+      })
+      .rpc();
+
+    assert.fail("Expected an error but transaction succeeded");
+  } catch (err) {
+    // Test passed - transaction failed as expected
+  }
+});
+```
+
+Verify the specific error code your program returns:
+
+```typescript
+try {
+  await program.methods
+    .withdraw(new anchor.BN(1_000_000))
+    .accounts({
+      vault: vaultAddress,
+      user: user.publicKey,
+    })
+    .rpc();
+
+  assert.fail("Expected InsufficientFunds error");
+} catch (err) {
+  assert.equal(err.error.errorCode.code, "InsufficientFunds");
+}
+```
+
+The error structure depends on your program's error definitions. Anchor errors include an `errorCode` field with the error name and number.
+
+<ArticleSection name="Testing Custom Errors" id="custom-errors" level="h2" />
+
+When your program defines custom errors, the Anchor client exposes them through the error object:
+
+```typescript
+// In your program:
+// #[error_code]
+// pub enum VaultError {
+//     #[msg("Insufficient funds in vault")]
+//     InsufficientFunds,
+//     #[msg("Vault is locked")]
+//     VaultLocked,
+// }
+
+try {
+  await program.methods.withdraw(amount).accounts({...}).rpc();
+  assert.fail("Expected VaultLocked error");
+} catch (err) {
+  assert.equal(err.error.errorCode.code, "VaultLocked");
+  assert.include(err.error.errorMessage, "Vault is locked");
+}
+```
+
+You can check both the error code and the error message. The message comes from the `#[msg("...")]` attribute in your program.
+
+<ArticleSection name="Helper Functions" id="helper-functions" level="h2" />
+
+Complex test suites benefit from reusable helper functions. Extract common operations into functions that multiple tests can use:
+
+```typescript
+async function createAndFundWallet(lamports = 1_000_000_000) {
+  const wallet = Keypair.generate();
+
+  await provider.connection.confirmTransaction(
+    await provider.connection.requestAirdrop(wallet.publicKey, lamports)
+  );
+
+  return wallet;
+}
+
+async function initializeVault(authority: Keypair) {
+  const vault = Keypair.generate();
+
+  await program.methods
+    .initialize()
+    .accounts({
+      vault: vault.publicKey,
+      authority: authority.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    })
+    .signers([vault])
+    .rpc();
+
+  return vault.publicKey;
+}
+
+// Use in tests
+it("Deposits to vault", async () => {
+  const user = await createAndFundWallet();
+  const vaultAddress = await initializeVault(user);
+
+  await program.methods
+    .deposit(new anchor.BN(100_000))
+    .accounts({
+      vault: vaultAddress,
+      user: user.publicKey,
+    })
+    .rpc();
+
+  const vaultAccount = await program.account.vault.fetch(vaultAddress);
+  assert.equal(vaultAccount.balance.toNumber(), 100_000);
+});
+```
+
+<ArticleSection name="Shared Test State" id="shared-state" level="h2" />
+
+Mocha provides `before` and `beforeEach` hooks for setting up state. Use `before` for expensive operations that can be shared across tests:
+
+```typescript
+describe("vault-program", () => {
+  let authority: Keypair;
+  let vaultAddress: PublicKey;
+
+  before(async () => {
+    authority = await createAndFundWallet();
+    vaultAddress = await initializeVault(authority);
+  });
+
+  it("Deposits funds", async () => {
+    await program.methods
+      .deposit(new anchor.BN(100_000))
+      .accounts({
+        vault: vaultAddress,
+        user: authority.publicKey,
+      })
+      .rpc();
+  });
+
+  it("Withdraws funds", async () => {
+    await program.methods
+      .withdraw(new anchor.BN(50_000))
+      .accounts({
+        vault: vaultAddress,
+        user: authority.publicKey,
+      })
+      .rpc();
+  });
+});
+```
+
+Use `beforeEach` when tests need isolated state:
+
+```typescript
+describe("vault-program", () => {
+  let user: Keypair;
+  let vaultAddress: PublicKey;
+
+  beforeEach(async () => {
+    user = await createAndFundWallet();
+    vaultAddress = await initializeVault(user);
+  });
+
+  it("Test 1", async () => {
+    // Fresh vault for this test
+  });
+
+  it("Test 2", async () => {
+    // Different fresh vault for this test
+  });
+});
+```
+
+<ArticleSection name="PDA Derivation in Tests" id="pda-derivation" level="h2" />
+
+When your program uses PDAs, derive them the same way in tests:
+
+```typescript
+const [vaultPda, vaultBump] = PublicKey.findProgramAddressSync(
+  [Buffer.from("vault"), authority.publicKey.toBuffer()],
+  program.programId
+);
+
+await program.methods
+  .initialize()
+  .accounts({
+    vault: vaultPda,
+    authority: authority.publicKey,
+  })
+  .rpc();
+```
+
+The seeds must match exactly what your program uses. A mismatch in seed order, encoding, or the program ID will produce a different address and cause transaction failures.
+
+Store the bump if your program needs it as an instruction argument:
+
+```typescript
+await program.methods
+  .initializeWithBump(vaultBump)
+  .accounts({
+    vault: vaultPda,
+    authority: authority.publicKey,
+  })
+  .rpc();
+```
+
+<ArticleSection name="Verifying Events" id="verifying-events" level="h2" />
+
+If your program emits events, you can verify them in tests. Anchor doesn't provide direct event access, but you can parse transaction logs:
+
+```typescript
+const tx = await program.methods
+  .deposit(new anchor.BN(100_000))
+  .accounts({
+    vault: vaultAddress,
+    user: user.publicKey,
+  })
+  .rpc();
+
+const txDetails = await provider.connection.getTransaction(tx, {
+  commitment: "confirmed",
+});
+
+const logs = txDetails.meta.logMessages;
+console.log("Transaction logs:", logs);
+
+// Check for expected log message
+assert.isTrue(logs.some(log => log.includes("Deposit event")));
+```
+
+This approach is limited because you are checking string content in logs. For more reliable event testing, use LiteSVM, which provides structured event access. See the [Testing with LiteSVM](/content/courses/testing-with-litesvm) course for details.
+
+<ArticleSection name="Common Test Pitfalls" id="common-pitfalls" level="h2" />
+
+**Forgetting signers**: When an account is created or must authorize an action, it needs to be in the signers array. If you get a "missing signature" error, check that all required keypairs are included:
+
+```typescript
+// Wrong: vault keypair generated but not added as signer
+const vault = Keypair.generate();
+await program.methods
+  .initialize()
+  .accounts({ vault: vault.publicKey })
+  .rpc();
+
+// Correct: vault keypair added as signer
+await program.methods
+  .initialize()
+  .accounts({ vault: vault.publicKey })
+  .signers([vault])
+  .rpc();
+```
+
+**Wrong PDA derivation**: If your test derives a PDA differently than your program, you'll get account mismatch errors. Double-check the seeds, their order, and encoding:
+
+```typescript
+// Program uses: [b"vault", authority.key().as_ref()]
+
+// Wrong: different seed order
+const [wrong] = PublicKey.findProgramAddressSync(
+  [authority.publicKey.toBuffer(), Buffer.from("vault")],
+  program.programId
+);
+
+// Correct: matches program seed order
+const [correct] = PublicKey.findProgramAddressSync(
+  [Buffer.from("vault"), authority.publicKey.toBuffer()],
+  program.programId
+);
+```
+
+**Stale account state**: After sending a transaction, you must fetch the account again. Using a previously fetched account object will show old data:
+
+```typescript
+// Wrong: checking stale account state
+const vaultAccount = await program.account.vault.fetch(vaultAddress);
+await program.methods.deposit(amount).accounts({...}).rpc();
+assert.equal(vaultAccount.balance.toNumber(), 100_000); // Still has old balance!
+
+// Correct: fetch after transaction
+const vaultBefore = await program.account.vault.fetch(vaultAddress);
+await program.methods.deposit(amount).accounts({...}).rpc();
+const vaultAfter = await program.account.vault.fetch(vaultAddress);
+assert.equal(vaultAfter.balance.toNumber(), 100_000);
+```
+
+**Not confirming airdrops**: If you request an airdrop and immediately try to use the account, the transaction might fail because the airdrop hasn't confirmed yet:
+
+```typescript
+// Wrong: doesn't wait for airdrop
+const user = Keypair.generate();
+await provider.connection.requestAirdrop(user.publicKey, 1_000_000_000);
+await program.methods.initialize().accounts({...}).rpc(); // Might fail!
+
+// Correct: waits for confirmation
+const user = Keypair.generate();
+await provider.connection.confirmTransaction(
+  await provider.connection.requestAirdrop(user.publicKey, 1_000_000_000)
+);
+await program.methods.initialize().accounts({...}).rpc();
+```
+
+**Incorrect BN comparisons**: Comparing BN objects directly checks reference equality, not value equality:
+
+```typescript
+// Wrong: compares object references
+assert.equal(vaultAccount.balance, new anchor.BN(100_000));
+
+// Correct: compares numeric values
+assert.equal(vaultAccount.balance.toNumber(), 100_000);
+// or
+assert.isTrue(vaultAccount.balance.eq(new anchor.BN(100_000)));
+```
+
+<ArticleSection name="Transaction Simulation" id="transaction-simulation" level="h2" />
+
+Before sending a transaction, you can simulate it to check for errors without consuming SOL:
+
+```typescript
+const simulation = await program.methods
+  .deposit(new anchor.BN(100_000))
+  .accounts({
+    vault: vaultAddress,
+    user: user.publicKey,
+  })
+  .simulate();
+
+console.log("Simulation result:", simulation);
+```
+
+Simulation runs the transaction against current chain state but does not commit it, which helps when debugging complex instructions before sending them.
+
+<ArticleSection name="Multiple Instructions Per Transaction" id="multiple-instructions" level="h2" />
+
+Sometimes you need multiple instructions in one transaction. Use the `transaction()` method instead of `rpc()`:
+
+```typescript
+const tx = new anchor.web3.Transaction();
+
+tx.add(
+  await program.methods
+    .deposit(new anchor.BN(100_000))
+    .accounts({ vault: vaultAddress, user: user.publicKey })
+    .instruction()
+);
+
+tx.add(
+  await program.methods
+    .withdraw(new anchor.BN(50_000))
+    .accounts({ vault: vaultAddress, user: user.publicKey })
+    .instruction()
+);
+
+const signature = await provider.sendAndConfirm(tx);
+```
+
+Both instructions execute atomically. If either fails, the entire transaction rolls back.
+
+<ArticleSection name="Next Steps" id="next-steps" level="h2" />
+
+TypeScript tests against a local validator provide realistic integration testing. The type-safe client that powers these patterns is generated from your program's IDL — the Anchor in Production course explains this pipeline end-to-end in its client-sdk-generation lesson, which is worth understanding if you want to customize or extend the generated types.
+
+For faster test execution without starting a full validator, see the [Testing with LiteSVM](/content/courses/testing-with-litesvm) course. Next, continue to [Testing Security](/content/courses/testing-anchor-programs/testing-security) to learn how to verify your program rejects attacks.

@@ -1,0 +1,287 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Client SDK Generation
+
+![Anchor in Production](/graphics/course-banners/anchor-in-production.png)
+
+Every Anchor program produces an IDL file at build time. This IDL is the single source of truth for how clients interact with your program—it defines every instruction, account, type, and error. From this one artifact, you can generate TypeScript clients, publish on-chain discovery, and build production-grade integrations that stay in sync with your deployed program.
+
+<ArticleSection name="The IDL" id="the-idl" level="h2" />
+
+`anchor build` produces a JSON file at `target/idl/<program_name>.json`. The IDL describes everything a client needs: instructions (with discriminator bytes, accounts, and typed arguments), account discriminators for deserialization, full struct definitions in the `types` array, and custom errors mapping numeric codes to human-readable names.
+
+A trimmed example for a vault program with one instruction:
+
+```json
+{
+  "address": "Vault111111111111111111111111111111111111111",
+  "metadata": { "name": "vault", "version": "0.1.0", "spec": "0.1.0" },
+  "instructions": [{
+    "name": "deposit",
+    "discriminator": [242, 35, 198, 137, 82, 225, 242, 182],
+    "accounts": [
+      { "name": "vault", "writable": true, "pda": { "seeds": [
+        { "kind": "const", "value": [118, 97, 117, 108, 116] },
+        { "kind": "account", "path": "owner" }
+      ]}},
+      { "name": "owner", "signer": true, "writable": true },
+      { "name": "system_program", "address": "1111...1111" }
+    ],
+    "args": [{ "name": "amount", "type": "u64" }]
+  }],
+  "accounts": [{ "name": "Vault", "discriminator": [211, 8, 232, 43, ...] }],
+  "types": [{ "name": "Vault", "type": { "kind": "struct", "fields": [
+    { "name": "owner", "type": "pubkey" },
+    { "name": "balance", "type": "u64" },
+    { "name": "bump", "type": "u8" }
+  ]}}],
+  "errors": [{ "code": 6000, "name": "InsufficientFunds", "msg": "Insufficient vault balance" }]
+}
+```
+
+Anchor also generates `target/types/<program_name>.ts`, a TypeScript type derived from the IDL that the `@coral-xyz/anchor` client library uses for full type inference.
+
+<ArticleSection name="Publishing the IDL" id="publishing-the-idl" level="h2" />
+
+An IDL file in your repo only helps developers who have access to it. Publishing the IDL on-chain lets any client fetch it directly from the network. To publish for the first time:
+
+```bash
+anchor idl init --filepath target/idl/vault.json <PROGRAM_ID>
+```
+
+The command creates an on-chain IDL account storing the full IDL JSON compressed with zstd. The authority defaults to the program's upgrade authority. When you deploy a new version, update the on-chain IDL to match:
+
+```bash
+anchor idl upgrade --filepath target/idl/vault.json <PROGRAM_ID>
+```
+
+Any client can then fetch the IDL directly from the network:
+
+```bash
+anchor idl fetch <PROGRAM_ID>
+```
+
+The IDL authority controls who can modify the on-chain IDL. You can transfer this authority to a multisig, or set it to `None` to make the IDL immutable:
+
+```bash
+anchor idl set-authority --new-authority <NEW_AUTHORITY> <PROGRAM_ID>
+```
+
+On-chain IDLs serve two purposes. Block explorers like Solana Explorer and SolanaFM use them to decode transactions into human-readable instruction names and parameters. Client applications can also fetch the IDL at runtime to build dynamic interfaces without bundling the IDL in their code.
+
+<ArticleSection name="TypeScript Client with @coral-xyz/anchor" id="typescript-client" level="h2" />
+
+The `@coral-xyz/anchor` package uses the IDL type for full autocompletion and compile-time checking. Connection setup, `AnchorProvider`, and basic `.methods.rpc()` calling are covered in the Anchor Fundamentals course. The patterns below focus on production-specific usage.
+
+**Multi-instruction transactions.** Use `.instruction()` to compose multiple instructions into a single atomic transaction:
+
+```typescript
+const depositIx = await program.methods
+  .deposit(new BN(1_000_000_000))
+  .accounts({ owner: wallet.publicKey })
+  .instruction();
+
+const withdrawIx = await program.methods
+  .withdraw(new BN(500_000_000))
+  .accounts({ owner: wallet.publicKey })
+  .instruction();
+
+const tx = new Transaction().add(depositIx, withdrawIx);
+await sendTransaction(tx, connection);
+```
+
+Use `.accounts()` for the common case where Anchor infers PDAs and well-known programs. Use `.accountsStrict()` in production code paths where you want explicit control over every account passed to the instruction.
+
+<ArticleSection name="Generating Typed Clients" id="generating-typed-clients" level="h2" />
+
+The `@coral-xyz/anchor` client works well for projects that already depend on the Anchor framework. For standalone client packages that you publish to npm for other developers, generated typed clients are a better fit.
+
+Anchor includes a built-in client generation command:
+
+```bash
+anchor client gen --idl target/idl/vault.json --out ./sdk/src
+```
+
+This produces TypeScript files with typed instruction builders, account decoders, and error types. The generated code has no dependency on the `@coral-xyz/anchor` runtime library, which makes it lighter for client applications.
+
+For more control, Codama (formerly Kinobi) is the standard tool in the Solana ecosystem. It takes an Anchor IDL, transforms it into a rich intermediate representation, and generates clients for multiple languages:
+
+```typescript
+import { createFromRoot } from "codama";
+import { rootNodeFromAnchor } from "@codama/nodes-from-anchor";
+import { renderJavaScriptVisitor } from "@codama/renderers-js";
+import anchorIdl from "../target/idl/vault.json";
+
+const codama = createFromRoot(rootNodeFromAnchor(anchorIdl));
+
+codama.accept(
+  renderJavaScriptVisitor("./sdk/js/src/generated")
+);
+```
+
+Codama can also generate Rust clients with `@codama/renderers-rust`, which is useful for programs that call your program via CPI.
+
+Generated clients have three advantages over hand-written ones. They stay in sync with the program automatically—regenerate after each build and the client matches the deployed code. They eliminate bugs caused by mismatched account names, argument types, or discriminators. And they provide full type safety without requiring the consumer to understand the IDL format.
+
+A typical CI pipeline runs `anchor build`, then the client generation step, then client-side tests against the output. If the program's interface changes in a way that breaks the client, the pipeline catches it before deployment.
+
+<ArticleSection name="Account Fetching and Filtering" id="account-fetching" level="h2" />
+
+Basic account fetching (`.fetch`, `.fetchMultiple`, `.all()`) is covered in Anchor Fundamentals. The production-critical pattern is `memcmp` filtering, which narrows `getProgramAccounts` results by matching byte patterns at specific offsets. Without filters, `.all()` scans every account owned by your program -- on mainnet with 500,000 accounts, this can take 10-30 seconds or be rejected by the RPC provider entirely.
+
+The first 8 bytes of every Anchor account are the discriminator, so struct fields start at offset 8:
+
+```typescript
+const myVaults = await program.account.vault.all([
+  {
+    memcmp: {
+      offset: 8,
+      bytes: ownerPublicKey.toBase58(),
+    },
+  },
+]);
+```
+
+This fetches only vaults where the `owner` field (first field after the discriminator, at offset 8) matches the given public key. Each result contains both the `publicKey` and deserialized `account` data.
+
+For fields beyond the first, calculate the offset by summing preceding field sizes plus the 8-byte discriminator. In the `Vault` struct where `owner` is 32 bytes and `balance` is 8 bytes, the `bump` field starts at offset `8 + 32 + 8 = 48`.
+
+<ArticleSection name="Error Handling in Clients" id="error-handling" level="h2" />
+
+Basic `AnchorError` catching is covered in the Anchor Fundamentals Errors and Events lesson. The production pattern is mapping error codes to user-facing messages, separate from the developer-oriented IDL error strings:
+
+```typescript
+const USER_ERROR_MESSAGES: Record<number, string> = {
+  6000: "Your vault does not have enough funds for this withdrawal.",
+  6001: "You are not the owner of this vault.",
+  6002: "This vault has been frozen by the administrator.",
+};
+
+function getUserMessage(err: AnchorError): string {
+  const code = err.error.errorCode.number;
+  return USER_ERROR_MESSAGES[code]
+    ?? "An unexpected error occurred. Please try again.";
+}
+```
+
+Anchor's built-in errors use codes below 6000: 2000-2999 for constraint violations (`ConstraintMut`, `ConstraintSeeds`), 3000-3999 for account errors. Custom program errors start at 6000. Distinguishing these ranges lets you route framework errors to developer logs while surfacing custom errors to users.
+
+For transactions sent outside `.rpc()`, use the `translateError` helper to parse error codes from transaction logs and map them to IDL error definitions.
+
+<ArticleSection name="Building Production Clients" id="production-clients" level="h2" />
+
+Development clients connect to localhost and assume transactions succeed. Production clients deal with rate limits, network partitions, and confirmation latency. The patterns here bridge that gap.
+
+### Connection Management
+
+Create a single `Connection` instance and reuse it across your application. Each instance holds a websocket and an HTTP client, so creating multiples wastes resources and triggers rate limits faster.
+
+```typescript
+import { Connection } from "@solana/web3.js";
+
+const RPC_URL = process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com";
+
+const connection = new Connection(RPC_URL, {
+  commitment: "confirmed",
+  wsEndpoint: process.env.WS_URL,
+  disableRetryOnRateLimit: false,
+});
+```
+
+Public Solana RPC endpoints enforce rate limits of about 40 requests per second per IP. For production, use a dedicated RPC provider (Helius, Triton, QuickNode) with higher limits and lower latency.
+
+### Retry Logic
+
+Transactions can fail for transient reasons—leader rotation, blockhash expiry, temporary RPC unavailability. A retry layer handles these without surfacing them to the user.
+
+```typescript
+async function sendWithRetry(
+  connection: Connection,
+  transaction: Transaction,
+  signers: Signer[],
+  maxRetries = 3
+): Promise<string> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const { blockhash, lastValidBlockHeight } =
+        await connection.getLatestBlockhash("confirmed");
+      transaction.recentBlockhash = blockhash;
+      transaction.lastValidBlockHeight = lastValidBlockHeight;
+      transaction.sign(...signers);
+
+      const signature = await connection.sendRawTransaction(
+        transaction.serialize(),
+        { skipPreflight: false, maxRetries: 0 }
+      );
+      await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed"
+      );
+      return signature;
+    } catch (err: any) {
+      const isRetryable =
+        err.message?.includes("Blockhash not found") ||
+        err.message?.includes("block height exceeded");
+      if (!isRetryable || attempt === maxRetries - 1) throw err;
+    }
+  }
+  throw new Error("Transaction failed after all retries");
+}
+```
+
+Set `maxRetries: 0` on `sendRawTransaction` so the RPC does not retry on its own. Your application then has full control over retry timing and blockhash refresh.
+
+### Transaction Confirmation Strategies
+
+Solana offers three commitment levels, each a different tradeoff between speed and certainty:
+
+- **processed**: The transaction reached a validator and was executed, but may be rolled back. Latency is roughly 400ms.
+- **confirmed**: A supermajority (66%+) of validators have confirmed the block. Rollback is extremely unlikely. Latency is roughly 800ms.
+- **finalized**: 31 additional blocks confirmed on top. Rollback is not possible under normal conditions. Latency is roughly 12-15 seconds.
+
+For most user-facing operations, `confirmed` provides fast feedback with minimal rollback risk. Use `finalized` when the operation is irreversible—releasing a payment, finalizing an auction, or recording a settlement.
+
+```typescript
+// User-facing deposit: confirmed is fast enough
+await connection.confirmTransaction(signature, "confirmed");
+
+// Treasury withdrawal: wait for finalized
+await connection.confirmTransaction(signature, "finalized");
+```
+
+### Handling RPC Rate Limits
+
+When your application sends bursts of requests, the RPC provider may throttle you. A batch function with delays prevents 429 errors:
+
+```typescript
+async function batchFetch<T>(
+  items: PublicKey[],
+  fetchFn: (batch: PublicKey[]) => Promise<T[]>,
+  batchSize: number = 100,
+  delayMs: number = 200
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    results.push(...await fetchFn(batch));
+    if (i + batchSize < items.length) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+// Fetch 500 vaults in batches of 100 with 200ms delay
+const vaults = await batchFetch(
+  allAddresses,
+  (batch) => program.account.vault.fetchMultiple(batch)
+);
+```
+
+The 200ms delay keeps you well under typical rate limits. Most paid providers allow 200-500 requests per second, so adjust based on your provider's documented limits. For websocket subscriptions, most providers cap concurrent subscriptions per connection (Helius at 100, Triton at 256). If you need more, open additional connections or use a geyser-based indexing approach.
+
+---
+
+If you want your generated SDKs to work well for other developers composing with your program, the Building with Anchor course's Designing for Composability lesson covers designing CPI-friendly interfaces that make SDKs more useful to downstream integrators.
+
+The next lesson covers upgrades and governance—how to manage program upgrades safely, implement upgrade authorities with multisig, and plan for the lifecycle of a production program.

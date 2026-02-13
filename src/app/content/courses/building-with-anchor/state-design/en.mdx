@@ -1,0 +1,284 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# State Design
+
+![Build real Anchor programs - state design patterns](/graphics/course-banners/building-with-anchor.png)
+
+Account design determines how your program stores and retrieves data. Poor choices here cascade into every instruction—excess rent costs, wasted transaction space, and programs that can't evolve. Solana charges rent based on space allocated, not space used. An account with 1,000 bytes costs the same whether you fill it with data or leave it empty. This makes upfront sizing decisions permanent economic commitments.
+
+This lesson covers the design decisions that shape your program's economics, scalability, and evolution. The choices you make here affect every instruction you write.
+
+<ArticleSection name="Data Type Costs" id="data-types" level="h2" />
+
+Every data type in your account struct consumes a fixed number of bytes. Choosing the right type means balancing the range of values you need against the space you pay for. Here are the standard types and their sizes:
+
+- `u8`: 1 byte (0 to 255)
+- `u16`: 2 bytes (0 to 65,535)
+- `u32`: 4 bytes (0 to 4.3 billion)
+- `u64`: 8 bytes (0 to 18.4 quintillion)
+- `u128`: 16 bytes (0 to 340 undecillion)
+- `i8`, `i16`, `i32`, `i64`, `i128`: Same sizes as unsigned, but include negative values
+- `bool`: 1 byte (true or false)
+- `Pubkey`: 32 bytes (Solana address)
+- `String`: 4-byte length prefix + 1 byte per character
+- `Vec<T>`: 4-byte length prefix + size of each element
+- `Option<T>`: 1 byte + size of inner type (the extra byte stores `Some` vs `None`)
+
+Strings and vectors require `#[max_len]` when using `InitSpace`. You pay for the maximum length upfront, even if the actual data is shorter. An `Option<Pubkey>` consumes 33 bytes—1 for the discriminator and 32 for the potential `Pubkey`.
+
+Rent costs scale linearly with account size. Here are typical costs:
+
+| Account Size | Rent-Exempt Minimum |
+|---|---|
+| 50 bytes | ~0.00059 SOL |
+| 100 bytes | ~0.00116 SOL |
+| 200 bytes | ~0.00232 SOL |
+| 500 bytes | ~0.00580 SOL |
+| 1,000 bytes | ~0.01160 SOL |
+| 10,000 bytes | ~0.11600 SOL |
+
+The difference between a `u64` counter (8 bytes) and a `u8` counter (1 byte) is negligible for a single account. But a protocol with 100,000 user accounts saves 700 KB of rent by choosing `u8` where 255 is sufficient. Data type decisions compound at scale.
+
+Enums store a 1-byte tag plus enough space for the **largest** variant:
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
+pub enum OrderType {
+    Market,                                        // 0 data bytes
+    Limit { price: u64 },                          // 8 data bytes
+    StopLoss { trigger_price: u64, limit_price: u64 }, // 16 data bytes
+}
+```
+
+Every `OrderType` field consumes 17 bytes (1 tag + 16 for `StopLoss`), even when most orders are `Market`. If the large variant is rare, consider splitting it into a separate account and storing a `Pubkey` reference instead. This saves 16 bytes on the common case at the cost of an extra account for the rare case.
+
+<ArticleSection name="Single Account vs Multiple Accounts" id="account-architecture" level="h2" />
+
+This is the most consequential state design decision. A single account is simpler to initialize and query, but it becomes a bottleneck when multiple users need simultaneous access. Multiple accounts parallelize access but increase transaction complexity.
+
+A single-account marketplace stores all listings in one place:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Marketplace {
+    pub authority: Pubkey,
+    #[max_len(100)]
+    pub listings: Vec<Listing>,
+}
+```
+
+Every instruction that modifies a listing must load the entire marketplace account, even if it only touches one entry. Two users creating listings at the same time conflict because both transactions need write access to the same account. Solana processes conflicting writes sequentially, not in parallel. This creates a hard throughput ceiling.
+
+The single-account approach also caps the number of entries. With a 10,240-byte limit on `init` and each `Listing` consuming 72 bytes, you store around 140 listings maximum.
+
+A multi-account design creates a PDA for each listing:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Listing {
+    pub seller: Pubkey,
+    pub mint: Pubkey,
+    pub price: u64,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: u64)]
+pub struct CreateListing<'info> {
+    #[account(
+        init,
+        payer = seller,
+        space = 8 + Listing::INIT_SPACE,
+        seeds = [b"listing", seller.key().as_ref(), listing_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub listing: Account<'info, Listing>,
+    #[account(mut)]
+    pub seller: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+Two users creating listings don't conflict because they write to different accounts. Solana processes these in parallel. The total number of listings is unbounded.
+
+The tradeoff is transaction complexity. An instruction that needs many listings must load each one. Solana limits transactions to 64 accounts. Clients must batch requests or maintain an off-chain index.
+
+Rent also differs. A single account pays rent once for the entire allocation. 100 separate accounts each pay the rent-exempt minimum (~0.00089 SOL each), totaling ~0.089 SOL vs ~0.0064 SOL for a single account.
+
+**Decision framework:**
+- **Single account**: Global state with low write contention—configuration, protocol fees, admin authorities
+- **Multiple accounts**: User-specific data or entities needing independent lifecycles—profiles, escrows, listings, positions
+
+The architecture depends on access patterns, not data relationships alone.
+
+<ArticleSection name="Embedding Data vs Referencing Accounts" id="embed-vs-reference" level="h2" />
+
+When one entity relates to another, you choose between storing the data inline or storing a `Pubkey` reference to a separate account. This is the Solana equivalent of embedding vs normalizing in a database.
+
+**Embed** when the related data is small, always accessed together, and owned by the same entity:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct UserProfile {
+    pub authority: Pubkey,
+    pub settings: UserSettings, // Embedded: 3 bytes
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
+pub struct UserSettings {
+    pub notifications_enabled: bool,
+    pub theme: u8,
+    pub language: u8,
+}
+```
+
+The settings are always read with the profile. Embedding avoids an extra account lookup.
+
+**Reference** when the related data is large, accessed independently, or shared across entities:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Order {
+    pub owner: Pubkey,
+    pub order_type: SimpleOrderType,
+    pub advanced_params: Option<Pubkey>, // Reference to separate account
+    pub bump: u8,
+}
+```
+
+Advanced order parameters live in a separate account. Most orders don't need them, so you save space on the common case. The separate account can be loaded only when the `advanced_params` field is `Some`.
+
+**Decision framework:**
+- Embed if the data is < 64 bytes, always co-accessed, and doesn't need independent lifecycle
+- Reference if the data is large, optionally accessed, or shared between multiple parent accounts
+- Reference if different instructions need the data at different times (avoids loading unnecessary bytes)
+
+A common mistake is embedding a `Vec<Pubkey>` of related accounts that grows unboundedly. This should almost always be a set of separate PDA accounts with the parent's key as a seed.
+
+<ArticleSection name="Mutability and Write Contention" id="write-contention" level="h2" />
+
+Every account marked `mut` in your instruction creates a potential write conflict. Solana's scheduler processes transactions touching the same writable account sequentially. Two transactions writing to the same account cannot execute in parallel, regardless of which fields they modify.
+
+This has direct consequences for throughput:
+
+```rust
+// High contention: every trade writes to the global pool
+#[derive(Accounts)]
+pub struct Trade<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>, // All trades serialize here
+    pub user: Signer<'info>,
+}
+```
+
+If your pool processes 1,000 trades per second, each trade queues behind the previous one. The pool account becomes the bottleneck.
+
+**Strategies to reduce contention:**
+
+**Separate read-only from writable state.** Split a single account into a read-only config and a writable state:
+
+```rust
+// Config: rarely changes, can be read-only in most instructions
+#[account]
+pub struct PoolConfig {
+    pub authority: Pubkey,
+    pub fee_basis_points: u16,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub bump: u8,
+}
+
+// State: changes every trade, requires mut
+#[account]
+pub struct PoolState {
+    pub total_volume: u128,
+    pub last_trade_timestamp: i64,
+    pub bump: u8,
+}
+```
+
+Instructions that only read config don't contend with instructions that write state.
+
+**Use per-user accounts for user-specific state.** Instead of a global counter tracking each user's balance, give each user their own account:
+
+```rust
+// Bad: global account, all deposits serialize
+#[account]
+pub struct Vault {
+    pub total_deposits: u64,
+    pub user_balances: Vec<UserBalance>, // Contention point
+}
+
+// Good: per-user accounts, deposits parallelize
+#[account]
+pub struct UserPosition {
+    pub vault: Pubkey,
+    pub user: Pubkey,
+    pub balance: u64,
+    pub bump: u8,
+}
+```
+
+Users deposit to their own `UserPosition` in parallel. A global total can be computed off-chain or updated lazily.
+
+**Accept eventual consistency for aggregates.** If you need a global counter (total staked, total volume), consider whether it truly needs to be updated atomically with every transaction. Some protocols update global aggregates via a periodic crank instruction rather than on every user action.
+
+The key insight: `mut` is a design decision, not a reflex. Every time you add `mut` to an account, ask whether the instruction truly needs to write to it. Read-only accounts don't cause contention.
+
+<ArticleSection name="Padding and Future-Proofing" id="padding" level="h2" />
+
+Programs evolve. A field you don't need today might become critical in six months. Two strategies handle future changes: reserved padding bytes and `realloc`. Each serves different use cases.
+
+Padding adds unused bytes at initialization:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Treasury {
+    pub authority: Pubkey,
+    pub balance: u64,
+    pub fee_rate: u16,
+    pub reserved: [u8; 100],
+}
+```
+
+When you need a new field, convert part of the reserved space:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct Treasury {
+    pub authority: Pubkey,
+    pub balance: u64,
+    pub fee_rate: u16,
+    pub withdrawal_limit: u64, // New field, takes 8 bytes from reserved
+    pub reserved: [u8; 92],
+}
+```
+
+Existing accounts work without migration. Anchor deserializes bytes in order, and the reserved bytes were always there.
+
+**Decision framework:**
+- **Padding**: Use for singleton accounts (protocol config, treasury) where rent cost is a one-time expense and reallocation is disruptive. 64-128 bytes of padding is typical.
+- **Realloc**: Use for numerous accounts (user profiles, positions) where padding across thousands of accounts wastes rent. Start small, grow on demand.
+- **Versioning**: Use when changes are structural (reordering fields, changing types). Store a version byte and handle layouts conditionally.
+
+Padding is simple but wasteful at scale. Realloc is efficient but requires migration transactions. Versioning is flexible but adds conditional logic to every instruction. Most production programs use padding for singletons and realloc for per-user accounts.
+
+<ArticleSection name="Design Decisions in Practice" id="conclusion" level="h2" />
+
+State design is where economic cost, runtime performance, and program logic intersect. The decisions are more permanent than instruction logic—you can refactor a function, but changing an account's layout after deployment requires explicit migration.
+
+A checklist for new programs:
+
+1. **For each entity**: Single account or per-instance PDA? Based on write contention and query patterns.
+2. **For each field**: Smallest type that fits the value range? Embed or reference?
+3. **For mutable accounts**: Can you split read-only config from writable state?
+4. **For future-proofing**: Padding for singletons, realloc budget for user accounts?
+
+When your schemas do need to evolve after deployment, the Advanced Anchor Patterns course covers versioning and migration strategies in its versioning-and-migration lesson. Before relying on stored data in downstream instructions, make sure to validate it properly—the Securing Anchor Programs course explores this in its missing-validation lesson. The next lesson covers PDA architecture—how to use deterministic addressing as your program's namespace system.

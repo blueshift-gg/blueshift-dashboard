@@ -1,0 +1,355 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Indexing and Monitoring
+
+![Anchor in Production](/graphics/course-banners/anchor-in-production.png)
+
+Solana's RPC is a network interface, not a database. The `getProgramAccounts` call scans every account owned by your program and returns matches. On mainnet, a program with 500,000 accounts can take 10-30 seconds to return results from `getProgramAccounts`, and many RPC providers rate-limit or reject these calls entirely. You cannot filter by arbitrary fields in your account data without specifying exact byte offsets via `memcmp` filters. There are no indexes, no secondary keys, no joins.
+
+Production applications need a separate layer that mirrors on-chain state into a queryable store. An indexer watches the chain for changes—new accounts, updated accounts, emitted events—and writes them to a database where your API can run arbitrary queries in milliseconds. Without this layer, your application either makes expensive RPC calls on every page load or operates on stale cached data with no update mechanism.
+
+This lesson covers the tools Solana and Anchor provide for tracking on-chain state: events, transaction log parsing, Geyser plugins, and the patterns for building a production indexer.
+
+<ArticleSection name="Anchor Events" id="anchor-events" level="h2" />
+
+Anchor's event system broadcasts structured data from instructions into transaction logs. Define an event with `#[event]` and emit it with `emit!`:
+
+```rust
+#[event]
+pub struct DepositEvent {
+    pub vault: Pubkey,
+    pub depositor: Pubkey,
+    pub amount: u64,
+    pub total_deposited: u64,
+    pub timestamp: i64,
+}
+```
+
+Inside an instruction handler, emit after the state change:
+
+```rust
+emit!(DepositEvent {
+    vault: vault.key(),
+    depositor: ctx.accounts.depositor.key(),
+    amount,
+    total_deposited: vault.total_deposited,
+    timestamp: Clock::get()?.unix_timestamp,
+});
+```
+
+When `emit!` runs, Anchor serializes the struct with an 8-byte discriminator (SHA-256 of `event:<EventName>`) and writes it to the transaction log via `sol_log_data`. Events exist only in logs -- they consume no account space and cost roughly 1,000 CU per emit, up to the 10 KB per-instruction log limit.
+
+On the client side, `addEventListener` opens a WebSocket and delivers deserialized events in real time. The Client SDK Generation lesson covers this pattern in detail, including listener lifecycle management.
+
+<ArticleSection name="Transaction Log Parsing" id="log-parsing" level="h2" />
+
+The `onLogs` subscription watches for all log output from a specific program. Unlike account-level subscriptions (`onAccountChange`), which tell you an account changed but not why, log parsing tells you exactly which instruction ran and what events it emitted.
+
+```typescript
+const subscriptionId = connection.onLogs(
+  programId,
+  (logs, context) => {
+    console.log(`Transaction: ${logs.signature}`);
+    console.log(`Slot: ${context.slot}`);
+
+    if (logs.err) {
+      console.log(`Transaction failed: ${JSON.stringify(logs.err)}`);
+      return;
+    }
+
+    for (const log of logs.logs) {
+      // Anchor events appear as base64-encoded data after "Program data:"
+      if (log.startsWith("Program data:")) {
+        const base64Data = log.slice("Program data: ".length);
+        const buffer = Buffer.from(base64Data, "base64");
+
+        // First 8 bytes are the event discriminator
+        const discriminator = buffer.slice(0, 8);
+        const eventData = buffer.slice(8);
+
+        // Match discriminator to known event types and deserialize
+      }
+    }
+  },
+  "confirmed"
+);
+```
+
+You can also rebuild state from historical transactions. This is useful for backfilling an indexer or auditing what happened over a time period. The `getSignaturesForAddress` method returns transaction signatures for a given account, and `getParsedTransaction` returns the full transaction data including logs:
+
+```typescript
+async function getHistoricalEvents(
+  connection: Connection,
+  programId: PublicKey,
+  beforeSignature?: string
+): Promise<void> {
+  const signatures = await connection.getSignaturesForAddress(programId, {
+    before: beforeSignature,
+    limit: 100,
+  });
+
+  for (const sigInfo of signatures) {
+    if (sigInfo.err) continue; // Skip failed transactions
+
+    const tx = await connection.getParsedTransaction(sigInfo.signature, {
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!tx?.meta?.logMessages) continue;
+
+    for (const log of tx.meta.logMessages) {
+      if (log.startsWith("Program data:")) {
+        // Parse event same as above
+      }
+    }
+  }
+}
+```
+
+Note the `limit: 100` parameter. Solana RPC returns at most 1,000 signatures per request. For programs with high transaction volumes, you need to paginate by passing the last signature from each batch as the `before` parameter in the next request. A program processing 50 transactions per second generates 4.3 million signatures per day, requiring at least 4,300 paginated requests to scan a full day's history.
+
+<ArticleSection name="Geyser Plugins" id="geyser-plugins" level="h2" />
+
+RPC subscriptions work through the standard RPC interface. The RPC node processes blocks, updates its database, and pushes changes to subscribers. The added latency—typically 200-500ms after slot confirmation—is noticeable. It also means the RPC node does double work: processing blocks for its own state and re-processing them to notify subscribers.
+
+Geyser plugins operate at a lower level. They hook into the validator itself and receive streaming notifications as the validator processes transactions. A Geyser plugin gets account updates, transaction results, and slot notifications directly from the validator's execution pipeline, before the data reaches the RPC layer.
+
+The three notification types are:
+
+- **Account updates**: Fires when any account's data changes. Includes the full account data, the slot number, and whether the update is from a confirmed or finalized slot.
+- **Transaction notifications**: Fires for every processed transaction. Includes the transaction signature, all instructions, all logs, and the execution status.
+- **Slot notifications**: Fires when the validator processes a new slot. Useful for tracking chain progress and detecting forks.
+
+You need Geyser when your application requires any of the following:
+
+- Sub-second latency on account updates (Geyser delivers in 50-100ms vs. 200-500ms for RPC)
+- Guaranteed delivery of every update without gaps (Geyser is push-based from the validator, not pull-based through WebSocket)
+- High-throughput indexing of programs with thousands of transactions per second
+- Notification of account changes across many programs simultaneously
+
+Popular implementations include Yellowstone (by Triton), which streams data over gRPC, and the Jito Geyser plugin. Many RPC providers (Helius, Triton, QuickNode) offer hosted Geyser access through gRPC endpoints, so you don't need to run your own validator.
+
+A minimal Yellowstone gRPC client in TypeScript subscribes to account updates for a specific program:
+
+```typescript
+import Client from "@triton-one/yellowstone-grpc";
+
+const client = new Client("https://your-grpc-endpoint.com", "your-token");
+const stream = await client.subscribe();
+
+// Subscribe to all account updates for your program
+const request = {
+  accounts: {
+    vault: {
+      owner: ["VauLt1111111111111111111111111111111111111"],
+    },
+  },
+  transactions: {},
+  slots: {},
+  blocks: {},
+  blocksMeta: {},
+};
+
+stream.on("data", (data) => {
+  if (data.account) {
+    const account = data.account;
+    console.log(`Account updated: ${account.account.pubkey}`);
+    console.log(`Slot: ${account.slot}`);
+    // Deserialize account.account.data as needed
+  }
+});
+
+await stream.write(request);
+```
+
+For most applications, RPC WebSocket subscriptions are sufficient during early development and moderate traffic. Migrate to Geyser when you hit reliability issues with WebSocket drops or when your indexing latency requirements tighten below 200ms.
+
+<ArticleSection name="Building a Simple Indexer" id="building-indexer" level="h2" />
+
+A production indexer combines three layers: backfill missed events on startup, subscribe for real-time updates, and reconcile on an interval to catch WebSocket drops. Each layer covers a failure mode the others miss.
+
+The database needs two tables -- one for indexed data, one for the indexer's position in the chain:
+
+```
+CREATE TABLE deposits (
+    id SERIAL PRIMARY KEY,
+    signature TEXT UNIQUE NOT NULL,
+    vault TEXT NOT NULL,
+    depositor TEXT NOT NULL,
+    amount BIGINT NOT NULL,
+    slot BIGINT NOT NULL,
+    indexed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE indexer_state (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    last_signature TEXT,
+    last_slot BIGINT
+);
+```
+
+The `indexer_state` table stores the last processed signature. On restart, the indexer resumes from that point.
+
+The entry point wires the three layers together:
+
+```typescript
+async function startIndexer() {
+  await backfill();
+  subscribeToLogs();
+  setInterval(reconcile, 60_000);
+}
+```
+
+**Backfill** paginates through `getSignaturesForAddress` until it reaches the last processed signature:
+
+```typescript
+async function backfill() {
+  const lastSig = await getLastSignature(db);
+  let before: string | undefined;
+
+  while (true) {
+    const sigs = await connection.getSignaturesForAddress(
+      PROGRAM_ID, { before, limit: 100 }
+    );
+    if (sigs.length === 0) break;
+
+    for (const s of sigs) {
+      if (s.signature === lastSig) return;
+      if (!s.err) await processTransaction(s.signature);
+    }
+    before = sigs[sigs.length - 1].signature;
+  }
+}
+```
+
+**Subscribe** attaches an `onLogs` listener for real-time processing:
+
+```typescript
+function subscribeToLogs() {
+  connection.onLogs(
+    PROGRAM_ID,
+    async (logs, ctx) => {
+      if (!logs.err) await processTransaction(logs.signature, ctx.slot);
+    },
+    "confirmed"
+  );
+}
+```
+
+**Reconcile** runs the same logic as backfill but with a short lookback window of 50 signatures, catching anything the WebSocket dropped.
+
+The shared `processTransaction` function deduplicates by signature, fetches the transaction, parses events with Anchor's `EventParser`, and upserts to the database:
+
+```typescript
+const eventParser = new EventParser(PROGRAM_ID, new BorshCoder(idl));
+
+async function processTransaction(signature: string, slot?: number) {
+  const exists = await db.query(
+    "SELECT 1 FROM deposits WHERE signature = $1", [signature]
+  );
+  if (exists.rows.length > 0) return;
+
+  const tx = await connection.getParsedTransaction(signature, {
+    maxSupportedTransactionVersion: 0,
+  });
+  if (!tx?.meta?.logMessages) return;
+
+  for (const event of eventParser.parseLogs(tx.meta.logMessages)) {
+    if (event.name === "DepositEvent") {
+      await db.query(
+        `INSERT INTO deposits (signature, vault, depositor, amount, slot)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (signature) DO NOTHING`,
+        [signature, event.data.vault, event.data.depositor,
+         event.data.amount.toString(), slot || tx.slot]
+      );
+    }
+  }
+  await updateIndexerState(db, signature, slot || tx.slot);
+}
+```
+
+Backfill catches events from while the indexer was offline. The subscription provides low-latency updates during normal operation. Reconciliation catches events the WebSocket dropped. Together, the three layers guarantee eventual delivery of every event.
+
+<ArticleSection name="Monitoring and Alerting" id="monitoring-alerting" level="h2" />
+
+Once your program is deployed, you need visibility into how it operates. Monitoring covers three areas: transaction metrics, error tracking, and account state health.
+
+**Transaction Metrics**
+
+`getSignaturesForAddress` returns the error status of each transaction, which you can aggregate into success and failure rates over a time window:
+
+```typescript
+async function collectMetrics(
+  connection: Connection,
+  programId: PublicKey,
+  windowMinutes: number
+) {
+  const cutoff = Date.now() / 1000 - windowMinutes * 60;
+  const errors = new Map<string, number>();
+  let total = 0, failures = 0, before: string | undefined;
+
+  while (true) {
+    const sigs = await connection.getSignaturesForAddress(
+      programId, { before, limit: 100 }
+    );
+    if (sigs.length === 0) break;
+
+    for (const sig of sigs) {
+      if (sig.blockTime && sig.blockTime < cutoff)
+        return { total, failures, errorRate: total ? failures / total : 0, errors };
+      total++;
+      if (sig.err) {
+        failures++;
+        const key = JSON.stringify(sig.err);
+        errors.set(key, (errors.get(key) || 0) + 1);
+      }
+    }
+    before = sigs[sigs.length - 1].signature;
+  }
+  return { total, failures, errorRate: total ? failures / total : 0, errors };
+}
+```
+
+Push results to Prometheus, Datadog, or a time-series database on a schedule. A healthy program typically has an error rate below 5%. Rates above 10% indicate a program bug or client-side transaction construction issues.
+
+**Error Tracking**
+
+Failed transactions contain a program error code in `tx.meta.err.InstructionError`. Anchor framework errors use codes 0-5999; your custom errors start at 6000. Extract and categorize them:
+
+```typescript
+function extractErrorCode(err: any): { code: number; index: number } | null {
+  if (!err?.InstructionError) return null;
+  const [index, ixErr] = err.InstructionError;
+  if (ixErr.Custom !== undefined) return { code: ixErr.Custom, index };
+  return null;
+}
+```
+
+Map codes back to your program's error enum. A spike in error 6003 (`InsufficientBalance`) signals a UX problem -- users attempting operations without enough funds. A spike in 3012 (`AccountNotInitialized`) signals a client bug.
+
+**Account State Health**
+
+Monitor key accounts for invariant violations. For a vault, verify that the on-chain lamport balance (minus rent) matches the tracked deposit total, that authority accounts have not changed, and that account data deserializes without errors. Fetch both the typed account and raw `AccountInfo`, then compare the expected invariants.
+
+**Setting Up Alerts**
+
+Baseline alert thresholds for any production program:
+
+- Error rate exceeds 10% over a 5-minute window
+- Zero transactions in the last 15 minutes (for programs with continuous traffic)
+- Vault balance drops below a minimum threshold
+- Unknown account calls an admin instruction
+- Compute usage exceeds 180,000 CU (approaching the 200,000 default limit)
+
+Run `collectMetrics` on a schedule, check thresholds, and push alerts via Slack webhook, PagerDuty, or email -- a simple HTTP POST when a threshold is crossed.
+
+For early-stage programs, Solana Explorer provides free monitoring. Bookmark your program address on explorer.solana.com for transaction history, success rates, and instruction breakdowns.
+
+As traffic grows, consider hosted indexing services like Helius webhooks or QuickNode Streams. These handle WebSocket reconnection, backfilling, and horizontal scaling -- the same infrastructure problems a custom indexer must eventually solve.
+
+---
+
+For a foundational look at defining the events that indexers consume, the Anchor Fundamentals course's Errors and Events lesson covers event declaration and emission patterns. On the security side, the Securing Anchor Programs course's Auditing Anchor Code lesson covers the security review process that ongoing monitoring complements.
+
+The next lesson covers operational patterns—the day-to-day practices for running a Solana program in production, including key management, upgrade procedures, and incident response.

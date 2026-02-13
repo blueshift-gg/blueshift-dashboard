@@ -1,0 +1,318 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# What Is Anchor
+
+![Anchor Fundamentals - Learn Solana development with Anchor](/graphics/course-banners/anchor-fundamentals.png)
+
+Anchor is the standard framework for Solana program development. It replaces manual account validation, data serialization, and error handling with Rust macros that generate this boilerplate at compile time creating shorter, safer, and faster program to write.
+
+<ArticleSection name="The Problem Anchor Solves" id="the-problem" level="h2" />
+
+Writing programs directly against the Solana runtime requires handling repetitive, error-prone tasks for every instruction. Account validation alone can take 10-15 lines per account: checking the signer flag, verifying ownership, deserializing data, validating the account type.
+
+Here's what transferring SOL from a vault looks like in native Solana:
+
+```rust
+pub fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let account_iter = &mut accounts.iter();
+
+    let vault = next_account_info(account_iter)?;
+    let destination = next_account_info(account_iter)?;
+    let authority = next_account_info(account_iter)?;
+
+    // Manual validation
+    if !authority.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    if vault.owner != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    // Deserialize instruction
+    let amount = u64::from_le_bytes(
+        instruction_data[0..8].try_into().unwrap()
+    );
+
+    // Transfer logic
+    **vault.try_borrow_mut_lamports()? -= amount;
+    **destination.try_borrow_mut_lamports()? += amount;
+
+    Ok(())
+}
+```
+
+The same program in Anchor reduces to this:
+
+```rust
+#[program]
+pub mod vault_program {
+    use super::*;
+
+    pub fn transfer_from_vault(
+        ctx: Context<TransferFromVault>,
+        amount: u64,
+    ) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        let destination = &mut ctx.accounts.destination;
+
+        **vault.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **destination.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct TransferFromVault<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub destination: SystemAccount<'info>,
+    pub authority: Signer<'info>,
+}
+```
+
+Anchor handles account validation, type checking, and deserialization through derive macros so the program focuses on business logic.
+
+<ArticleSection name="What Anchor Is" id="what-anchor-is" level="h2" />
+
+Anchor is a framework built on top of the Solana runtime. It consists of:
+
+- A collection of Rust macros that generate boilerplate code at compile time
+- A type system for accounts that enforces validation rules
+- A standard program structure that reduces cognitive load
+- Client-side SDKs for TypeScript and Python that auto-generate instruction builders
+
+Solana Foundation maintains Anchor, and most production Solana programs use it. The framework is not a separate runtime or VM but it just generates standard Solana bytecode that runs on the same runtime as native programs.
+
+The core dependency is `anchor-lang`, which provides the macro system and common types. Additional crates like `anchor-spl` provide wrappers for standard programs like the Token program.
+
+<ArticleSection name="The Four Core Macros" id="core-macros" level="h2" />
+
+Anchor programs are structured around four macros. Each serves a distinct purpose in the program lifecycle.
+
+### declare_id!
+
+```rust
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+```
+
+This macro hardcodes the program's address at compile time. The address is generated when you build a new program and must match the address of the deployed program. The Solana runtime uses this to verify that the program executing is the one that owns the accounts being modified.
+
+You typically generate this once per program and never change it unless redeploying to a new address.
+
+### #[program]
+
+```rust
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        // Instruction logic
+        Ok(())
+    }
+
+    pub fn update(ctx: Context<Update>, value: u64) -> Result<()> {
+        // Instruction logic
+        Ok(())
+    }
+}
+```
+
+This marks the module containing your instruction handlers. Each public function becomes an instruction that clients can invoke. The first parameter is always `Context<T>`, which wraps the accounts struct. Additional parameters are instruction data, deserialized automatically.
+
+Anchor generates the instruction dispatch logic, routing incoming transactions to the correct handler based on a discriminator.
+
+### #[derive(Accounts)]
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(init, payer = user, space = 8 + 32)]
+    pub data_account: Account<'info, DataAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+This generates the validation logic for accounts passed to an instruction. The `#[account(...)]` attribute specifies constraints: `init` creates a new account, `payer` defines who pays rent, `space` allocates bytes, `mut` marks the account as writable.
+
+Anchor validates these constraints before your instruction executes. If validation fails, the transaction reverts before any state changes.
+
+### #[error_code]
+
+```rust
+#[error_code]
+pub enum ErrorCode {
+    #[msg("The provided value is out of range")]
+    ValueOutOfRange,
+    #[msg("Insufficient funds in vault")]
+    InsufficientFunds,
+}
+```
+
+This defines custom error types with human-readable messages. Errors are assigned unique numeric codes automatically. When an error occurs, the framework logs the message and returns the code to the client.
+
+Without this macro, you'd return generic `ProgramError` variants with no context.
+
+<ArticleSection name="Project Setup" id="project-setup" level="h2" />
+
+Anchor provides a CLI for scaffolding new projects. Install it with:
+
+```bash
+cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+```
+
+Create a new program:
+
+```bash
+anchor init my_program
+```
+
+This generates a workspace with the following structure:
+
+```
+my_program/
+├── Anchor.toml          # Project configuration
+├── Cargo.toml           # Workspace dependencies
+├── programs/
+│   └── my_program/
+│       ├── Cargo.toml   # Program dependencies
+│       └── src/
+│           └── lib.rs   # Program code
+├── tests/
+│   └── my_program.ts    # Integration tests
+└── migrations/
+    └── deploy.js        # Deployment script
+```
+
+The `Anchor.toml` file configures the workspace:
+
+```toml
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+my_program = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+```
+
+The `[programs.localnet]` section maps program names to their deployed addresses. The `[provider]` section specifies the cluster (Localnet, Devnet, Mainnet) and wallet for transactions.
+
+The program's `Cargo.toml` includes the Anchor dependency:
+
+```toml
+[dependencies]
+anchor-lang = "0.30.1"
+```
+
+The version should match your CLI version. Mismatches can cause compilation errors.
+
+<ArticleSection name="Program Structure" id="program-structure" level="h2" />
+
+A minimal Anchor program uses all four core macros in a single file:
+
+```rust
+use anchor_lang::prelude::*;
+
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let account = &mut ctx.accounts.data_account;
+        account.authority = ctx.accounts.user.key();
+        account.value = 0;
+        Ok(())
+    }
+
+    pub fn update(ctx: Context<Update>, value: u64) -> Result<()> {
+        let account = &mut ctx.accounts.data_account;
+        account.value = value;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(init, payer = user, space = 8 + 32 + 8)]
+    pub data_account: Account<'info, DataAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut, has_one = authority)]
+    pub data_account: Account<'info, DataAccount>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct DataAccount {
+    pub authority: Pubkey,
+    pub value: u64,
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Unauthorized")]
+    Unauthorized,
+}
+```
+
+This program defines two instructions: `initialize` creates a new account, `update` modifies its value. The `#[account]` macro on `DataAccount` derives serialization traits and adds an 8-byte discriminator to distinguish account types.
+
+Build the program with:
+
+```bash
+anchor build
+```
+
+This compiles the Rust code to a `.so` binary and places it in `target/deploy/`. The binary is what gets deployed to the Solana network.
+
+Test the program with:
+
+```bash
+anchor test
+```
+
+This starts a local validator, deploys the program, and runs the TypeScript tests in the `tests/` directory.
+
+<ArticleSection name="The Tradeoff" id="tradeoff" level="h2" />
+
+Anchor is not free. The framework adds runtime overhead:
+
+- 8-byte discriminator per account increases rent costs
+- Validation logic increases compute units consumed
+- The `anchor-lang` dependency adds ~50KB to the compiled binary
+
+For most programs, these costs are acceptable. The safety guarantees prevent entire classes of bugs: type confusion attacks, missing signer checks, incorrect account ownership, and unvalidated deserialization. Production programs like Marinade, Mango, and Phoenix all use Anchor.
+
+You might avoid Anchor when building performance-critical programs where every compute unit matters, writing minimal programs with tight transaction budgets, or targeting constrained environments. Even then, many teams prototype with Anchor and optimize selectively.
+
+---
+
+The next lesson covers accounts and discriminators in depth—how Anchor's type system validates accounts, how discriminators prevent type confusion attacks, and how to calculate space for account initialization.

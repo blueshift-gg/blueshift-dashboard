@@ -1,0 +1,754 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Accounts and Discriminators
+
+![Anchor Fundamentals - accounts and discriminators](/graphics/course-banners/anchor-fundamentals.png)
+
+Solana is account-based. Every piece of on-chain data—token balances, program state, user profiles—lives in an account. Anchor provides typed wrappers around these accounts that validate ownership, check discriminators, and deserialize data automatically.
+
+Understanding how Anchor handles accounts is foundational to writing secure programs. The framework prevents entire classes of vulnerabilities through its account type system and discriminator checks.
+
+<ArticleSection name="The Solana Account Model" id="solana-account-model" level="h2" />
+
+Every account on Solana contains five fields:
+
+```rust
+pub struct Account {
+    pub lamports: u64,        // Balance in lamports (1 SOL = 1B lamports)
+    pub data: Vec<u8>,        // Raw data storage
+    pub owner: Pubkey,        // Program that owns this account
+    pub executable: bool,     // Can this account be executed as a program?
+    pub rent_epoch: u64,      // Rent collection tracking
+}
+```
+
+The owner field determines which program can modify the account's data. Only the owner program can write to an account. The System Program owns new accounts by default, but programs can transfer ownership during initialization.
+
+Rent is no longer a practical concern. Accounts with at least two years of rent are "rent-exempt" and never collected. In practice, all accounts are rent-exempt.
+
+Programs store data by creating accounts they own. When you initialize a user profile or game state, you're creating an account that your program owns and can modify.
+
+<ArticleSection name="Anchor Account Types" id="anchor-account-types" level="h2" />
+
+The `#[derive(Accounts)]` struct defines which accounts an instruction expects. Anchor provides several types that validate accounts differently:
+
+### `Account<'info, T>`
+
+The most common type. Deserializes account data into type `T` and validates:
+
+- The account owner matches the current program
+- The discriminator (first 8 bytes) matches type `T`
+- The data deserializes successfully
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateProfile<'info> {
+    #[account(mut)]
+    pub profile: Account<'info, UserProfile>,
+}
+
+#[account]
+pub struct UserProfile {
+    pub authority: Pubkey,
+    pub username: String,
+    pub level: u8,
+}
+```
+
+When this instruction runs, Anchor checks that `profile` is owned by your program, has the correct discriminator for `UserProfile`, and deserializes the data. If any check fails, the instruction returns an error before your code runs.
+
+The `'info` lifetime ensures accounts remain valid for the instruction's duration. All account types use this lifetime.
+
+### `Signer<'info>`
+
+Verifies that an account signed the transaction. Does not deserialize data.
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 32 + 1
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `user` field must sign the transaction. Without a valid signature, the instruction fails. This prevents unauthorized account creation or modifications.
+
+Signers are usually the transaction fee payer or the authority over an account being modified.
+
+### `SystemAccount<'info>`
+
+An account owned by the System Program. Used for user wallet accounts that don't store custom data.
+
+```rust
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub from: SystemAccount<'info>,
+
+    #[account(mut)]
+    pub to: SystemAccount<'info>,
+}
+```
+
+This validates that both accounts are owned by the System Program (address `11111111111111111111111111111111`). You cannot use `SystemAccount` for accounts owned by other programs.
+
+### `Program<'info, T>`
+
+Verifies that an account is an executable program matching a specific program ID.
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{System};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `System` type is imported from `anchor_lang::system_program`. When you need to invoke the System Program for creating accounts or transferring lamports, use `Program<'info, System>`.
+
+Other common programs include `Token` and `AssociatedToken` from `anchor_spl::token`.
+
+### `AccountInfo<'info>`
+
+No validation. The account can be owned by any program and contain any data. Requires a `/// CHECK:` comment explaining why it's safe.
+
+```rust
+#[derive(Accounts)]
+pub struct RawAccess<'info> {
+    /// CHECK: Manual validation in instruction logic
+    pub account: AccountInfo<'info>,
+}
+```
+
+`AccountInfo` is the raw type from `solana_program`. Use it when you need low-level account access or are manually validating accounts.
+
+**Note**: The `/// CHECK:` comment is mandatory. Anchor refuses to compile without it. This forces you to document why skipping validation is safe.
+
+
+### `UncheckedAccount<'info>`
+
+Equivalent to `AccountInfo<'info>`. Also requires `/// CHECK:` comments.
+
+```rust
+#[derive(Accounts)]
+pub struct Delegate<'info> {
+    pub authority: Signer<'info>,
+
+    /// CHECK: Manual validation in instruction logic
+    pub delegate: UncheckedAccount<'info>,
+}
+```
+
+Prefer using this type instead of `AccountInfo` so it's explicit that no check have been done on this account.
+
+### `Option<Account<'info, T>>`
+
+An account that may or may not be present. Validates the account only if it's provided.
+
+```rust
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(mut)]
+    pub profile: Account<'info, UserProfile>,
+
+    pub referrer: Option<Account<'info, UserProfile>>,
+}
+```
+
+When calling this instruction, clients can pass a referrer account or omit it. Your instruction logic checks if the referrer exists:
+
+```rust
+pub fn update(ctx: Context<Update>) -> Result<()> {
+    if let Some(referrer) = &ctx.accounts.referrer {
+        // Reward referrer
+        msg!("Referrer: {}", referrer.key());
+    }
+
+    Ok(())
+}
+```
+
+The default account resolution for optional account in anchor is passing the program ID if the account is set to None.
+
+### `Box<Account<'info, T>>`
+
+Heap-allocates the account data instead of using the stack. Required for large accounts that would overflow the stack limit (10KB per instruction).
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateLargeAccount<'info> {
+    #[account(mut)]
+    pub large_account: Box<Account<'info, LargeData>>,
+}
+
+#[account]
+pub struct LargeData {
+    pub items: [u8; 9000],  // Too large for stack
+}
+```
+
+Without `Box`, deserializing this account would exceed the stack and cause a panic. The `Box` wrapper moves the data to the heap, where size limits are higher.
+
+Use `Box` for any account larger than a few kilobytes. The performance cost is minimal compared to preventing runtime panics.
+
+<ArticleSection name="Discriminators" id="discriminators" level="h2" />
+
+The first 8 bytes of every Anchor account are its discriminator. This is a hash derived from the account type name:
+
+```rust
+discriminator = sha256("account:UserProfile")[0..8]
+```
+
+The discriminator prefix is `"account:"` followed by the struct name. Anchor calculates this at compile time and embeds it in the program binary.
+
+When you pass an account to an instruction expecting `Account<'info, UserProfile>`, Anchor checks:
+
+1. The account owner matches your program
+2. The first 8 bytes match the `UserProfile` discriminator
+
+If either check fails, the instruction returns an error. This prevents type confusion attacks where an attacker passes a `GameState` account where a `UserProfile` is expected.
+
+Consider this vulnerable program without discriminators:
+
+```rust
+// Vulnerable: No discriminator check
+pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+    let vault = &ctx.accounts.vault;
+    // Anyone could pass a fake vault account with inflated balance
+    require!(vault.balance >= amount, ErrorCode::InsufficientFunds);
+
+    // Transfer amount...
+    Ok(())
+}
+```
+
+An attacker could create an account with any data, as long as it's owned by your program. They could set the balance field to a high value and bypass the check.
+
+Discriminators prevent this attack. The attacker's fake account would have the wrong discriminator, and Anchor would reject it before your instruction runs.
+
+### Custom Discriminators
+
+Starting in Anchor v0.31.0, you can set custom discriminators:
+
+```rust
+#[account(discriminator = [1, 2, 3, 4, 5, 6, 7, 8])]
+pub struct UserProfile {
+    pub authority: Pubkey,
+    pub username: String,
+}
+```
+
+This overrides the default hash-based discriminator. Use this when migrating from pre-Anchor programs that used different account prefixes.
+
+Most programs should use the default discriminator. Custom values are only needed for backward compatibility.
+
+<ArticleSection name="The #[account] Attribute" id="account-attribute" level="h2" />
+
+The `#[account]` attribute marks a struct as an Anchor account type. It generates several implementations:
+
+```rust
+#[account]
+pub struct UserProfile {
+    pub authority: Pubkey,     // 32 bytes
+    pub username: String,      // 4 + len bytes
+    pub level: u8,             // 1 byte
+    pub experience: u64,       // 8 bytes
+}
+```
+
+This attribute automatically:
+
+- Implements `AnchorSerialize` and `AnchorDeserialize` for serialization
+- Adds the discriminator as the first 8 bytes
+- Sets the account owner to the declaring program
+- Implements `AccountSerialize` and `AccountDeserialize` traits
+- Implements `Owner` trait returning your program ID
+
+The full expansion looks like:
+
+```rust
+impl anchor_lang::AccountSerialize for UserProfile {
+    fn try_serialize<W: std::io::Write>(&self, writer: &mut W) -> anchor_lang::Result<()> {
+        writer.write_all(&Self::DISCRIMINATOR)?;
+        AnchorSerialize::serialize(self, writer)?;
+        Ok(())
+    }
+}
+
+impl anchor_lang::AccountDeserialize for UserProfile {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        let disc = &buf[0..8];
+        if disc != Self::DISCRIMINATOR {
+            return Err(ErrorCode::AccountDiscriminatorMismatch.into());
+        }
+        Self::deserialize(&mut &buf[8..])
+    }
+}
+
+impl anchor_lang::Owner for UserProfile {
+    fn owner() -> Pubkey {
+        crate::ID
+    }
+}
+```
+
+You don't write this code. The `#[account]` attribute generates it. Understanding what it generates helps debug deserialization issues or discriminator mismatches.
+
+Every field in an account struct must implement `AnchorSerialize` and `AnchorDeserialize`. Standard types (integers, booleans, `Pubkey`, `String`, `Vec`) already implement these traits. Custom types need `#[derive(AnchorSerialize, AnchorDeserialize)]`.
+
+<ArticleSection name="Account Space Calculation" id="account-space" level="h2" />
+
+When initializing an account with `init`, you must specify exactly how many bytes it needs. The account owns this space and pays rent to keep it open.
+
+The space is the discriminator (8 bytes) plus the sum of all field sizes:
+
+```rust
+#[account]
+pub struct UserProfile {
+    pub authority: Pubkey,     // 32 bytes
+    pub level: u8,             // 1 byte
+    pub experience: u64,       // 8 bytes
+}
+
+// Total: 8 (discriminator) + 32 + 1 + 8 = 49 bytes
+```
+
+Common field sizes:
+
+- `bool`: 1 byte
+- `u8` / `i8`: 1 byte
+- `u16` / `i16`: 2 bytes
+- `u32` / `i32`: 4 bytes
+- `u64` / `i64`: 8 bytes
+- `u128` / `i128`: 16 bytes
+- `Pubkey`: 32 bytes
+- `String`: 4 bytes (length prefix) + UTF-8 bytes
+- `Vec<T>`: 4 bytes (length prefix) + element count * element size
+- `Option<T>`: 1 byte (tag) + T size
+
+Variable-size fields (`String`, `Vec`) require a length prefix. Anchor uses 4 bytes for the length, then stores the actual data.
+
+### Manual Space Calculation
+
+Specify space in the `init` constraint:
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 1 + 8  // discriminator + authority + level + experience
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+If you specify too little space, deserialization will fail. If you specify too much, you waste the payer's lamports. Calculate exactly.
+
+### The InitSpace Derive Macro
+
+Anchor v0.30.0 introduced `InitSpace` for automatic calculation:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[account]
+#[derive(InitSpace)]
+pub struct UserProfile {
+    pub authority: Pubkey,
+    pub level: u8,
+    pub experience: u64,
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + UserProfile::INIT_SPACE
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+`InitSpace` generates a `INIT_SPACE` constant equal to the sum of all field sizes. You still add the 8-byte discriminator manually.
+
+For variable-size fields, use the `#[max_len]` attribute:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct UserProfile {
+    pub authority: Pubkey,
+
+    #[max_len(32)]
+    pub username: String,          // 4 + 32 bytes
+
+    #[max_len(10)]
+    pub badges: Vec<Pubkey>,       // 4 + (10 * 32) bytes
+
+    pub level: u8,
+}
+```
+
+The `#[max_len]` attribute sets the maximum number of elements. For `String`, it's the maximum UTF-8 byte length (not character count). For `Vec<T>`, it's the maximum number of elements.
+
+If you try to store a string longer than 32 bytes or a vector with more than 10 elements, serialization will fail at runtime. Set maximums that match your program's requirements.
+
+### Realloc for Resizing Accounts
+
+Accounts can grow or shrink using `realloc`:
+
+```rust
+#[derive(Accounts)]
+pub struct AddBadge<'info> {
+    #[account(
+        mut,
+        realloc = 8 + UserProfile::INIT_SPACE + 32,  // Add space for one more badge
+        realloc::payer = user,
+        realloc::zero = false
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `realloc` constraint resizes the account to the specified size. If the new size is larger, the payer covers the additional rent. If smaller, excess lamports are returned to the payer.
+
+The `realloc::zero` parameter determines whether new bytes are zeroed. Set to `false` when you'll immediately write to the new space. Set to `true` for safety when the new space may remain uninitialized.
+
+<ArticleSection name="Token Accounts" id="token-accounts" level="h2" />
+
+SPL tokens use standardized account layouts. The `anchor_spl` crate provides types for working with token accounts.
+
+### Mint Account
+
+The mint account defines a token's properties:
+
+```rust
+use anchor_spl::token::{Mint, Token};
+
+#[derive(Accounts)]
+pub struct InitializeMint<'info> {
+    #[account(
+        init,
+        payer = payer,
+        mint::decimals = 9,
+        mint::authority = mint_authority,
+    )]
+    pub mint: Account<'info, Mint>,
+
+    /// CHECK: This account will be the mint authority
+    pub mint_authority: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+```
+
+The `mint::decimals` constraint sets the token's decimal places. 9 decimals means 1 token = 1,000,000,000 base units. This matches SOL's precision.
+
+The `mint::authority` constraint sets who can mint new tokens. Only this authority can increase supply. Set to `None` to create a fixed-supply token.
+
+### TokenAccount
+
+Token accounts hold a user's balance of a specific token:
+
+```rust
+use anchor_spl::token::{TokenAccount, Token};
+
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = from_authority,
+    )]
+    pub from: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = to_authority,
+    )]
+    pub to: Account<'info, TokenAccount>,
+
+    pub from_authority: Signer<'info>,
+
+    /// CHECK: Not used in this instruction
+    pub to_authority: UncheckedAccount<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    pub token_program: Program<'info, Token>,
+}
+```
+
+The `associated_token::mint` constraint verifies the token account holds the specified mint. This prevents transferring the wrong token.
+
+The `associated_token::authority` constraint verifies who controls the token account. The authority can transfer tokens or close the account.
+
+### Associated Token Accounts
+
+Associated Token Accounts (ATAs) derive a token account address from a wallet and mint. Each wallet has exactly one ATA per token.
+
+```rust
+use anchor_spl::token::{Mint, Token};
+use anchor_spl::associated_token::{AssociatedToken};
+
+#[derive(Accounts)]
+pub struct InitializeATA<'info> {
+    #[account(
+        init,
+        payer = payer,
+        associated_token::mint = mint,
+        associated_token::authority = authority,
+    )]
+    pub token_account: Account<'info, TokenAccount>,
+
+    pub mint: Account<'info, Mint>,
+
+    /// CHECK: This account will own the token account
+    pub authority: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The ATA address is deterministic. Given a wallet and mint, there's only one valid ATA address. This simplifies token transfers since you don't need to track account addresses.
+
+### InterfaceAccount for Token Extensions
+
+Token-2022 (the new token program) uses a different program ID but compatible account layouts. `InterfaceAccount` works with both Token and Token-2022:
+
+```rust
+use anchor_spl::token_interface::{TokenAccount, TokenInterface};
+
+#[derive(Accounts)]
+pub struct TransferBoth<'info> {
+    #[account(mut)]
+    pub from: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub to: InterfaceAccount<'info, TokenAccount>,
+
+    pub authority: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+```
+
+Use `InterfaceAccount` instead of `Account` for token accounts, and `Interface` instead of `Program` for the token program. This makes your program compatible with both token program versions.
+
+Token-2022 adds extensions like transfer fees, confidential transfers, and permanent delegates. `InterfaceAccount` handles these extensions automatically.
+
+<ArticleSection name="Account Validation Patterns" id="validation-patterns" level="h2" />
+
+Anchor's account types handle basic validation, but you often need additional checks.
+
+### Authority Verification
+
+Check that the signer controls an account:
+
+```rust
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(
+        mut,
+        has_one = authority
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    pub authority: Signer<'info>,
+}
+```
+
+The `has_one` constraint verifies that `profile.authority` equals `authority.key()`. If they don't match, the instruction fails.
+
+This prevents users from modifying accounts they don't own. The signer must be the account's authority.
+
+### Derived Address Verification
+
+For accounts at deterministic addresses:
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + UserProfile::INIT_SPACE,
+        seeds = [b"profile", user.key().as_ref()],
+        bump
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `seeds` and `bump` constraints verify the account address matches a Program Derived Address. This prevents account substitution attacks where an attacker passes a different account.
+
+### State Validation
+
+Check account field values with `constraint`:
+
+```rust
+#[derive(Accounts)]
+pub struct LevelUp<'info> {
+    #[account(
+        mut,
+        has_one = authority,
+        constraint = profile.experience >= 1000 @ ErrorCode::InsufficientExperience
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    pub authority: Signer<'info>,
+}
+```
+
+The `constraint` clause runs arbitrary validation logic. If it evaluates to `false`, the instruction fails with the specified error code.
+
+Use constraints to enforce invariants before your instruction logic runs. This keeps validation centralized in the `#[derive(Accounts)]` struct.
+
+### Account Relationships
+
+Verify relationships between accounts:
+
+```rust
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        mut,
+        constraint = vault.authority == authority.key()
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        mut,
+        constraint = token_account.owner == authority.key(),
+        constraint = token_account.mint == vault.accepted_mint
+    )]
+    pub token_account: Account<'info, TokenAccount>,
+
+    pub authority: Signer<'info>,
+}
+```
+
+Multiple constraints can reference multiple accounts. This enforces that the token account is owned by the signer and holds the correct mint type for the vault.
+
+<ArticleSection name="Common Mistakes" id="common-mistakes" level="h2" />
+
+### Using UncheckedAccount Without Validation
+
+Never use `UncheckedAccount` for accounts whose data you read:
+
+```rust
+// Wrong: Reading unvalidated data
+pub fn vulnerable(ctx: Context<Vulnerable>) -> Result<()> {
+    let data = ctx.accounts.data.try_borrow_data()?;
+    let amount = u64::from_le_bytes(data[8..16].try_into().unwrap());
+    // Attacker controls this value completely
+    Ok(())
+}
+```
+
+The attacker can pass any account. They control the data. Use `Account<'info, T>` to validate ownership and structure.
+
+### Incorrect Space Calculation
+
+Forgetting the discriminator causes deserialization failures:
+
+```rust
+// Wrong: Missing discriminator bytes
+#[account(
+    init,
+    payer = user,
+    space = 32 + 8 + 1  // Should be 8 + 32 + 8 + 1
+)]
+pub profile: Account<'info, UserProfile>,
+```
+
+Always add 8 bytes for the discriminator. Use `InitSpace` to automate this calculation.
+
+### Forgetting Variable-Size Prefixes
+
+`String` and `Vec` need length prefixes:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct UserProfile {
+    pub authority: Pubkey,
+
+    // Wrong: String needs 4 + len, not just len
+    #[max_len(32)]
+    pub username: String,  // Actually uses 36 bytes, not 32
+}
+```
+
+The `#[max_len]` attribute is correct here. It accounts for the 4-byte prefix automatically. If you calculate manually, remember to add 4 bytes.
+
+### Confusing Account Types
+
+Using `Account` where `Signer` is needed:
+
+```rust
+// Wrong: User can pass any account
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    pub authority: Account<'info, UserProfile>,
+}
+
+// Correct: Must provide signature
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    pub authority: Signer<'info>,
+}
+```
+
+`Account<'info, T>` validates structure but not signatures. Use `Signer<'info>` when the account must sign the transaction.
+
+<ArticleSection name="What's Next" id="whats-next" level="h2" />
+
+These account types handle validation for accounts that already exist. But how do you create new accounts with deterministic addresses that your program controls? 
+
+That requires Program Derived Addresses. As you move beyond the basics, the Building with Anchor course explores how to structure account state for complex programs in its State Design lesson.

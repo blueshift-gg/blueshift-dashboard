@@ -1,0 +1,332 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Access Control Patterns
+
+![Build real Anchor programs - access control patterns](/graphics/course-banners/building-with-anchor.png)
+
+Missing access control is the most exploited vulnerability class in Solana programs. Sealevel (the Solana runtime) does not enforce who can call your instructions—that responsibility falls entirely on your program. An instruction without checks will execute for anyone who submits a transaction with the correct accounts. The attacker pays the transaction fee. Your program processes the instruction. By the time you notice, funds are gone.
+
+<ArticleSection name="The Unprotected Instruction" id="unprotected-instruction" level="h2" />
+
+A treasury program collects protocol fees and lets an administrator withdraw them:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod treasury {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let treasury = &mut ctx.accounts.treasury;
+        treasury.authority = ctx.accounts.authority.key();
+        treasury.total_collected = 0;
+        treasury.bump = ctx.bumps.treasury;
+        Ok(())
+    }
+
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
+        let treasury = &mut ctx.accounts.treasury;
+        require!(
+            treasury.total_collected >= amount,
+            TreasuryError::InsufficientFunds
+        );
+
+        **treasury.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.recipient.try_borrow_mut_lamports()? += amount;
+        treasury.total_collected -= amount;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump = treasury.bump
+    )]
+    pub treasury: Account<'info, Treasury>,
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
+}
+```
+
+The `WithdrawFees` context requires a `recipient` account but never checks whether the caller is the authority. Anyone can call `withdraw_fees` with any recipient address. The fix uses Anchor's `has_one` constraint:
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump = treasury.bump,
+        has_one = authority
+    )]
+    pub treasury: Account<'info, Treasury>,
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
+}
+```
+
+Two changes: `has_one = authority` checks that `treasury.authority == authority.key()`. And `authority: Signer<'info>` ensures the caller actually signed with that key. Both are required—`has_one` alone doesn't verify the signature, and `Signer` alone doesn't verify the key matches the stored authority.
+
+<ArticleSection name="Single Authority Pattern" id="single-authority" level="h2" />
+
+The single authority pattern works for programs with one privileged role. A global config, a protocol treasury, or an upgrade authority all use this structure:
+
+```rust
+#[account]
+pub struct Treasury {
+    pub authority: Pubkey,
+    pub total_collected: u64,
+    pub bump: u8,
+}
+```
+
+One pubkey controls sensitive operations. That pubkey cannot change without an explicit transfer instruction. This is the right choice when:
+
+- Only one entity needs privileged access
+- The program is small enough that role separation adds no value
+- You're building a personal tool, not a protocol
+
+<ArticleSection name="Multi-Authority Pattern" id="multi-authority" level="h2" />
+
+Real protocols separate responsibilities. The admin can pause the program, the fee collector can withdraw fees, and the operator can update parameters. If one role is compromised, the attacker gains limited control.
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct ProtocolConfig {
+    pub admin: Pubkey,
+    pub fee_collector: Pubkey,
+    pub operator: Pubkey,
+    pub paused: bool,
+    pub fee_basis_points: u16,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = fee_collector
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub fee_collector: Signer<'info>,
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateFee<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = operator
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub operator: Signer<'info>,
+}
+```
+
+Each instruction validates a different authority. If the operator's key is compromised, the attacker can change fees but cannot withdraw funds or pause the protocol. Multi-authority trades convenience for blast radius containment.
+
+<ArticleSection name="Choosing an Access Control Model" id="choosing-model" level="h2" />
+
+The right model depends on your program's complexity and threat profile:
+
+**Single authority** — Use when one entity controls everything. Personal tools, simple vaults, early-stage protocols. One key compromise means full control loss, but the simplicity reduces implementation bugs.
+
+**Multi-authority** — Use when distinct operations have distinct risk profiles. Protocols where fee collection, parameter updates, and emergency powers should not share a key. Each role is a separate pubkey field in your config account. This is the right default for most production programs.
+
+**Role-based access (RBAC)** — Use when the set of privileged users is dynamic and large. A marketplace with many approved sellers, a protocol with a changing set of liquidators. Each user gets a PDA storing their role. The cost is rent for each role account, but it scales to any number of users without modifying the config struct. Mention only: if you need RBAC, create a `UserRole` PDA per user with an enum field and validate it via constraints.
+
+**No access control (permissionless)** — Use when the instruction's correctness is enforced by constraints, not by who calls it. Liquidations, cranks, reward distributions. If the math is right regardless of the caller, a signer requirement adds friction without security.
+
+The decision framework:
+
+| Question | If Yes |
+|---|---|
+| Does only one entity ever need this operation? | Single authority |
+| Do different operations have different risk levels? | Multi-authority |
+| Is the set of authorized users dynamic? | RBAC |
+| Is correctness independent of the caller? | Permissionless |
+
+Most programs use a mix. Admin operations use single or multi-authority. User operations use per-user PDA validation. Maintenance operations are permissionless.
+
+<ArticleSection name="The access_control Macro" id="access-control-macro" level="h2" />
+
+Anchor provides the `#[access_control]` attribute to run validation logic before the instruction handler executes. This is useful when access checks involve logic more complex than what constraints can express:
+
+```rust
+#[program]
+pub mod protocol {
+    use super::*;
+
+    #[access_control(check_not_paused(&ctx.accounts.config))]
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        // This only runs if check_not_paused passes
+        let vault = &mut ctx.accounts.vault;
+        vault.balance += amount;
+        Ok(())
+    }
+
+    #[access_control(check_not_paused(&ctx.accounts.config))]
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        require!(vault.balance >= amount, VaultError::InsufficientFunds);
+        vault.balance -= amount;
+        Ok(())
+    }
+}
+
+fn check_not_paused(config: &Account<ProtocolConfig>) -> Result<()> {
+    require!(!config.paused, ProtocolError::ProtocolPaused);
+    Ok(())
+}
+```
+
+The `#[access_control]` attribute takes a function call that returns `Result<()>`. If the function returns an error, the instruction aborts before the handler runs. This pattern works well for checks that apply to multiple instructions—you write the validation once and apply it as an attribute.
+
+You can chain multiple checks:
+
+```rust
+#[access_control(check_not_paused(&ctx.accounts.config) check_authority(&ctx.accounts.config, &ctx.accounts.authority))]
+pub fn admin_action(ctx: Context<AdminAction>) -> Result<()> {
+    // Only runs if both checks pass
+    Ok(())
+}
+
+fn check_authority(config: &Account<ProtocolConfig>, authority: &Signer) -> Result<()> {
+    require!(config.admin == authority.key(), ProtocolError::Unauthorized);
+    Ok(())
+}
+```
+
+**When to use `#[access_control]` vs constraints:**
+
+- **Constraints** (`has_one`, `constraint = ...`): Use for simple field comparisons and PDA validation. These are declarative and visible in the accounts struct.
+- **`#[access_control]`**: Use for validation involving multiple accounts, temporal checks (time-based locks), or logic you want to reuse across instructions.
+
+Both run before your instruction handler. Constraints run during account deserialization. `#[access_control]` functions run after deserialization but before the handler. For most cases, constraints are sufficient and more idiomatic. Use `#[access_control]` when the logic doesn't fit cleanly into a constraint expression.
+
+<ArticleSection name="Authority Transfer" id="authority-transfer" level="h2" />
+
+Authorities change. The protocol launches with one admin before governance takes over, or a team member leaves. A single-step transfer is dangerous—if the current authority passes a wrong address, the protocol locks permanently.
+
+The two-step transfer prevents this:
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct ProtocolConfig {
+    pub authority: Pubkey,
+    pub pending_authority: Option<Pubkey>,
+    pub bump: u8,
+}
+
+pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    config.pending_authority = Some(new_authority);
+    Ok(())
+}
+
+pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    config.authority = ctx.accounts.new_authority.key();
+    config.pending_authority = None;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct ProposeAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        constraint = config.pending_authority == Some(new_authority.key()) @ ProtocolError::NoPendingAuthority
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub new_authority: Signer<'info>,
+}
+```
+
+The current authority proposes. The new authority accepts, proving they control the key. If the proposal targets a wrong address, nothing breaks—the old authority remains valid and can propose again. Always use two-step transfers for production programs.
+
+<ArticleSection name="Freeze and Pause Patterns" id="freeze-pause" level="h2" />
+
+Programs need emergency shutdown mechanisms. A simple pause flag protects user-facing instructions:
+
+```rust
+#[account]
+pub struct ProtocolConfig {
+    pub authority: Pubkey,
+    pub paused: bool,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        constraint = !config.paused @ ProtocolError::ProtocolPaused
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    // Other accounts...
+}
+```
+
+The constraint prevents execution when `paused` is true. Admin instructions like `pause` and `unpause` should not check the flag—otherwise the protocol cannot be restarted:
+
+```rust
+#[derive(Accounts)]
+pub struct Pause<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+    pub authority: Signer<'info>,
+}
+
+pub fn pause(ctx: Context<Pause>) -> Result<()> {
+    ctx.accounts.config.paused = true;
+    Ok(())
+}
+
+pub fn unpause(ctx: Context<Pause>) -> Result<()> {
+    ctx.accounts.config.paused = false;
+    Ok(())
+}
+```
+
+**Design decision: global pause vs granular pause.** A global `paused` boolean stops everything. Granular flags (`deposits_paused`, `withdrawals_paused`) let the admin block new entries while allowing exits. If a bug is found in deposit logic, users can still withdraw. The choice depends on whether partial operation is meaningful for your protocol.
+
+<ArticleSection name="Access Control as Architecture" id="access-control-system" level="h2" />
+
+Access control is the structure that determines who can execute state transitions. A program without access control is a public database where anyone can write anything. The patterns here create boundaries: this key controls this operation, those constraints gate those instructions.
+
+Solana does not enforce these boundaries beyond signature verification. The runtime checks that signatures are valid. It does not check whether the signer should be allowed to perform the operation. That logic is yours to define.
+
+For a deeper look at the full taxonomy of missing validation attacks beyond access control, see the missing-validation lesson in the Securing Anchor Programs course. When you are ready to lock down upgrade authorities with multisig patterns, the Anchor in Production course addresses this in its upgrades-and-governance lesson. The next lesson covers account lifecycle—how accounts are created, resized, and closed. Access control protects operations on existing accounts. Lifecycle management determines when accounts come into existence and when they cease to exist.

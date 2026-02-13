@@ -1,0 +1,205 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# PDA Architecture
+
+![Build real Anchor programs - PDA architecture](/graphics/course-banners/building-with-anchor.png)
+
+Anchor Fundamentals covered what PDAs are and how seeds derive addresses. This lesson is about architecture—how to use PDAs as your program's addressing system. The patterns you choose shape how clients find accounts, how state scales, and whether your program can compose with others.
+
+<ArticleSection name="When to Create a PDA" id="when-to-create-pda" level="h2" />
+
+Not every piece of state needs its own PDA. Before adding a new account type, ask: does this data need an independent address?
+
+**Create a PDA when:**
+- Multiple instructions need the account independently (not always co-loaded with a parent)
+- Clients need to look up the account without knowing a keypair
+- Other programs need to derive the address to compose with yours
+- The data has a lifecycle independent of its parent (created/closed at different times)
+
+**Don't create a PDA when:**
+- The data is always accessed alongside a parent account—embed it as a field instead
+- The data is small and static—a field in an existing account costs less rent than a new PDA
+- You're creating a PDA just to avoid passing data as an instruction argument
+
+A common over-engineering pattern is creating a `UserSettings` PDA when a `settings` field embedded in the existing `UserProfile` account would suffice. Each unnecessary PDA costs ~0.00089 SOL in rent and adds an account to every instruction that needs the data.
+
+The right question isn't "what entity exists?" but "what needs an independent address?"
+
+<ArticleSection name="PDAs as Namespaces" id="pdas-as-namespaces" level="h2" />
+
+A PDA is a deterministic address derived from seeds and a program ID. Each unique seed combination produces exactly one PDA. This makes PDAs a namespace system: seeds create hierarchical relationships between accounts.
+
+```rust
+#[derive(Accounts)]
+pub struct CreateUserProfile<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + UserProfile::INIT_SPACE,
+        seeds = [b"profile", user.key().as_ref()],
+        bump
+    )]
+    pub profile: Account<'info, UserProfile>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The pattern `[b"profile", user.key()]` creates a namespace where each user gets exactly one profile. The first seed acts as a type prefix—it disambiguates profile PDAs from other account types in your program. The second seed indexes by user, making the address predictable. Given a user's public key, clients derive the profile address without an RPC call.
+
+This pattern extends to any unique identifier. A token mint account might use `[b"mint", token_symbol.as_bytes()]`. A game inventory might use `[b"inventory", player.key(), game_id.as_ref()]`. The seeds define your addressing scheme.
+
+<ArticleSection name="Multi-Seed Derivation Patterns" id="multi-seed-patterns" level="h2" />
+
+Complex programs need multi-dimensional lookups. A lending protocol tracks positions per user, per collateral type. A marketplace tracks listings per seller, per item.
+
+```rust
+#[derive(Accounts)]
+pub struct OpenPosition<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + LendingPosition::INIT_SPACE,
+        seeds = [
+            b"position",
+            user.key().as_ref(),
+            collateral_mint.key().as_ref()
+        ],
+        bump
+    )]
+    pub position: Account<'info, LendingPosition>,
+
+    pub collateral_mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+This seed pattern creates a two-dimensional index: `[user][collateral_mint] -> position`. A user can have multiple positions (one per collateral type), and different users with the same collateral type get different PDAs.
+
+A three-dimensional example for a governance program:
+
+```rust
+seeds = [
+    b"vote",
+    proposal.key().as_ref(),
+    voter.key().as_ref(),
+    council_mint.key().as_ref()
+]
+```
+
+Each vote is unique to a combination of proposal, voter, and council membership. This prevents double-voting while allowing the same voter to vote on different proposals.
+
+<ArticleSection name="PDA-to-PDA Relationships" id="pda-to-pda-relationships" level="h2" />
+
+One PDA's address can be a seed for another PDA. This creates hierarchical structures—a config at the root, vaults beneath it, and per-user positions at the leaves.
+
+```rust
+// Root: protocol config
+seeds = [b"config"]
+
+// Level 1: vault per token mint
+seeds = [b"vault", config.key(), token_mint.key()]
+
+// Level 2: user position per vault
+seeds = [b"position", vault.key(), user.key()]
+```
+
+Each level references its parent's address. The config PDA is global. Each vault PDA includes the config address to tie it to that specific config. Each position includes its vault's address. Anchor validates that each account matches its expected PDA, so the seeds themselves enforce the relationship.
+
+This pattern scales to arbitrary depth. A governance program might have a realm PDA, then proposal PDAs under each realm, then vote PDAs under each proposal. Keep hierarchies shallow when possible—each level adds an account to your instruction's requirements.
+
+<ArticleSection name="Designing Seeds for Discoverability" id="seed-discoverability" level="h2" />
+
+Seeds determine how clients find your accounts. A well-designed seed scheme makes your program easy to integrate with. A poorly designed one forces clients to maintain off-chain indexes or scan the entire program.
+
+**Seed order affects `getProgramAccounts` filtering.** Clients use `memcmp` filters on account data to find accounts matching certain criteria. But they can also derive PDAs directly when seeds are predictable. The most common query pattern should use the most accessible seed values.
+
+If your most common query is "all positions for this user":
+```rust
+seeds = [b"position", user.key(), mint.key()]
+```
+
+Clients derive each position by iterating over known mints. If mints are unknown, they use `getProgramAccounts` with a filter on the user field stored in the account data.
+
+If your most common query is "all positions for this mint across users":
+```rust
+seeds = [b"position", mint.key(), user.key()]
+```
+
+Now clients filter by mint. Choose the order based on your primary access pattern.
+
+**Seeds must be derivable without on-chain lookups.** A vault PDA derived from `[b"vault", authority.as_ref()]` is discoverable from the authority's pubkey alone. A vault PDA derived from `[b"vault", counter.to_le_bytes()]` requires the caller to know the counter value, which means querying an indexer or scanning state. This destroys composability—another program cannot derive your PDA without first reading your state.
+
+**Good seeds for discoverability:**
+- User public keys (the user always knows their own key)
+- Mint addresses (programs know which tokens they interact with)
+- String literals and program-specific constants
+- Instruction parameters that clients construct (IDs, indices)
+
+**Bad seeds for discoverability:**
+- Timestamps (require knowing the exact moment of creation)
+- Incrementing counters stored in another account (require reading that account first)
+- Hashes of mutable data (change when the data changes)
+
+<ArticleSection name="Common Anti-Patterns" id="anti-patterns" level="h2" />
+
+PDA design has failure modes. Here are patterns to avoid.
+
+**Seeds that are too broad** create collisions. If your program uses `[b"user"]` as the only seed, every user gets the same PDA. The second user to initialize fails. Always include a unique identifier like the user's public key.
+
+**Seeds that are too narrow** make accounts unfindable. Using `[b"profile", timestamp.to_le_bytes()]` forces the client to know the exact timestamp. Stick to deterministic seeds the client can reconstruct.
+
+**Forgetting to include a user key** creates shared state when you want per-user state. `[b"config", mint.key()]` is global for that mint. If you wanted per-user configuration, you needed `[b"config", mint.key(), user.key()]`.
+
+**Using mutable data as seeds** breaks determinism. If your seed includes a username that can change, the PDA address changes. The old account becomes orphaned. Seeds should be immutable—public keys, mint addresses, fixed identifiers. Store mutable data inside the account, not in the seeds.
+
+```rust
+// Bad: seed uses mutable data
+seeds = [b"profile", username.as_bytes()]
+
+// Good: seed uses immutable public key
+seeds = [b"profile", user.key().as_ref()]
+```
+
+**Not ordering seeds for query efficiency** makes client-side filtering harder. If your most common query is "all positions for this user," put the user key before other variable seeds.
+
+<ArticleSection name="Design Process" id="design-process" level="h2" />
+
+When designing PDA structure for a new program, start by mapping state relationships. What entities exist? What relationships do they have?
+
+For each entity, ask: is this global or per-user? Is there one per some other identifier, like a token mint? The answers become your seeds. A global config uses `[b"config"]`, a per-user profile uses `[b"profile", user.key()]`, and an item uses `[b"item", seller.key(), item_id.as_ref()]`.
+
+Then consider relationships. If a bid references an item, should the item's PDA be a seed for the bid? This enforces the relationship in the address space: `[b"bid", item.key(), bidder.key()]`. The bid cannot exist without a valid item PDA.
+
+Finally, think about client queries and composability. If another program needs to derive your accounts, can they do it from publicly available data?
+
+An example design for a simple escrow:
+
+```rust
+// One escrow per maker + mint combination
+// Seed order: [type, maker, mint]
+// Why: clients query "all escrows created by this maker"
+#[account]
+pub struct Escrow {
+    pub maker: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub amount: u64,
+    pub bump: u8,
+}
+
+// Derivation
+seeds = [b"escrow", maker.key(), mint_a.key()]
+```
+
+If the maker wants multiple escrows for the same tokens, add a counter or nonce: `[b"escrow", maker.key(), mint_a.key(), &id.to_le_bytes()]`. The ID could be an incrementing counter stored in a separate maker config account—but note this trades discoverability for flexibility.
+
+<ArticleSection name="Moving Forward" id="moving-forward" level="h2" />
+
+PDAs are your program's addressing system. Seeds define the namespace, relationships between accounts, and how clients find state. Multi-seed patterns support complex indexing, while hierarchical PDAs model parent-child relationships. Seed ordering determines query efficiency, and predictable derivation enables composability.
+
+As your PDA designs grow more complex, be aware that seed collisions and bump manipulation can introduce security vulnerabilities—the Securing Anchor Programs course addresses these in its pda-vulnerabilities lesson. For instructions that need to accept a variable number of accounts beyond what seeds can express, the Advanced Anchor Patterns course covers remaining accounts in its remaining-accounts-patterns lesson. The next lesson covers designing for composability—how to build instructions that other programs actually want to call.

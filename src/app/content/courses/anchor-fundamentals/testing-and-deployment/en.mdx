@@ -1,0 +1,215 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Testing and Deployment
+
+![Anchor Fundamentals - testing and deployment](/graphics/course-banners/anchor-fundamentals.png)
+
+A program that works locally is not finished. Testing catches bugs before deployment. Deployment puts the program on-chain where it handles real transactions and real value.
+
+This lesson covers the essentials: writing TypeScript tests, running them against a local validator, building your program, and deploying to devnet.
+
+<ArticleSection name="Testing with anchor test" id="anchor-test" level="h2" />
+
+The `anchor test` command runs the full testing workflow. It starts a local validator, deploys your program, runs TypeScript tests, and shuts down the validator when finished.
+
+```bash
+anchor test
+```
+
+This command does four things:
+
+1. Starts a local Solana validator using `solana-test-validator`
+2. Builds your program with `anchor build`
+3. Deploys the program to the local validator
+4. Runs the tests in the `tests/` directory using the configured test runner
+
+Each test run starts with a fresh validator and clean state, isolating tests from each other and preventing flaky failures caused by leftover accounts.
+
+You can also run the validator separately and deploy manually:
+
+```bash
+# Terminal 1
+solana-test-validator
+
+# Terminal 2
+anchor build
+anchor deploy
+anchor run test
+```
+
+This workflow is useful when debugging tests. The validator stays running between test executions, which speeds up iteration.
+
+<ArticleSection name="Writing TypeScript Tests" id="typescript-tests" level="h2" />
+
+Anchor projects include a `tests/` directory with a default test file. Tests use the Anchor client library to call instructions and fetch account state:
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { assert } from "chai";
+import { VaultProgram } from "../target/types/vault_program";
+
+describe("vault-program", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.VaultProgram as Program<VaultProgram>;
+
+  it("Creates a vault", async () => {
+    const vault = anchor.web3.Keypair.generate();
+
+    await program.methods
+      .initialize()
+      .accounts({
+        vault: vault.publicKey,
+        user: provider.wallet.publicKey,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([vault])
+      .rpc();
+
+    const vaultAccount = await program.account.vaultState.fetch(
+      vault.publicKey
+    );
+
+    assert.equal(
+      vaultAccount.owner.toBase58(),
+      provider.wallet.publicKey.toBase58()
+    );
+    assert.equal(vaultAccount.balance.toNumber(), 0);
+  });
+});
+```
+
+The `anchor.workspace` object provides access to all programs in your workspace. Types are auto-generated from the IDL during build. The `rpc()` method sends the transaction, waits for confirmation, and returns the transaction signature. If the transaction fails, it throws an error with details about what went wrong.
+
+Anchor converts Rust types to TypeScript: `Pubkey` becomes `PublicKey`, `u64` becomes `BN` (big number), `String` becomes `string`.
+
+<ArticleSection name="Testing Error Cases" id="testing-errors" level="h2" />
+
+Good tests verify that instructions fail when they should. A test that calls an instruction with the wrong signer should fail:
+
+```typescript
+it("Fails when non-owner tries to withdraw", async () => {
+  const attacker = anchor.web3.Keypair.generate();
+
+  try {
+    await program.methods
+      .withdraw(new anchor.BN(100))
+      .accounts({
+        vault: vault.publicKey,
+        owner: attacker.publicKey,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([attacker])
+      .rpc();
+
+    assert.fail("Expected an error but instruction succeeded");
+  } catch (error) {
+    assert.include(error.message, "ConstraintHasOne");
+  }
+});
+```
+
+If the instruction succeeds when it shouldn't, `assert.fail()` catches it. The catch block verifies the error type matches expectations. For custom errors defined with `#[error_code]`, check `error.error.errorCode.code` against the variant name.
+
+The [Testing Anchor Programs](/content/courses/testing-anchor-programs) course covers test organization, security testing patterns, and debugging in depth.
+
+<ArticleSection name="Building Your Program" id="building" level="h2" />
+
+The `anchor build` command compiles your Rust program into Solana bytecode:
+
+```bash
+anchor build
+```
+
+The output appears in the `target/` directory:
+
+```
+target/
+├── deploy/
+│   ├── my_program.so          # Compiled bytecode
+│   └── my_program-keypair.json # Program keypair
+├── idl/
+│   └── my_program.json         # Interface Definition Language
+└── types/
+    └── my_program.ts           # TypeScript types
+```
+
+The `.so` file is the compiled program. The keypair file contains the program's address — this must match `declare_id!()` in your program. The IDL is a JSON description of your program's interface that client libraries use to generate typed instruction builders.
+
+A typical Anchor program compiles to 200-400 KB. Build in release mode for smaller binaries:
+
+```bash
+anchor build --verifiable
+```
+
+The `--verifiable` flag produces a deterministic build inside a Docker container, enabling anyone to rebuild your program and verify it matches the deployed bytecode.
+
+<ArticleSection name="Deploying to Devnet" id="deploying-devnet" level="h2" />
+
+Devnet is Solana's public testing network. It runs the same software as mainnet but uses worthless tokens.
+
+Configure `Anchor.toml` for devnet:
+
+```toml
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[programs.devnet]
+my_program = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+```
+
+Get devnet SOL from the faucet and deploy:
+
+```bash
+solana airdrop 2 --url devnet
+anchor deploy --provider.cluster devnet
+```
+
+If this is your first deployment, update `declare_id!()` with the program address from the keypair file, then rebuild and redeploy.
+
+<ArticleSection name="Deployment Costs" id="deployment-costs" level="h2" />
+
+Deploying requires paying rent-exemption for the program account. The cost depends on program size. For a 300 KB program:
+
+```
+300,000 bytes × 6,960 lamports/byte/year × 2 = ~4.18 SOL
+```
+
+The factor of 2 comes from rent exemption, which requires two years of rent upfront. This is a one-time cost. Upgrades cost only transaction fees (less than 0.01 SOL) since the account already exists.
+
+<ArticleSection name="Upgrades and Immutability" id="upgrades" level="h2" />
+
+Solana programs are upgradeable by default. The program has an upgrade authority — the keypair that can deploy new versions:
+
+```bash
+anchor upgrade --provider.cluster devnet --program-id <PROGRAM_ID>
+```
+
+This replaces the existing bytecode. The program address stays the same. Accounts created by the old version continue working as long as the data layout is compatible.
+
+To make a program permanently immutable:
+
+```bash
+solana program set-upgrade-authority <PROGRAM_ID> --final
+```
+
+This is irreversible — no one can change the program after this, not even to fix bugs. Most production programs remain upgradeable, with the upgrade authority transferred to a multisig or governance system.
+
+The [Anchor in Production](/content/courses/anchor-in-production) course covers deployment strategies, verifiable builds, upgrade governance, and operational patterns in depth.
+
+<ArticleSection name="The Development Workflow" id="workflow" level="h2" />
+
+The full cycle from code to deployment:
+
+1. Write the program
+2. Write tests covering success and failure cases
+3. Run `anchor test` to verify on a local validator
+4. Build with `anchor build --verifiable`
+5. Deploy to devnet and test against real network conditions
+6. Get a security audit if the program handles value
+7. Deploy to mainnet
+
+This completes the Anchor Fundamentals course. You now have the building blocks — accounts, PDAs, instructions, constraints, CPIs, errors, events, testing, and deployment. The next course, Building with Anchor, applies these to architectural design decisions: when to use which account pattern, how to structure PDAs for composability, and how to manage access control at scale.

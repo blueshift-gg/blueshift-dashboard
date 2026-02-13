@@ -16,12 +16,22 @@ const redirects = [
   },
   {
     source: "/:locale/courses/introduction-to-anchor",
-    destination: "/:locale/courses/anchor-for-dummies",
+    destination: "/:locale/paths/anchor-for-dummies",
     permanent: true,
   },
   {
     source: "/:locale/courses/introduction-to-anchor/:lesson*",
-    destination: "/:locale/courses/anchor-for-dummies/:lesson*",
+    destination: "/:locale/paths/anchor-for-dummies",
+    permanent: true,
+  },
+  {
+    source: "/:locale/courses/anchor-for-dummies",
+    destination: "/:locale/paths/anchor-for-dummies",
+    permanent: true,
+  },
+  {
+    source: "/:locale/courses/anchor-for-dummies/:lesson*",
+    destination: "/:locale/paths/anchor-for-dummies",
     permanent: true,
   },
   {
@@ -36,4 +46,4 @@ const redirects = [
   },
 ];
 
-export default redirects; 
+export default redirects;
