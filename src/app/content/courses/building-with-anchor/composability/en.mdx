@@ -1,0 +1,333 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Designing for Composability
+
+![Build real Anchor programs - composability](/graphics/course-banners/building-with-anchor.png)
+
+Composability is what makes Solana DeFi possible. A single transaction can call a lending protocol, which calls a price oracle, which reads an AMM's pool state—all atomically. But composability doesn't happen by accident. Most programs ship with subtle design choices that make them hard or impossible for other programs to call. This lesson covers the decisions that determine whether your program becomes a building block or an island.
+
+<ArticleSection name="Payer Flexibility" id="payer-flexibility" level="h2" />
+
+The most impactful composability decision is who pays for account creation. Many programs hardcode the user as the payer:
+
+```rust
+// Rigid: only the user can pay
+#[derive(Accounts)]
+pub struct CreatePosition<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + Position::INIT_SPACE,
+        seeds = [b"position", user.key().as_ref()],
+        bump
+    )]
+    pub position: Account<'info, Position>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+This works for direct user transactions. But what about a relayer that submits transactions on behalf of users? A protocol that creates positions for its users via CPI? A gasless onboarding flow where a sponsor pays rent?
+
+Separate the payer from the user:
+
+```rust
+// Flexible: anyone can pay
+#[derive(Accounts)]
+pub struct CreatePosition<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + Position::INIT_SPACE,
+        seeds = [b"position", user.key().as_ref()],
+        bump
+    )]
+    pub position: Account<'info, Position>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+Now the payer and user are distinct accounts. A relayer pays rent. A protocol subsidizes creation. The user still signs to authorize the position. One field change opens the door to relayers, protocol-subsidized onboarding, and gasless flows.
+
+This pattern applies to any instruction that creates accounts. The cost is one extra account in the instruction. The benefit is that every program in the ecosystem can integrate your creation flow.
+
+<ArticleSection name="Authorization Paths" id="authorization-paths" level="h2" />
+
+Every instruction has an implicit assumption about who calls it. The design question isn't just "who can call this?" but "does anyone need to sign at all?"
+
+**Signer-required instructions** restrict execution to the account owner:
+
+```rust
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        has_one = authority,
+        seeds = [b"vault", authority.key().as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+```
+
+Only the vault authority can withdraw. This is correct for user funds.
+
+**Permissionless instructions** let anyone execute when the action benefits the system:
+
+```rust
+#[derive(Accounts)]
+pub struct Liquidate<'info> {
+    #[account(
+        mut,
+        seeds = [b"position", position.owner.as_ref()],
+        bump = position.bump,
+        constraint = is_undercollateralized(&position, &oracle) @ ErrorCode::PositionHealthy
+    )]
+    pub position: Account<'info, Position>,
+    pub oracle: Account<'info, PriceFeed>,
+
+    #[account(mut)]
+    pub liquidator: Signer<'info>, // Anyone can call
+}
+```
+
+Liquidations don't need the position owner's signature. The constraint validates that the position is undercollateralized. Anyone—a bot, another protocol, a keeper network—can execute the liquidation. Making this permissionless means your protocol doesn't rely on a single liquidator.
+
+**The design decision:** For each instruction, ask whether restricting the caller adds security or just friction. Cranks, settlements, price updates, reward distributions, and liquidations are often better as permissionless operations. Deposits, withdrawals, and authority changes need signer authorization.
+
+A common mistake is requiring a signer for instructions that are purely state-maintenance. If the instruction's correctness is enforced by constraints rather than by who calls it, making it permissionless improves composability and reliability.
+
+<ArticleSection name="Don't Force ATAs" id="dont-force-atas" level="h2" />
+
+Associated Token Accounts (ATAs) are convenient defaults—one token account per wallet per mint, at a deterministic address. Many programs hardcode ATA requirements:
+
+```rust
+// Over-constrained: requires the user's ATA specifically
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+
+    pub mint: Account<'info, Mint>,
+    pub user: Signer<'info>,
+}
+```
+
+This rejects any token account that isn't the user's ATA. But what about:
+- A protocol vault that holds tokens in a PDA-owned token account?
+- A multisig treasury using a non-ATA token account?
+- A program composing via CPI that manages its own token accounts?
+
+Accept any token account and validate only what matters:
+
+```rust
+// Flexible: any token account with the right mint and authority
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = authority,
+    )]
+    pub source_token_account: Account<'info, TokenAccount>,
+
+    pub mint: Account<'info, Mint>,
+    pub authority: Signer<'info>,
+}
+```
+
+The `token::mint` constraint ensures the token account holds the right token. The `token::authority` constraint ensures the signer controls the account. The specific address of the token account doesn't matter.
+
+This is one of the most common composability killers. Programs copy the ATA pattern from templates without asking whether the constraint is necessary. The ATA constraint is useful for destination accounts where you want deterministic addressing. For source accounts, validate the mint and authority instead.
+
+<ArticleSection name="Minimal Account Requirements" id="minimal-accounts" level="h2" />
+
+Every account in your instruction's context is a requirement that callers must satisfy. More accounts means more friction for integrators, larger transactions, and higher probability of exceeding Solana's 64-account transaction limit.
+
+Consider a token transfer instruction that requires unnecessary accounts:
+
+```rust
+// Bloated: 8 accounts for a simple transfer
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    pub config: Account<'info, Config>,     // Only used to check fee_rate
+    pub fee_collector: Account<'info, FeeCollector>, // Only used for address
+    #[account(mut)]
+    pub source: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+If `config` is only read for a fee rate, consider storing the fee rate in the vault itself. If `fee_collector` is only used for its address, store that address in the vault. If the system program isn't needed, remove it.
+
+```rust
+// Minimal: 5 accounts
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>, // Contains fee_rate and fee_collector address
+    #[account(mut)]
+    pub source: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Three fewer accounts means a smaller transaction, less data to fetch, and fewer opportunities for callers to pass the wrong account.
+
+**Design principle:** Every account in your instruction should be either read from or written to. If you're only using an account to access a single field, consider whether that field belongs in an account you already load.
+
+This doesn't mean cramming everything into one account (that creates write contention). It means being intentional about what each instruction requires and not adding accounts "just in case."
+
+<ArticleSection name="Predictable PDAs" id="predictable-pdas" level="h2" />
+
+If another program can derive your accounts from publicly known data, they can compose with you without querying your state first. This is the foundation of on-chain composability.
+
+A composable PDA derivation:
+
+```rust
+// Any program can derive this from the user's pubkey
+seeds = [b"vault", user.key().as_ref()]
+```
+
+A non-composable derivation:
+
+```rust
+// Requires knowing the vault_count, which lives in another account
+seeds = [b"vault", vault_count.to_le_bytes().as_ref()]
+```
+
+The second pattern forces composing programs to first read your counter account, then derive the PDA. This adds an account to their instruction, adds latency, and creates a dependency on your state being available.
+
+**Rules for composable PDAs:**
+1. Derive from data the caller already has (user keys, mint addresses, program IDs)
+2. Use static string prefixes to distinguish account types
+3. Avoid seeds that require reading your program's state first
+4. Document your seed derivation in comments and IDL metadata
+
+When you design a PDA that another program will need to derive, the seed scheme is part of your public API. Changing it is a breaking change for every program that integrates with you.
+
+<ArticleSection name="Events for Discoverability" id="events" level="h2" />
+
+Programs composing with yours need to know what happened. Anchor events make on-chain activity discoverable:
+
+```rust
+#[event]
+pub struct PositionOpened {
+    pub user: Pubkey,
+    pub vault: Pubkey,
+    pub amount: u64,
+    pub shares_minted: u64,
+    pub timestamp: i64,
+}
+
+pub fn open_position(ctx: Context<OpenPosition>, amount: u64) -> Result<()> {
+    let shares = calculate_shares(amount, &ctx.accounts.vault);
+
+    // State updates...
+
+    emit!(PositionOpened {
+        user: ctx.accounts.user.key(),
+        vault: ctx.accounts.vault.key(),
+        amount,
+        shares_minted: shares,
+        timestamp: Clock::get()?.unix_timestamp,
+    });
+
+    Ok(())
+}
+```
+
+Events are not accessible within a transaction (programs can't read each other's events during execution). But they're critical for the ecosystem around your program:
+
+- **Indexers** store events in queryable databases, enabling frontends and analytics
+- **Keepers and bots** monitor events to trigger follow-up actions (liquidations, rebalances)
+- **Integrating protocols** use indexed events to display activity from your program
+
+**What to emit:**
+- The accounts involved (as `Pubkey` values, not account data)
+- The amounts or values that changed
+- Computed results that would be expensive to recompute (shares minted, fees collected)
+- Timestamps for ordering
+
+**What not to emit:**
+- Entire account structs (wasteful, callers can read the account)
+- Data that doesn't change (the vault's authority doesn't need to be in every event)
+- Internal implementation details that callers shouldn't depend on
+
+Events cost compute units. A small event (~100 bytes) costs roughly 200-300 CUs. Emit what composing programs need, not everything that happened.
+
+<ArticleSection name="Error Design" id="error-design" level="h2" />
+
+When your program is called via CPI, the calling program receives your error code. Meaningful errors let callers handle failures intelligently. Generic errors force them to guess.
+
+```rust
+// Bad: generic errors
+#[error_code]
+pub enum VaultError {
+    #[msg("Invalid")]
+    Invalid,
+    #[msg("Failed")]
+    Failed,
+}
+
+// Good: specific, actionable errors
+#[error_code]
+pub enum VaultError {
+    #[msg("Deposit amount is zero")]
+    ZeroDeposit,
+    #[msg("Vault deposit cap reached")]
+    DepositCapExceeded,
+    #[msg("Vault is paused for deposits")]
+    DepositsDisabled,
+    #[msg("Insufficient shares for withdrawal amount")]
+    InsufficientShares,
+    #[msg("Withdrawal would leave vault below minimum balance")]
+    MinimumBalanceViolation,
+}
+```
+
+A composing program that receives `DepositsDisabled` can route to a different vault. One that receives `DepositCapExceeded` can split the deposit across vaults. One that receives `Invalid` can only fail.
+
+**Error design principles:**
+- Each error should describe a single failure condition
+- Error messages should explain what went wrong, not what to do (the caller decides the response)
+- Group errors by domain (deposit errors, withdrawal errors, admin errors)
+- Use specific codes for conditions that callers might want to handle differently
+
+Error codes are part of your public API. Composing programs match on them. Renaming or renumbering error variants is a breaking change.
+
+<ArticleSection name="Putting It Together" id="conclusion" level="h2" />
+
+Composability isn't a feature you bolt on after the program works. It's a set of design decisions made during initial development:
+
+1. **Separate payer from user** — one field change enables relayers, subsidized onboarding, and protocol-to-protocol flows
+2. **Question every signer requirement** — permissionless where correctness comes from constraints, not identity
+3. **Accept any valid token account** — validate mint and authority, not specific addresses
+4. **Minimize account requirements** — every extra account is friction for integrators
+5. **Derive PDAs from public data** — if another program can't derive your accounts, they can't compose with you
+6. **Emit meaningful events** — the ecosystem around your program depends on knowing what happened
+7. **Design specific errors** — callers handle `DepositCapExceeded` differently than `Invalid`
+
+These decisions have near-zero implementation cost individually. Together, they determine whether a protocol with 10 developers builds on top of your program or builds around it.
+
+When making CPIs to programs you do not control, understanding trust boundaries is critical—the Securing Anchor Programs course covers this in its cpi-trust-boundaries lesson. For cases where Anchor's CPI helpers are insufficient and you need lower-level control, the Advanced Anchor Patterns course explains raw CPIs and syscalls in its raw-cpis-and-syscalls lesson. The next lesson covers access control patterns—how to decide who can execute each instruction and when.

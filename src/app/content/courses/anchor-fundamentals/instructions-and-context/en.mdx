@@ -1,0 +1,355 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instructions and Context
+
+![Anchor Fundamentals - instructions and context](/graphics/course-banners/anchor-fundamentals.png)
+
+Instructions are the entry points to your program. Each instruction function defines one operation: what accounts it needs, what parameters it accepts, and what logic it executes. When a client sends a transaction to your program, Anchor uses the instruction data to route to the correct function, deserialize the accounts and parameters, and execute your logic.
+
+This lesson covers how instructions work in Anchor: the `#[program]` module structure, the Context type, instruction discriminators, parameters, and return values.
+
+<ArticleSection name="The #[program] Module" id="program-module" level="h2" />
+
+Every instruction in your program is defined as a public function inside a module marked with the `#[program]` attribute. Anchor generates the program entrypoint that dispatches incoming transactions to these functions.
+
+```rust
+use anchor_lang::prelude::*;
+
+declare_id!("11111111111111111111111111111111");
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        // Instruction logic here
+        Ok(())
+    }
+
+    pub fn update(ctx: Context<Update>, new_value: u64) -> Result<()> {
+        // Instruction logic here
+        Ok(())
+    }
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        // Instruction logic here
+        Ok(())
+    }
+}
+```
+
+Each instruction function follows a consistent pattern. The first parameter is always `Context<T>`, where `T` is an accounts struct that defines what accounts the instruction needs. Additional parameters follow after the context parameter. Every instruction returns `Result<()>`, so you can use the `?` operator for error propagation.
+
+When you build your program, Anchor generates an entrypoint function that reads the instruction discriminator from the transaction data, matches it to the correct function, deserializes the accounts and parameters, and calls your instruction.
+
+<ArticleSection name="The Context Type" id="context-type" level="h2" />
+
+The `Context<T>` type provides access to everything your instruction needs: the validated accounts, the program ID, any remaining accounts not specified in your accounts struct, and PDA bumps.
+
+```rust
+pub struct Context<'a, 'b, 'c, 'info, T> {
+    pub program_id: &'a Pubkey,
+    pub accounts: &'b mut T,
+    pub remaining_accounts: &'c [AccountInfo<'info>],
+    pub bumps: BTreeMap<String, u8>,
+}
+```
+
+The `accounts` field gives you access to the deserialized accounts struct. This is how you read and modify account data in your instruction logic.
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(init, payer = user, space = 8 + 32)]
+    pub data_account: Account<'info, DataAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    let data_account = &mut ctx.accounts.data_account;
+    data_account.authority = ctx.accounts.user.key();
+    Ok(())
+}
+```
+
+The `program_id` field contains your program's address. This is useful when you need to verify that an account is owned by your program or when deriving PDAs.
+
+```rust
+pub fn verify_ownership(ctx: Context<VerifyOwnership>) -> Result<()> {
+    let account = &ctx.accounts.some_account;
+    require!(
+        account.owner == ctx.program_id,
+        ErrorCode::InvalidOwner
+    );
+    Ok(())
+}
+```
+
+The `remaining_accounts` field contains any accounts passed to the instruction that were not specified in your accounts struct. This is useful for instructions that need a variable number of accounts.
+
+```rust
+pub fn process_multiple(ctx: Context<ProcessMultiple>) -> Result<()> {
+    for account_info in ctx.remaining_accounts.iter() {
+        // Process each remaining account
+        msg!("Processing account: {}", account_info.key);
+    }
+    Ok(())
+}
+```
+
+The `bumps` field is a map of PDA bumps for any seeds-derived accounts in your accounts struct. The keys are the field names from your accounts struct.
+
+```rust
+#[derive(Accounts)]
+pub struct CreateVault<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32,
+        seeds = [b"vault", user.key().as_ref()],
+        bump
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn create_vault(ctx: Context<CreateVault>) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    vault.authority = ctx.accounts.user.key();
+    vault.bump = ctx.bumps.vault; // Store the bump
+    Ok(())
+}
+```
+
+<ArticleSection name="Instruction Discriminators" id="instruction-discriminators" level="h2" />
+
+When a client calls your program, it needs to tell the program which instruction to execute. Anchor uses an 8-byte discriminator at the start of the instruction data for this purpose.
+
+The discriminator is derived by taking the first 8 bytes of the SHA-256 hash of the string `"global:<function_name>"`.
+
+```rust
+// For this instruction:
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    Ok(())
+}
+
+// The discriminator is:
+// sha256("global:initialize")[0..8]
+// Results in: [175, 175, 109, 31, 13, 152, 155, 237]
+```
+
+When you use the Anchor client library, it automatically calculates and prepends the correct discriminator to your instruction data. The generated entrypoint reads this discriminator and routes to the matching instruction function.
+
+You can see the discriminators for your program by looking at the generated IDL file after building. Each instruction includes its discriminator as a byte array.
+
+```json
+{
+  "instructions": [
+    {
+      "name": "initialize",
+      "discriminator": [175, 175, 109, 31, 13, 152, 155, 237],
+      "accounts": [...],
+      "args": []
+    }
+  ]
+}
+```
+
+Starting from Anchor v0.31.0, you can specify custom discriminators using the `#[instruction]` attribute. This is useful when you need to maintain backwards compatibility or match specific discriminator values.
+
+```rust
+#[program]
+pub mod my_program {
+    use super::*;
+
+    #[instruction(discriminator = [1, 2, 3, 4, 5, 6, 7, 8])]
+    pub fn custom_discriminator(ctx: Context<CustomDiscriminator>) -> Result<()> {
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Instruction Parameters" id="instruction-parameters" level="h2" />
+
+Instructions can accept parameters beyond the context argument. These parameters are serialized into the instruction data and automatically deserialized by Anchor when the instruction is called.
+
+Basic Rust types work out of the box: integers, booleans, public keys, strings, and vectors.
+
+```rust
+pub fn update_data(
+    ctx: Context<UpdateData>,
+    amount: u64,
+    enabled: bool,
+    authority: Pubkey,
+    name: String,
+    metadata: Vec<u8>,
+) -> Result<()> {
+    let account = &mut ctx.accounts.data_account;
+    account.amount = amount;
+    account.enabled = enabled;
+    account.authority = authority;
+    account.name = name;
+    account.metadata = metadata;
+    Ok(())
+}
+```
+
+For custom types, implement the `AnchorSerialize` and `AnchorDeserialize` traits. The easiest way is to derive them automatically.
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct Config {
+    pub fee_basis_points: u16,
+    pub max_amount: u64,
+    pub enabled: bool,
+}
+
+pub fn update_config(ctx: Context<UpdateConfig>, config: Config) -> Result<()> {
+    let account = &mut ctx.accounts.config_account;
+    account.config = config;
+    Ok(())
+}
+```
+
+Parameter size matters. Solana transactions have a maximum size of 1,232 bytes after serialization. This includes signatures, account metadata, the program ID, and the instruction data. Large parameters like long strings or big vectors can exceed this limit.
+
+```rust
+// This might fail if the string is too long
+pub fn store_large_data(ctx: Context<StoreData>, data: String) -> Result<()> {
+    require!(data.len() <= 1000, ErrorCode::DataTooLarge);
+    ctx.accounts.data_account.data = data;
+    Ok(())
+}
+```
+
+For large data, consider splitting it across multiple instructions or storing it off-chain with only a hash or reference stored on-chain.
+
+<ArticleSection name="Accessing Parameters in Constraints" id="parameters-in-constraints" level="h2" />
+
+Sometimes you need to use instruction parameters in account constraints. The `#[instruction(...)]` attribute on your accounts struct makes parameters available during account validation.
+
+```rust
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct Transfer<'info> {
+    #[account(
+        mut,
+        constraint = source.balance >= amount @ ErrorCode::InsufficientFunds
+    )]
+    pub source: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    let source = &mut ctx.accounts.source;
+    let destination = &mut ctx.accounts.destination;
+
+    source.balance = source.balance.checked_sub(amount)
+        .ok_or(ErrorCode::InsufficientFunds)?;
+    destination.balance = destination.balance.checked_add(amount)
+        .ok_or(ErrorCode::Overflow)?;
+
+    Ok(())
+}
+```
+
+The `#[instruction(amount: u64)]` attribute tells Anchor to deserialize the `amount` parameter before validating the accounts. The constraint on the `source` account can then reference `amount` and verify sufficient balance before the instruction logic runs.
+
+You can specify multiple parameters in the attribute, but you must list them in the same order they appear in the instruction function signature.
+
+```rust
+#[derive(Accounts)]
+#[instruction(amount: u64, recipient: Pubkey)]
+pub struct TransferWithRecipient<'info> {
+    #[account(mut)]
+    pub source: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = destination.owner == recipient @ ErrorCode::InvalidRecipient
+    )]
+    pub destination: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+}
+
+pub fn transfer_with_recipient(
+    ctx: Context<TransferWithRecipient>,
+    amount: u64,
+    recipient: Pubkey,
+) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+You can also use instruction parameters in PDA seeds. This is common when the PDA derivation depends on user input.
+
+```rust
+#[derive(Accounts)]
+#[instruction(vault_id: u64)]
+pub struct CreateVault<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 8 + 1,
+        seeds = [b"vault", user.key().as_ref(), vault_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn create_vault(ctx: Context<CreateVault>, vault_id: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    vault.authority = ctx.accounts.user.key();
+    vault.vault_id = vault_id;
+    vault.bump = ctx.bumps.vault;
+    Ok(())
+}
+```
+
+<ArticleSection name="Return Values" id="return-values" level="h2" />
+
+Anchor instruction functions return `Result<()>`. The `Result` type allows you to propagate errors using the `?` operator, and the unit type `()` indicates that successful instructions return nothing by default.
+
+```rust
+pub fn process_data(ctx: Context<ProcessData>) -> Result<()> {
+    let account = &mut ctx.accounts.data_account;
+
+    // Early return on error
+    require!(account.is_initialized, ErrorCode::NotInitialized);
+
+    // Update account data
+    account.counter = account.counter.checked_add(1)
+        .ok_or(ErrorCode::Overflow)?;
+
+    Ok(())
+}
+```
+
+Solana does not support direct return values from program instructions. Most instructions communicate results by writing to account state, which clients read after the transaction confirms.
+
+For cases where you need synchronous return data without writing to an account, `set_return_data` sets up to 1,024 bytes that the caller can read immediately after execution:
+
+```rust
+use anchor_lang::solana_program::program::set_return_data;
+
+pub fn calculate(ctx: Context<Calculate>, a: u64, b: u64) -> Result<()> {
+    let result = a.checked_add(b).ok_or(ErrorCode::Overflow)?;
+    set_return_data(&result.to_le_bytes());
+    Ok(())
+}
+```
+
+For structured, observable output -- recording that a transfer happened, a game started, or a reward was distributed -- use events. Events, the `emit!()` macro, CPI events, and the `msg!()` logging macro are covered in the Errors and Events lesson.
+
+<ArticleSection name="Next Steps" id="next-steps" level="h2" />
+
+Instructions define what your program can do, but constraints define what it allows. Next up: Anchor's declarative constraint system for account validation and security.

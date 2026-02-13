@@ -1,0 +1,371 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Deployment Strategies
+
+![Anchor in Production](/graphics/course-banners/anchor-in-production.png)
+
+Building an Anchor program is one thing. Getting it on-chain safely is another. A deployment is a multi-step process that writes your compiled program binary to a Solana account, assigns an upgrade authority, and marks the program as executable. Each step has failure modes that are silent and expensive to fix after the fact.
+
+This lesson covers the full deployment lifecycle: how deploys work under the hood, how to manage keypairs across environments, how to deploy to devnet and mainnet, how to automate multi-stage deployments, and how to produce verifiable builds that let anyone confirm your on-chain bytecode matches the source.
+
+<ArticleSection name="Program Deployment on Solana" id="program-deployment" level="h2" />
+
+Solana programs are BPF bytecode stored in on-chain accounts. The BPF Loader v2 (`BPFLoaderUpgradeab1e111111111111111111111111`) manages the lifecycle of upgradeable programs. When you deploy, three accounts are involved:
+
+- **Program account**—stores a pointer to the program data account. This account's address is the program ID that clients use to invoke the program.
+- **Program data account**—holds the actual compiled bytecode. This is a separate account because upgrades replace the bytecode without changing the program ID.
+- **Buffer account**—a temporary staging area where the bytecode is written before being swapped into the program data account.
+
+The deployment process works in two phases. First, the CLI writes your compiled `.so` binary into a buffer account in chunks of roughly 1 KB per transaction. For a 200 KB program, this takes around 200 transactions. Once the buffer is fully written, a single `DeployWithMaxDataLen` instruction atomically creates the program account and program data account, copies the buffer contents into the program data, and marks the program as executable.
+
+This two-phase approach exists because Solana transactions have a 1,232-byte size limit. You cannot send an entire program binary in one transaction. The buffer acts as an accumulator.
+
+Anchor wraps this process with `anchor deploy`, which calls `solana program deploy` under the hood with the correct paths. The raw Solana CLI command looks like this:
+
+```bash
+solana program deploy target/deploy/my_program.so
+```
+
+Anchor's equivalent reads the program name from `Anchor.toml` and resolves paths automatically:
+
+```bash
+anchor deploy
+```
+
+Both commands produce identical on-chain results. The difference is convenience—Anchor reads your project configuration and deploys the right binary with the right keypair.
+
+After deployment, the program account stores metadata including the upgrade authority. The upgrade authority is the only keypair that can modify the program. If you lose this keypair, the program is frozen forever. If someone else obtains it, they control your program.
+
+You can inspect a deployed program's metadata with the Solana CLI:
+
+```bash
+solana program show <PROGRAM_ID>
+```
+
+This outputs the program data length, the upgrade authority address, and the last deploy slot.
+
+<ArticleSection name="Keypair Management" id="keypair-management" level="h2" />
+
+Every Solana program has a program ID derived from a keypair. When Anchor builds your project for the first time, it generates a keypair file at `target/deploy/my_program-keypair.json`. The public key of this keypair becomes the program ID.
+
+Your program declares its own ID using the `declare_id!` macro:
+
+```rust
+declare_id!("8Fpi9BFxKEwJEbTpN3pfPaGraBvE3t85HdLU7g2dPopT");
+```
+
+This value must match the public key in your keypair file. If they diverge, the program will deploy to an address that doesn't match what's hardcoded in the binary, and on-chain CPI calls referencing the declared ID will fail.
+
+To extract the public key from a keypair file and verify alignment:
+
+```bash
+solana-keygen pubkey target/deploy/my_program-keypair.json
+```
+
+Compare this output with the value in `declare_id!`. They must be identical.
+
+When working across environments—local, devnet, mainnet—you have two options for keypair management. The first approach uses the same keypair everywhere, so the program ID is consistent across all networks. This simplifies client configuration because the program ID never changes.
+
+```bash
+# Copy the keypair to a safe location
+cp target/deploy/my_program-keypair.json ~/.config/solana/deploy-keypairs/my_program.json
+```
+
+The second approach uses different keypairs per environment. This is useful when you want devnet and mainnet to run different program versions simultaneously without risk of confusion.
+
+Whichever approach you choose, back up your keypair files. The keypair file IS the program identity. Losing it means you cannot redeploy to the same address. Store it encrypted, off-machine, with the same care you'd give a private key that controls funds—because it does control funds, indirectly, through the programs it governs.
+
+Anchor also supports configuring the program ID per cluster in `Anchor.toml`:
+
+```toml
+[programs.devnet]
+my_program = "8Fpi9BFxKEwJEbTpN3pfPaGraBvE3t85HdLU7g2dPopT"
+
+[programs.mainnet]
+my_program = "J7t2iAm3dLbMx6K9VxLFPc4YzF3B3M7czR9opPr6g3C5"
+```
+
+When you run `anchor build`, the framework replaces the `declare_id!` value in your source with the program ID matching the active cluster, preventing ID mismatches during cross-environment deploys.
+
+<ArticleSection name="Devnet Deployment" id="devnet-deployment" level="h2" />
+
+Devnet is where you validate that your program deploys correctly and functions as expected in a real network environment. It uses test SOL that costs nothing, so mistakes are free.
+
+Start by configuring the Solana CLI to target devnet:
+
+```bash
+solana config set --url https://api.devnet.solana.com
+```
+
+Verify your configuration:
+
+```bash
+solana config get
+```
+
+You need SOL in your wallet to pay for the deployment. Airdrop test SOL:
+
+```bash
+solana airdrop 5
+```
+
+The devnet faucet limits airdrops to 5 SOL per request. If your program is large and you need more, run the airdrop command multiple times. A 200 KB program costs approximately 1.4 SOL for rent exemption, plus transaction fees for the buffer writes.
+
+Build your program:
+
+```bash
+anchor build
+```
+
+Deploy to devnet:
+
+```bash
+anchor deploy --provider.cluster devnet
+```
+
+If the deploy succeeds, you'll see output like:
+
+```
+Deploying workspace: https://api.devnet.solana.com
+Upgrade authority: /Users/you/.config/solana/id.json
+Deploying program "my_program"...
+Program path: target/deploy/my_program.so
+Program Id: 8Fpi9BFxKEwJEbTpN3pfPaGraBvE3t85HdLU7g2dPopT
+
+Deploy success
+```
+
+Verify the deployment on a block explorer by navigating to `https://explorer.solana.com/address/<PROGRAM_ID>?cluster=devnet`. The explorer shows the program's executable status, data length, and upgrade authority.
+
+Common deployment failures on devnet:
+
+**Insufficient balance.** The error `account has insufficient funds` means your wallet doesn't have enough SOL. Check your balance with `solana balance` and airdrop more.
+
+**Wrong network.** If your CLI points to mainnet but you intended devnet, you'll either fail (no mainnet SOL) or accidentally deploy to mainnet. Always verify with `solana config get` before deploying.
+
+**Program ID mismatch.** If `declare_id!` doesn't match the keypair, the deploy succeeds but the program won't work correctly. Run `anchor keys sync` to align the declared ID with the keypair automatically.
+
+**Buffer write failures.** Network congestion can cause individual buffer write transactions to fail. The CLI retries automatically, but persistent failures may require waiting and retrying the full deploy.
+
+<ArticleSection name="Mainnet Deployment" id="mainnet-deployment" level="h2" />
+
+Mainnet deployment follows the same commands as devnet, but the stakes are different. The SOL is real, the program is public, and mistakes cost money.
+
+The primary cost is rent exemption for the program data account. Solana charges rent based on account size, and programs must be rent-exempt (fully funded) at deployment. The formula is approximately 6.96 SOL per MB of program data. A 200 KB program costs roughly 1.4 SOL. A 500 KB program costs around 3.5 SOL. A 1.4 MB program (near the current max of 1.5 MB for BPF programs) costs approximately 10 SOL.
+
+Calculate the exact cost before deploying:
+
+```bash
+solana rent $(wc -c < target/deploy/my_program.so)
+```
+
+This returns the rent-exempt balance required for an account of that size.
+
+Use a dedicated deploy keypair for mainnet, separate from your daily development wallet. This keypair becomes the upgrade authority, and it should be stored securely—ideally on a hardware wallet or an air-gapped machine. If this keypair is compromised, an attacker can replace your program with malicious code.
+
+Set the deploy keypair:
+
+```bash
+solana config set --keypair /path/to/mainnet-deploy-keypair.json
+```
+
+Verify the binary before deploying. Compute the SHA-256 hash of your built program and record it:
+
+```bash
+sha256sum target/deploy/my_program.so
+```
+
+This hash serves as a reference point. If you later need to verify that the on-chain bytecode matches your source, you can compare against this hash.
+
+Deploy to mainnet:
+
+```bash
+solana config set --url https://api.mainnet-beta.solana.com
+anchor deploy --provider.cluster mainnet
+```
+
+After a successful mainnet deploy, transfer the upgrade authority to a multisig if your program manages user funds. A single keypair as upgrade authority is a single point of failure. Squads Protocol provides multisig-based program governance that requires multiple signers to approve upgrades.
+
+<ArticleSection name="Multi-Stage Deployment" id="multi-stage-deployment" level="h2" />
+
+A multi-stage deployment pipeline deploys to devnet first, runs integration tests against the live devnet program, and only then deploys to mainnet. This catches issues that unit tests and local validator testing miss—network latency effects, account size limits, transaction size constraints, and CPI behavior with real on-chain programs.
+
+The basic pipeline looks like this:
+
+1. Build the program
+2. Deploy to devnet
+3. Run integration tests against devnet
+4. If tests pass, deploy to mainnet
+5. Run smoke tests against mainnet
+
+If you use feature flags (covered in the Advanced Anchor Patterns course), build environment-specific binaries:
+
+```bash
+# Devnet build with debug logging
+anchor build -- --features devnet
+
+# Mainnet build with production settings
+anchor build -- --features mainnet
+```
+
+Your `Cargo.toml` defines the feature flags:
+
+```toml
+[features]
+devnet = []
+mainnet = []
+```
+
+And your program code uses conditional compilation:
+
+```rust
+#[cfg(feature = "devnet")]
+const ADMIN: Pubkey = pubkey!("devnetAdminPubkeyHere11111111111111111111");
+
+#[cfg(feature = "mainnet")]
+const ADMIN: Pubkey = pubkey!("mainnetAdminPubkeyHere1111111111111111111");
+```
+
+A CI/CD pipeline automates this flow. Here is a GitHub Actions workflow that deploys on merge to the `release` branch:
+
+```
+name: Deploy
+on:
+  push:
+    branches: [release]
+
+jobs:
+  deploy-devnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: coral-xyz/setup-anchor@v0.30.1
+      - name: Build for devnet
+        run: anchor build -- --features devnet
+      - name: Deploy to devnet
+        env:
+          DEPLOY_KEYPAIR: ${{ secrets.DEVNET_DEPLOY_KEYPAIR }}
+        run: |
+          echo "$DEPLOY_KEYPAIR" > /tmp/deploy-key.json
+          solana config set --url https://api.devnet.solana.com
+          solana config set --keypair /tmp/deploy-key.json
+          anchor deploy --provider.cluster devnet
+      - name: Run integration tests
+        run: anchor test --skip-build --provider.cluster devnet
+
+  deploy-mainnet:
+    needs: deploy-devnet
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: coral-xyz/setup-anchor@v0.30.1
+      - name: Build for mainnet
+        run: anchor build -- --features mainnet
+      - name: Deploy to mainnet
+        env:
+          DEPLOY_KEYPAIR: ${{ secrets.MAINNET_DEPLOY_KEYPAIR }}
+        run: |
+          echo "$DEPLOY_KEYPAIR" > /tmp/deploy-key.json
+          solana config set --url https://api.mainnet-beta.solana.com
+          solana config set --keypair /tmp/deploy-key.json
+          anchor deploy --provider.cluster mainnet
+```
+
+The `needs: deploy-devnet` directive ensures mainnet deployment only runs after devnet succeeds. The `environment: production` field enables GitHub's environment protection rules, which can require manual approval before the mainnet job runs.
+
+Store deploy keypairs as encrypted GitHub secrets. Never commit keypair files to your repository.
+
+<ArticleSection name="Verifiable Builds" id="verifiable-builds" level="h2" />
+
+When you compile a Rust program, the output binary depends on the compiler version, host operating system, linked libraries, and build flags. Two developers building the same source code on different machines will produce different binaries. Without verifiable builds, there is no way to confirm that the bytecode running on-chain corresponds to a given source repository.
+
+Verifiable builds use Docker to create a deterministic build environment. The same source code, built inside the same Docker image, produces the same binary byte-for-byte every time, regardless of the host machine. Anyone can clone your repo, run the build, and compare the output against the on-chain bytecode.
+
+Anchor supports verifiable builds natively. To build a verifiable binary:
+
+```bash
+anchor build --verifiable
+```
+
+This command pulls the `projectserum/build` Docker image (matched to your Anchor version), mounts your project directory, and compiles inside the container. The output binary is deterministic.
+
+To verify an already-deployed program against its source:
+
+```bash
+anchor verify <PROGRAM_ID>
+```
+
+This command builds the program inside the Docker container and compares the resulting binary against the on-chain bytecode. If they match, the verification passes. If they differ, the source code does not correspond to the deployed program.
+
+The verification process works as follows:
+
+1. Clone the repository at the specified commit
+2. Build inside the Docker container to produce a deterministic binary
+3. Fetch the on-chain program bytecode
+4. Compare the two binaries byte-for-byte
+5. Report match or mismatch
+
+The Anchor Verified Build standard allows explorers and wallets to display verification status. When a program is verified, users can see the source code that produced the on-chain bytecode. The result is trust—users don't need to take the developer's word that the program does what they claim. They can read the source and know it matches.
+
+To publish your verified build to the Anchor registry:
+
+```bash
+anchor publish <PROGRAM_NAME>
+```
+
+This uploads your IDL and links it to the verified build. Both become available to anyone who queries the program.
+
+Verifiable builds add roughly 2-5 minutes to compile time because of the Docker overhead. For CI/CD pipelines, cache the Docker image to reduce pull times. The tradeoff is worth it for any program that manages user funds or claims to be open source.
+
+<ArticleSection name="Deployment Checklist" id="deployment-checklist" level="h2" />
+
+Run through this checklist before every mainnet deployment. Each item catches a failure mode that has cost real SOL or broken real programs.
+
+**Program ID alignment.** Confirm that `declare_id!` matches your deploy keypair. Run `anchor keys sync` or manually compare with `solana-keygen pubkey target/deploy/my_program-keypair.json`.
+
+```bash
+anchor keys sync
+```
+
+**Upgrade authority.** Verify which keypair holds upgrade authority. After deployment, this is the only key that can modify the program. Run `solana program show <PROGRAM_ID>` and confirm the authority address is correct and the keypair is backed up.
+
+**Devnet validation.** Deploy to devnet and run your full integration test suite against the devnet deployment. Do not skip this step even for small changes—devnet catches issues that local validator testing misses.
+
+**Verifiable build.** Build with `anchor build --verifiable` and confirm the output matches what you intend to deploy. Record the SHA-256 hash.
+
+```bash
+anchor build --verifiable
+sha256sum target/verifiable/my_program.so
+```
+
+**IDL correctness.** Verify that your IDL matches the program by inspecting it manually or deploying it to the IDL account. Client SDKs depend on the IDL being accurate—a stale IDL causes client-side errors that look like on-chain bugs.
+
+```bash
+anchor idl init --filepath target/idl/my_program.json <PROGRAM_ID>
+```
+
+For upgrades to an existing program, use `anchor idl upgrade` instead.
+
+**SOL balance.** Check that your deploy wallet has enough SOL to cover rent exemption and transaction fees. A failed deployment mid-buffer-write wastes SOL on transactions that wrote to a buffer you'll never use.
+
+```bash
+solana balance
+solana rent $(wc -c < target/deploy/my_program.so)
+```
+
+**Binary size.** Confirm your program binary is under 1.5 MB, which is the maximum size for BPF programs on Solana. Programs that exceed this limit fail to deploy.
+
+```bash
+ls -la target/deploy/my_program.so
+```
+
+**Feature flags.** If you use conditional compilation, double-check that you built with the correct feature flag for the target environment. A mainnet deploy built with devnet features will use wrong admin keys and test configurations.
+
+**Upgrade authority transfer.** For programs managing user funds, plan to transfer the upgrade authority to a multisig after deployment. Document the multisig members and threshold before deploying.
+
+---
+
+For a deeper look at conditional compilation, the Advanced Anchor Patterns course's Feature Flags lesson covers building environment-specific binaries and managing feature flag lifecycles across deployments.
+
+The next lesson covers client SDK generation—how to produce TypeScript and Rust clients from your program's IDL so that applications can interact with your deployed program.

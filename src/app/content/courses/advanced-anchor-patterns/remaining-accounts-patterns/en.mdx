@@ -1,0 +1,407 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Remaining Accounts Patterns
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+Anchor's `#[derive(Accounts)]` struct defines a fixed set of accounts for each instruction. Every call to that instruction must pass exactly those accounts in exactly that order. This works until you need a variable number of accounts—send tokens to five recipients in one call, 12 in another, or conditionally include an oracle account only when a price feed is required.
+
+The `ctx.remaining_accounts` field solves this. It holds a slice of `AccountInfo` references for any accounts passed beyond the ones defined in your accounts struct. These accounts arrive unvalidated: no owner checks, no deserialization, no constraint verification. Your instruction logic is responsible for everything.
+
+<ArticleSection name="What Are Remaining Accounts" id="what-are-remaining-accounts" level="h2" />
+
+When a client sends a transaction, it includes a list of accounts. Anchor maps the first N accounts to the fields in your `#[derive(Accounts)]` struct, validates them according to your constraints, and deserializes them into typed references. Any accounts after that first N go into `ctx.remaining_accounts` as raw `AccountInfo` values.
+
+```rust
+#[derive(Accounts)]
+pub struct ProcessBatch<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    // Anchor maps the first 2 accounts here.
+    // Everything else lands in ctx.remaining_accounts.
+}
+
+pub fn process_batch(ctx: Context<ProcessBatch>) -> Result<()> {
+    let extras = ctx.remaining_accounts;
+    msg!("Received {} extra accounts", extras.len());
+    Ok(())
+}
+```
+
+The type of `ctx.remaining_accounts` is `&[AccountInfo<'info>]`—a plain slice. There's no type information, no ownership validation, and no guarantee about what these accounts represent. They could be token accounts, PDAs, programs, or completely unrelated accounts controlled by an attacker.
+
+<ArticleSection name="Why Use Remaining Accounts" id="why-use-remaining-accounts" level="h2" />
+
+Anchor's static account struct cannot express "0 to N accounts of this type." Every field in the struct maps to exactly one account. If your instruction always processes exactly three token accounts, declare them in the struct. If the count varies per call, remaining accounts are the only option.
+
+Common scenarios where the count varies:
+
+- **Batch operations.** A payroll instruction distributes tokens to N recipients. One call might pay four employees, the next pays 20. Declaring 20 token account fields wastes transaction space when you only need four, and 20 is still an arbitrary ceiling.
+
+- **Multi-pool routing.** A swap routes through N liquidity pools. The optimal path depends on current prices, so the pool count changes with every transaction.
+
+- **Optional features.** An instruction reads from an oracle when a price-dependent feature is active, but skips the oracle otherwise. Declaring the oracle in the struct forces every caller to pass it, even when unused.
+
+- **Multi-token operations.** A portfolio rebalancer adjusts positions across N token accounts. The number of tokens in a portfolio varies by user.
+
+In each case, the set of accounts is determined by the caller at transaction time, not by the program at compile time.
+
+<ArticleSection name="Accessing and Iterating" id="accessing-and-iterating" level="h2" />
+
+The `remaining_accounts` slice supports standard Rust slice operations: indexing, iteration, length checks, and slicing.
+
+Access accounts by index when the position carries meaning:
+
+```rust
+pub fn transfer_with_optional_memo(ctx: Context<TransferCtx>) -> Result<()> {
+    let remaining = ctx.remaining_accounts;
+
+    if remaining.is_empty() {
+        msg!("No optional accounts provided");
+        return Ok(());
+    }
+
+    let first = &remaining[0];
+    msg!("First remaining account: {}", first.key);
+
+    Ok(())
+}
+```
+
+Iterate when processing all remaining accounts uniformly:
+
+```rust
+pub fn log_all_accounts(ctx: Context<LogAccounts>) -> Result<()> {
+    for (i, account) in ctx.remaining_accounts.iter().enumerate() {
+        msg!(
+            "Account {}: key={}, owner={}, lamports={}, data_len={}",
+            i,
+            account.key,
+            account.owner,
+            account.lamports(),
+            account.data_len()
+        );
+    }
+
+    Ok(())
+}
+```
+
+Each `AccountInfo` exposes the standard fields: `key`, `owner`, `lamports()`, `data` (borrow with `account.data.borrow()`), `is_signer`, `is_writable`, and `executable`. These are identical to the fields on any `AccountInfo` in Solana. Nothing about remaining accounts changes the underlying data—only the validation differs.
+
+<ArticleSection name="Manual Validation" id="manual-validation" level="h2" />
+
+Remaining accounts arrive with zero validation. No owner check confirms the account belongs to your program. No constraint verification ensures it's the right PDA. No deserialization confirms it holds valid data. If you read or write remaining accounts without validation, an attacker can substitute any account they control.
+
+Consider an instruction that transfers tokens to recipients passed as remaining accounts. Without validation, an attacker could pass their own token account in place of a legitimate recipient:
+
+```rust
+// INSECURE: no validation on remaining accounts
+pub fn insecure_batch_pay(ctx: Context<BatchPay>, amounts: Vec<u64>) -> Result<()> {
+    let remaining = ctx.remaining_accounts;
+
+    for (i, amount) in amounts.iter().enumerate() {
+        let recipient = &remaining[i];
+        // Transferring to an unvalidated account — anyone can be a "recipient"
+        transfer_tokens(&ctx.accounts.vault, recipient, *amount)?;
+    }
+
+    Ok(())
+}
+```
+
+An attacker calls this instruction with their own token account as one of the remaining accounts. The program happily sends funds to the wrong address. The fix is manual validation before any read or write.
+
+The four validation primitives you need are owner checks (`account.owner == &expected_program`), key checks (`account.key == expected`), mutability checks (`account.is_writable`), and signer checks (`account.is_signer`). Combine them into a validation function that runs before processing:
+
+```rust
+fn validate_recipient(account: &AccountInfo) -> Result<()> {
+    require!(account.owner == &spl_token::ID, ErrorCode::InvalidAccountOwner);
+    require!(account.is_writable, ErrorCode::AccountNotWritable);
+    Ok(())
+}
+
+pub fn secure_batch_pay(ctx: Context<BatchPay>, amounts: Vec<u64>) -> Result<()> {
+    let remaining = ctx.remaining_accounts;
+    require!(remaining.len() == amounts.len(), ErrorCode::LengthMismatch);
+
+    for (i, amount) in amounts.iter().enumerate() {
+        let recipient = &remaining[i];
+        validate_recipient(recipient)?;
+        transfer_tokens(&ctx.accounts.vault, recipient, *amount)?;
+    }
+
+    Ok(())
+}
+```
+
+Every remaining account that your program reads from, writes to, or passes into a CPI must be validated. The validation required depends on the operation, but skipping it is always a vulnerability.
+
+<ArticleSection name="Deserializing Remaining Accounts" id="deserializing-remaining-accounts" level="h2" />
+
+Raw `AccountInfo` gives you bytes. For structured access, deserialize the account data into a typed struct. Anchor provides `Account::try_from` for this, or you can deserialize manually with Borsh.
+
+Using Anchor's `Account::try_from`:
+
+```rust
+use anchor_lang::accounts::account::Account;
+use anchor_spl::token::TokenAccount;
+
+pub fn read_token_balances(ctx: Context<ReadBalances>) -> Result<()> {
+    for account_info in ctx.remaining_accounts.iter() {
+        // try_from validates the owner and deserializes the data
+        let token_account: Account<TokenAccount> =
+            Account::try_from(account_info)?;
+
+        msg!(
+            "Mint: {}, Balance: {}",
+            token_account.mint,
+            token_account.amount
+        );
+    }
+
+    Ok(())
+}
+```
+
+`Account::try_from` performs the same owner check and deserialization that Anchor does for accounts declared in the struct. If the account isn't owned by the expected program or the data doesn't match the expected layout, it returns an error.
+
+For manual Borsh deserialization when you need more control:
+
+```rust
+use borsh::BorshDeserialize;
+
+#[derive(BorshDeserialize)]
+pub struct StakeEntry {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+pub fn sum_stakes(ctx: Context<SumStakes>) -> Result<()> {
+    let mut total: u64 = 0;
+
+    for account_info in ctx.remaining_accounts.iter() {
+        require!(
+            account_info.owner == ctx.program_id,
+            ErrorCode::InvalidAccountOwner
+        );
+
+        let data = account_info.data.borrow();
+        // Skip the 8-byte Anchor discriminator
+        let entry = StakeEntry::try_from_slice(&data[8..])?;
+        total = total.checked_add(entry.amount)
+            .ok_or(ErrorCode::Overflow)?;
+    }
+
+    msg!("Total staked: {}", total);
+    Ok(())
+}
+```
+
+Manual deserialization skips Anchor's discriminator check, so you must validate the owner yourself and handle the eight-byte discriminator offset. This approach is useful when working with accounts from non-Anchor programs or when you need to read only a portion of the account data.
+
+<ArticleSection name="Common Patterns" id="common-patterns" level="h2" />
+
+### Batch Transfers
+
+Distribute tokens to a variable number of recipients in a single instruction. The remaining accounts alternate between recipient token accounts and their expected mints for validation:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+
+#[derive(Accounts)]
+pub struct BatchTransfer<'info> {
+    #[account(mut)]
+    pub source: Account<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<()> {
+    let recipients = ctx.remaining_accounts;
+    require!(recipients.len() == amounts.len(), ErrorCode::LengthMismatch);
+
+    for (i, amount) in amounts.iter().enumerate() {
+        let recipient = &recipients[i];
+        require!(recipient.owner == &spl_token::ID, ErrorCode::InvalidAccountOwner);
+        require!(recipient.is_writable, ErrorCode::AccountNotWritable);
+
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.source.to_account_info(),
+                    to: recipient.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                },
+            ),
+            *amount,
+        )?;
+    }
+
+    Ok(())
+}
+```
+
+Each recipient account is validated for owner and writability before the CPI. The `amounts` vector must match the remaining accounts count exactly.
+
+### Optional Accounts
+
+Include an oracle only when the instruction needs price data. The caller passes 0 or 1 remaining accounts depending on the operation:
+
+```rust
+pub fn execute_trade(
+    ctx: Context<ExecuteTrade>,
+    amount: u64,
+    use_oracle: bool,
+) -> Result<()> {
+    let price = if use_oracle {
+        require!(
+            ctx.remaining_accounts.len() == 1,
+            ErrorCode::MissingOracle
+        );
+
+        let oracle_info = &ctx.remaining_accounts[0];
+        require!(
+            oracle_info.owner == &oracle_program::ID,
+            ErrorCode::InvalidAccountOwner
+        );
+
+        let oracle_data = oracle_info.data.borrow();
+        let price_feed = PriceFeed::try_from_slice(&oracle_data[8..])?;
+        price_feed.current_price
+    } else {
+        ctx.accounts.pool.last_known_price
+    };
+
+    process_trade(&ctx.accounts.pool, amount, price)?;
+    Ok(())
+}
+```
+
+The instruction works with or without the oracle. When `use_oracle` is false, the remaining accounts slice is empty and the program falls back to the pool's cached price. This avoids forcing every caller to look up and pass the oracle account when it isn't needed.
+
+### Dynamic CPI Targets
+
+Route a CPI to different programs based on runtime logic. Pass the target program as a remaining account:
+
+```rust
+pub fn route_swap(ctx: Context<RouteSwap>, amount: u64) -> Result<()> {
+    let remaining = ctx.remaining_accounts;
+    require!(remaining.len() >= 2, ErrorCode::InsufficientAccounts);
+
+    let target_program = &remaining[0];
+    let pool_account = &remaining[1];
+
+    require!(target_program.executable, ErrorCode::NotAProgram);
+
+    let instruction = build_swap_instruction(
+        target_program.key,
+        pool_account.key,
+        &ctx.accounts.user_token.key(),
+        amount,
+    );
+
+    solana_program::program::invoke(
+        &instruction,
+        &[
+            pool_account.to_account_info(),
+            ctx.accounts.user_token.to_account_info(),
+            ctx.accounts.authority.to_account_info(),
+        ],
+    )?;
+
+    Ok(())
+}
+```
+
+The `executable` check confirms the first remaining account is a program. Without it, an attacker could pass a data account and cause the CPI to fail with a confusing error—or worse, exploit unexpected behavior.
+
+<ArticleSection name="Typed Remaining Accounts" id="typed-remaining-accounts" level="h2" />
+
+Raw iteration with manual validation gets repetitive. A helper function can validate and deserialize remaining accounts into a typed collection, centralizing the validation logic.
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token::TokenAccount;
+
+pub fn parse_token_accounts<'info>(
+    remaining: &[AccountInfo<'info>],
+    expected_mint: &Pubkey,
+) -> Result<Vec<Account<'info, TokenAccount>>> {
+    let mut parsed = Vec::with_capacity(remaining.len());
+
+    for (i, account_info) in remaining.iter().enumerate() {
+        let token_account: Account<TokenAccount> =
+            Account::try_from(account_info).map_err(|_| {
+                msg!("Failed to parse remaining account {} as TokenAccount", i);
+                error!(ErrorCode::InvalidTokenAccount)
+            })?;
+
+        require!(
+            token_account.mint == *expected_mint,
+            ErrorCode::MintMismatch
+        );
+
+        parsed.push(token_account);
+    }
+
+    Ok(parsed)
+}
+```
+
+Use this helper at the top of your instruction:
+
+```rust
+pub fn rebalance_portfolio(ctx: Context<Rebalance>, target_weights: Vec<u16>) -> Result<()> {
+    let token_accounts = parse_token_accounts(
+        ctx.remaining_accounts,
+        &ctx.accounts.portfolio_mint.key(),
+    )?;
+
+    require!(
+        token_accounts.len() == target_weights.len(),
+        ErrorCode::LengthMismatch
+    );
+
+    for (account, weight) in token_accounts.iter().zip(target_weights.iter()) {
+        msg!("Account {}: balance={}, target_weight={}", account.key(), account.amount, weight);
+        // Rebalancing logic here
+    }
+
+    Ok(())
+}
+```
+
+The helper validates owner, deserializes data, and checks the mint—all in one place. Every instruction that processes token accounts from remaining accounts calls the same function, so a fix to the validation logic applies everywhere.
+
+For programs that process multiple types of remaining accounts, use a structured approach where positions in the slice have defined meanings. For example, the first account could be a program to CPI into (validated with `executable`), the second a PDA owned by your program (validated with an owner check), and the rest token accounts parsed through the helper. Document the expected order in your IDL or client code—the program enforces types and ownership, but the caller must know which positions expect which account types.
+
+<ArticleSection name="Limitations and Trade-offs" id="limitations-and-trade-offs" level="h2" />
+
+Remaining accounts trade compile-time safety for runtime flexibility. That trade-off carries real costs.
+
+**No compile-time guarantees.** Anchor's account struct catches type mismatches, missing accounts, and constraint violations at compile time. Remaining accounts defer all of this to runtime. A typo in your validation logic won't surface until someone calls the instruction with bad data.
+
+**Manual validation burden.** Every remaining account needs explicit checks for owner, type, writability, and signer status, and missing even one check is a security vulnerability. Auditors must trace through your validation logic manually, since Anchor's constraint system doesn't apply.
+
+**Client complexity.** The client must construct the account list in the correct order with the correct number of accounts. Anchor's IDL describes the fixed accounts struct, but remaining accounts have no schema. Your documentation is the only guide for client developers, and out-of-date docs lead to broken integrations.
+
+**Transaction size limits.** Each account in a transaction consumes 32 bytes for the public key plus metadata. Solana transactions are capped at 1232 bytes. After the fixed accounts, signatures, and instruction data, you might fit 20 to 30 remaining accounts depending on the instruction. Exceeding this limit requires breaking the operation into multiple transactions.
+
+**When to use remaining accounts vs. separate instructions:**
+
+Use remaining accounts when the variable account count is inherent to the operation. Batch transfers, multi-pool swaps, and portfolio operations fundamentally need N accounts in a single atomic transaction. Splitting them into separate instructions changes the semantics—partial execution is possible, and atomicity is lost.
+
+Use separate instructions when the operations are independent. If paying 10 recipients doesn't need to be atomic, 10 separate transfer instructions are simpler and easier to debug. Each instruction gets full Anchor validation, clear error messages, and simple client code.
+
+A useful heuristic: if losing atomicity changes the correctness of your operation, use remaining accounts. If each sub-operation can succeed or fail independently, use separate instructions.
+
+Because remaining accounts bypass Anchor's compile-time checks, the Testing Anchor Programs course covers negative testing patterns essential for validating this logic in its testing-security lesson. For the validation patterns these accounts need — owner checks, signer checks, and key comparisons — the Securing Anchor Programs course goes deeper in its missing-validation lesson.
+
+---
+
+Next, you'll learn about versioning and migration—how to evolve on-chain account schemas without breaking existing data.

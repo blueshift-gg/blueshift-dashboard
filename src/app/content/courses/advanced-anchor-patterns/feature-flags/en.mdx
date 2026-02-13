@@ -1,0 +1,298 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Feature Flags
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+A program that works on devnet needs different token addresses, admin keys, and CPI targets than the same program on mainnet. Feature flags solve this at compile time—different configurations compile into different binaries, with no runtime overhead.
+
+<ArticleSection name="The Environment Problem" id="the-environment-problem" level="h2" />
+
+Programs move through multiple environments during development: localnet for rapid iteration, devnet for integration testing, mainnet-beta for production. Each environment uses different infrastructure:
+
+```rust
+// What should these values be?
+pub const USDC_MINT: Pubkey = pubkey!("???");
+pub const ADMIN_KEY: Pubkey = pubkey!("???");
+pub const ORACLE_PROGRAM: Pubkey = pubkey!("???");
+```
+
+Hardcoding mainnet addresses breaks local testing, while hardcoding devnet addresses breaks production deployments. Maintaining separate codebases for each environment creates drift and introduces bugs.
+
+The problem extends beyond addresses. A lending protocol might need a `set_price` instruction for testing that should never exist in production. A trading program might use different fee rates during development. These aren't runtime configuration choices—they're fundamentally different program behaviors that should compile into different binaries.
+
+<ArticleSection name="Cargo Features" id="cargo-features" level="h2" />
+
+Cargo's feature system controls conditional compilation. Features are declared in `Cargo.toml` and checked with `cfg` attributes at compile time.
+
+Add a `features` table to your program's `Cargo.toml`:
+
+```toml
+[features]
+default = ["mainnet"]
+mainnet = []
+devnet = []
+testing = []
+```
+
+The `default` feature activates when no features are explicitly specified. Setting `default = ["mainnet"]` means production configuration is the fallback—you must explicitly opt into development or testing builds.
+
+Build with specific features using Anchor's build command:
+
+```bash
+# Mainnet build (uses default)
+anchor build
+
+# Devnet build
+anchor build -- --no-default-features --features devnet
+
+# Testing build
+anchor build -- --no-default-features --features testing
+```
+
+The `--no-default-features` flag disables the default feature set before activating the specified feature. Without it, both `mainnet` and `devnet` would be active simultaneously.
+
+<ArticleSection name="Conditional Compilation" id="conditional-compilation" level="h2" />
+
+The `cfg` attribute controls which code compiles based on active features. Code inside a `cfg` block only exists in the binary if its condition is met.
+
+Define environment-specific constants:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[cfg(feature = "mainnet")]
+pub const USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+#[cfg(feature = "devnet")]
+pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+
+#[cfg(feature = "testing")]
+pub const USDC_MINT: Pubkey = pubkey!("Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr");
+```
+
+These are the real USDC mint addresses on mainnet and devnet. The testing address can be any pubkey—it's only used in local tests where you control token creation.
+
+The same pattern works for any environment-specific value:
+
+```rust
+#[cfg(feature = "mainnet")]
+pub const ADMIN_KEY: Pubkey = pubkey!("YourMainnetAdminKey...");
+
+#[cfg(feature = "devnet")]
+pub const ADMIN_KEY: Pubkey = pubkey!("YourDevnetAdminKey...");
+
+#[cfg(feature = "mainnet")]
+pub const PROTOCOL_FEE_BPS: u16 = 30; // 0.3% on mainnet
+
+#[cfg(not(feature = "mainnet"))]
+pub const PROTOCOL_FEE_BPS: u16 = 0; // No fees in development
+```
+
+The `not` modifier inverts the condition. `cfg(not(feature = "mainnet"))` means "compile this when the mainnet feature is not active". This provides a default for all non-production builds without repeating code for each development feature.
+
+<ArticleSection name="Feature-Gated Instructions" id="feature-gated-instructions" level="h2" />
+
+Some instructions should only exist in testing builds. A lending protocol that relies on oracles in production might need a `set_price` instruction for tests. This instruction should never compile into the production binary.
+
+Gate entire instructions with `cfg` attributes:
+
+```rust
+#[program]
+pub mod lending {
+    use super::*;
+
+    pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+        let price = get_oracle_price(&ctx.accounts.oracle)?;
+        // Use real oracle price
+        Ok(())
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn set_price(ctx: Context<SetPrice>, price: u64) -> Result<()> {
+        let oracle = &mut ctx.accounts.oracle;
+        oracle.price = price;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "testing")]
+#[derive(Accounts)]
+pub struct SetPrice<'info> {
+    #[account(mut)]
+    pub oracle: Account<'info, OracleAccount>,
+    pub authority: Signer<'info>,
+}
+```
+
+When built without the `testing` feature, `set_price` and its `SetPrice` context don't exist. The instruction is absent from the program entirely, not merely disabled. Attempting to call it fails at the instruction parsing level.
+
+This pattern is critical for maintaining security invariants. If an instruction exists in the binary, it can be called. Feature flags ensure dangerous testing utilities never reach production.
+
+Apply the same pattern to accounts and validation logic:
+
+```rust
+#[account]
+pub struct Config {
+    pub admin: Pubkey,
+    pub fee_rate: u16,
+
+    #[cfg(feature = "testing")]
+    pub test_mode: bool,
+}
+
+pub fn validate_user(user: &Pubkey) -> Result<()> {
+    #[cfg(feature = "testing")]
+    {
+        // Skip validation in tests
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "testing"))]
+    {
+        require!(is_authorized(user), ErrorCode::Unauthorized);
+        Ok(())
+    }
+}
+```
+
+The `test_mode` field only exists in testing builds. In production, the `Config` account is smaller and the field cannot be accessed.
+
+<ArticleSection name="Feature Flags in Anchor.toml" id="feature-flags-in-anchor-toml" level="h2" />
+
+Anchor's cluster configuration integrates with Cargo features through custom build commands. Configure per-cluster features in `Anchor.toml`:
+
+```toml
+[programs.localnet]
+lending = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+
+[programs.devnet]
+lending = "DQ8Y8RrqrnBpYRqv7KAqJvmCkT8GzNJBCGEYVfqDxJv9"
+
+[programs.mainnet-beta]
+lending = "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K"
+
+[toolchain]
+anchor_version = "0.30.1"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[[scripts.localnet.build]]
+cmd = "anchor build"
+
+[[scripts.devnet.build]]
+cmd = "anchor build -- --no-default-features --features devnet"
+
+[[scripts.mainnet.build]]
+cmd = "anchor build -- --no-default-features --features mainnet"
+```
+
+The `scripts` table doesn't exist in standard Anchor configuration, but you can create wrapper scripts that invoke the correct build commands. A more practical approach is documenting the build commands:
+
+```bash
+# Local development
+anchor build -- --no-default-features --features testing
+
+# Deploy to devnet
+anchor build -- --no-default-features --features devnet
+solana program deploy --program-id devnet-keypair.json target/deploy/lending.so
+
+# Deploy to mainnet
+anchor build -- --no-default-features --features mainnet
+solana program deploy --program-id mainnet-keypair.json target/deploy/lending.so
+```
+
+Always build with explicit features before deployment. The default feature protects against accidental mainnet deploys with wrong configuration, but explicit flags make intent clear.
+
+<ArticleSection name="Best Practices" id="best-practices" level="h2" />
+
+**Default to production configuration.** Set `default = ["mainnet"]` in `Cargo.toml`. Development builds require explicit opt-in, but production builds use safe defaults, preventing accidental deploys with development features enabled.
+
+**Name features after environments, not behaviors.** Use `testing`, `devnet`, `mainnet` rather than `skip_validation` or `mock_oracle`. Environment names describe when code should run, not what it does, so the purpose of each feature is immediately clear.
+
+**Keep conditional blocks small.** Extract environment-specific logic into constants and helper functions rather than scattering `cfg` attributes throughout instruction logic:
+
+```rust
+// Good: centralized configuration
+pub const USDC_MINT: Pubkey = get_usdc_mint();
+
+#[cfg(feature = "mainnet")]
+const fn get_usdc_mint() -> Pubkey {
+    pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+}
+
+#[cfg(not(feature = "mainnet"))]
+const fn get_usdc_mint() -> Pubkey {
+    pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU")
+}
+
+// Bad: scattered conditionals
+pub fn process_payment(ctx: Context<Payment>) -> Result<()> {
+    #[cfg(feature = "mainnet")]
+    let mint = pubkey!("EPj...");
+
+    #[cfg(not(feature = "mainnet"))]
+    let mint = pubkey!("4zM...");
+
+    // ...
+}
+```
+
+Centralized configuration makes it easy to verify that all environment-specific values are correct.
+
+**Document what each feature controls.** Add comments to your `Cargo.toml` explaining the purpose of each feature:
+
+```toml
+[features]
+# Production configuration with real addresses and full validation
+default = ["mainnet"]
+
+# Mainnet addresses, production fees, all security checks
+mainnet = []
+
+# Devnet addresses, reduced fees, all security checks
+devnet = []
+
+# Local test addresses, no fees, includes test-only instructions
+testing = []
+```
+
+Clear documentation prevents confusion when team members or auditors review build configurations.
+
+**Verify feature flags in tests.** Write tests that confirm the correct configuration is active:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_usdc_mint_is_devnet() {
+        #[cfg(feature = "devnet")]
+        assert_eq!(
+            USDC_MINT,
+            pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "testing")]
+    fn test_set_price_exists() {
+        // This test only compiles in testing builds
+        // Verifies the instruction is gated correctly
+    }
+}
+```
+
+These tests catch configuration errors before deployment.
+
+**Avoid complex feature combinations.** Don't use multiple features simultaneously or create features that depend on other features. Each build should activate exactly one environment feature. Complex combinations create exponential testing overhead and make behavior hard to predict.
+
+Feature flags solve the environment problem at compile time. Different builds produce different binaries with zero runtime overhead. For a deeper look at managing these different builds across clusters and CI pipelines, the Anchor in Production course covers end-to-end deployment workflows in its deployment-strategies lesson.
+
+The next lesson covers compute optimization and how to keep those binaries executing efficiently within Solana's compute budget.

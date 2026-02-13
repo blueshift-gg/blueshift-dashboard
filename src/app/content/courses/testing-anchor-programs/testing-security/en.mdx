@@ -1,0 +1,735 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Testing Security
+
+![Testing Anchor Programs](/graphics/course-banners/testing-anchor-programs.png)
+
+Happy-path tests verify your program works. Security tests verify it can't be exploited. A program without negative tests has an unknown number of vulnerabilities — and "unknown" is the most dangerous count.
+
+Each test you write is a vulnerability you've confirmed does not exist. This lesson covers how to write tests that prove your program rejects malicious inputs, unauthorized access, and impossible state transitions. The patterns here apply to any Anchor program — vault, DEX, lending protocol, or governance — because the underlying vulnerability classes are universal.
+
+The lesson is organized by vulnerability class: access control, arithmetic edge cases, state transitions, account validation, and CPI security. Each section provides one or two canonical test patterns, explains the underlying vulnerability, and lists additional cases to test using the same pattern. The final section covers how to organize these tests into a maintainable suite with a coverage matrix.
+
+<ArticleSection name="Prioritizing Security Tests" id="prioritizing-security-tests" level="h2" />
+
+Not all security tests carry equal weight. Prioritize by potential damage:
+
+1. **Authorization tests** — essential for every program. A missing signer check can drain all funds in a single transaction. Test every privileged instruction with an unauthorized wallet. These tests have the highest ROI because the vulnerability they prevent — unauthorized fund extraction — is the most common exploit on Solana.
+2. **Arithmetic tests** — essential for any program that tracks balances or computes amounts. Overflow and underflow bugs have caused eight-figure losses on Solana and EVM chains alike. Focus on `checked_add`, `checked_sub`, and `checked_mul` at every balance mutation. If your program does division, test for divide-by-zero and rounding-direction attacks.
+3. **State transition tests** — catch logic bugs where accounts reach impossible states. Double-initialization and use-after-close are the highest-priority cases. Add close-with-balance tests for any account that holds funds. These bugs are subtle because the program appears to work in happy-path testing — only malicious or accidental reuse of accounts exposes them.
+4. **CPI validation tests** — required whenever your program invokes another program. A forged program ID or token mint can redirect funds to an attacker-controlled account. Test each CPI target and every account constraint individually.
+
+The return on investment drops steeply after the first test per category. One well-constructed access-control test that fails correctly proves the constraint works; duplicating it for every instruction yields diminishing returns. Write one canonical test per vulnerability class, then enumerate the remaining instructions that need the same pattern.
+
+A practical minimum coverage target: one authorization test per privileged instruction, one overflow and one underflow test per arithmetic operation on financial state, one double-init test per `init` constraint, and one fake-program-ID test per CPI call. For a vault program with 4 instructions, that translates to roughly 8-12 security tests.
+
+Programs handling higher total value locked (TVL) warrant proportionally more testing. A governance program managing protocol parameters might need 5-6 authorization tests (one per governance action), while a simple tip jar might need only 2. Scale your test investment to match the blast radius of a potential exploit.
+
+<ArticleSection name="Negative Testing Fundamentals" id="negative-testing" level="h2" />
+
+Negative tests prove that invalid operations fail as expected. For every instruction that succeeds in your happy-path tests, write at least one test that should fail. The structure is always the same: call the instruction with a malicious or invalid input, wrap the call in try/catch, and place `assert.fail()` after the instruction call so the test fails if the transaction unexpectedly succeeds.
+
+The try/catch pattern serves a dual purpose. First, it verifies that the transaction fails (if `assert.fail` executes, the transaction succeeded when it should not have). Second, it verifies that the transaction fails for the right reason by asserting on the error message. A test that only checks for any error can mask bugs — the transaction might fail due to insufficient lamports rather than the constraint you intended to test.
+
+The following test attempts to initialize a vault with the wrong authority. The PDA is derived from `wrongAuthority`, but the vault's seeds constraint expects a different key:
+
+```typescript
+it("fails to initialize vault with wrong authority", async () => {
+  const wrongAuthority = Keypair.generate();
+  const [vault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), wrongAuthority.publicKey.toBuffer()],
+    program.programId
+  );
+  try {
+    await program.methods.initializeVault()
+      .accounts({
+        vault, authority: wrongAuthority.publicKey,
+        payer: provider.wallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([wrongAuthority]).rpc();
+    assert.fail("Expected transaction to fail");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    assert.ok(error.message.includes("ConstraintSeeds"));
+  }
+});
+```
+
+This test verifies the PDA derivation constraint works. If the transaction succeeds when it should not, you have a critical vulnerability. The `assert.fail` call is the key mechanism: it only executes if the transaction does not throw, meaning the security check you expected to reject the transaction is missing or misconfigured.
+
+The double assertion in the catch block (`error instanceof Error` and `error.message.includes`) is intentional. The first confirms the error is a real Error object (not a string or undefined). The second confirms the error is the specific Anchor constraint error you are testing, not an unrelated failure.
+
+The try/catch + `assert.fail` pattern appears in every security test. To reduce boilerplate, extract a helper that wraps the assertion logic:
+
+```typescript
+async function expectError(
+  fn: () => Promise<string>,
+  expectedError?: string
+) {
+  try {
+    await fn();
+    assert.fail("Transaction should have failed");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    if (expectedError) {
+      assert.ok(error.message.includes(expectedError));
+    }
+  }
+}
+```
+
+With this helper, each security test reduces to a single call:
+
+```typescript
+it("fails to deposit with wrong vault PDA", async () => {
+  const [wrongVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("wrong"), authority.publicKey.toBuffer()],
+    program.programId
+  );
+  await expectError(
+    () => program.methods.deposit(new BN(1_000_000))
+      .accounts({ vault: wrongVault, authority: authority.publicKey,
+        systemProgram: SystemProgram.programId })
+      .rpc(),
+    "AccountNotInitialized"
+  );
+});
+```
+
+Apply this pattern to test every constraint: wrong vault PDA (expect `AccountNotInitialized`), wrong depositor authority, wrong system program ID, and any other account passed into the instruction. The structure is identical each time — only the account substitution and expected error string change.
+
+**Error message assertions** deserve special attention. Anchor error messages follow a predictable format: built-in constraints produce errors like `ConstraintSeeds`, `ConstraintTokenMint`, and `AccountNotInitialized`, while custom errors produce the variant name you defined in your `#[error_code]` enum. Always assert on the specific error string, not just `error instanceof Error`. A generic assertion passes even when the transaction fails for the wrong reason — for example, failing with `InsufficientFunds` instead of `ConstraintSeeds` means your authorization check is missing but the test still passes.
+
+When testing custom errors, match the exact error code name from your program:
+
+```typescript
+// In your Anchor program:
+// #[error_code]
+// pub enum VaultError {
+//     #[msg("Vault balance is not zero")]
+//     VaultNotEmpty,
+// }
+
+// In your test:
+assert.ok(error.message.includes("VaultNotEmpty"));
+```
+
+If the error message does not contain the expected string, the test should fail — this catches cases where the runtime rejects the transaction for a different reason than the constraint you intended to test.
+
+<ArticleSection name="Testing Access Control" id="access-control" level="h2" />
+
+Access control is the most critical security property for any program that manages funds. A single missing signer check can allow an attacker to drain every vault in a single transaction. The testing strategy is straightforward: create an attacker wallet and attempt every privileged operation using that wallet instead of the legitimate authority.
+
+The setup creates two wallets — a legitimate authority and an attacker — then initializes a vault owned by the authority. Both wallets are funded so that any failure is due to authorization checks, not insufficient lamports.
+
+```typescript
+describe("Access Control", () => {
+  let authority: Keypair;
+  let attacker: Keypair;
+  let vault: PublicKey;
+
+  before(async () => {
+    authority = Keypair.generate();
+    attacker = Keypair.generate();
+    await provider.connection.requestAirdrop(
+      authority.publicKey, 2 * LAMPORTS_PER_SOL);
+    await provider.connection.requestAirdrop(
+      attacker.publicKey, 2 * LAMPORTS_PER_SOL);
+    [vault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), authority.publicKey.toBuffer()],
+      program.programId);
+    await program.methods.initializeVault()
+      .accounts({ vault, authority: authority.publicKey,
+        payer: authority.publicKey,
+        systemProgram: SystemProgram.programId })
+      .signers([authority]).rpc();
+  });
+```
+
+The `before` block runs once for the entire `describe` block, creating a single vault that all access-control tests share. This is acceptable here because access-control tests should not modify the vault state — they attempt unauthorized operations that fail before any state change occurs. If your tests do modify state, use `beforeEach` instead.
+
+With the setup in place, the canonical access-control test substitutes the attacker's key for every privileged account field and asserts that the PDA constraint rejects it.
+
+```typescript
+  it("prevents unauthorized withdrawal", async () => {
+    try {
+      await program.methods
+        .withdraw(new BN(1_000_000))
+        .accounts({
+          vault,
+          authority: attacker.publicKey,
+          recipient: attacker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      assert.fail("Attacker should not be able to withdraw");
+    } catch (error) {
+      assert.ok(error.message.includes("ConstraintSeeds"));
+    }
+  });
+});
+```
+
+The test sends the attacker's public key as the vault authority. Because the PDA is derived from the legitimate authority's key, the seeds `["vault", authority.publicKey]` do not match when the attacker's key is substituted. Anchor rejects the transaction with `ConstraintSeeds` before the instruction logic executes.
+
+The key insight: PDA-based access control ties authorization to account derivation. If the PDA seeds include the authority's public key, an attacker cannot produce a valid PDA for the legitimate vault using their own key. The test above proves this mechanism works.
+
+This test should run against every instruction that requires authorization. For a vault program, that means `withdraw`, `closeVault`, and any admin-only instructions like `updateConfig`. The test body is identical for each — only the method name and arguments change.
+
+A more sophisticated attack involves PDA authority substitution. The attacker initializes their own vault (which succeeds, since the PDA derived from their key is valid for their vault), then attempts to operate on the legitimate vault by passing their own key as authority:
+
+```typescript
+it("prevents PDA authority substitution", async () => {
+  const [attackerVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), attacker.publicKey.toBuffer()],
+    program.programId);
+  await program.methods.initializeVault()
+    .accounts({ vault: attackerVault,
+      authority: attacker.publicKey,
+      payer: attacker.publicKey,
+      systemProgram: SystemProgram.programId })
+    .signers([attacker]).rpc();
+  try {
+    await program.methods.withdraw(new BN(100))
+      .accounts({ vault, authority: attacker.publicKey,
+        recipient: attacker.publicKey,
+        systemProgram: SystemProgram.programId })
+      .signers([attacker]).rpc();
+    assert.fail("Should not accept wrong authority");
+  } catch (error) {
+    assert.ok(error.message.includes("ConstraintSeeds"));
+  }
+});
+```
+
+The attacker has a valid vault of their own, but the PDA seeds for the original vault include the legitimate authority's key. The attacker's key produces a different PDA, so Anchor's seeds constraint rejects the transaction.
+
+Apply the same try/catch pattern for unauthorized `closeVault` and unauthorized parameter updates — each test differs only in the instruction called and the expected error string. If any of these tests succeed, you have an access control vulnerability.
+
+For programs that use `has_one` constraints instead of PDA seeds for access control, the error message will be `ConstraintHasOne` instead of `ConstraintSeeds`. The test structure is identical — only the expected error string changes. Programs that use both patterns (PDA seeds for account derivation and `has_one` for authority validation) should have tests for each constraint independently.
+
+In summary, a complete access-control test suite for a vault program with `initialize`, `deposit`, `withdraw`, and `close` instructions needs 4 tests: one unauthorized-signer test per instruction. The PDA authority substitution test adds a 5th test that covers a more sophisticated attack vector. Using the `expectError` helper, these 5 tests fit in about 40 lines of test code.
+
+<ArticleSection name="Testing Arithmetic Edge Cases" id="arithmetic-edge-cases" level="h2" />
+
+Arithmetic bugs are a common source of exploits in programs that track balances. Three categories matter: overflow (adding past `u64::MAX`), underflow (subtracting below zero), and boundary values (zero, one, maximum). Unlike access-control bugs, which are binary (the constraint exists or it does not), arithmetic bugs can be partial — a program might handle overflow correctly for deposits but not for fee calculations.
+
+Start with the boundary case. A zero-value deposit should be a no-op — if the program incorrectly modifies state on a zero deposit, fee calculations or reward distributions could be exploited:
+
+```typescript
+it("handles zero deposit without state change", async () => {
+  const balanceBefore = await getVaultBalance(vault);
+  await program.methods
+    .deposit(new BN(0))
+    .accounts({
+      vault,
+      authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority])
+    .rpc();
+  const balanceAfter = await getVaultBalance(vault);
+  assert.equal(balanceBefore, balanceAfter);
+});
+```
+
+If the program has a minimum deposit constraint, this test should fail with a custom error like `MinimumDepositNotMet`. If it has no minimum, the balance must remain unchanged. Both outcomes are acceptable — the test verifies that zero does not cause unexpected side effects like updating a timestamp or emitting an event.
+
+Zero-value testing is particularly important for programs that charge fees. A fee calculation of `amount * fee_rate / 10_000` where `amount` is zero should produce a zero fee, not a negative fee or a panic.
+
+The overflow test deposits a value that, when added to the existing balance, exceeds `2^64 - 1`:
+
+```typescript
+it("prevents overflow in balance addition", async () => {
+  const vaultData = await program.account.vault.fetch(vault);
+  const maxU64 = new BN("18446744073709551615");
+  const overflowAmount = maxU64.sub(vaultData.balance).add(new BN(1));
+
+  try {
+    await program.methods
+      .deposit(overflowAmount)
+      .accounts({
+        vault,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+    assert.fail("Should fail with overflow error");
+  } catch (error) {
+    assert.ok(
+      error.message.includes("overflow") ||
+      error.message.includes("insufficient")
+    );
+  }
+});
+```
+
+The overflow test computes the exact amount needed to exceed `u64::MAX` given the current balance: `maxU64 - currentBalance + 1`. This precision is important because a hardcoded value like `u64::MAX` might fail for the wrong reason — the payer may lack the lamports to fund the deposit, producing an `InsufficientFunds` error from the system program rather than an overflow error from the vault program.
+
+The underflow test attempts to withdraw one lamport more than the vault holds:
+
+```typescript
+it("prevents underflow in withdrawal", async () => {
+  const vaultData = await program.account.vault.fetch(vault);
+  const underflowAmount = vaultData.balance.add(new BN(1));
+
+  try {
+    await program.methods
+      .withdraw(underflowAmount)
+      .accounts({
+        vault,
+        authority: authority.publicKey,
+        recipient: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+    assert.fail("Should prevent underflow");
+  } catch (error) {
+    assert.ok(
+      error.message.includes("InsufficientFunds") ||
+      error.message.includes("insufficient")
+    );
+  }
+});
+```
+
+The underflow test mirrors the overflow test in structure. The `vaultData.balance.add(new BN(1))` computes an amount exactly one lamport greater than the vault holds, guaranteeing that the subtraction in the program's withdrawal logic would produce a negative result. Like the overflow test, this precision matters — testing with an arbitrarily large value might fail for the wrong reason.
+
+Both tests depend on the program using checked arithmetic internally. On the Rust side, the difference between safe and unsafe arithmetic is one method call:
+
+```rust
+// Unsafe — wraps silently on overflow
+vault.balance = vault.balance + deposit_amount;
+
+// Safe — returns an error the test can catch
+vault.balance = vault.balance
+    .checked_add(deposit_amount)
+    .ok_or(ErrorCode::Overflow)?;
+```
+
+Programs compiled with `overflow-checks = true` in `Cargo.toml` will panic on unchecked overflow, which the Solana runtime converts to a program error. However, relying on the compiler flag alone is fragile — explicitly using `checked_add`, `checked_sub`, and `checked_mul` makes the intent clear and ensures the error code is meaningful. The compiler flag can be accidentally removed during a dependency update or Cargo configuration change, silently removing overflow protection.
+
+Anchor's default project template sets `overflow-checks = true` in the release profile. Verify this setting exists in your `Cargo.toml` and add a CI check that greps for it to prevent accidental removal.
+
+The overflow test above computes the exact amount needed to exceed `u64::MAX` given the current balance. This is more precise than passing a hardcoded large value like `u64::MAX` directly, because a hardcoded value might fail for the wrong reason (insufficient lamports in the payer account rather than overflow in the balance). Computing the exact overflow amount isolates the arithmetic bug.
+
+Two additional cases worth testing: `u64::MAX` as a direct input (verify the program rejects or handles it without panic), and multiplication overflow for programs that compute fees or interest (e.g., `balance * rate / 10_000` where `balance * rate` can overflow before the division). These follow the identical try/catch structure — only the input value and expected error differ.
+
+For programs that use decimal math (via `f64` or fixed-point libraries), precision loss is an additional vulnerability. Rounding errors that lose fractions of a lamport per transaction can be exploited by executing thousands of small transactions that each round in the attacker's favor. Test that `deposit(1)` followed by `withdraw(1)` leaves the balance unchanged, and that `deposit(3)` followed by three `withdraw(1)` calls does not leave a residual balance.
+
+<ArticleSection name="Testing State Transitions" id="state-transitions" level="h2" />
+
+State transition tests verify that accounts can only move between valid states. Every account has a lifecycle: uninitialized, active, and (optionally) closed. Security bugs occur when operations execute against accounts in the wrong lifecycle stage — depositing into a closed vault, reinitializing an active vault to reset its balance, or closing a vault that still holds funds.
+
+The two highest-priority cases are double initialization and close-with-balance. Double initialization is dangerous because it can reset account state: if an attacker reinitializes a vault, the balance field resets to zero while the actual lamports remain in the account. Close-with-balance is dangerous because it can strand funds or allow the closer to extract lamports that belong to depositors.
+
+Note that programs using `init_if_needed` instead of `init` are intentionally vulnerable to reinitialization by design. If your program uses `init_if_needed`, the double-initialization test should verify that the second call does not reset existing state (balance, authority, or other fields).
+
+The double-initialization test calls `initializeVault` twice on the same PDA. Anchor's `init` constraint allocates the account on the first call; the second call must fail because the account already exists.
+
+```typescript
+it("prevents double initialization", async () => {
+  const [vault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), authority.publicKey.toBuffer()],
+    program.programId);
+  await program.methods.initializeVault()
+    .accounts({ vault, authority: authority.publicKey,
+      payer: authority.publicKey,
+      systemProgram: SystemProgram.programId })
+    .signers([authority]).rpc();
+  try {
+    await program.methods.initializeVault()
+      .accounts({ vault, authority: authority.publicKey,
+        payer: authority.publicKey,
+        systemProgram: SystemProgram.programId })
+      .signers([authority]).rpc();
+    assert.fail("Should not allow double initialization");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+  }
+});
+```
+
+The test for operations on uninitialized accounts uses an identical structure — substitute a random public key for the vault PDA and expect `AccountNotInitialized` or `InvalidAccountData`. No separate code block is needed; only the account address and error string differ from the pattern above. Anchor's `Account<'info, T>` type handles this check automatically, but if your program uses `UncheckedAccount` for any field, the check must be manual and therefore more important to test.
+
+Programs that use `realloc` to resize accounts introduce an additional state-transition risk: the account can be resized to a smaller buffer, truncating data. If your program supports reallocation, test that downsizing below the minimum data length fails.
+
+Together, the double-initialization and uninitialized-account tests cover the two ends of the account lifecycle. A vault that is already active should reject initialization; a vault that does not yet exist should reject operations. These two tests form the minimum viable state-transition coverage for any account type.
+
+For account closing, one test proves the critical invariant: a vault with a non-zero balance cannot be closed.
+
+```typescript
+it("prevents closing vault with non-zero balance", async () => {
+  await program.methods.deposit(new BN(1_000_000))
+    .accounts({
+      vault, authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority]).rpc();
+
+  try {
+    await program.methods.closeVault()
+      .accounts({
+        vault, authority: authority.publicKey,
+        recipient: authority.publicKey,
+      })
+      .signers([authority]).rpc();
+    assert.fail("Should not close vault with balance");
+  } catch (error) {
+    assert.ok(
+      error.message.includes("VaultNotEmpty") ||
+      error.message.includes("ConstraintRaw")
+    );
+  }
+});
+```
+
+The complement to this test is proving that the valid state transition works: a vault with zero balance can be closed, and the account ceases to exist afterward.
+
+```typescript
+it("allows closing vault after full withdrawal", async () => {
+  const vaultData = await program.account.vault.fetch(vault);
+  await program.methods.withdraw(vaultData.balance)
+    .accounts({
+      vault, authority: authority.publicKey,
+      recipient: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority]).rpc();
+
+  await program.methods.closeVault()
+    .accounts({
+      vault, authority: authority.publicKey,
+      recipient: authority.publicKey,
+    })
+    .signers([authority]).rpc();
+
+  const accountInfo = await provider.connection.getAccountInfo(vault);
+  assert.equal(accountInfo, null);
+});
+```
+
+The `getAccountInfo` check at the end is critical. If the account still exists after `closeVault`, the close instruction has a bug — potentially leaving lamports stranded or allowing the account to be reused. This positive test complements the negative test above: together, they prove that close fails when it should and succeeds when it should.
+
+The next test to write follows the same structure: **operations on closed accounts**. After closing, attempt a deposit on the same PDA and expect `AccountNotInitialized`. This mirrors the uninitialized-account test but confirms the program behaves correctly after account closure, not just before initialization. The distinction matters because some programs use `init_if_needed`, which would silently reinitialize a closed account — a serious vulnerability if the program does not intend to support account reuse.
+
+State verification after every mutation is not strictly a security test, but it catches bugs where state mutations affect unrelated fields. Fetch account data before and after the operation, then compare:
+
+```typescript
+it("verifies state integrity after deposit", async () => {
+  const beforeData = await program.account.vault.fetch(vault);
+  const depositAmount = new BN(5_000_000);
+
+  await program.methods.deposit(depositAmount)
+    .accounts({
+      vault,
+      authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority]).rpc();
+
+  const afterData = await program.account.vault.fetch(vault);
+  assert.ok(
+    afterData.balance.eq(beforeData.balance.add(depositAmount))
+  );
+  assert.ok(afterData.authority.equals(beforeData.authority));
+});
+```
+
+The second assertion — checking that the authority field did not change — catches a class of bugs where the program's serialization logic overwrites adjacent fields during a partial update. This is especially relevant for programs that use `realloc` or manual serialization rather than Anchor's derived `#[account]` macros.
+
+For each instruction that modifies state, write one state-verification test. The test should assert on every field in the account: fields that should change, fields that should not, and any derived fields (like a last-updated timestamp). This discipline catches subtle bugs that are invisible in happy-path testing.
+
+<ArticleSection name="Testing Account Validation" id="account-validation" level="h2" />
+
+Account validation tests verify that your program rejects accounts it does not own, accounts with the wrong discriminator, and accounts passed at the wrong position. These tests complement access-control tests by targeting the account structure rather than the signer.
+
+While access-control tests ask "can the wrong person perform this operation?", account validation tests ask "can the right person perform this operation on the wrong account?" Both questions must be answered to have complete security coverage.
+
+The first test passes a random public key (not a PDA derived from the program) as the vault account:
+
+```typescript
+it("rejects operations on wrong PDA", async () => {
+  const wrongPda = Keypair.generate().publicKey;
+  try {
+    await program.methods
+      .deposit(new BN(1_000_000))
+      .accounts({
+        vault: wrongPda,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority]).rpc();
+    assert.fail("Should reject invalid PDA");
+  } catch (error) {
+    assert.ok(
+      error.message.includes("AccountNotInitialized") ||
+      error.message.includes("InvalidAccountData")
+    );
+  }
+});
+```
+
+Anchor checks both the account owner (must match the program ID) and the 8-byte discriminator (must match the expected account type). A random public key fails on both counts.
+
+The second test passes an account owned by the system program rather than your program. This verifies the `Account<'info, Vault>` constraint checks ownership:
+
+```typescript
+it("rejects accounts with wrong program owner", async () => {
+  const systemAccount = Keypair.generate().publicKey;
+  try {
+    await program.methods
+      .withdraw(new BN(1_000_000))
+      .accounts({
+        vault: systemAccount,
+        authority: authority.publicKey,
+        recipient: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority]).rpc();
+    assert.fail("Should reject wrong program owner");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+  }
+});
+```
+
+Anchor's `Account<'info, T>` type performs three checks automatically: the account must be owned by the declaring program, the first 8 bytes must match the expected discriminator, and the data must deserialize into type `T`. These tests verify all three checks are in place.
+
+If your program uses `UncheckedAccount` or `AccountInfo` for any field, these tests are especially important — Anchor will not add automatic ownership checks for unchecked accounts, so your instruction logic must validate them manually. The same applies to `remaining_accounts`, which bypass all Anchor validation.
+
+A related attack is type cosplay, where an attacker passes an account of a different type from the same program. For example, if your program has both `Vault` and `Config` account types, an attacker might pass a `Config` account where a `Vault` is expected. Anchor's discriminator check prevents this — each account type gets a unique 8-byte hash of `account:TypeName`. Test this by creating a `Config` account and passing it where a `Vault` is expected:
+
+```typescript
+it("rejects type cosplay (Config as Vault)", async () => {
+  const [config] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId
+  );
+  await program.methods.initializeConfig()
+    .accounts({ config, authority: authority.publicKey,
+      payer: authority.publicKey,
+      systemProgram: SystemProgram.programId })
+    .signers([authority]).rpc();
+
+  await expectError(
+    () => program.methods.deposit(new BN(1_000_000))
+      .accounts({ vault: config, authority: authority.publicKey,
+        systemProgram: SystemProgram.programId })
+      .signers([authority]).rpc(),
+    "InvalidAccountData"
+  );
+});
+```
+
+This test only applies to programs with multiple account types. Single-account-type programs are not vulnerable to type cosplay but should still test wrong-PDA and wrong-owner scenarios.
+
+For programs that accept `remaining_accounts`, write tests that pass extra accounts, missing accounts, and accounts in the wrong order. Anchor does not validate `remaining_accounts` — any checks must be in your instruction logic, making these tests essential.
+
+Account validation is the security layer that protects against account confusion attacks. Even if access control is perfect (only authorized signers can call instructions), a program that accepts the wrong accounts can still be exploited. The attacker uses their own authorized wallet to call an instruction, but passes a carefully crafted account that redirects funds or corrupts state. Testing both access control and account validation together provides defense in depth.
+
+The attack surface for account validation grows with the number of accounts in each instruction's context struct. An instruction that takes 3 accounts has 3 potential substitution points; an instruction that takes 8 accounts (common in DeFi programs that interact with AMM pools) has 8. Each account is an independent test case.
+
+<ArticleSection name="Testing CPI Security" id="cpi-security" level="h2" />
+
+When your program makes cross-program invocations, each account passed into the CPI must be validated. Without validation, an attacker can substitute a malicious program that mimics the expected interface but redirects funds to their own account. This is one of the most exploited vulnerability classes on Solana — programs that accept an arbitrary `AccountInfo` as the token program have lost millions to fake-program attacks.
+
+CPI security tests differ from other security tests in one important way: they often require setup of token mints, token accounts, and associated token accounts before the test logic runs. Use `@solana/spl-token` helper functions (`createMint`, `createAccount`, `mintTo`) to construct the test state, and keep the setup in a `before` or `beforeEach` block separate from the test assertions.
+
+Three patterns cover the essential CPI security cases: fake program ID, wrong token mint, and wrong PDA seeds. Each pattern substitutes exactly one account and asserts the expected constraint error. This isolation ensures you know which validation is missing if a test passes when it should fail.
+
+The first pattern substitutes a random public key for the token program. Anchor's `Program<'info, Token>` constraint checks that the account's program ID matches the SPL Token program and rejects the transaction before the CPI ever executes.
+
+```typescript
+it("rejects fake token program ID", async () => {
+  const fakeTokenProgram = Keypair.generate().publicKey;
+  try {
+    await program.methods
+      .transferTokens(new BN(1_000_000))
+      .accounts({
+        vault, vaultTokenAccount,
+        recipient: recipientTokenAccount,
+        authority: authority.publicKey,
+        tokenProgram: fakeTokenProgram,
+      })
+      .signers([authority]).rpc();
+    assert.fail("Should reject fake token program");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+  }
+});
+```
+
+A more targeted assertion checks for a specific program ID mismatch error. However, the exact error depends on whether Anchor catches it during deserialization (producing an Anchor-specific error) or the Solana runtime catches it during CPI execution (producing a runtime error). Asserting `error instanceof Error` is acceptable here because both paths produce an error — the test's purpose is to verify the transaction fails, not to distinguish between Anchor and runtime validation.
+
+Note that this test substitutes the program ID on the client side. On Solana, the runtime also validates that CPI target programs exist and are executable. A program ID that does not correspond to a deployed program will fail at the runtime level. The test still catches the vulnerability because the result is a failed transaction regardless of which layer rejects it.
+
+The second pattern creates a token account with the wrong mint and passes it as the recipient. This validates the `token::mint` constraint.
+
+```typescript
+it("rejects wrong token mint", async () => {
+  const wrongMint = await createMint(
+    provider.connection, payer, authority.publicKey, null, 6);
+  const wrongTokenAccount = await createAccount(
+    provider.connection, payer, wrongMint, recipient);
+  try {
+    await program.methods.transferTokens(new BN(1_000_000))
+      .accounts({ vault, vaultTokenAccount,
+        recipient: wrongTokenAccount,
+        authority: authority.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([authority]).rpc();
+    assert.fail("Should reject wrong token mint");
+  } catch (error) {
+    assert.ok(
+      error.message.includes("ConstraintTokenMint") ||
+      error.message.includes("MintMismatch"));
+  }
+});
+```
+
+The mint-mismatch test is especially important for programs that interact with multiple token types. A lending protocol that accepts USDC as collateral but uses SOL for loans needs tests proving that a SOL token account cannot be passed where a USDC account is expected, and vice versa.
+
+The third pattern — wrong token authority — creates a token account owned by a different wallet and passes it as the recipient. Depending on the program's constraints, this may fail with a token authority mismatch or succeed without moving tokens (in which case, verify the balance is zero).
+
+Apply the same substitution logic for wrong PDA seeds: derive a PDA with `Buffer.from("wrong")` instead of the correct seed and expect `AccountNotInitialized` or `ConstraintSeeds`. For CPI signer verification, confirm the PDA can sign for token transfers by depositing tokens into a PDA-owned token account, then withdrawing through the CPI — this is a positive test that proves the PDA signer derivation works correctly.
+
+The discipline of substituting one account at a time is important. If you swap two accounts simultaneously and the test fails, you cannot determine which validation caught the substitution. One substitution per test, one assertion per test.
+
+Programs that interact with multiple external programs (e.g., Token Program and Associated Token Account Program) need separate tests for each CPI target. A program that makes 3 CPI calls should have at least 3 fake-program-ID tests, one per call site. The `expectError` helper from the Negative Testing Fundamentals section keeps these tests concise despite the repetition.
+
+<ArticleSection name="Organizing a Security Test Suite" id="security-test-suite" level="h2" />
+
+With all the individual test patterns covered, the final step is organizing them into a maintainable suite. The goal is a single test file that serves as both a regression suite and a security audit artifact — anyone reviewing the program can read the test file and see exactly which vulnerabilities have been tested.
+
+Separate security tests from happy-path tests. A common convention is to use a dedicated file named `security.test.ts` or `security.spec.ts`, distinct from `program.test.ts`. This separation makes it easy to run security tests independently and to see at a glance whether the security suite exists. It also prevents the suite from growing unwieldy — a single file with both happy-path and security tests can exceed 1,000 lines and become difficult to navigate.
+
+Group security tests by vulnerability class. Use `beforeEach` to generate fresh keypairs and derive PDAs, so each test runs against clean state. The choice between `before` (run once) and `beforeEach` (run per test) matters: `before` is faster but shares state between tests, which can mask bugs. `beforeEach` is safer because a corrupted account in one test does not affect the next.
+
+A well-organized suite looks like this:
+
+```typescript
+describe("Security Test Suite", () => {
+  let authority: Keypair;
+  let attacker: Keypair;
+  let vault: PublicKey;
+
+  beforeEach(async () => {
+    authority = Keypair.generate();
+    attacker = Keypair.generate();
+    await provider.connection.requestAirdrop(
+      authority.publicKey, 5 * LAMPORTS_PER_SOL
+    );
+    await provider.connection.requestAirdrop(
+      attacker.publicKey, 5 * LAMPORTS_PER_SOL
+    );
+    [vault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), authority.publicKey.toBuffer()],
+      program.programId
+    );
+  });
+
+  describe("Authorization Vulnerabilities", () => { /* ... */ });
+  describe("Arithmetic Vulnerabilities", () => { /* ... */ });
+  describe("State Transition Vulnerabilities", () => { /* ... */ });
+  describe("Account Validation Vulnerabilities", () => { /* ... */ });
+});
+```
+
+Each `describe` block contains the tests from the previous sections. The `beforeEach` guarantees isolation — a failing test in one block cannot corrupt state for another. This matters because security tests intentionally attempt destructive operations; without isolation, a successful exploit in one test could leave corrupted state that masks failures in subsequent tests.
+
+Some vulnerability classes require additional setup beyond the shared `beforeEach`. The Arithmetic Vulnerabilities block, for example, needs a vault with an existing balance before testing overflow. Use a nested `beforeEach` for this:
+
+```typescript
+describe("Arithmetic Vulnerabilities", () => {
+  beforeEach(async () => {
+    await program.methods.initializeVault()
+      .accounts({
+        vault, authority: authority.publicKey,
+        payer: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority]).rpc();
+    await program.methods.deposit(new BN(10_000_000))
+      .accounts({
+        vault, authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority]).rpc();
+  });
+
+  it("prevents overflow ...", async () => { /* ... */ });
+  it("prevents underflow ...", async () => { /* ... */ });
+});
+```
+
+The nested `beforeEach` initializes the vault and deposits 10,000,000 lamports before each arithmetic test. This ensures both the overflow and underflow tests start from the same known balance, regardless of execution order.
+
+The Authorization Vulnerabilities block needs a similar nested `beforeEach` to initialize the vault before testing unauthorized operations. The State Transition block typically does not need nested setup because each test manages its own initialization as part of the test logic (e.g., double-initialization tests must call `initializeVault` as part of the test itself).
+
+Name each test after the vulnerability it disproves: `"prevents unauthorized withdrawal"`, `"prevents integer overflow in deposits"`, `"prevents double initialization"`. When a test fails, the name tells you exactly which vulnerability exists. Avoid vague names like `"handles bad input"` — specificity is the point.
+
+Document what each test verifies with a block comment at the top of the suite:
+
+```typescript
+/**
+ * Authorization: unauthorized withdrawal, PDA authority substitution
+ * Arithmetic: integer overflow in deposits, underflow in withdrawals
+ * State: double initialization, close with balance
+ * Accounts: wrong PDA, wrong program owner
+ */
+```
+
+This serves as a coverage checklist. When adding a new instruction, scan the list and add the corresponding security tests.
+
+Build a coverage matrix to track which vulnerability classes are tested for each instruction. For a vault program with 4 instructions, the matrix looks like this:
+
+| Instruction | Auth | Overflow | Underflow | State | Account |
+|---|---|---|---|---|---|
+| initialize | - | - | - | double init | wrong PDA |
+| deposit | wrong signer | balance overflow | - | uninitialized | wrong owner |
+| withdraw | wrong signer | - | balance underflow | uninitialized | wrong owner |
+| close | wrong signer | - | - | non-empty close | wrong PDA |
+
+Each cell represents one test. Empty cells indicate cases that do not apply — `initialize` has no signer-based authorization beyond PDA derivation, and `deposit` cannot underflow. The matrix makes gaps visible. If a cell should have a test but does not, add one.
+
+Use the `expectError` helper from the Negative Testing Fundamentals section to keep each test concise. With the helper, a full security suite for this vault program fits in roughly 120 lines of test code, despite covering 10+ vulnerability cases.
+
+Run the suite with Mocha's `--grep` flag to target specific vulnerability classes:
+
+```bash
+anchor test --skip-build -- --grep "Authorization Vulnerabilities"
+anchor test --skip-build -- --grep "Vulnerabilities" --reporter spec
+```
+
+For CI pipelines, run the full suite on every pull request. Security tests are fast — they fail before executing instruction logic — so they add minimal overhead to build times. A vault program's security suite typically runs in under 10 seconds on a standard CI runner.
+
+Consider adding a CI step that counts security tests and fails the build if the count drops below a threshold. This prevents accidental deletion of security tests during refactoring:
+
+```bash
+SECURITY_COUNT=$(anchor test --skip-build -- --grep "Vulnerabilities" \
+  --reporter json 2>/dev/null | jq '.stats.tests')
+if [ "$SECURITY_COUNT" -lt 8 ]; then
+  echo "Security test count dropped below threshold"
+  exit 1
+fi
+```
+
+A thorough security suite has at least as many negative tests as happy-path tests. If a test file has 20 tests and only 2 test failure cases, coverage is incomplete. The vault program above has 4 happy-path tests (one per instruction) and 10 security tests — a 2.5:1 ratio of negative to positive tests.
+
+When a security test unexpectedly passes (the transaction succeeds when it should fail), treat it as a critical bug. The test has found a real vulnerability. Stop other work and fix it before merging. A passing security test that should fail is more dangerous than a failing test that should pass — the first means your program is exploitable, the second means your test has a bug.
+
+**Maintaining the suite over time:** Security tests should evolve with the program. When you add a new instruction, update the coverage matrix and add the corresponding tests before writing the instruction logic — writing security tests first is similar to test-driven development and often reveals constraint gaps before the instruction is implemented. When you fix a vulnerability, add a regression test that reproduces the original exploit. When you upgrade Anchor versions, rerun the full security suite — constraint behavior can change between versions.
+
+For programs that have undergone a formal security audit, map each finding to a test. The test proves the finding was addressed and prevents regression. Auditors often provide proof-of-concept exploits; convert these into tests by translating the exploit transaction into the try/catch pattern. This mapping also serves as documentation for future auditors, showing which findings from previous audits are covered by automated tests.
+
+The security suite should also test program upgrades. If your program is upgradeable, write a test that deploys a new version and verifies that existing account state is compatible with the new program logic. Account data layout changes that break deserialization are a common source of upgrade-related vulnerabilities. Test that accounts created by version N can be read by version N+1 without errors.
+
+Finally, consider fuzzing as a complement to the deterministic tests covered in this lesson. Property-based testing tools generate random inputs and verify that invariants hold across all of them. For example, a property test might assert that for any sequence of deposits and withdrawals, the vault balance never goes negative and always equals the sum of deposits minus the sum of withdrawals. Fuzzing catches edge cases that human-written tests miss, but it does not replace the explicit vulnerability tests above — both approaches are necessary for thorough security coverage.
+
+Security testing is not optional. Each test you skip is a vulnerability you have not ruled out. For a complete taxonomy of the vulnerabilities to test against — including signer authorization, type cosplay, and account closing attacks — see the Securing Anchor Programs course, which pairs directly with the test patterns covered here. The Anchor in Production course covers runtime safeguards like rate limiting and pause mechanisms in its operational-patterns lesson, adding a layer of protection that complements your test suite.
+
+Next, you will learn how to debug failing tests and identify the root cause of security violations: [Debugging Tests](/courses/testing-anchor-programs/debugging-tests).

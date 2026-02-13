@@ -1,0 +1,410 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Compute Optimization
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+Every instruction on Solana runs within a compute budget. The runtime allocates 200,000 compute units (CU) per instruction by default, with a maximum of 1,400,000 CU per transaction. Programs that exceed their budget fail with `Program failed to complete: exceeded CU meter at BPF instruction`. No partial execution, no rollback—the transaction fails and the user pays fees for nothing.
+
+Most Anchor programs fit within the 200,000 CU default. But programs that load many accounts, perform complex math, or execute multiple CPIs can exceed that budget quickly. This lesson covers how to measure compute usage, identify expensive operations, and apply targeted optimizations.
+
+<ArticleSection name="Understanding the Compute Budget" id="understanding-the-compute-budget" level="h2" />
+
+Solana's runtime tracks compute units like a gas meter. Each BPF instruction, syscall, and memory operation costs CU. When the meter reaches the budget limit, execution halts.
+
+The default allocation is 200,000 CU per instruction. A transaction with three instructions gets 200,000 CU for each, not 600,000 shared across them. The transaction-level cap of 1,400,000 CU limits the total across all instructions.
+
+Programs can request additional CU by including a `ComputeBudgetProgram` instruction. On the client side, this looks like:
+
+```typescript
+import { ComputeBudgetProgram } from "@solana/web3.js";
+
+const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({
+  units: 400_000,
+});
+
+const transaction = new Transaction()
+  .add(modifyComputeUnits)
+  .add(yourInstruction);
+```
+
+This sets the budget for the entire transaction to 400,000 CU. The `setComputeUnitLimit` instruction itself costs no CU—the runtime processes it before execution begins.
+
+Requesting more CU than the default affects priority fee calculations. Solana's fee market prices transactions in micro-lamports per CU. A transaction requesting 400,000 CU at the same priority fee rate costs twice as much as one requesting 200,000 CU. Optimizing compute usage directly reduces transaction costs.
+
+<ArticleSection name="Measuring Compute Usage" id="measuring-compute-usage" level="h2" />
+
+Before optimizing anything, measure where CU is spent. The `sol_log_compute_units()` function prints the remaining compute budget to the program log at the point it's called.
+
+Place measurement points around suspected hot spots:
+
+```rust
+use anchor_lang::prelude::*;
+use solana_program::log::sol_log_compute_units;
+
+pub fn process_trade(ctx: Context<ProcessTrade>, amount: u64) -> Result<()> {
+    sol_log_compute_units(); // Log remaining CU: checkpoint 1
+
+    let pool = &ctx.accounts.pool;
+    let price = calculate_price(pool.reserve_a, pool.reserve_b, amount)?;
+
+    sol_log_compute_units(); // Log remaining CU: checkpoint 2
+
+    execute_swap(&ctx, amount, price)?;
+
+    sol_log_compute_units(); // Log remaining CU: checkpoint 3
+
+    emit!(TradeEvent {
+        user: ctx.accounts.user.key(),
+        amount,
+        price,
+    });
+
+    sol_log_compute_units(); // Log remaining CU: checkpoint 4
+
+    Ok(())
+}
+```
+
+The transaction logs will show lines like:
+
+```
+Program log: 187,232 units remaining
+Program log: 164,891 units remaining
+Program log: 98,420 units remaining
+Program log: 95,102 units remaining
+```
+
+Reading these logs from top to bottom reveals the cost of each section. The gap between checkpoint 1 and 2 is 22,341 CU for price calculation. The swap execution between checkpoints 2 and 3 costs 66,471 CU. The event emission between 3 and 4 costs 3,318 CU.
+
+The first checkpoint tells you how much CU Anchor consumed before your instruction logic ran—in this case, roughly 12,768 CU for account deserialization and constraint validation.
+
+To read these logs from a test, use the `transaction.meta.logMessages` field in the RPC response, or pass `--log` to `anchor test` and inspect the `.anchor/program-logs` directory.
+
+<ArticleSection name="Deserialization Costs" id="deserialization-costs" level="h2" />
+
+Anchor performs several operations before your instruction handler runs. Each account in your `Accounts` struct costs CU to process:
+
+1. **Discriminator check**—an eight-byte comparison against the expected account type (~200 CU)
+2. **Borsh deserialization**—parsing raw bytes into Rust structs (varies by account size)
+3. **Constraint validation**—`has_one`, `constraint`, seed derivation, signer checks
+
+A typical `Account<'info, T>` deserialization costs between 3,000 and 8,000 CU depending on the struct size. A small account with two `Pubkey` fields and a `u64` costs around 3,200 CU. A larger account with arrays and nested structs can cost 7,000 CU or more.
+
+Here's a comparison of deserialization costs for a 500-byte account struct:
+
+```rust
+// Standard deserialization: ~4,800 CU
+#[account(mut)]
+pub pool: Account<'info, Pool>,
+
+// Zero-copy deserialization: ~800 CU
+#[account(mut)]
+pub pool: AccountLoader<'info, Pool>,
+
+// Unchecked (no deserialization): ~100 CU
+/// CHECK: Validated manually in instruction body
+pub pool: UncheckedAccount<'info>,
+```
+
+`AccountLoader` (zero-copy) skips borsh deserialization entirely and casts the raw bytes as a struct reference, reducing CU by roughly 80% compared to standard `Account`. The tradeoff is that zero-copy accounts require fixed-size fields and `#[repr(C)]` layout, as covered in the zero-copy lesson.
+
+`UncheckedAccount` performs no deserialization or validation at all. You must validate it manually in your instruction logic. This is the cheapest option but the most dangerous—an unchecked account is a common source of security vulnerabilities.
+
+Every account you add to the `Accounts` struct costs CU regardless of whether your instruction logic uses it. If an instruction only conditionally needs an account, consider using `remaining_accounts` instead of a dedicated field, or using `Option<Account<'info, T>>` with the understanding that `None` still costs a small amount for the option check.
+
+<ArticleSection name="Optimizing Arithmetic" id="optimizing-arithmetic" level="h2" />
+
+Rust's default arithmetic operators perform overflow checks in debug mode and (if configured) in release mode. Anchor enables overflow checks in release builds by default through its `Cargo.toml` template, which sets `overflow-checks = true` in the release profile. Each checked operation costs more than its unchecked equivalent.
+
+The difference for a single operation is small—roughly 5-20 CU depending on the operation. But in a tight loop or a function called many times per instruction, the cost compounds.
+
+```rust
+// Checked addition: ~15 CU per operation
+let result = a.checked_add(b).ok_or(ErrorCode::Overflow)?;
+
+// Unchecked addition: ~3 CU per operation
+let result = a.wrapping_add(b);
+```
+
+When overflow is mathematically impossible, unchecked arithmetic is safe. A counter that increments by 1 from 0 won't overflow `u64` in anyone's lifetime. A balance already validated as less than `u64::MAX - amount` can safely add `amount` without checking.
+
+Use unchecked arithmetic selectively, with comments explaining why overflow is impossible:
+
+```rust
+pub fn increment_counter(ctx: Context<IncrementCounter>) -> Result<()> {
+    let counter = &mut ctx.accounts.counter;
+
+    // Counter tracks total trades. At 1 trade per slot (400ms),
+    // u64::MAX would take ~234 billion years to reach.
+    counter.count = counter.count.wrapping_add(1);
+
+    Ok(())
+}
+```
+
+Bit shifting is cheaper than multiplication or division for powers of two. Shifting left by one is equivalent to multiplying by two, and shifting right by one is equivalent to dividing by two:
+
+```rust
+// Multiplication by 8: ~10 CU
+let result = value * 8;
+
+// Bit shift equivalent: ~3 CU
+let result = value << 3;
+```
+
+The compiler often performs this optimization automatically, but in cases where overflow checks interfere, explicit bit shifting guarantees the cheaper instruction is used.
+
+<ArticleSection name="Optimizing Account Access" id="optimizing-account-access" level="h2" />
+
+The simplest way to reduce CU is to load fewer accounts. Each account in the `Accounts` struct adds deserialization and validation costs. Review your instruction's account list and remove anything not strictly needed.
+
+If an account is only needed in certain code paths, pass it through `remaining_accounts` and deserialize it manually only when required:
+
+```rust
+#[derive(Accounts)]
+pub struct ProcessOrder<'info> {
+    #[account(mut)]
+    pub order: Account<'info, Order>,
+    pub user: Signer<'info>,
+    // Referrer account is optional — only needed if order has a referrer
+}
+
+pub fn process_order(ctx: Context<ProcessOrder>) -> Result<()> {
+    let order = &mut ctx.accounts.order;
+
+    // Core logic runs without touching the referrer
+    let payout = calculate_payout(order.amount, order.price)?;
+    order.status = OrderStatus::Filled;
+
+    // Only deserialize referrer if the order has one
+    if order.referrer != Pubkey::default() {
+        let referrer_info = ctx.remaining_accounts
+            .get(0)
+            .ok_or(ErrorCode::MissingReferrer)?;
+
+        let mut referrer: Account<ReferrerAccount> =
+            Account::try_from(referrer_info)?;
+
+        // 5% referral fee
+        referrer.earned = referrer.earned
+            .checked_add(payout / 20)
+            .ok_or(ErrorCode::Overflow)?;
+
+        referrer.exit(&crate::ID)?;
+    }
+
+    Ok(())
+}
+```
+
+Orders without a referrer skip the deserialization of `ReferrerAccount` entirely, saving roughly 4,000-5,000 CU per non-referral order.
+
+Another pattern is to split instructions based on the accounts they need. Instead of one `process_order` instruction that handles every case, create `process_order` for the common path and `process_order_with_referral` for the referral case. Each instruction loads only the accounts it needs, keeping the common path fast.
+
+<ArticleSection name="Optimizing Serialization" id="optimizing-serialization" level="h2" />
+
+After your instruction logic runs, Anchor serializes any modified accounts back to their data buffer. This only happens for accounts marked `mut` in the `Accounts` struct. Read-only accounts skip serialization entirely.
+
+Removing unnecessary `mut` annotations saves the serialization cost:
+
+```rust
+// Before: pool is mutable but we only read from it
+#[derive(Accounts)]
+pub struct GetPrice<'info> {
+    #[account(mut)]  // Unnecessary mut — costs ~3,500 CU on exit
+    pub pool: Account<'info, Pool>,
+    pub user: Signer<'info>,
+}
+
+// After: pool is read-only, no serialization on exit
+#[derive(Accounts)]
+pub struct GetPrice<'info> {
+    pub pool: Account<'info, Pool>,  // Saves ~3,500 CU
+    pub user: Signer<'info>,
+}
+```
+
+The serialization cost scales with account size: a 200-byte account costs roughly 2,000 CU to serialize back, while a 1,000-byte account costs around 3,500 CU. A 10,000-byte zero-copy account using `AccountLoader` costs near zero because zero-copy writes directly to the account's memory region.
+
+Audit your `Accounts` structs and verify that every `mut` annotation corresponds to actual writes. In a codebase that evolved over time, instructions often accumulate mutable references to accounts they no longer modify.
+
+The same principle applies to `AccountLoader`. Use `.load()` instead of `.load_mut()` when you only read from a zero-copy account:
+
+```rust
+// Reading only — no write lock, no serialization
+let pool = ctx.accounts.pool.load()?;
+let price = pool.current_price;
+
+// Writing — acquires write lock, triggers serialization
+let mut pool = ctx.accounts.pool.load_mut()?;
+pool.current_price = new_price;
+```
+
+<ArticleSection name="Practical Example" id="practical-example" level="h2" />
+
+Here's a token swap instruction before and after optimization. The unoptimized version uses 148,000 CU. Each optimization targets a specific cost.
+
+The starting point:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, Pool>,
+    #[account(mut)]
+    pub pool_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub pool_token_b: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_b: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub fee_account: Account<'info, FeeTracker>,
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+pub fn swap(ctx: Context<Swap>, amount_in: u64) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let fee_account = &mut ctx.accounts.fee_account;
+
+    // Calculate output with checked math
+    let fee = amount_in
+        .checked_mul(pool.fee_bps as u64).ok_or(ErrorCode::Overflow)?
+        .checked_div(10_000).ok_or(ErrorCode::Overflow)?;
+
+    let amount_after_fee = amount_in
+        .checked_sub(fee).ok_or(ErrorCode::Overflow)?;
+
+    let reserve_a = pool.reserve_a;
+    let reserve_b = pool.reserve_b;
+
+    // Constant product: (a + in) * (b - out) = a * b
+    let numerator = reserve_b
+        .checked_mul(amount_after_fee).ok_or(ErrorCode::Overflow)?;
+    let denominator = reserve_a
+        .checked_add(amount_after_fee).ok_or(ErrorCode::Overflow)?;
+    let amount_out = numerator
+        .checked_div(denominator).ok_or(ErrorCode::Overflow)?;
+
+    // Update reserves
+    pool.reserve_a = reserve_a
+        .checked_add(amount_after_fee).ok_or(ErrorCode::Overflow)?;
+    pool.reserve_b = reserve_b
+        .checked_sub(amount_out).ok_or(ErrorCode::Overflow)?;
+
+    // Track fees
+    fee_account.total_fees = fee_account.total_fees
+        .checked_add(fee).ok_or(ErrorCode::Overflow)?;
+    fee_account.swap_count = fee_account.swap_count
+        .checked_add(1).ok_or(ErrorCode::Overflow)?;
+
+    // Transfer tokens via CPI (omitted for brevity)
+
+    Ok(())
+}
+```
+
+**Optimization 1: Remove unnecessary `mut` from fee_account.** If fee tracking can happen in a separate crank instruction, remove `fee_account` entirely. If it must stay, at minimum verify it needs mutation. In this case, assume we move fee tracking to a separate instruction. Removing one mutable `Account<'info, FeeTracker>` saves roughly 7,800 CU (3,500 deserialization + 3,300 serialization + 1,000 constraint checks).
+
+**Optimization 2: Use unchecked math where overflow is impossible.** The fee calculation uses `fee_bps` which maxes at 10,000. For any `amount_in` under `u64::MAX / 10_000`, the multiplication cannot overflow. Reserve additions and subtractions are bounded by the pool's existing reserves, which themselves fit in `u64`. The swap counter incrementing by 1 cannot overflow.
+
+```rust
+pub fn swap_optimized(ctx: Context<SwapOptimized>, amount_in: u64) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+
+    // fee_bps <= 10_000, amount_in <= u64::MAX, product fits in u128
+    // then divided back down — safe to skip checked math
+    let fee = ((amount_in as u128 * pool.fee_bps as u128) / 10_000) as u64;
+    let amount_after_fee = amount_in - fee;
+
+    let reserve_a = pool.reserve_a;
+    let reserve_b = pool.reserve_b;
+
+    // Use u128 intermediate to prevent overflow in multiplication
+    let amount_out = ((reserve_b as u128 * amount_after_fee as u128)
+        / (reserve_a as u128 + amount_after_fee as u128)) as u64;
+
+    // Reserve updates: bounded by existing reserves that fit in u64
+    pool.reserve_a = reserve_a + amount_after_fee;
+    pool.reserve_b = reserve_b - amount_out;
+
+    // Transfer tokens via CPI (omitted for brevity)
+
+    Ok(())
+}
+```
+
+This saves roughly 2,400 CU across the eight checked operations replaced (300 CU savings per operation on average, due to the removed error branching and wrapping logic).
+
+**Optimization 3: Use AccountLoader for the pool.** If `Pool` is a large struct (say 400 bytes with price history arrays), switching to zero-copy deserialization saves CU:
+
+```rust
+#[derive(Accounts)]
+pub struct SwapOptimized<'info> {
+    #[account(mut)]
+    pub pool: AccountLoader<'info, Pool>,
+    #[account(mut)]
+    pub pool_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub pool_token_b: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_b: Account<'info, TokenAccount>,
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Switching `Pool` from `Account` to `AccountLoader` saves approximately 4,000 CU on deserialization for a 400-byte struct.
+
+**Optimization 4: Validate amount_out is nonzero.** This isn't a CU optimization—it's a correctness check that prevents zero-output swaps. Include it because optimized code must remain correct:
+
+```rust
+require!(amount_out > 0, ErrorCode::ZeroOutput);
+```
+
+The combined savings:
+
+| Optimization | CU Saved |
+|---|---|
+| Remove fee_account | ~7,800 |
+| Unchecked arithmetic | ~2,400 |
+| AccountLoader for Pool | ~4,000 |
+| **Total** | **~14,200** |
+
+The optimized instruction uses approximately 133,800 CU instead of 148,000 CU—a 9.6% reduction. The remaining CU is dominated by the two token transfer CPIs, which cost roughly 45,000 CU each and cannot be optimized from the caller's side.
+
+<ArticleSection name="When to Optimize" id="when-to-optimize" level="h2" />
+
+Most Anchor programs fit within the 200,000 CU default budget without any optimization. A simple instruction that loads three accounts, performs some arithmetic, and writes to one account typically uses 40,000-80,000 CU. There's no reason to optimize that.
+
+Optimize when you have evidence of a problem:
+
+- Your instruction fails with `exceeded CU meter`
+- You're paying excessive priority fees because of high CU requests
+- Transaction simulation shows you're close to the budget limit
+- You're building a high-frequency protocol where per-transaction cost matters
+
+Profile first. Insert `sol_log_compute_units()` calls at key points, run the instruction in a test, and identify where CU is spent. The bottleneck is almost never where you expect it to be.
+
+After profiling, target the largest costs first. CPI calls to other programs often dominate the budget—a single SPL Token transfer costs around 45,000 CU. You can't optimize the external program's code, but you can minimize the number of CPIs or batch operations to reduce instruction count.
+
+For most programs, these three changes cover 80% of potential savings:
+
+- Remove accounts you don't need
+- Remove `mut` from accounts you don't write to
+- Use `AccountLoader` for large accounts
+
+Save the micro-optimizations—unchecked math, bit shifting, manual serialization—for programs that have already applied the structural changes and still exceed their budget. A 300 CU saving on arithmetic doesn't matter when you can save 7,000 CU by removing an unnecessary account.
+
+Once your program is deployed, the Anchor in Production course covers monitoring compute usage and setting up alerts in its operational-patterns lesson. For profiling compute consumption in your test suite, the Testing Anchor Programs course covers debugging and simulation techniques in its debugging-anchor lesson.
+
+---
+
+The next lesson covers remaining accounts patterns—how to pass variable-length account lists to instructions and process them dynamically at runtime.

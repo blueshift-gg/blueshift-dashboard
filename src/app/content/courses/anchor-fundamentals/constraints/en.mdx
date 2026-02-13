@@ -1,0 +1,641 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Constraints
+
+![Anchor Fundamentals - constraints](/graphics/course-banners/anchor-fundamentals.png)
+
+Constraints are Anchor's primary safety mechanism. They generate validation code that runs before your instruction logic—if any check fails, the transaction aborts before your code executes.
+
+<ArticleSection name="How Constraints Work" id="how-constraints-work" level="h2" />
+
+Constraints are compile-time rules that expand into runtime validation code. When you declare a constraint on an account in your instruction context, Anchor inserts the corresponding check at the beginning of your instruction handler.
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(mut, has_one = authority)]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+```
+
+The `has_one = authority` constraint generates code that verifies `config.authority == authority.key()`. If this check fails, the instruction aborts with an error before your handler runs.
+
+This pattern moves validation from manual checks scattered through your code into declarative rules at the account definition. The result is less error-prone and more auditable.
+
+<ArticleSection name="Constraint Execution Order" id="constraint-execution-order" level="h2" />
+
+Constraints execute in the order you declare them. This matters when combining constraints that depend on each other.
+
+```rust
+#[account(
+    init,           // 1. Create account
+    payer = payer,  // 2. Deduct rent from payer
+    space = 8 + 32, // 3. Allocate space
+    seeds = [b"vault", authority.key().as_ref()],  // 4. Derive PDA
+    bump             // 5. Find canonical bump
+)]
+pub vault: Account<'info, Vault>,
+```
+
+Creation constraints like `init` must come before validation constraints. You cannot validate data that does not exist yet. Similarly, `realloc` must come before constraints that check the resized data.
+
+<ArticleSection name="Account Creation Constraints" id="account-creation-constraints" level="h2" />
+
+### init
+
+The `init` constraint creates a new account, assigns it to your program, and allocates space for its data. It requires both `payer` and `space`.
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 8
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,  // 32 bytes
+    pub balance: u64,       // 8 bytes
+}
+```
+
+The `space` calculation includes an 8-byte discriminator that Anchor adds automatically. This discriminator prevents account type confusion attacks.
+
+When using `init` with PDAs, add the `seeds` and `bump` constraints to derive the address:
+
+```rust
+#[account(
+    init,
+    payer = user,
+    space = 8 + 32 + 8,
+    seeds = [b"vault", user.key().as_ref()],
+    bump
+)]
+pub vault: Account<'info, Vault>,
+```
+
+### init_if_needed
+
+The `init_if_needed` constraint creates an account only if it does not already exist. If the account exists, execution continues without error.
+
+```rust
+#[derive(Accounts)]
+pub struct InitOrContinue<'info> {
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + 32
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+This constraint requires the `init-if-needed` feature flag in your Cargo.toml:
+
+```toml
+[dependencies]
+anchor-lang = { version = "0.30.0", features = ["init-if-needed"] }
+```
+
+Use this constraint carefully. It can enable re-initialization attacks if your instruction logic assumes a fresh account. Only use it when idempotent behavior is safe.
+
+### zero
+
+The `zero` constraint verifies that an account's data is all zeros. This is used with zero-copy accounts that are created externally before your program initializes them.
+
+```rust
+#[derive(Accounts)]
+pub struct InitZeroCopy<'info> {
+    #[account(zero)]
+    pub large_data: AccountLoader<'info, LargeData>,
+}
+```
+
+This pattern is uncommon. Most programs use `init` for account creation.
+
+<ArticleSection name="Mutation Constraints" id="mutation-constraints" level="h2" />
+
+### mut
+
+The `mut` constraint marks an account as writable. Without this constraint, any attempt to modify the account data will fail.
+
+```rust
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+```
+
+Anchor enforces write permissions at the account validation layer. If you mark an account as `mut` in your context but do not pass it as writable in the transaction, the instruction fails.
+
+### realloc
+
+The `realloc` constraint resizes an account's data. It requires `realloc::payer`, `realloc::zero`, and `mut`.
+
+```rust
+#[derive(Accounts)]
+#[instruction(new_size: usize)]
+pub struct Resize<'info> {
+    #[account(
+        mut,
+        realloc = 8 + new_size,
+        realloc::payer = payer,
+        realloc::zero = true
+    )]
+    pub data: Account<'info, DynamicData>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `realloc::payer` specifies who pays for increased rent or receives refunded rent when shrinking. The `realloc::zero` determines whether new space is zero-initialized. Set this to `true` unless you have a specific reason not to.
+
+Reallocation can increase or decrease size. When increasing, the payer must have enough lamports to cover the rent difference. When decreasing, the difference is refunded to the payer.
+
+### close
+
+The `close` constraint closes an account by transferring its lamports to a target account and marking it for garbage collection.
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(
+        mut,
+        close = authority
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+```
+
+After closure, the account's data is zeroed and its owner is set to the System Program. The account cannot be used again unless recreated.
+
+The target of `close` must be marked as `mut` because it receives the lamports.
+
+<ArticleSection name="Validation Constraints" id="validation-constraints" level="h2" />
+
+### has_one
+
+The `has_one` constraint verifies that an account field matches another account in the context.
+
+```rust
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        has_one = authority
+    )]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+```
+
+This expands to `vault.authority == authority.key()`. If the check fails, the instruction aborts.
+
+You can validate multiple fields:
+
+```rust
+#[account]
+pub struct Config {
+    pub admin: Pubkey,
+    pub treasury: Pubkey,
+}
+
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(
+        mut,
+        has_one = admin,
+        has_one = treasury
+    )]
+    pub config: Account<'info, Config>,
+    pub admin: Signer<'info>,
+    pub treasury: SystemAccount<'info>,
+}
+```
+
+### address
+
+The `address` constraint verifies that an account's address matches a specific value.
+
+```rust
+use anchor_lang::solana_program::pubkey;
+
+const ADMIN: Pubkey = pubkey!("Admn1111111111111111111111111111111111111111");
+
+#[derive(Accounts)]
+pub struct AdminOnly<'info> {
+    #[account(address = ADMIN)]
+    pub admin: Signer<'info>,
+}
+```
+
+This is useful for hardcoded authorities or well-known accounts. The constraint expands to `admin.key() == ADMIN`.
+
+You can also use dynamic addresses:
+
+```rust
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, address = vault.authority)]
+    pub authority: Signer<'info>,
+}
+```
+
+### owner
+
+The `owner` constraint verifies that an account is owned by a specific program.
+
+```rust
+#[derive(Accounts)]
+pub struct ValidateOwnership<'info> {
+    #[account(owner = token_program.key())]
+    pub token_account: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+This is less common than other constraints because Anchor's account types like `Account<'info, T>` already enforce ownership by your program. Use `owner` when working with raw `AccountInfo` or accounts from other programs.
+
+### executable
+
+The `executable` constraint verifies that an account is executable.
+
+```rust
+#[derive(Accounts)]
+pub struct CallProgram<'info> {
+    #[account(executable)]
+    pub program: AccountInfo<'info>,
+}
+```
+
+This is rarely needed because `Program<'info, T>` already enforces executability.
+
+### signer
+
+The `signer` constraint verifies that an account signed the transaction. This is an alternative to using the `Signer<'info>` type.
+
+```rust
+#[derive(Accounts)]
+pub struct WithSigner<'info> {
+    #[account(signer)]
+    pub authority: AccountInfo<'info>,
+}
+```
+
+Prefer the `Signer<'info>` type over this constraint. The type makes the requirement explicit and is harder to overlook.
+
+### constraint
+
+The `constraint` constraint allows arbitrary boolean expressions. Use this for validation logic that does not fit into other constraints.
+
+```rust
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        constraint = vault.balance >= amount
+    )]
+    pub vault: Account<'info, Vault>,
+}
+```
+
+You can reference instruction arguments by adding the `#[instruction(...)]` attribute to your context struct.
+
+Multiple custom constraints are allowed:
+
+```rust
+#[account(
+    mut,
+    constraint = vault.balance >= amount,
+    constraint = amount > 0,
+    constraint = amount <= MAX_WITHDRAWAL
+)]
+pub vault: Account<'info, Vault>,
+```
+
+### seeds and bump
+
+The `seeds` and `bump` constraints derive and validate PDAs. Together they verify that an account address matches the expected derivation.
+
+```rust
+#[derive(Accounts)]
+pub struct AccessVault<'info> {
+    #[account(
+        seeds = [b"vault", authority.key().as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+```
+
+The `bump` constraint reads the bump seed from the account data. Your account struct must store this value:
+
+```rust
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+```
+
+When using `init`, you can omit the bump value and let Anchor find the canonical bump:
+
+```rust
+#[account(
+    init,
+    payer = payer,
+    space = 8 + 32 + 1,
+    seeds = [b"vault", authority.key().as_ref()],
+    bump
+)]
+pub vault: Account<'info, Vault>,
+```
+
+Access the bump in your instruction handler with `ctx.bumps.vault`. Store it in the account if you need it later.
+
+<ArticleSection name="Token Constraints" id="token-constraints" level="h2" />
+
+Token constraints validate SPL token accounts and mints. These constraints work with the `anchor-spl` crate.
+
+### Mint Constraints
+
+Mint constraints validate token mint accounts.
+
+```rust
+use anchor_spl::token::{Mint, Token};
+
+#[derive(Accounts)]
+pub struct CreateMint<'info> {
+    #[account(
+        init,
+        payer = payer,
+        mint::decimals = 9,
+        mint::authority = authority.key(),
+        mint::freeze_authority = authority.key()
+    )]
+    pub mint: Account<'info, Mint>,
+    pub authority: SystemAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `mint::decimals` sets the decimal precision, while `mint::authority` specifies who can mint new tokens and `mint::freeze_authority` specifies who can freeze token accounts. Both authorities are optional—omit the constraint to set them to `None`.
+
+When validating existing mints:
+
+```rust
+#[derive(Accounts)]
+pub struct ValidateMint<'info> {
+    #[account(
+        mint::decimals = 6,
+        mint::authority = config.mint_authority
+    )]
+    pub mint: Account<'info, Mint>,
+    pub config: Account<'info, Config>,
+}
+```
+
+### Token Account Constraints
+
+Token account constraints validate SPL token accounts.
+
+```rust
+use anchor_spl::token::{Token, TokenAccount};
+
+#[derive(Accounts)]
+pub struct InitializeToken<'info> {
+    #[account(
+        init,
+        payer = payer,
+        token::mint = mint,
+        token::authority = authority
+    )]
+    pub token_account: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    pub authority: SystemAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `token::mint` constraint sets or validates the mint. The `token::authority` sets or validates the token account authority.
+
+### Associated Token Account Constraints
+
+Associated token account constraints work with deterministic token accounts derived from a wallet and mint.
+
+```rust
+use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::associated_token::AssociatedToken;
+
+#[derive(Accounts)]
+pub struct InitializeATA<'info> {
+    #[account(
+        init,
+        payer = payer,
+        associated_token::mint = mint,
+        associated_token::authority = owner
+    )]
+    pub token_account: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    pub owner: SystemAccount<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `associated_token::mint` and `associated_token::authority` constraints derive the correct address and validate that the account matches the expected derivation.
+
+<ArticleSection name="Custom Error Messages" id="custom-error-messages" level="h2" />
+
+Add custom error messages to any constraint with the `@` operator.
+
+```rust
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Insufficient balance for withdrawal")]
+    InsufficientBalance,
+    #[msg("Withdrawal amount must be greater than zero")]
+    InvalidAmount,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        constraint = vault.balance >= amount @ ErrorCode::InsufficientBalance,
+        constraint = amount > 0 @ ErrorCode::InvalidAmount
+    )]
+    pub vault: Account<'info, Vault>,
+}
+```
+
+Without custom errors, constraint failures return generic Anchor error codes. Custom errors make debugging easier and provide better feedback to users.
+
+<ArticleSection name="Combining Constraints" id="combining-constraints" level="h2" />
+
+Most real-world accounts require multiple constraints. Combine them to express complex validation rules.
+
+```rust
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct TransferFromVault<'info> {
+    #[account(
+        mut,
+        has_one = authority @ ErrorCode::Unauthorized,
+        constraint = vault.balance >= amount @ ErrorCode::InsufficientBalance,
+        constraint = !vault.frozen @ ErrorCode::VaultFrozen,
+        seeds = [b"vault", authority.key().as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+    pub authority: Signer<'info>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub balance: u64,
+    pub frozen: bool,
+    pub bump: u8,
+}
+```
+
+This context validates authority ownership, sufficient balance, freeze status, and PDA derivation. All checks run before your instruction logic executes.
+
+<ArticleSection name="Common Patterns" id="common-patterns" level="h2" />
+
+### Authority Validation
+
+Most instructions verify that the caller has permission to perform an action.
+
+```rust
+#[derive(Accounts)]
+pub struct Update<'info> {
+    #[account(
+        mut,
+        has_one = authority
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+```
+
+This pattern appears in nearly every state-modifying instruction. The `has_one` constraint prevents unauthorized updates.
+
+### PDA Creation
+
+Creating PDAs requires combining `init`, `seeds`, and `bump`.
+
+```rust
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + 32 + 1,
+        seeds = [b"config"],
+        bump
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    config.authority = ctx.accounts.payer.key();
+    config.bump = ctx.bumps.config;
+    Ok(())
+}
+```
+
+Store the bump seed in your account data for later validation.
+
+### Token Account Validation
+
+When working with tokens, validate both the mint and authority.
+
+```rust
+#[derive(Accounts)]
+pub struct DepositTokens<'info> {
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = user
+    )]
+    pub user_token: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = vault
+    )]
+    pub vault_token: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    pub vault: Account<'info, Vault>,
+    pub user: Signer<'info>,
+}
+```
+
+This prevents users from depositing wrong tokens or manipulating accounts they do not control.
+
+### Rent Refunds
+
+When closing accounts or shrinking data, specify where rent refunds go.
+
+```rust
+#[derive(Accounts)]
+pub struct CloseVault<'info> {
+    #[account(
+        mut,
+        close = authority,
+        has_one = authority
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+```
+
+The `close` constraint transfers all lamports to the authority before marking the account for deletion.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Constraints move security checks from manual code into declarative rules that execute before your instruction logic. Next up: cross-program invocations. For a deeper look at which vulnerabilities constraints prevent, see the What Anchor Protects lesson in Securing Anchor Programs.

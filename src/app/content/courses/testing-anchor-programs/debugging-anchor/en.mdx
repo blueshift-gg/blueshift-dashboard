@@ -1,0 +1,554 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Debugging Anchor Programs
+
+![Testing Anchor Programs](/graphics/course-banners/testing-anchor-programs.png)
+
+Every Solana developer spends time debugging failed transactions. The skill isn't avoiding errors — it's reading error output efficiently and knowing where to look. Anchor provides structured error messages, but you need to know how to decode them.
+
+This lesson covers the practical debugging tools you will use daily: reading Anchor error codes, analyzing transaction logs, simulating transactions before sending, profiling compute unit usage, and using `anchor expand` to see what your macros generate.
+
+<ArticleSection name="Reading Error Messages" id="reading-error-messages" level="h2" />
+
+When an Anchor program fails, the error follows a consistent format:
+
+```
+Error: AnchorError thrown in programs/counter/src/lib.rs:42. Error Code: ConstraintMut. Error Number: 2000. Error Message: A mut constraint was violated.
+Program log: Left: 7XYNPjXpRnPqEk8Dv7Tr5KMNfJoYC4wPf2zQbqHwJqxX
+Program log: Right: 8ZYNPjXpRnPqEk8Dv7Tr5KMNfJoYC4wPf2zQbqHwJqxY
+```
+
+The error structure:
+- **Error Code**: The constraint that failed (`ConstraintMut`)
+- **Error Number**: Numeric code (2000)
+- **Error Message**: What went wrong
+- **Program logs**: Additional context (account addresses, values)
+
+Anchor reserves error codes in specific ranges:
+- **0-999**: System errors (rarely seen)
+- **1000-1999**: Reserved
+- **2000-2999**: Constraint errors
+- **3000-5999**: Reserved
+- **6000+**: Your custom errors
+
+### Common Anchor Constraint Errors
+
+The most frequent errors you'll see:
+
+**`AccountNotInitialized` (2012)**
+```rust
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub user: Account<'info, User>,  // User account doesn't exist yet
+}
+```
+
+This means you tried to deserialize an account that hasn't been initialized. Usually happens when you forget `init` or pass the wrong address.
+
+**`ConstraintMut` (2000)**
+```rust
+pub struct Update<'info> {
+    #[account(mut)]
+    pub counter: Account<'info, Counter>,  // Passed as immutable
+}
+```
+
+The account was marked `mut` in your struct, but you passed it as read-only in the instruction. Check your client call — the account needs `isMut: true`.
+
+**`ConstraintHasOne` (2001)**
+```rust
+pub struct Close<'info> {
+    #[account(
+        mut,
+        has_one = authority  // counter.authority != authority.key()
+    )]
+    pub counter: Account<'info, Counter>,
+    pub authority: Signer<'info>,
+}
+```
+
+The `has_one` constraint checks that `counter.authority` equals `authority.key()`. If this fails, you passed the wrong authority account.
+
+**`ConstraintSeeds` (2006)**
+```rust
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + Counter::INIT_SPACE,
+        seeds = [b"counter", authority.key().as_ref()],
+        bump
+    )]
+    pub counter: Account<'info, Counter>,
+}
+```
+
+The derived PDA doesn't match the account you passed. You either:
+- Used wrong seeds in your client code
+- Passed the wrong bump
+- Called the wrong authority
+
+### Custom Errors
+
+For your own errors, define them in an enum:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod counter {
+    use super::*;
+
+    pub fn increment(ctx: Context<Increment>) -> Result<()> {
+        let counter = &mut ctx.accounts.counter;
+
+        require!(
+            counter.count < 100,
+            CounterError::MaxCountReached
+        );
+
+        counter.count += 1;
+        Ok(())
+    }
+}
+
+#[error_code]
+pub enum CounterError {
+    #[msg("Counter has reached maximum value of 100")]
+    MaxCountReached,
+}
+```
+
+When this error is thrown:
+
+```
+Error: AnchorError caused by account: counter. Error Code: MaxCountReached. Error Number: 6000. Error Message: Counter has reached maximum value of 100.
+```
+
+Custom errors start at 6000 and increment for each variant you define. The first custom error is 6000, the second is 6001, and so on.
+
+<ArticleSection name="Transaction Logs" id="transaction-logs" level="h2" />
+
+Transaction logs show everything that happened during execution: which instructions ran, what CPIs were called, how much compute was used, and any custom messages.
+
+### Streaming Logs
+
+To watch logs in real-time during testing:
+
+```bash
+solana logs
+```
+
+This streams all transactions on your current cluster. Filter by program ID:
+
+```bash
+solana logs <program-id>
+```
+
+### Adding Debug Output
+
+Use `msg!()` to print debug information:
+
+```rust
+use anchor_lang::prelude::*;
+
+pub fn increment(ctx: Context<Increment>) -> Result<()> {
+    let counter = &mut ctx.accounts.counter;
+
+    msg!("Current count: {}", counter.count);
+    msg!("Authority: {}", counter.authority);
+
+    counter.count += 1;
+
+    msg!("New count: {}", counter.count);
+    Ok(())
+}
+```
+
+The logs will show:
+
+```
+Program log: Current count: 5
+Program log: Authority: 7XYNPjXpRnPqEk8Dv7Tr5KMNfJoYC4wPf2zQbqHwJqxX
+Program log: New count: 6
+```
+
+### Understanding Log Structure
+
+Logs show execution flow with indentation for CPIs:
+
+```
+Program 11111111111111111111111111111111 invoke [1]
+Program 11111111111111111111111111111111 success
+Program CounterProgram invoke [1]
+Program log: Instruction: Initialize
+Program log: Counter initialized
+Program CounterProgram consumed 5432 compute units
+Program CounterProgram success
+```
+
+Each CPI increases the depth by one level. The number in brackets `[1]`, `[2]`, etc. shows the CPI depth. The System Program (all 1s) is called at depth 1, then your program runs at depth 1, and any CPIs from your program would be depth 2.
+
+Compute units consumed are logged at the end of each instruction. This is how you profile performance.
+
+<ArticleSection name="Transaction Simulation" id="transaction-simulation" level="h2" />
+
+Before sending a transaction, you can simulate it to see if it would succeed:
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { Counter } from "../target/types/counter";
+
+describe("counter", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Counter as Program<Counter>;
+
+  it("simulates increment", async () => {
+    const [counter] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("counter"), provider.wallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    const simulation = await program.methods
+      .increment()
+      .accounts({
+        counter,
+        authority: provider.wallet.publicKey,
+      })
+      .simulate();
+
+    console.log("Logs:", simulation.raw);
+    console.log("Compute units used:", simulation.unitsConsumed);
+  });
+});
+```
+
+The `simulate()` method returns:
+- `raw`: Full transaction logs
+- `unitsConsumed`: Compute units used
+- `returnData`: Any return data from the instruction
+
+Simulation is useful when:
+- A transaction fails and you want to see the full logs
+- You need to check compute units before deploying
+- You're testing complex CPI chains
+- You want to verify account states without modifying them
+
+### Simulating Failed Transactions
+
+When a transaction fails on-chain, simulate it to get detailed logs:
+
+```typescript
+try {
+  await program.methods
+    .increment()
+    .accounts({
+      counter,
+      authority: provider.wallet.publicKey,
+    })
+    .rpc();
+} catch (error) {
+  console.log("Transaction failed, simulating...");
+
+  const simulation = await program.methods
+    .increment()
+    .accounts({
+      counter,
+      authority: provider.wallet.publicKey,
+    })
+    .simulate({ commitment: "processed" });
+
+  console.log("Simulation logs:", simulation.raw);
+}
+```
+
+The logs from simulation are often more complete than what you get from a failed transaction.
+
+<ArticleSection name="Compute Unit Debugging" id="compute-unit-debugging" level="h2" />
+
+Every Solana transaction has a compute budget — a limit on how much processing it can do. Each instruction gets 200,000 compute units (CU) by default. If you exceed this, the transaction fails with "exceeded compute budget."
+
+### Checking Compute Usage
+
+Track compute units in your tests:
+
+```typescript
+it("profiles compute units", async () => {
+  const simulation = await program.methods
+    .complexOperation()
+    .accounts({
+      // accounts
+    })
+    .simulate();
+
+  console.log(`Compute units used: ${simulation.unitsConsumed}`);
+
+  // Assert you're under budget
+  assert(simulation.unitsConsumed < 200_000);
+});
+```
+
+### Increasing Compute Budget
+
+If you need more than 200,000 CU, request additional units:
+
+```typescript
+import { ComputeBudgetProgram } from "@solana/web3.js";
+
+const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({
+  units: 400_000,
+});
+
+const tx = await program.methods
+  .complexOperation()
+  .accounts({
+    // accounts
+  })
+  .preInstructions([modifyComputeUnits])
+  .rpc();
+```
+
+The maximum is 1.4 million CU per transaction. If a single instruction needs more, you need to break it into multiple instructions.
+
+### Common Compute Costs
+
+Typical operations and their approximate costs:
+
+- **Account deserialization**: ~5,000 CU per account
+- **PDA derivation**: ~3,200 CU
+- **CPI overhead**: ~1,000 CU per call
+- **SPL Token transfer**: ~4,500 CU
+- **Account creation**: ~10,000 CU
+
+These are rough estimates. Actual costs depend on account size, number of seeds, and program logic.
+
+### Profiling Across Tests
+
+Compare compute usage across different implementations:
+
+```typescript
+describe("compute profiling", () => {
+  it("measures naive implementation", async () => {
+    const sim = await program.methods.naiveApproach().simulate();
+    console.log(`Naive: ${sim.unitsConsumed} CU`);
+  });
+
+  it("measures optimized implementation", async () => {
+    const sim = await program.methods.optimizedApproach().simulate();
+    console.log(`Optimized: ${sim.unitsConsumed} CU`);
+  });
+});
+```
+
+Run tests and compare output to see which approach is more efficient.
+
+<ArticleSection name="Common Debugging Scenarios" id="common-debugging-scenarios" level="h2" />
+
+Certain error patterns appear frequently. Here's how to recognize and fix them.
+
+### Transaction Too Large
+
+```
+Error: Transaction too large: 1245 > 1232 bytes
+```
+
+Solana limits transactions to 1,232 bytes. This happens when you pass too many accounts or signers.
+
+**Solution**: Break the instruction into multiple transactions, or use lookup tables to compress account addresses.
+
+```typescript
+// Instead of one large transaction
+await program.methods
+  .processAll()
+  .accounts({
+    account1,
+    account2,
+    account3,
+    // ... 20 more accounts
+  })
+  .rpc();
+
+// Split into smaller transactions
+await program.methods
+  .processBatch1()
+  .accounts({ account1, account2, account3 })
+  .rpc();
+
+await program.methods
+  .processBatch2()
+  .accounts({ account4, account5, account6 })
+  .rpc();
+```
+
+### Account Not Found
+
+```
+Error: Account does not exist 7XYNPjXpRnPqEk8Dv7Tr5KMNfJoYC4wPf2zQbqHwJqxX
+```
+
+You passed an account address that doesn't exist on-chain. Common causes:
+
+- Wrong PDA seeds
+- Forgot to initialize the account
+- Using wrong authority or parameters
+
+**Solution**: Verify your PDA derivation matches your program:
+
+```typescript
+// In your test
+const [counter, bump] = anchor.web3.PublicKey.findProgramAddressSync(
+  [Buffer.from("counter"), authority.publicKey.toBuffer()],
+  program.programId
+);
+
+// Must match your program seeds exactly
+// #[account(
+//     seeds = [b"counter", authority.key().as_ref()],
+//     bump
+// )]
+```
+
+### Custom Program Error: 0x0
+
+```
+Error: Custom program error: 0x0
+```
+
+This cryptic error usually means an Anchor constraint failed, but the error code wasn't decoded. The actual error is in the transaction logs.
+
+**Solution**: Check the logs with `solana logs` or simulate the transaction to see the full error message.
+
+### Instruction Modified Read-Only Account
+
+```
+Error: Instruction modified data of an account it does not own
+```
+
+You marked an account as mutable in your program but passed it as read-only from the client, or you tried to modify an account you don't own.
+
+**Solution**: Check your account constraints match your client call:
+
+```rust
+// Program expects mut
+#[account(mut)]
+pub counter: Account<'info, Counter>,
+```
+
+```typescript
+// Client must pass as mutable
+.accounts({
+  counter: counterAddress,  // This account must be writable
+})
+.remainingAccounts([
+  { pubkey: counterAddress, isSigner: false, isWritable: true }
+])
+```
+
+### Missing Signer
+
+```
+Error: Signature verification failed
+```
+
+An account marked as `Signer` was not signed by that keypair.
+
+**Solution**: Make sure the keypair signs the transaction:
+
+```typescript
+const authority = anchor.web3.Keypair.generate();
+
+await program.methods
+  .initialize()
+  .accounts({
+    authority: authority.publicKey,
+  })
+  .signers([authority])  // Don't forget this
+  .rpc();
+```
+
+<ArticleSection name="Using Anchor Expand" id="using-anchor-expand" level="h2" />
+
+Anchor macros generate a lot of code behind the scenes. Sometimes you need to see exactly what they produce.
+
+The `anchor expand` command outputs the fully expanded Rust code with all macros resolved:
+
+```bash
+anchor expand
+```
+
+This prints the entire program with macros expanded. The output is verbose, but useful for understanding what Anchor generates.
+
+### What Expand Shows You
+
+**Account constraint checks**:
+
+```rust
+// Your code
+#[account(
+    mut,
+    has_one = authority,
+    constraint = counter.count < 100 @ CounterError::MaxCountReached
+)]
+pub counter: Account<'info, Counter>,
+```
+
+Expands to validation code that:
+- Checks the account is mutable
+- Verifies `counter.authority == authority.key()`
+- Validates `counter.count < 100`
+- Returns the custom error if the constraint fails
+
+**Discriminator validation**:
+
+Every Anchor account has an 8-byte discriminator that identifies its type. `anchor expand` shows how this is checked during deserialization to ensure you passed the right account type.
+
+**CPI generation**:
+
+When you use `CpiContext` to call another program, expand shows the exact instruction data and account list that gets passed.
+
+### Practical Usage
+
+You won't run `anchor expand` often, but it's valuable when:
+
+- A constraint fails and you want to see the exact check being performed
+- You need to understand discriminator validation for zero-copy accounts
+- You're debugging CPI issues and need to see the generated instruction
+- You're learning how Anchor macros work under the hood
+
+Most of the time, the error messages and logs give you enough information. Use expand when you need to see the implementation details.
+
+<ArticleSection name="Debugging Workflow" id="debugging-workflow" level="h2" />
+
+A practical debugging process:
+
+1. **Read the error code first**. Anchor errors tell you exactly what constraint failed. Start there.
+
+2. **Check the logs**. Run `solana logs` or simulate the transaction. The logs show which instruction failed and any custom messages.
+
+3. **Verify account addresses**. Most errors come from wrong PDAs, missing accounts, or incorrect seeds. Print addresses in your test and compare them to your program.
+
+4. **Simulate before sending**. If a transaction might fail, simulate it first to get full logs without spending compute units.
+
+5. **Profile compute usage**. If you're close to limits, check compute units consumed in simulation and optimize hot paths.
+
+6. **Use `msg!()` liberally**. Print state before and after operations. Remove debug messages once the code works.
+
+7. **Expand macros when necessary**. If you can't figure out why a constraint fails, use `anchor expand` to see the generated validation code.
+
+The cycle is: write test, run test, read error, fix code, repeat. The faster you can read and understand errors, the faster this cycle runs.
+
+## Conclusion
+
+Testing and debugging are iterative. Write a test, watch it fail, read the error, fix the code, run again. The faster this cycle, the faster you ship. The tools from this course — TypeScript tests, security testing, and debugging techniques — make that cycle as short as possible.
+
+You now have the complete testing workflow:
+- Write integration tests with Anchor's TypeScript client
+- Test CPI interactions between programs
+- Identify security vulnerabilities before they hit production
+- Debug failed transactions efficiently using logs, simulation, and error codes
+
+These skills apply to every Anchor program you build. The testing patterns stay consistent even as your programs grow more complex. Start with simple test cases, add security scenarios, profile compute usage, and iterate until your program behaves correctly under all conditions.
+
+The difference between a program that works in testing and one that works in production is thoroughness. Test edge cases. Test with wrong authorities. Test with invalid account states. Test with maximum compute usage. The more failure scenarios you test during development, the fewer you'll encounter after deployment. When you need to understand exactly what Anchor generates behind its macros — especially for CPI calls — the Advanced Anchor Patterns course covers raw CPIs and syscalls in its raw-cpis-and-syscalls lesson, which clarifies the code that `anchor expand` reveals. For production incidents where logs and simulation alone are not enough, the Anchor in Production course covers operational runbooks and incident response in its operational-patterns lesson.

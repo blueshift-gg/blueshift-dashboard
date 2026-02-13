@@ -1,0 +1,266 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Account Lifecycle
+
+![Build real Anchor programs - account lifecycle](/graphics/course-banners/building-with-anchor.png)
+
+Every Solana account has a lifecycle: creation, use, and eventually closure. Anchor provides constraints for each stage, but the design decisions around when and how to use them matter more than the syntax. This lesson covers the architectural choices that determine how your accounts come into existence, evolve, and cease to exist.
+
+<ArticleSection name="The Lifecycle Stages" id="lifecycle-stages" level="h2" />
+
+Accounts move through distinct phases:
+
+1. **Creation**: Allocate space, assign ownership, initialize state
+2. **Use**: Read and write data across multiple transactions
+3. **Resize** (optional): Expand or shrink allocated space
+4. **Closure** (optional): Reclaim rent and mark the account as closed
+
+Each stage involves specific Anchor constraints and runtime checks. The most common mistakes happen during creation (reinitialization) and closure (account resurrection). The most consequential design decisions are about when to create and when to close.
+
+<ArticleSection name="Permanent vs Temporary Accounts" id="permanent-vs-temporary" level="h2" />
+
+Before choosing creation and closure patterns, decide whether each account type is permanent or temporary. This is the foundational lifecycle design decision.
+
+**Permanent accounts** persist for the lifetime of the program. Protocol configuration, global state, fee collection—these are created once and never closed. They may be resized or migrated, but their existence is assumed by every instruction.
+
+**Temporary accounts** exist for a bounded duration. An escrow that closes when both parties settle. A position that closes when the user withdraws everything. A vote that closes after the proposal ends.
+
+**Session accounts** are a special case of temporary—they exist for a single transaction or a short series of transactions. An order that's created, filled, and closed within one transaction. A temporary buffer for a multi-step computation.
+
+The decision matters because it shapes your entire instruction design:
+
+| Account Type | Creation | Closure | Rent Strategy |
+|---|---|---|---|
+| Permanent | `init` once, never again | Never | Accept rent as protocol cost |
+| Temporary | `init` per use | `close` when done | Rent returned to user |
+| Session | `init` in setup ix | `close` in cleanup ix | Minimal rent, fast reclaim |
+
+A common mistake is treating all accounts as permanent by never implementing closure. This costs users rent indefinitely for accounts they no longer need. If an account has a natural end-of-life, design for closure.
+
+<ArticleSection name="When to Use init_if_needed" id="init-if-needed" level="h2" />
+
+The `init_if_needed` constraint creates an account only if it doesn't already exist. This produces idempotent operations—multiple calls won't fail.
+
+```rust
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserPosition::INIT_SPACE,
+        seeds = [b"position", vault.key().as_ref(), user.key().as_ref()],
+        bump
+    )]
+    pub position: Account<'info, UserPosition>,
+
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+If the position exists, Anchor loads it. If not, Anchor creates it. This is convenient—the user doesn't need a separate "create position" step before depositing.
+
+**The danger: reinitialization attacks.** If your instruction handler unconditionally writes initial values, an attacker can call it again to reset state:
+
+```rust
+// VULNERABLE: always resets balance
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+    position.user = ctx.accounts.user.key();
+    position.balance = amount; // Attacker calls with amount=0 to wipe balance
+    Ok(())
+}
+```
+
+The safe pattern checks whether initialization already occurred:
+
+```rust
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+
+    if position.user == Pubkey::default() {
+        // First deposit: initialize
+        position.user = ctx.accounts.user.key();
+        position.vault = ctx.accounts.vault.key();
+        position.balance = 0;
+        position.bump = ctx.bumps.position;
+    }
+
+    position.balance = position.balance.checked_add(amount)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    Ok(())
+}
+```
+
+**Design decision: `init_if_needed` vs separate instructions.**
+
+Use `init_if_needed` when:
+- The creation is a side effect of a primary action (deposit creates position)
+- Requiring a separate creation step would harm UX significantly
+- The handler can safely distinguish first-call from subsequent calls
+
+Use separate `create` and `update` instructions when:
+- Creation involves complex initialization logic
+- You want explicit control over when accounts are created
+- The reinitialization risk is hard to mitigate in the handler
+
+Most programs are better served by separate instructions. The UX cost of a "create" step is usually small (one extra transaction), and the safety benefit is significant.
+
+<ArticleSection name="Realloc vs Close-and-Recreate" id="realloc-vs-recreate" level="h2" />
+
+When an account needs more (or less) space, you have two strategies.
+
+**Realloc** adjusts the account size in place:
+
+```rust
+#[derive(Accounts)]
+pub struct ExpandList<'info> {
+    #[account(
+        mut,
+        realloc = 8 + ItemList::INIT_SPACE,
+        realloc::payer = authority,
+        realloc::zero = false
+    )]
+    pub list: Account<'info, ItemList>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+Realloc preserves the account address and existing data. The `realloc::payer` funds additional rent (or receives refunded rent when shrinking). Maximum growth per instruction is 10,240 bytes.
+
+**Close-and-recreate** destroys the account and creates a new one:
+
+```rust
+// Step 1: Close the old account
+pub fn close_old(ctx: Context<CloseOld>) -> Result<()> {
+    // close constraint on account returns rent to authority
+    Ok(())
+}
+
+// Step 2: Create a new, larger account
+pub fn create_new(ctx: Context<CreateNew>) -> Result<()> {
+    // init with new space
+    Ok(())
+}
+```
+
+This resets all data. The account gets a new discriminator validation. If the account is a PDA with the same seeds, it gets the same address.
+
+**Decision framework:**
+
+| Factor | Realloc | Close-and-Recreate |
+|---|---|---|
+| Preserves data | Yes | No (must copy) |
+| Preserves address | Yes | Only for PDAs with same seeds |
+| Growth limit | 10,240 bytes per ix | Unlimited |
+| Complexity | Low | Higher (two transactions) |
+| Account references | Other accounts' Pubkey refs remain valid | Refs remain valid for same-seed PDAs |
+
+Use realloc when:
+- You need to grow or shrink incrementally
+- Data must be preserved without copying
+- Growth fits within the 10 KiB per-instruction limit
+
+Use close-and-recreate when:
+- The account layout has changed fundamentally (new struct, different version)
+- You need to grow beyond 10 KiB in a single operation (close, then create with new size)
+- The account needs a fresh discriminator check (migration safety)
+
+<ArticleSection name="Closing Accounts Safely" id="close-constraint" level="h2" />
+
+The `close` constraint reclaims rent by transferring all lamports to a target account:
+
+```rust
+#[derive(Accounts)]
+pub struct CloseVault<'info> {
+    #[account(
+        mut,
+        close = authority,
+        has_one = authority,
+        constraint = vault.balance == 0 @ VaultError::VaultNotEmpty
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+```
+
+Anchor performs three operations: transfers all lamports to the target, zeros all account data, and sets the discriminator to `CLOSED_ACCOUNT_DISCRIMINATOR`. The discriminator change prevents account resurrection—if someone sends lamports to a closed PDA, the account exists again in Solana's state, but Anchor's discriminator check rejects it.
+
+**Always validate preconditions before closing.** The constraint `vault.balance == 0` ensures you can't close a vault that still holds tokens. Without this, closing a vault with tokens would make those tokens unrecoverable.
+
+**Closure patterns for common account types:**
+
+- **Escrows**: Close when both parties settle or after a timeout expires
+- **Positions**: Close when balance reaches zero after full withdrawal
+- **Votes**: Close after the proposal's voting period ends and results are tallied
+- **Temporary buffers**: Close in the same transaction that consumes the data
+
+**Design decision: who receives the rent?** The `close = recipient` target determines where rent goes. Options:
+
+- **The user who created it** — fairest, they paid the rent
+- **A protocol treasury** — when the protocol paid for creation
+- **The transaction payer** — for session accounts where the creator and closer differ
+
+<ArticleSection name="Account Migration" id="account-migration" level="h2" />
+
+Production programs eventually need to change account structures. You have three strategies, and the right one depends on the scope of change.
+
+**Strategy 1: Option fields for additive changes**
+
+```rust
+#[account]
+#[derive(InitSpace)]
+pub struct User {
+    pub authority: Pubkey,
+    pub balance: u64,
+    pub last_action: Option<i64>, // None for old accounts, Some(ts) for new
+}
+```
+
+Old accounts have `last_action = None`. New accounts set `Some(timestamp)`. This requires no migration—instructions handle the `None` case gracefully. Use for simple additions where backward compatibility is critical.
+
+**Strategy 2: Migration instruction for schema upgrades**
+
+Provide a dedicated instruction that reads the old format and writes the new one. Each account migrates once. The instruction reallocs to the new size, copies old fields, and initializes new fields. Mark accounts with a version byte to prevent double-migration.
+
+Use for one-time schema upgrades where you can migrate all accounts within a reasonable timeframe.
+
+**Strategy 3: Versioned accounts for major breaking changes**
+
+Store a version byte and handle different layouts conditionally. Version 1 instructions and version 2 instructions coexist. Use when multiple versions must be live simultaneously or the structural change is fundamental.
+
+**Decision framework:**
+- Adding a nullable field? → Option
+- One-time upgrade, same structure? → Migration instruction
+- Breaking change, coexisting versions? → Versioned accounts
+
+Most production programs use Option fields for minor additions and migration instructions for major upgrades. The Advanced Anchor Patterns course covers versioning and migration in depth in its versioning-and-migration lesson.
+
+<ArticleSection name="Lifecycle Decisions in Practice" id="lifecycle-in-practice" level="h2" />
+
+Account lifecycle extends beyond individual operations. It's about coordinating state changes across multiple accounts while maintaining consistency.
+
+A token staking program lifecycle:
+
+1. User creates a stake account (`init`)
+2. User deposits tokens (writes to account)
+3. Rewards accrue over time (periodic writes)
+4. User withdraws everything and closes the account (`close`)
+
+Each stage has different constraints: creation requires rent payment, use requires authority validation, and closure requires zeroing the balance and cleaning up associated token accounts.
+
+The key design decisions for any program's lifecycle:
+
+1. **For each account type**: Permanent, temporary, or session?
+2. **For creation**: `init` with separate instruction or `init_if_needed` as side effect?
+3. **For growth**: Padding, realloc, or close-and-recreate?
+4. **For closure**: Who triggers it? Who receives the rent? What preconditions must hold?
+
+The Securing Anchor Programs course dives deeper into the dangers of reinitialization and account revival attacks in its reinitialization-and-revival lesson. For accounts that store large amounts of data where deserialization costs become prohibitive, the Advanced Anchor Patterns course covers zero-copy account techniques in its zero-copy-accounts lesson. When these pieces work together, accounts become reliable building blocks for complex on-chain systems.

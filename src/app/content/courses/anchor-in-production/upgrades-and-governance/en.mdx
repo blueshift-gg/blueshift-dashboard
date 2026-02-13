@@ -1,0 +1,394 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Upgrades and Governance
+
+![Anchor in Production](/graphics/course-banners/anchor-in-production.png)
+
+Solana programs are upgradeable by default. The runtime stores program bytecode in a special account, and a designated upgrade authority can replace that bytecode at any time. Your deployed program is not permanent unless you explicitly make it so. Understanding how upgrades work, who controls them, and how to execute them safely determines whether your program earns user trust or loses it.
+
+<ArticleSection name="Program Upgrades" id="program-upgrades" level="h2" />
+
+Every Solana program has an associated program data account that holds the executable bytecode. When you deploy with `solana program deploy`, the CLI writes the compiled `.so` file into this account. The program's address stays the same across upgrades—only the bytecode changes.
+
+The upgrade authority is a public key stored in the program's metadata. Whoever holds the corresponding private key can replace the program's executable data. By default, this is the keypair that originally deployed the program.
+
+Upgrading a program follows a buffer account pattern. The CLI first writes the new bytecode into a temporary buffer account, then atomically swaps the buffer contents into the program data account. This two-step process ensures the program is never in a half-written state.
+
+The full sequence looks like this:
+
+```bash
+# Build the new version
+anchor build
+
+# Deploy the upgrade (uses buffer account internally)
+solana program deploy target/deploy/my_program.so \
+  --program-id <PROGRAM_ID> \
+  --url mainnet-beta
+```
+
+The `solana program deploy` command handles the buffer creation, bytecode upload, and swap in one operation. For large programs, you can manage the buffer manually:
+
+```bash
+# Write bytecode to a buffer account
+solana program write-buffer target/deploy/my_program.so --url mainnet-beta
+
+# The command outputs the buffer address
+# Buffer: 5Kf3...
+
+# Deploy from the buffer
+solana program deploy --buffer 5Kf3... --program-id <PROGRAM_ID> --url mainnet-beta
+```
+
+Manual buffer management is useful when network conditions are unreliable. If the upload fails partway through, you can resume writing to the same buffer instead of starting over. It also lets you separate the upload step (which takes time) from the swap step (which is instant).
+
+After an upgrade, the program address remains the same. All PDAs derived from the program ID continue to work. Existing accounts are not modified. The new bytecode takes effect immediately for all subsequent transactions.
+
+<ArticleSection name="Upgrade Authority Management" id="upgrade-authority-management" level="h2" />
+
+Who holds the upgrade authority determines your program's trust model. There are four common configurations, each with different trade-offs.
+
+**Single keypair.** The deployer's keypair is the upgrade authority. This is the default. It is fast and simple: one person can push upgrades instantly. The risk is that if the key is compromised, the attacker can replace the program with anything. If the key is lost, the program can never be upgraded again. Single keypair authority works for development and testing. It does not work for programs managing user funds on mainnet.
+
+**Multisig.** The upgrade authority is a multisig account (like Squads Protocol). Upgrading requires M-of-N signers to approve, removing single points of failure. If one signer's key is compromised, the attacker cannot upgrade alone. The trade-off is speed: collecting signatures takes time, which slows down emergency patches.
+
+**DAO governance.** The upgrade authority is a governance program (like Realms or SPL Governance). Token holders vote on upgrades, which maximizes decentralization but produces the slowest response time. Governance proposals typically require a voting period of 2-7 days before execution. Emergency fixes during an active exploit cannot wait that long.
+
+**Nobody (immutable).** The upgrade authority is set to `None`. No one can upgrade the program, and it runs the same bytecode forever—maximum trust but zero flexibility.
+
+To check the current upgrade authority of a program:
+
+```bash
+solana program show <PROGRAM_ID> --url mainnet-beta
+```
+
+The output includes the upgrade authority address. To transfer the authority to a new address:
+
+```bash
+solana program set-upgrade-authority <PROGRAM_ID> \
+  --new-upgrade-authority <NEW_AUTHORITY_PUBKEY> \
+  --url mainnet-beta
+```
+
+This is a one-way transfer. The current authority signs the transaction, and control moves to the new address. There is no confirmation step from the new authority. If you transfer to the wrong address, you lose upgrade capability permanently.
+
+<ArticleSection name="Making Programs Immutable" id="making-programs-immutable" level="h2" />
+
+Setting the upgrade authority to `None` makes the program immutable. The bytecode can never change again.
+
+```bash
+solana program set-upgrade-authority <PROGRAM_ID> --final --url mainnet-beta
+```
+
+The `--final` flag sets the authority to `None`. This operation is irreversible. Once executed, the program's behavior is fixed for the lifetime of the Solana network.
+
+Immutability creates a specific trust guarantee: users know the code they audit today is the code that will run tomorrow. No one can introduce a backdoor. No team can rug-pull by deploying a malicious update. The program's behavior is fully determined by its current bytecode.
+
+The cost of this guarantee is equally specific. Bugs can never be fixed. If a vulnerability is discovered after the program is made immutable, there is no patch. Users must migrate to a new program at a new address. Any tokens locked in the old program's accounts remain locked unless the program already includes withdrawal logic that covers the scenario.
+
+When immutability makes sense:
+
+- The program is small, well-audited, and unlikely to need changes
+- The program is a primitive that other programs compose with, and changing it would break downstream dependencies
+- Users require a guarantee that the program cannot be altered
+
+When immutability does not make sense:
+
+- The program is still being iterated on
+- The program interacts with external protocols that may change their interfaces
+- The team needs the ability to respond to security incidents
+
+Most production programs on mainnet remain upgradeable. They protect users not through immutability but through governance controls on who can trigger upgrades and under what conditions.
+
+<ArticleSection name="Multisig Upgrade Authority" id="multisig-upgrade-authority" level="h2" />
+
+Multisig program authority is the standard for production programs that manage user funds. Squads Protocol is the most widely used multisig solution on Solana. It requires a configurable threshold of signers to approve any transaction, including program upgrades.
+
+The workflow has three steps: propose the upgrade, collect signatures, and execute.
+
+First, create a Squads multisig and set it as the program's upgrade authority:
+
+```bash
+# After creating a Squads multisig, transfer upgrade authority to it
+solana program set-upgrade-authority <PROGRAM_ID> \
+  --new-upgrade-authority <SQUADS_MULTISIG_ADDRESS> \
+  --url mainnet-beta
+```
+
+To upgrade the program, a team member creates a proposal through the Squads UI or SDK. The proposal contains the buffer account address holding the new bytecode.
+
+```typescript
+import Squads from "@sqds/multisig";
+
+const multisig = Squads.endpoint(connection, wallet);
+
+// Step 1: Upload the new bytecode to a buffer
+// (done via CLI: solana program write-buffer ...)
+
+// Step 2: Create a proposal to upgrade the program
+const msTransaction = await multisig.createTransaction(
+  multisigAddress,
+  1 // authority index for program upgrades
+);
+
+// Step 3: Add the upgrade instruction to the proposal
+await multisig.addInstruction(
+  msTransaction.publicKey,
+  upgradeInstruction // BPF loader upgrade instruction
+);
+
+// Step 4: Activate the proposal for voting
+await multisig.activateTransaction(msTransaction.publicKey);
+
+// Step 5: Each signer approves
+await multisig.approveTransaction(msTransaction.publicKey);
+
+// Step 6: After threshold is met, execute
+await multisig.executeTransaction(msTransaction.publicKey);
+```
+
+The threshold determines how many signers must approve before execution. A 3-of-5 multisig requires 3 out of 5 team members to sign. If 2 keys are compromised, the attacker still cannot upgrade the program because they need 3 signatures.
+
+Choosing the right threshold involves balancing security against operational speed. A 2-of-3 is fast but only tolerates 1 compromised key. A 4-of-7 tolerates 3 compromised keys but requires coordinating 4 people for every upgrade. For most teams, 3-of-5 or 2-of-3 provides a reasonable balance.
+
+Store the signer keys in different locations. If all 5 keys are on the same laptop, the multisig provides no additional security over a single keypair. Distribute keys across hardware wallets held by different team members in different physical locations.
+
+<ArticleSection name="Safe Upgrade Procedures" id="safe-upgrade-procedures" level="h2" />
+
+An upgrade replaces all of your program's logic in a single transaction. A bad upgrade can corrupt accounts, brick the program, or drain funds. Following a checklist before and after each upgrade reduces these risks to near zero.
+
+**Pre-upgrade checklist:**
+
+1. Verify the build is reproducible. Run `anchor build --verifiable` and confirm the output hash matches what you expect.
+
+2. Test account migrations. If the new version changes account layouts, verify that existing accounts deserialize correctly under the new schema.
+
+3. Check backward compatibility. If clients depend on specific instruction formats, confirm the new version still accepts those formats. Removing or reordering instruction arguments breaks every client that has not updated.
+
+4. Review the diff. Compare the new version against the currently deployed version line by line. Automated tests catch logic errors but not malicious insertions.
+
+5. Deploy to devnet first. Upgrade the devnet instance and run the full test suite against it.
+
+```bash
+# Build verifiable
+anchor build --verifiable
+
+# Get the hash of the new build
+sha256sum target/deploy/my_program.so
+
+# Deploy to devnet first
+solana program deploy target/deploy/my_program.so \
+  --program-id <PROGRAM_ID> \
+  --url devnet
+
+# Run tests against devnet
+anchor test --provider.cluster devnet --skip-build --skip-deploy
+```
+
+**Post-upgrade verification:**
+
+After the mainnet upgrade executes, verify everything immediately.
+
+```bash
+# Confirm the on-chain program hash matches your build
+solana program dump <PROGRAM_ID> /tmp/deployed.so --url mainnet-beta
+sha256sum /tmp/deployed.so
+# Compare with: sha256sum target/deploy/my_program.so
+
+# Verify via anchor
+anchor verify <PROGRAM_ID> --provider.cluster mainnet-beta
+```
+
+Then test the live program. Call each instruction with known inputs and verify the outputs match expectations. Fetch a sample of existing accounts and confirm they deserialize correctly.
+
+**Rolling back.** If something goes wrong after the upgrade, deploy the previous version. Keep the previous `.so` file in version control or a secure archive. Rolling back is the same operation as upgrading: upload the old bytecode to a buffer and deploy it.
+
+```bash
+# Deploy the previous version
+solana program deploy previous_version/my_program.so \
+  --program-id <PROGRAM_ID> \
+  --url mainnet-beta
+```
+
+Rollback is only possible if the upgrade authority is still active and the account layout changes are backward compatible. If the new version wrote data in a format the old version cannot read, rolling back will cause deserialization failures for those accounts.
+
+<ArticleSection name="IDL Upgrades" id="idl-upgrades" level="h2" />
+
+When you upgrade a program, the IDL must be updated to match. The IDL describes the program's interface: its instructions, account types, and error codes. If the on-chain IDL does not match the deployed bytecode, clients that fetch the IDL will construct invalid transactions.
+
+Anchor stores the IDL on-chain in a PDA derived from the program ID. The `anchor idl` commands manage this account.
+
+```bash
+# Upload the IDL for the first time
+anchor idl init --filepath target/idl/my_program.json <PROGRAM_ID> \
+  --provider.cluster mainnet-beta
+
+# Upgrade the IDL after a program upgrade
+anchor idl upgrade --filepath target/idl/my_program.json <PROGRAM_ID> \
+  --provider.cluster mainnet-beta
+```
+
+The IDL upgrade authority defaults to the program's upgrade authority. If your program upgrade authority is a multisig, you may need to set a separate IDL authority for faster IDL updates. You can do this with:
+
+```bash
+anchor idl set-authority --program-id <PROGRAM_ID> \
+  --new-authority <NEW_IDL_AUTHORITY> \
+  --provider.cluster mainnet-beta
+```
+
+**Versioning IDLs.** Keep every version of the IDL in version control. Tag each release with its IDL version so you can reconstruct any historical client.
+
+```
+idl/
+  v1.0.0.json
+  v1.1.0.json
+  v2.0.0.json
+```
+
+**Handling clients on the old IDL.** When you change instruction arguments or account layouts, clients using the previous IDL will fail. There are two strategies.
+
+The first is additive changes only. Add new instructions instead of modifying existing ones. Add new fields to the end of account structs instead of reordering. The old IDL stays functional for existing instructions while the new IDL covers new functionality.
+
+The second is versioned instructions. Prefix instruction names with a version number (`initialize_v2`, `deposit_v3`). Keep the old instructions active until all clients migrate. Deprecate old versions by having them return a custom error after a grace period.
+
+```rust
+pub fn deposit_v1(_ctx: Context<DepositV1>, _amount: u64) -> Result<()> {
+    err!(MyError::DeprecatedInstruction)
+}
+
+pub fn deposit_v2(ctx: Context<DepositV2>, amount: u64, memo: String) -> Result<()> {
+    // Current implementation
+    Ok(())
+}
+```
+
+This approach keeps old clients from silently failing. They receive an explicit error telling them the instruction is deprecated, rather than a confusing deserialization failure.
+
+<ArticleSection name="Governance Patterns" id="governance-patterns" level="h2" />
+
+On-chain governance moves upgrade decisions from a small team to a broader group of stakeholders. The most common pattern is time-locked upgrades: someone proposes an upgrade, a waiting period passes, and then the upgrade can be executed.
+
+**Time-locked upgrades.** The simplest governance pattern uses a timelock program that sits between the proposer and the program upgrade. The flow works as follows:
+
+1. A team member proposes an upgrade by submitting the buffer address to the timelock
+2. The timelock records the proposal with a timestamp
+3. After N days (typically 2-3), anyone can execute the proposal
+4. The timelock calls the BPF loader to upgrade the program
+
+During the waiting period, the community can review the proposed bytecode. If the upgrade is malicious or buggy, users have time to withdraw funds before execution.
+
+Here is a simplified timelock account structure:
+
+```rust
+#[account]
+pub struct TimelockProposal {
+    pub proposer: Pubkey,
+    pub program_id: Pubkey,
+    pub buffer: Pubkey,
+    pub proposed_at: i64,
+    pub delay_seconds: i64,
+    pub executed: bool,
+    pub bump: u8,
+}
+
+pub fn propose_upgrade(ctx: Context<ProposeUpgrade>, buffer: Pubkey) -> Result<()> {
+    let proposal = &mut ctx.accounts.proposal;
+    let clock = Clock::get()?;
+
+    proposal.proposer = ctx.accounts.proposer.key();
+    proposal.program_id = ctx.accounts.program_account.key();
+    proposal.buffer = buffer;
+    proposal.proposed_at = clock.unix_timestamp;
+    proposal.delay_seconds = 172_800; // 48 hours
+    proposal.executed = false;
+    proposal.bump = ctx.bumps.proposal;
+
+    Ok(())
+}
+
+pub fn execute_upgrade(ctx: Context<ExecuteUpgrade>) -> Result<()> {
+    let proposal = &mut ctx.accounts.proposal;
+    let clock = Clock::get()?;
+
+    let earliest_execution = proposal.proposed_at + proposal.delay_seconds;
+    require!(
+        clock.unix_timestamp >= earliest_execution,
+        GovernanceError::TimelockNotExpired
+    );
+    require!(!proposal.executed, GovernanceError::AlreadyExecuted);
+
+    proposal.executed = true;
+
+    // CPI to BPF loader to perform the upgrade
+    // ... upgrade logic via CPI ...
+
+    Ok(())
+}
+```
+
+The `propose_upgrade` instruction records the buffer address and the current timestamp. The `execute_upgrade` instruction checks that at least 172,800 seconds (48 hours) have passed since the proposal. If the timelock has not expired, the transaction fails.
+
+**Emergency upgrade procedures.** Timelocks create a problem during active exploits. Waiting 48 hours while an attacker drains funds is not acceptable. Most governance systems include an emergency path.
+
+The pattern is a guardian address that can bypass the timelock under specific conditions. The guardian can execute upgrades immediately, but only when paired with a separate emergency flag. The emergency flag is itself controlled by a multisig.
+
+```rust
+#[account]
+pub struct GovernanceConfig {
+    pub timelock_authority: Pubkey,
+    pub emergency_authority: Pubkey,
+    pub delay_seconds: i64,
+    pub emergency_active: bool,
+    pub bump: u8,
+}
+
+pub fn activate_emergency(ctx: Context<ActivateEmergency>) -> Result<()> {
+    ctx.accounts.config.emergency_active = true;
+    Ok(())
+}
+
+pub fn execute_emergency_upgrade(ctx: Context<EmergencyUpgrade>) -> Result<()> {
+    let config = &ctx.accounts.config;
+    require!(config.emergency_active, GovernanceError::EmergencyNotActive);
+
+    // Perform the upgrade immediately, no timelock check
+    // ... upgrade logic ...
+
+    // Deactivate emergency mode
+    ctx.accounts.config.emergency_active = false;
+
+    Ok(())
+}
+```
+
+The `activate_emergency` instruction requires the `emergency_authority` to sign. The `execute_emergency_upgrade` instruction checks that emergency mode is active and performs the upgrade without waiting. After execution, emergency mode deactivates automatically to prevent abuse.
+
+**Community voting.** Full governance programs like SPL Governance or Realms allow token holders to vote on upgrade proposals. The flow looks like this:
+
+1. A governance proposal is created containing the upgrade instruction
+2. Token holders vote yes or no during a voting period (typically 3-7 days)
+3. If the proposal passes the vote threshold (for example, 60% of votes in favor with at least 1% of total supply participating), it enters a cooldown period
+4. After cooldown, anyone can finalize the proposal, which executes the upgrade
+
+This model maximizes decentralization. No single entity controls the program. The trade-off is latency: the full proposal-vote-cooldown cycle can take 7-14 days from start to execution.
+
+Most production programs use a hybrid model. Day-to-day parameter changes go through governance with short voting periods. Emergency upgrades go through a multisig guardian with no timelock. Making the program immutable requires a supermajority governance vote. This layered approach provides both security and responsiveness.
+
+<ArticleSection name="Choosing Your Upgrade Model" id="choosing-your-upgrade-model" level="h2" />
+
+The right upgrade model depends on what your program does and who trusts it.
+
+A program in early development uses a single keypair. Speed matters more than decentralization when you are iterating daily.
+
+A program managing user funds on mainnet uses a multisig. The minimum viable setup is a 2-of-3 multisig with keys distributed across team members. A multisig prevents single key compromise while keeping upgrade latency under an hour.
+
+A program with a large user base and significant TVL adds governance. Token holders vote on upgrades. The multisig remains as an emergency backstop. The upgrade path moves from proposer to timelock to execution, with an emergency bypass for active exploits.
+
+A program that has reached stability and will not change becomes immutable. This only makes sense after months or years of production operation, multiple audits, and broad community agreement that the program's feature set is complete.
+
+There is no single correct answer. The model should match the program's maturity and the trust requirements of its users. A program that starts with a single keypair and gradually migrates to governance over 12-18 months is following a well-tested path.
+
+---
+
+When upgrades involve changes to account data layouts, the Advanced Anchor Patterns course's Versioning and Migration lesson covers the strategies for migrating account data safely across schema changes. The authorization patterns used by multisig governance setups are explored in detail in the Building with Anchor course's Access Control Patterns lesson.
+
+The next lesson covers indexing and monitoring—how to observe your program's on-chain activity, track account state changes, and detect anomalies in production.

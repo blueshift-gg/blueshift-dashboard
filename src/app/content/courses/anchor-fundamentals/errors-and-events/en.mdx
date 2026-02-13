@@ -1,0 +1,367 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Errors and Events
+
+![Anchor Fundamentals - errors and events](/graphics/course-banners/anchor-fundamentals.png)
+
+Errors tell callers what went wrong. Events tell indexers what happened. Both are essential for programs that humans and other programs interact with.
+
+<ArticleSection name="Custom Errors" id="custom-errors" level="h2" />
+
+Programs fail for many reasons. Users provide invalid inputs, accounts have insufficient balances, arithmetic overflows. Anchor gives you tools to describe these failures precisely.
+
+Define custom errors with an enum marked with `#[error_code]`:
+
+```rust
+#[error_code]
+pub enum GameError {
+    #[msg("Player has already joined this game")]
+    PlayerAlreadyJoined,
+    #[msg("Game has reached maximum players")]
+    GameFull,
+    #[msg("Game has not started yet")]
+    GameNotStarted,
+    #[msg("Invalid game state transition")]
+    InvalidStateTransition,
+}
+```
+
+Each variant becomes an error that your program can return. The `#[msg("...")]` attribute provides a human-readable description. Without it, the variant name becomes the message.
+
+Anchor assigns error codes starting at 6000. The first variant gets 6000, the second gets 6001, and so on. Codes 0-5999 are reserved for Anchor's own errors like `ConstraintMut` or `AccountNotMutable`.
+
+Return errors using the `err!()` macro:
+
+```rust
+pub fn join_game(ctx: Context<JoinGame>) -> Result<()> {
+    let game = &mut ctx.accounts.game;
+
+    if game.player_count >= game.max_players {
+        return err!(GameError::GameFull);
+    }
+
+    Ok(())
+}
+```
+
+The `err!()` macro wraps your error in Anchor's error type and attaches source location information. This helps with debugging.
+
+You can also use `Err(error!(GameError::GameFull))`, which is equivalent but more verbose. The `error!()` macro (with the `or` at the end) constructs the error object, while `err!()` returns it immediately.
+
+<ArticleSection name="The require! Macro" id="require-macro" level="h2" />
+
+Most errors follow a pattern: check a condition, return an error if false. The `require!()` macro expresses this concisely:
+
+```rust
+pub fn start_game(ctx: Context<StartGame>) -> Result<()> {
+    let game = &mut ctx.accounts.game;
+
+    require!(
+        game.player_count >= game.min_players,
+        GameError::NotEnoughPlayers
+    );
+
+    require!(
+        game.state == GameState::Lobby,
+        GameError::InvalidStateTransition
+    );
+
+    game.state = GameState::Active;
+    Ok(())
+}
+```
+
+Each `require!()` evaluates the condition. If false, it returns the error. If true, execution continues.
+
+This replaces the manual pattern:
+
+```rust
+if game.player_count < game.min_players {
+    return err!(GameError::NotEnoughPlayers);
+}
+```
+
+Anchor provides specialized variants for common checks:
+
+**require_keys_eq!** checks if two public keys match:
+
+```rust
+require_keys_eq!(
+    game.authority,
+    ctx.accounts.authority.key(),
+    GameError::UnauthorizedAuthority
+);
+```
+
+**require_keys_neq!** checks if two keys differ:
+
+```rust
+require_keys_neq!(
+    ctx.accounts.player.key(),
+    ctx.accounts.game.authority,
+    GameError::AuthorityCannotPlay
+);
+```
+
+**require_gt!** and **require_gte!** perform numeric comparisons:
+
+```rust
+require_gt!(
+    ctx.accounts.player.lamports(),
+    entry_fee,
+    GameError::InsufficientFunds
+);
+
+require_gte!(
+    game.player_count,
+    2,
+    GameError::NotEnoughPlayers
+);
+```
+
+These variants exist because key comparisons and numeric checks happen frequently. They make intent clearer than generic boolean expressions.
+
+<ArticleSection name="Error Propagation" id="error-propagation" level="h2" />
+
+When a function returns `Result<T>`, you can propagate its errors upward using the `?` operator:
+
+```rust
+pub fn process_game_action(ctx: Context<ProcessAction>) -> Result<()> {
+    // If validate_player returns an error, this function returns it
+    validate_player(&ctx.accounts.player)?;
+
+    // If update_game_state returns an error, this function returns it
+    update_game_state(&mut ctx.accounts.game)?;
+
+    Ok(())
+}
+
+fn validate_player(player: &Account<Player>) -> Result<()> {
+    require!(player.is_active, GameError::PlayerInactive);
+    require!(!player.is_banned, GameError::PlayerBanned);
+    Ok(())
+}
+```
+
+The `?` operator checks the result. If it's `Err(e)`, the error returns immediately. If it's `Ok(v)`, execution continues with the unwrapped value.
+
+CPI calls propagate errors automatically. When you invoke another program and it fails, Anchor converts its error into your program's context:
+
+```rust
+// CPI to token program
+token::transfer(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        token::Transfer {
+            from: ctx.accounts.player_token.to_account_info(),
+            to: ctx.accounts.game_vault.to_account_info(),
+            authority: ctx.accounts.player.to_account_info(),
+        },
+    ),
+    amount,
+)?;
+```
+
+If the token transfer fails (insufficient balance, wrong authority), the error bubbles up. Your program's transaction fails with that error.
+
+Sometimes you want to add context to propagated errors. Use `map_err()`:
+
+```rust
+token::transfer(cpi_ctx, amount)
+    .map_err(|_| error!(GameError::TransferFailed))?;
+```
+
+This converts the token program error into your custom error. Useful when you want to control exactly which error clients see.
+
+<ArticleSection name="Events" id="events" level="h2" />
+
+Events record that something happened. Unlike errors, they describe success. A player joined, a game started, a reward was distributed.
+
+Define events with the `#[event]` attribute:
+
+```rust
+#[event]
+pub struct PlayerJoined {
+    pub game: Pubkey,
+    pub player: Pubkey,
+    pub player_count: u8,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct GameStarted {
+    pub game: Pubkey,
+    pub player_count: u8,
+    pub prize_pool: u64,
+    pub timestamp: i64,
+}
+```
+
+Events are just structs. They can contain any data that's `BorshSerialize`. Common fields include public keys (which accounts), numeric values (how much), and timestamps (when).
+
+Emit events with the `emit!()` macro:
+
+```rust
+pub fn join_game(ctx: Context<JoinGame>) -> Result<()> {
+    let game = &mut ctx.accounts.game;
+    let player = &ctx.accounts.player;
+
+    require!(
+        game.player_count < game.max_players,
+        GameError::GameFull
+    );
+
+    game.player_count += 1;
+
+    emit!(PlayerJoined {
+        game: game.key(),
+        player: player.key(),
+        player_count: game.player_count,
+        timestamp: Clock::get()?.unix_timestamp,
+    });
+
+    Ok(())
+}
+```
+
+When the transaction succeeds, Anchor serializes the event and stores it in the transaction logs. The Solana runtime includes these logs in the transaction metadata.
+
+Events do not live on-chain as account data. They exist only in transaction logs. This makes them cheap to emit but read-only after the fact.
+
+Clients can listen for events in real-time:
+
+```typescript
+const listener = program.addEventListener("PlayerJoined", (event, slot) => {
+  console.log(`Player ${event.player} joined game ${event.game}`);
+  console.log(`Total players: ${event.playerCount}`);
+});
+```
+
+Or fetch them from past transactions:
+
+```typescript
+const events = await program.account.game.all([
+  {
+    memcmp: {
+      offset: 8,
+      bytes: gamePublicKey.toBase58(),
+    }
+  }
+]);
+```
+
+Indexers like Helius or QuickNode watch for events and store them in databases. This lets you build rich UIs without scanning every transaction manually.
+
+<ArticleSection name="CPI Events" id="cpi-events" level="h2" />
+
+Normal events are recorded in the current program's logs. When another program calls yours via CPI, those events stay in the inner instruction logs. The caller cannot easily observe them.
+
+CPI events solve this. Mark an event with `emit_cpi!()` instead of `emit!()`:
+
+```rust
+#[event]
+pub struct GameFinished {
+    pub game: Pubkey,
+    pub winner: Pubkey,
+    pub prize: u64,
+}
+
+pub fn finish_game(ctx: Context<FinishGame>) -> Result<()> {
+    let game = &ctx.accounts.game;
+
+    emit_cpi!(GameFinished {
+        game: game.key(),
+        winner: ctx.accounts.winner.key(),
+        prize: game.prize_pool,
+    });
+
+    Ok(())
+}
+```
+
+The `emit_cpi!()` macro writes the event to an account provided by the caller. This makes it visible across CPI boundaries.
+
+You must add an event authority account to your instruction:
+
+```rust
+#[derive(Accounts)]
+pub struct FinishGame<'info> {
+    #[account(mut)]
+    pub game: Account<'info, Game>,
+    /// CHECK: winner validation happens in instruction logic
+    pub winner: AccountInfo<'info>,
+
+    #[account(
+        seeds = [b"__event_authority"],
+        bump,
+    )]
+    /// CHECK: event authority PDA
+    pub event_authority: AccountInfo<'info>,
+
+    pub program: Program<'info, crate::ID>,
+}
+```
+
+The event authority is a PDA derived from the seed `b"__event_authority"`. Anchor uses this account to prove the event came from your program.
+
+When a program calls `finish_game` via CPI, the event appears in the outer instruction logs. The caller's event listeners will catch it.
+
+Most programs do not need CPI events. Use them only when other programs need to observe your events, or when building composable protocols where event visibility matters.
+
+<ArticleSection name="Logging" id="logging" level="h2" />
+
+The `msg!()` macro prints debug information to transaction logs:
+
+```rust
+pub fn complex_calculation(ctx: Context<Calculate>) -> Result<()> {
+    let input = ctx.accounts.data.value;
+
+    msg!("Starting calculation with input: {}", input);
+
+    let intermediate = input * 2 + 10;
+    msg!("Intermediate result: {}", intermediate);
+
+    let result = intermediate.checked_div(3)
+        .ok_or(GameError::DivisionByZero)?;
+
+    msg!("Final result: {}", result);
+
+    ctx.accounts.data.result = result;
+    Ok(())
+}
+```
+
+Logs appear when you run `solana logs` or inspect transaction details in explorers. They are essential for debugging failed transactions.
+
+Logging costs compute units. Each `msg!()` call consumes roughly 100 compute units, plus more for formatting complex data. On programs near the 200k compute limit, excessive logging can cause failures.
+
+In production, keep logging minimal. Log state transitions, important calculations, and conditions that led to errors. Remove verbose debug logs before deploying.
+
+To view logs during local development:
+
+```bash
+solana logs
+```
+
+This streams logs from the local validator. When a transaction involving your program executes, you'll see your `msg!()` output.
+
+For specific programs:
+
+```bash
+solana logs <program-id>
+```
+
+This filters logs to only that program. Useful in production environments where many programs execute simultaneously.
+
+Some teams add conditional logging:
+
+```rust
+#[cfg(feature = "debug")]
+msg!("Debug: player_count = {}", game.player_count);
+```
+
+Enable it in development with `cargo build-bpf --features debug` and disable in production by omitting the feature. This keeps production performant while preserving debugging tools.
+
+<ArticleSection name="Next Steps" id="next-steps" level="h2" />
+
+With accounts, instructions, constraints, CPIs, errors, and events covered, you have the building blocks. Next up: testing and deploying your programs.

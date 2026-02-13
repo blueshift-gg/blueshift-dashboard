@@ -1,0 +1,183 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Raw CPIs and Syscalls
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+Anchor's `CpiContext` wraps two Solana syscalls: `invoke` and `invoke_signed`. Most programs never need the raw layer, but understanding it helps when debugging CPI failures, calling non-Anchor programs, or squeezing out the last compute units.
+
+<ArticleSection name="Behind Anchor's CPI abstractions" id="anchor-cpi-layer" level="h2" />
+
+An Anchor CPI like `token::transfer(CpiContext::new(...), amount)` compiles down to a `solana_program::program::invoke` call. The `CpiContext` abstraction builds the `Instruction` struct, collects `AccountInfo` references in the right order, chooses between `invoke` and `invoke_signed`, and type-checks at compile time.
+
+Dropping to raw invoke sacrifices those guarantees but opens access to programs without Anchor wrappers, custom serialization formats, and direct visibility into what executes on-chain.
+
+<ArticleSection name="The invoke syscall" id="invoke-syscall" level="h2" />
+
+`solana_program::invoke` takes two arguments: an `Instruction` and a slice of `AccountInfo` references.
+
+```rust
+pub fn invoke(
+    instruction: &Instruction,
+    account_infos: &[AccountInfo],
+) -> ProgramResult
+```
+
+The `Instruction` struct carries the target `program_id`, a `Vec<AccountMeta>` describing each account's role, and a `data: Vec<u8>` payload. Two `AccountMeta` constructors cover both cases:
+
+- `AccountMeta::new(pubkey, is_signer)` -- writable account
+- `AccountMeta::new_readonly(pubkey, is_signer)` -- read-only account
+
+Before dispatching, the runtime validates that all signers are present and signed, all writable accounts are marked correctly, and the callee program exists and is executable.
+
+<ArticleSection name="Building instructions manually" id="manual-instructions" level="h2" />
+
+Calling another Anchor program via raw invoke requires matching its wire format: an 8-byte discriminator followed by Borsh-serialized parameters. Compute the discriminator as `sha256("global:instruction_name")[0..8]`.
+
+The following function builds an instruction for a hypothetical `deposit` endpoint on an external vault program:
+
+```rust
+use solana_program::{hash::hash, instruction::{AccountMeta, Instruction}, pubkey::Pubkey};
+
+fn build_deposit_ix(
+    program_id: &Pubkey, vault: &Pubkey, user_token: &Pubkey,
+    vault_token: &Pubkey, authority: &Pubkey, token_program: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let disc = &hash(b"global:deposit").to_bytes()[0..8];
+    let mut data = disc.to_vec();
+    data.extend_from_slice(&amount.to_le_bytes());
+
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(*vault, false),
+            AccountMeta::new(*user_token, false),
+            AccountMeta::new(*vault_token, false),
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new_readonly(*token_program, false),
+        ],
+        data,
+    }
+}
+```
+
+Pass the built instruction to `invoke` alongside the matching `AccountInfo` slice:
+
+```rust
+pub fn call_deposit(ctx: Context<CallDeposit>, amount: u64) -> Result<()> {
+    let ix = build_deposit_ix(
+        ctx.accounts.target_program.key,
+        ctx.accounts.vault.key,
+        ctx.accounts.user_token.key,
+        ctx.accounts.vault_token.key,
+        ctx.accounts.authority.key,
+        ctx.accounts.token_program.key,
+        amount,
+    );
+
+    invoke(&ix, &[
+        ctx.accounts.vault.to_account_info(),
+        ctx.accounts.user_token.to_account_info(),
+        ctx.accounts.vault_token.to_account_info(),
+        ctx.accounts.authority.to_account_info(),
+        ctx.accounts.token_program.to_account_info(),
+    ])?;
+    Ok(())
+}
+```
+
+This is brittle: account order must match exactly, serialization must align, and the discriminator must be correct. A single mismatch produces a cryptic runtime error.
+
+<ArticleSection name="invoke_signed for PDA signers" id="invoke-signed" level="h2" />
+
+When a PDA must sign a CPI, use `invoke_signed`. It takes the same arguments as `invoke` plus a `signers_seeds: &[&[&[u8]]]` parameter. The runtime re-derives the PDA from the seeds and, if it matches, grants signing authority.
+
+The triple-nested slice structure represents: an outer list of PDAs (usually one), a middle list of seed components per PDA, and the inner byte slices for each component.
+
+A vault PDA transferring tokens via raw `invoke_signed`:
+
+```rust
+pub fn vault_transfer(ctx: Context<VaultTransfer>, amount: u64) -> Result<()> {
+    let authority_key = ctx.accounts.authority.key();
+    let bump = ctx.bumps.vault;
+
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        b"vault",
+        authority_key.as_ref(),
+        &[bump],
+    ]];
+
+    let ix = Instruction {
+        program_id: token::ID,
+        accounts: vec![
+            AccountMeta::new(ctx.accounts.vault_token.key(), false),
+            AccountMeta::new(ctx.accounts.recipient_token.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.vault.key(), true),
+        ],
+        data: spl_token::instruction::TokenInstruction::Transfer { amount }
+            .pack(),
+    };
+
+    invoke_signed(&ix, &[
+        ctx.accounts.vault_token.to_account_info(),
+        ctx.accounts.recipient_token.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+    ], signer_seeds)?;
+
+    Ok(())
+}
+```
+
+If the seeds or bump are wrong, the runtime rejects the CPI with `ProgramError::InvalidSeeds`.
+
+<ArticleSection name="declare_program as the modern alternative" id="declare-program" level="h2" />
+
+Anchor 0.30 introduced `declare_program!()`, which generates type-safe CPI code from an IDL file. Place the target program's IDL in an `/idls` directory and declare it at the crate root.
+
+The same `deposit` call from the previous section, using `declare_program!()`:
+
+```rust
+declare_program!(vault_program);
+
+#[program]
+pub mod caller {
+    use super::*;
+    pub fn deposit_to_vault(ctx: Context<DepositToVault>, amount: u64) -> Result<()> {
+        vault_program::cpi::deposit(
+            CpiContext::new(
+                ctx.accounts.vault_program.to_account_info(),
+                vault_program::cpi::accounts::Deposit {
+                    vault: ctx.accounts.vault.to_account_info(),
+                    user_token: ctx.accounts.user_token.to_account_info(),
+                    vault_token: ctx.accounts.vault_token.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                    token_program: ctx.accounts.token_program.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+        Ok(())
+    }
+}
+```
+
+The macro generates account structs matching the target program's contexts, CPI functions with correct discriminators, and parameter types matching the IDL. This eliminates manual discriminator calculation, manual serialization, and account-ordering mistakes -- all common failure modes with raw invoke.
+
+<ArticleSection name="When to go raw" id="when-raw" level="h2" />
+
+Calls to the System program (transfers, account creation, allocation) use the same `invoke` / `invoke_signed` pattern shown above. The `solana_program::system_instruction` module provides helper functions that build the `Instruction` struct, so manual serialization is unnecessary. Anchor's `init` constraint handles most System program interactions automatically.
+
+The decision comes down to three factors: whether the target is an Anchor program, whether you have its IDL, and how much type safety you need.
+
+| Approach | Best for | Type safety | Maintenance cost |
+|---|---|---|---|
+| `anchor_spl` / built-in helpers | SPL Token, Associated Token, System program | Full | Lowest |
+| `declare_program!()` | Other Anchor programs with a published IDL | Full | Low -- regenerate when IDL changes |
+| Raw `invoke` / `invoke_signed` | Non-Anchor programs, missing IDLs, custom wire formats, compute optimization | None | Highest -- manual discriminators, serialization, account ordering |
+
+Start with built-in helpers or `declare_program!()`. Drop to raw invoke only when those options are unavailable -- typically for non-Anchor programs without SDK helpers, programs with no public IDL, or cases where you need precise control over serialization to minimize compute.
+
+When calling untrusted or third-party programs via raw CPIs, the Securing Anchor Programs course explores the trust boundaries you need to enforce in its cpi-trust-boundaries lesson. If you want to inspect the CPI code that Anchor generates under the hood, the Debugging Anchor lesson in the Testing Anchor Programs course covers using `anchor expand` to view the expanded output.
+
+The next lesson covers feature flags and conditional compilation for managing program variants without duplicating code.

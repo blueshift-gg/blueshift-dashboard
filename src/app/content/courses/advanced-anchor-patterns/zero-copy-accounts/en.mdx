@@ -1,0 +1,391 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Zero-Copy Accounts
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+Standard Anchor accounts deserialize by copying data from the account's memory region into Rust structs. This works for small accounts, but Solana's stack is only four KB and the heap is 32 KB. A program that loads three 10 KB accounts will crash before your instruction logic runs.
+
+The error looks like this:
+
+```
+Program failed to complete: Access violation in stack frame 3
+```
+
+Each deserialization allocates memory on the stack. Load too much data and you exceed Solana's memory limits; the resulting access violation terminates the transaction. The four KB stack limit isn't a suggestion or a soft limit—it's enforced by the runtime, and exceeding it kills your program immediately.
+
+Zero-copy accounts solve this by accessing account data directly in its memory region without copying it to the stack or heap. Instead of deserializing the bytes into a new struct, zero-copy treats the raw account bytes as the struct itself. No copying means no memory consumption beyond the account's existing allocation.
+
+<ArticleSection name="The Memory Problem" id="memory-problem" level="h2" />
+
+Consider a program that manages user profiles with metadata:
+
+```rust
+#[account]
+pub struct UserProfile {
+    pub owner: Pubkey,
+    pub name: [u8; 64],
+    pub bio: [u8; 256],
+    pub avatar_url: [u8; 128],
+    pub social_links: [SocialLink; 10],
+    pub achievements: [Achievement; 20],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct SocialLink {
+    pub platform: [u8; 32],
+    pub url: [u8; 128],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct Achievement {
+    pub title: [u8; 64],
+    pub description: [u8; 256],
+    pub timestamp: i64,
+}
+```
+
+This struct is around nine KB. A single `Account<'info, UserProfile>` will deserialize and copy all nine KB to the stack. If your instruction loads three profiles, that's 27 KB of stack allocation before your code runs. You'll hit the access violation.
+
+The standard Anchor deserialization process:
+1. Read raw bytes from account data
+2. Allocate space on stack for the Rust struct
+3. Copy and deserialize bytes into the struct
+4. Return the struct to your instruction handler
+
+Each step consumes memory. Step 2 is where the stack overflow occurs.
+
+<ArticleSection name="What Zero-Copy Does" id="what-zero-copy-does" level="h2" />
+
+Zero-copy accounts eliminate the copying step entirely. Instead of deserializing bytes into a separate struct on the stack, they provide direct access to the account's memory region. The struct IS the raw bytes.
+
+This works because of two properties:
+- The account's data already lives in a memory region that persists for the transaction
+- Rust can reinterpret those raw bytes as a struct if the memory layout is predictable
+
+When you load a zero-copy account, Anchor doesn't allocate new memory. It returns a reference to the existing account data, interpreted as your struct type. Reading fields accesses the raw bytes directly. Writing fields modifies the account's memory in place.
+
+The zero-copy process:
+1. Read raw bytes from account data
+2. Cast the byte slice as a reference to your struct type
+3. Return the reference to your instruction handler
+
+No allocation. No copying. The memory footprint is constant regardless of account size.
+
+<ArticleSection name="Implementation" id="implementation" level="h2" />
+
+To use zero-copy accounts, your struct must satisfy strict requirements that guarantee predictable memory layout. Mark the struct with `#[account(zero_copy)]` and implement the required traits:
+
+```rust
+use anchor_lang::prelude::*;
+use bytemuck::{Pod, Zeroable};
+
+#[account(zero_copy)]
+pub struct UserProfile {
+    pub owner: Pubkey,
+    pub name: [u8; 64],
+    pub bio: [u8; 256],
+    pub avatar_url: [u8; 128],
+    pub social_links: [SocialLink; 10],
+    pub achievements: [Achievement; 20],
+}
+
+#[zero_copy]
+pub struct SocialLink {
+    pub platform: [u8; 32],
+    pub url: [u8; 128],
+}
+
+#[zero_copy]
+pub struct Achievement {
+    pub title: [u8; 64],
+    pub description: [u8; 256],
+    pub timestamp: i64,
+}
+```
+
+The `#[account(zero_copy)]` macro automatically derives:
+- `Copy` - the struct can be copied bitwise
+- `Clone` - the struct can be cloned
+- `bytemuck::Zeroable` - the struct can be safely initialized with all zero bytes
+- `bytemuck::Pod` - the struct is Plain Old Data with no invalid bit patterns
+- `#[repr(C)]` - the struct uses C-style memory layout (no padding, predictable field order)
+
+These traits ensure the struct's memory representation matches the account's byte layout exactly. The compiler can safely cast between raw bytes and struct references because the layout is deterministic and contains no Rust-specific metadata.
+
+Add the `bytemuck` dependency to your `Cargo.toml`:
+
+```toml
+[dependencies]
+bytemuck = { version = "1.14", features = ["min_const_generics"] }
+```
+
+The `min_const_generics` feature enables support for fixed-size arrays in zero-copy structs.
+
+<ArticleSection name="Using AccountLoader" id="using-account-loader" level="h2" />
+
+Standard Anchor accounts use `Account<'info, T>` which deserializes on access. Zero-copy accounts use `AccountLoader<'info, T>` which provides controlled access to the raw memory:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateProfile<'info> {
+    #[account(mut)]
+    pub profile: AccountLoader<'info, UserProfile>,
+    pub authority: Signer<'info>,
+}
+
+pub fn update_profile(ctx: Context<UpdateProfile>, new_bio: [u8; 256]) -> Result<()> {
+    let mut profile = ctx.accounts.profile.load_mut()?;
+
+    require!(
+        profile.owner == ctx.accounts.authority.key(),
+        ErrorCode::Unauthorized
+    );
+
+    profile.bio = new_bio;
+
+    Ok(())
+}
+```
+
+`AccountLoader` provides three methods for accessing the account data:
+
+**`.load()`** - Immutable read access. Use this when you only need to read account fields without modifying them:
+
+```rust
+pub fn view_profile(ctx: Context<ViewProfile>) -> Result<()> {
+    let profile = ctx.accounts.profile.load()?;
+    msg!("Owner: {}", profile.owner);
+    msg!("Bio: {:?}", profile.bio);
+    Ok(())
+}
+```
+
+**`.load_mut()`** - Mutable write access. Use this when you need to modify account fields:
+
+```rust
+pub fn update_bio(ctx: Context<UpdateProfile>, new_bio: [u8; 256]) -> Result<()> {
+    let mut profile = ctx.accounts.profile.load_mut()?;
+    profile.bio = new_bio;
+    Ok(())
+}
+```
+
+**`.load_init()`** - First-time access for newly initialized accounts. Use this immediately after creating the account to set initial values:
+
+```rust
+pub fn create_profile(ctx: Context<CreateProfile>) -> Result<()> {
+    let mut profile = ctx.accounts.profile.load_init()?;
+    profile.owner = ctx.accounts.authority.key();
+    profile.name = [0; 64];
+    profile.bio = [0; 256];
+    Ok(())
+}
+```
+
+All three methods must be called inside your instruction logic. Unlike `Account<'info, T>` which deserializes automatically when the struct is created, `AccountLoader` defers access until you explicitly request it.
+
+<ArticleSection name="Initialization" id="initialization" level="h2" />
+
+Account initialization depends on the account size. Solana restricts how much data you can initialize in a single instruction, with a limit of 10,240 bytes per transaction.
+
+**For accounts under 10,240 bytes**, use the standard `init` constraint with `zero`:
+
+```rust
+#[derive(Accounts)]
+pub struct CreateProfile<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + std::mem::size_of::<UserProfile>(),
+        zero
+    )]
+    pub profile: AccountLoader<'info, UserProfile>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn create_profile(ctx: Context<CreateProfile>, owner: Pubkey) -> Result<()> {
+    let mut profile = ctx.accounts.profile.load_init()?;
+    profile.owner = owner;
+    Ok(())
+}
+```
+
+The `zero` constraint tells Anchor this is a zero-copy account. The `space` calculation must include the eight-byte discriminator that Anchor prepends to all account data.
+
+**For accounts over 10,240 bytes**, you must create the account in a separate transaction, then initialize it:
+
+Transaction 1 - Create the account:
+```rust
+#[derive(Accounts)]
+pub struct CreateLargeAccount<'info> {
+    #[account(zero)]
+    pub large_account: AccountLoader<'info, LargeData>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+}
+
+pub fn create_large_account(ctx: Context<CreateLargeAccount>) -> Result<()> {
+    // Account was created externally, we just access it with the zero constraint
+    // The zero constraint allows us to access a zero-copy account that already exists
+    Ok(())
+}
+```
+
+Before calling this instruction, create the account using a System Program instruction. You can do this from the client:
+
+```typescript
+const accountSize = 8 + 50000; // 8-byte discriminator + account data
+const lamports = await connection.getMinimumBalanceForRentExemption(accountSize);
+
+const createAccountIx = SystemProgram.createAccount({
+  fromPubkey: payer.publicKey,
+  newAccountPubkey: largeAccount.publicKey,
+  lamports,
+  space: accountSize,
+  programId: program.programId,
+});
+
+const tx = new Transaction().add(createAccountIx);
+await sendAndConfirmTransaction(connection, tx, [payer, largeAccount]);
+```
+
+Transaction 2 - Initialize the data:
+```rust
+pub fn initialize_large_account(ctx: Context<CreateLargeAccount>) -> Result<()> {
+    let mut data = ctx.accounts.large_account.load_init()?;
+    data.owner = ctx.accounts.payer.key();
+    // Set other initial values...
+    Ok(())
+}
+```
+
+The `zero` constraint in the accounts struct tells Anchor to treat this as a zero-copy account without initializing it. The account must already exist and be owned by your program.
+
+<ArticleSection name="Constraints and Limitations" id="constraints" level="h2" />
+
+Zero-copy accounts have strict requirements because they operate directly on raw bytes. Any type that requires heap allocation or has an unpredictable memory layout cannot be used.
+
+**Fixed-size arrays only**. You cannot use `Vec`, `String`, or any dynamically-sized type:
+
+```rust
+// Valid
+pub struct ValidZeroCopy {
+    pub items: [Item; 100],
+    pub name: [u8; 64],
+}
+
+// Invalid - Vec requires heap allocation
+pub struct InvalidZeroCopy {
+    pub items: Vec<Item>,  // Compilation error
+    pub name: String,      // Compilation error
+}
+```
+
+If you need variable-length data, allocate the maximum size you'll need and track the actual length separately:
+
+```rust
+#[account(zero_copy)]
+pub struct DynamicData {
+    pub items: [Item; 100],
+    pub items_count: u64,  // Track how many items are actually used
+}
+```
+
+**All fields must be `Copy`**. Types that implement `Drop` or contain non-`Copy` fields cannot be used:
+
+```rust
+// Valid
+#[zero_copy]
+pub struct CopyableStruct {
+    pub value: u64,
+    pub flag: bool,
+    pub key: Pubkey,
+}
+
+// Invalid - Box requires Drop
+pub struct NonCopyStruct {
+    pub data: Box<u64>,  // Compilation error
+}
+```
+
+**Arrays of structs work if the nested struct is also zero-copy**:
+
+```rust
+#[zero_copy]
+pub struct Item {
+    pub id: u64,
+    pub data: [u8; 32],
+}
+
+#[account(zero_copy)]
+pub struct Container {
+    pub items: [Item; 50],
+}
+```
+
+Both `Item` and `Container` must use `#[zero_copy]` or `#[account(zero_copy)]`. The nested struct must satisfy all the same constraints as the parent.
+
+**No enums with data**. Enums with associated data have unpredictable layouts:
+
+```rust
+// Valid - simple enum with no data
+#[repr(u8)]
+#[derive(Copy, Clone)]
+pub enum Status {
+    Active = 0,
+    Inactive = 1,
+}
+
+#[account(zero_copy)]
+pub struct Account {
+    pub status: Status,
+}
+
+// Invalid - enum with associated data
+pub enum Message {
+    Text(String),    // Compilation error
+    Number(u64),     // Compilation error
+}
+```
+
+If you need enum-like behavior, use a discriminant field with separate optional fields for each variant:
+
+```rust
+#[account(zero_copy)]
+pub struct Message {
+    pub message_type: u8,  // 0 = text, 1 = number
+    pub text_data: [u8; 256],
+    pub number_data: u64,
+}
+```
+
+<ArticleSection name="When to Use Zero-Copy" id="when-to-use" level="h2" />
+
+Zero-copy accounts add complexity. Use them only when the benefits outweigh the constraints.
+
+**Use zero-copy when:**
+- Individual accounts exceed one KB and you load multiple accounts per instruction
+- You're hitting stack overflow errors with standard deserialization
+- You're building performance-critical paths where memory allocation is a bottleneck
+- Your data model naturally fits fixed-size arrays
+
+**Don't use zero-copy when:**
+- Your accounts are small (under one KB)
+- You rarely load more than two accounts per instruction
+- Your data needs dynamic structures like vectors or strings
+- The overhead of managing fixed-size arrays outweighs the memory savings
+
+Standard Anchor accounts work for most programs. The `Account<'info, T>` type handles deserialization automatically, supports all Rust types, and provides better ergonomics. The four KB stack limit only becomes a problem when loading large accounts or many accounts simultaneously.
+
+If you're unsure whether you need zero-copy, start with standard accounts. Migrate to zero-copy only if you encounter memory errors or have profiling data showing memory allocation as a bottleneck. The constraints on data structures make zero-copy accounts harder to work with, and premature optimization adds unnecessary complexity.
+
+For programs that do need zero-copy—order books, large state machines, high-frequency trading protocols—the memory savings are essential. The fixed-array constraint becomes an acceptable trade-off when your alternative is a program that crashes from stack overflow.
+
+---
+
+For efficient testing of these memory-sensitive patterns, the [Testing with LiteSVM](/content/courses/testing-with-litesvm) course covers fast in-process testing without the overhead of a full validator.
+
+Next, you'll learn about raw CPIs and how to invoke programs without Anchor's CPI helpers.

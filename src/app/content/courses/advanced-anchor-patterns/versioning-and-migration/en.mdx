@@ -1,0 +1,373 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Versioning and Migration
+
+![Advanced Anchor Patterns](/graphics/course-banners/advanced-anchor-patterns.png)
+
+Programs on Solana are upgradeable. Accounts are not. When a new program version changes an account struct, every existing account still holds the old data layout. Deserialization fails, and the program breaks for every user who created an account before the upgrade.
+
+Unlike a database `ALTER TABLE`, Solana cannot modify all accounts atomically. Each account must be migrated individually, and the program must handle the transition period where both old and new layouts exist on-chain.
+
+Three strategies cover the majority of cases:
+
+| Strategy | Use when | Tradeoff |
+|---|---|---|
+| **Reserved space + lazy migration** | Adding fields to an existing struct | Requires pre-allocated bytes; simplest path |
+| **Enum versioning** | Changing field types, removing fields, or restructuring accounts | Type-safe but adds storage overhead and code complexity |
+| **Version field + realloc** | Account must grow beyond reserved space | Costs rent for the size increase |
+
+Most upgrades need only the first strategy. The rest of this lesson covers each approach in detail.
+
+<ArticleSection name="The Versioning Problem" id="the-versioning-problem" level="h2" />
+
+A program stores user profiles at 80 bytes (8 discriminator + 32 + 32 + 8). After 50,000 users create profiles, the program needs a new `reputation: u64` field, bringing the struct to 88 bytes. Anchor tries to deserialize 80-byte accounts into the 88-byte struct, Borsh hits the end of the data, and every instruction fails with `BorshDeserializeError`.
+
+Updating 50,000 accounts cannot happen atomically. Solana transactions are capped at 1,232 bytes and 200,000 compute units by default. Even with priority fees, batch updates top out at a few hundred accounts per transaction. The program must handle both old and new layouts simultaneously during the transition.
+
+<ArticleSection name="Account Versioning with Enums" id="enum-versioning" level="h2" />
+
+The enum pattern wraps each account version in a variant. Borsh encodes enums with a leading byte (`0x00` for V1, `0x01` for V2), so the deserializer reads this byte first and selects the correct struct.
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub enum UserProfileVersion {
+    V1(UserProfileV1),
+    V2(UserProfileV2),
+}
+```
+
+Helper methods on the enum provide uniform access and upgrade logic:
+
+```rust
+impl UserProfileVersion {
+    pub fn owner(&self) -> Pubkey {
+        match self {
+            Self::V1(v1) => v1.owner,
+            Self::V2(v2) => v2.owner,
+        }
+    }
+
+    pub fn upgrade_to_v2(self) -> UserProfileV2 {
+        match self {
+            Self::V1(v1) => UserProfileV2 {
+                owner: v1.owner,
+                username: v1.username,
+                created_at: v1.created_at,
+                reputation: 0,
+            },
+            Self::V2(v2) => v2,
+        }
+    }
+}
+```
+
+The compiler enforces exhaustive matching -- adding V3 later produces a compile error in every `match` block that does not handle it. The cost is one extra byte per account for the enum discriminant, and every old struct definition must remain in the codebase. Deleting `UserProfileV1` breaks deserialization for any unmigrated V1 account.
+
+<ArticleSection name="Version Field Approach" id="version-field" level="h2" />
+
+A simpler alternative to enums is embedding a `version: u8` field directly in the account struct. All fields -- including future ones -- are present from the first deployment, initialized to zero values and ignored until a later program version activates them.
+
+```rust
+#[account]
+pub struct UserProfile {
+    pub version: u8,
+    pub owner: Pubkey,
+    pub username: [u8; 32],
+    pub created_at: i64,
+    pub reputation: u64,
+}
+```
+
+Instruction logic checks the version and upgrades in place:
+
+```rust
+pub fn update_reputation(ctx: Context<UpdateReputation>, new_rep: u64) -> Result<()> {
+    let profile = &mut ctx.accounts.profile;
+    if profile.version < 2 {
+        profile.reputation = 0;
+        profile.version = 2;
+    }
+    profile.reputation = new_rep;
+    Ok(())
+}
+```
+
+This approach requires foresight: the struct must pre-allocate space for fields that do not exist yet. It works well for additive changes where new fields have sensible zero defaults. It fails when fields need to be removed, retyped, or reordered -- those cases require the enum pattern.
+
+<ArticleSection name="Lazy Migration Pattern" id="lazy-migration" level="h2" />
+
+Lazy migration avoids batch jobs entirely. Each account migrates when a user next interacts with it -- no migration script, no downtime, no partial-failure risk.
+
+The pattern: every instruction that loads an account checks its version. If the version is old, the instruction upgrades the account in place before running normal logic.
+
+```rust
+#[account]
+pub struct Vault {
+    pub version: u8,
+    pub authority: Pubkey,
+    pub balance: u64,
+    pub last_updated: i64,
+    pub fee_rate: u16,
+    pub total_fees: u64,
+}
+
+impl Vault {
+    pub const CURRENT_VERSION: u8 = 2;
+
+    pub fn migrate_if_needed(&mut self) -> Result<()> {
+        if self.version == 1 {
+            self.fee_rate = 100;
+            self.total_fees = 0;
+            self.version = 2;
+        }
+        Ok(())
+    }
+}
+```
+
+Call `migrate_if_needed` at the start of every instruction that loads a `Vault`:
+
+```rust
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    vault.migrate_if_needed()?;
+
+    let fee = amount.checked_mul(vault.fee_rate as u64).unwrap()
+        .checked_div(10_000).unwrap();
+    vault.balance = vault.balance.checked_add(amount - fee).unwrap();
+    vault.total_fees = vault.total_fees.checked_add(fee).unwrap();
+    vault.last_updated = Clock::get()?.unix_timestamp;
+    Ok(())
+}
+```
+
+The overhead is a few hundred compute units for the version check and field initialization -- negligible for most instructions. The tradeoff: dormant accounts that are never touched again remain at V1 indefinitely. If guaranteed migration is required, combine lazy migration with a dedicated migration instruction.
+
+<ArticleSection name="Migration Instructions" id="migration-instructions" level="h2" />
+
+A dedicated migration instruction lets anyone upgrade a dormant account's data layout -- useful for staking positions from inactive users, config accounts, or historical records.
+
+```rust
+#[derive(Accounts)]
+pub struct MigrateVault<'info> {
+    #[account(
+        mut,
+        realloc = 8 + std::mem::size_of::<Vault>(),
+        realloc::payer = payer,
+        realloc::zero = false,
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn migrate_vault(ctx: Context<MigrateVault>) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    require!(
+        vault.version < Vault::CURRENT_VERSION,
+        ErrorCode::AlreadyMigrated
+    );
+    vault.migrate_if_needed()?;
+    Ok(())
+}
+```
+
+The `realloc` constraint grows the account before the instruction body runs, and `payer` covers the additional rent. No authority check is needed because migration only fills in default values without changing ownership.
+
+A client-side script can sweep all outdated accounts after deployment:
+
+```typescript
+const accounts = await program.account.vault.all();
+for (const account of accounts) {
+  if (account.account.version < CURRENT_VERSION) {
+    await program.methods.migrateVault()
+      .accounts({ vault: account.publicKey, payer: wallet.publicKey,
+                   systemProgram: SystemProgram.programId })
+      .rpc();
+  }
+}
+```
+
+<ArticleSection name="Adding Fields with Reserved Space" id="adding-fields-safely" level="h2" />
+
+The safest migration requires no migration at all. Pre-allocate reserved bytes at the end of the struct, then carve new fields from that space in later versions.
+
+```rust
+#[account]
+pub struct GameState {
+    pub authority: Pubkey,
+    pub name: [u8; 32],
+    pub score: u64,
+    pub _reserved: [u8; 64],
+}
+```
+
+When fields are needed, replace part of the reserved space. The total account size stays the same:
+
+```rust
+#[account]
+pub struct GameState {
+    pub authority: Pubkey,
+    pub name: [u8; 32],
+    pub score: u64,
+    pub level: u16,
+    pub experience: u64,
+    pub _reserved: [u8; 54],
+}
+```
+
+Old accounts have zeros in the bytes where `level` and `experience` are read. Borsh deserializes `0u16` and `0u64` -- valid defaults with no migration required. The constraint: fields can only be appended or carved from reserved space, never inserted between existing fields or removed. Once the reserved budget is exhausted, the account must be reallocated.
+
+<ArticleSection name="Reallocation" id="reallocation" level="h2" />
+
+When the new layout exceeds the original allocation (and no reserved space remains), Anchor's `realloc` constraint grows the account. It resizes the data, transfers additional rent from `payer`, and optionally zeroes new bytes (`realloc::zero = true` prevents leaking uninitialized memory). The constraint runs before the instruction body, so by the time migration logic executes, the account has enough space for the new struct. Accounts cannot exceed 10 MB total.
+
+The migration instruction example in the previous section demonstrates `realloc` in practice.
+
+<ArticleSection name="V2 Instructions" id="v2-instructions" level="h2" />
+
+Everything above covers **account data versioning** — the stored layout changes, but the instruction interface stays the same. A different problem arises when the instruction interface itself must change: different accounts, different validation flow, or different side effects. Modifying an existing instruction breaks every CPI caller and client that depends on it. V2 instructions solve this by adding a new instruction alongside the original.
+
+Kamino Lending (KLend) is the cleanest production example. Their V1 borrow instruction required callers to include separate `refresh_reserve` and `refresh_obligation` instructions at specific positions in the transaction. The program verified this by reading the instruction sysvar — transaction introspection. Every integrator had to construct transactions in a precise layout. V2 eliminated the introspection dependency by performing the refresh internally via CPI, but changing the required accounts meant V1 callers would break. The solution: keep V1 callable, add V2 alongside it.
+
+<ArticleSection name="Nest V1 Inside V2" id="nest-v1-inside-v2" level="h3" />
+
+V2 embeds the entire V1 account struct as a field, then adds whatever accounts the updated flow requires:
+
+```rust
+#[derive(Accounts)]
+pub struct BorrowV1<'info> {
+    pub owner: Signer<'info>,
+    #[account(mut, has_one = lending_market, has_one = owner)]
+    pub obligation: AccountLoader<'info, Obligation>,
+    pub lending_market: AccountLoader<'info, LendingMarket>,
+    #[account(mut, has_one = lending_market)]
+    pub borrow_reserve: AccountLoader<'info, Reserve>,
+    #[account(mut)]
+    pub reserve_source_liquidity: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut)]
+    pub user_destination_liquidity: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Interface<'info, TokenInterface>,
+    /// CHECK: instruction sysvar for transaction introspection
+    #[account(address = SysInstructions::id())]
+    pub instruction_sysvar: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct BorrowV2<'info> {
+    pub borrow_accounts: BorrowV1<'info>,
+    pub farms_state: Option<AccountLoader<'info, FarmsUserState>>,
+    pub farms_program: Program<'info, Farms>,
+}
+```
+
+No account definition is duplicated. Every constraint on the original accounts is inherited through the nested struct. V2 adds only what changed — the farms accounts needed for inline CPI. The `Option` wrapper on `farms_state` means V2 works even when no farms are configured for a reserve.
+
+<ArticleSection name="Share the Implementation" id="share-implementation" level="h3" />
+
+Both versions call the same core logic. The handler functions differ only in what happens around the shared implementation:
+
+```rust
+pub fn process_v1<'info>(
+    ctx: Context<'_, '_, '_, 'info, BorrowV1<'info>>,
+    amount: u64,
+) -> Result<()> {
+    // V1: verify refresh instructions exist in the transaction
+    check_refresh_ixs!(ctx.accounts, ctx.accounts.borrow_reserve);
+    borrow_impl(&ctx.accounts, ctx.remaining_accounts, amount)
+}
+
+pub fn process_v2<'info>(
+    ctx: Context<'_, '_, '_, 'info, BorrowV2<'info>>,
+    amount: u64,
+) -> Result<()> {
+    // V2: run shared logic, then refresh farms via CPI
+    borrow_impl(
+        &ctx.accounts.borrow_accounts,
+        ctx.remaining_accounts,
+        amount,
+    )?;
+    refresh_farms_cpi(
+        &ctx.accounts.borrow_accounts.borrow_reserve,
+        &ctx.accounts.farms_state,
+        &ctx.accounts.farms_program,
+    )
+}
+```
+
+`borrow_impl` accepts the V1 struct type as its parameter. V2 passes `&ctx.accounts.borrow_accounts` — the nested V1 field. All validation, state mutation, and token transfer logic lives in `borrow_impl` and is written once.
+
+<ArticleSection name="Deprecate, Don't Remove" id="deprecate-dont-remove" level="h3" />
+
+V1 stays in the program, marked with Rust's deprecation attribute:
+
+```rust
+#[deprecated(since = "1.8.0", note = "Use borrow_v2")]
+pub fn borrow(ctx: Context<BorrowV1>, amount: u64) -> Result<()> {
+    handler_borrow::process_v1(ctx, amount)
+}
+
+pub fn borrow_v2(ctx: Context<BorrowV2>, amount: u64) -> Result<()> {
+    handler_borrow::process_v2(ctx, amount)
+}
+```
+
+Removing V1 from the program binary changes the instruction discriminators and breaks every existing CPI caller and client. The `#[deprecated]` annotation produces compiler warnings for anyone importing V1 in Rust, guiding integrators toward V2 without forcing an immediate migration.
+
+<ArticleSection name="When V2 Instructions Apply" id="when-v2-applies" level="h3" />
+
+V2 instructions solve a different problem than account data versioning. The decision depends on what changed:
+
+| What changed | Strategy |
+|---|---|
+| Account struct fields (add/modify stored data) | Account versioning (reserved space, enums, lazy migration) |
+| Required accounts for an instruction | V2 instruction with struct nesting |
+| Validation flow (e.g., removing sysvar dependency) | V2 instruction with shared implementation |
+| Instruction arguments (new params without sensible defaults) | V2 instruction |
+| External programs CPI into your instruction | V2 instruction — V1 must remain callable |
+
+If only the data layout changes but the instruction interface stays the same, account versioning from the earlier sections is sufficient. V2 instructions are for interface-level breaking changes where existing callers must not break.
+
+<ArticleSection name="Version Compatibility Matrix" id="version-compatibility" level="h2" />
+
+Track which program version supports which account versions. A simple table in the repository serves as the reference for auditors and future maintainers:
+
+```
+Program Version | Account Versions Supported | Notes
+----------------------------------------------------------------------
+v1.0.0          | Vault V1                   | Initial deployment
+v1.1.0          | Vault V1, V2               | Lazy migration added
+v1.2.0          | Vault V2 only              | V1 support removed
+v2.0.0          | Vault V2, V3               | New fields, realloc
+```
+
+Test every transition in the matrix by creating accounts with raw V1 bytes and running them through the new program's migration path. Raw-byte tests catch field-offset misalignment that higher-level tests miss.
+
+<ArticleSection name="Best Practices" id="best-practices" level="h2" />
+
+**Version from day one.** Add a `version: u8` field to every account struct at first deployment. The cost is 1 byte per account. Retrofitting versioning later requires heuristics to distinguish accounts with and without the version byte.
+
+```rust
+#[account]
+pub struct Config {
+    pub version: u8,
+    pub authority: Pubkey,
+    pub fee_rate: u16,
+    pub _reserved: [u8; 64],
+}
+```
+
+**Never delete fields.** Removing a field shifts the byte offsets of every subsequent field, producing garbage on deserialization. Rename deprecated fields instead (e.g., `_deprecated_old_fee: u16`) to preserve byte alignment.
+
+**Test with real account data.** Fetch accounts from devnet or mainnet using `solana account`, deserialize them with the old struct, and run them through migration logic. Real data exposes edge cases -- zero values, maximum values, unusual timestamps -- that synthetic tests miss.
+
+**Plan for partial failure.** A migration script that crashes at account 30,001 of 50,000 leaves a mix of versions on-chain. Lazy migration handles this naturally because each account tracks its own version.
+
+**Document every migration.** Record what changed, what the default values are for new fields, and why. The compatibility matrix from the previous section is a good starting point.
+
+---
+
+For the governance and operational side of program upgrades — managing the upgrade authority, multisig approvals, and rollback plans — the Anchor in Production course covers these topics in its upgrades-and-governance lesson.
+
+The next course, Anchor in Production, covers deployment strategies, client SDK generation, upgrades, and the operational patterns that take a program from development to mainnet.

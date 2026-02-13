@@ -1,0 +1,343 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Cross-Program Invocations
+
+![Anchor Fundamentals - Cross-Program Invocations](/graphics/course-banners/anchor-fundamentals.png)
+
+Programs on Solana don't exist in isolation; a vault program needs the System Program to transfer SOL, a marketplace needs the Token Program to move tokens. 
+
+Cross-Program Invocations make this possible—one program calling another's instructions within the same transaction.
+
+<ArticleSection name="What CPIs Are" id="what-cpis-are" level="h2" />
+
+A Cross-Program Invocation is one program calling an instruction from another program. The calling program is the invoker. The program being called is the invokee.
+
+When your program makes a CPI:
+
+1. Execution pauses in your program
+2. Control transfers to the target program
+3. The target program executes its instruction
+4. Control returns to your program
+5. Your program continues executing
+
+This happens synchronously. No separate transaction, no asynchronous callbacks. The entire call stack executes in one transaction.
+
+CPIs are bounded by transaction limits. The maximum call depth is 4—your program can invoke a program that invokes another program that invokes another program, but no deeper. The compute budget (1.4 million units) applies to the entire transaction, including all CPIs.
+
+If a CPI fails, the error propagates up the call stack. Your program can catch the error with `?` or `.map_err()`, add context, and return it. The transaction reverts, rolling back all state changes across all programs involved.
+
+<ArticleSection name="CpiContext Basics" id="cpi-context" level="h2" />
+
+Anchor wraps CPI calls in a `CpiContext`. This struct packages the target program and the accounts needed for the instruction.
+
+The basic form:
+
+```rust
+CpiContext::new(program, accounts)
+```
+
+- `program`: The target program's `AccountInfo`
+- `accounts`: An Anchor accounts struct matching the target instruction's requirements
+
+Here's the structure in a real instruction. Suppose your program needs to transfer SOL from a user to a vault:
+
+```rust
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let cpi_context = CpiContext::new(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.user.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        },
+    );
+
+    transfer(cpi_context, amount)?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(mut)]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+The `Transfer` struct comes from `anchor_lang::system_program`. It mirrors the System Program's transfer instruction, specifying `from` and `to` accounts. The `transfer` function is an Anchor helper that generates the CPI.
+
+When this instruction runs:
+
+1. Anchor validates the accounts (user is signer and mutable, vault is mutable)
+2. Your program builds the `CpiContext`
+3. The `transfer` function invokes the System Program
+4. The System Program subtracts `amount` from `user` and adds it to `vault`
+5. Control returns to your program
+6. Your program returns `Ok(())`
+
+The entire operation is atomic. If the user doesn't have enough SOL, the System Program fails, the transaction reverts, and no state changes occur.
+
+<ArticleSection name="CPI with PDA Signers" id="cpi-with-signers" level="h2" />
+
+The examples so far assume the authority is a regular signer account. But what if the authority is a PDA?
+
+PDAs have no private key. They can't sign transactions in the traditional sense. Instead, your program proves it derived the PDA by providing the seeds. The Solana runtime verifies the seeds produce the PDA's address and treats the PDA as a signer for that CPI.
+
+This is where `CpiContext::new_with_signer` comes in:
+
+```rust
+CpiContext::new_with_signer(program, accounts, signer_seeds)
+```
+
+The third parameter is `signer_seeds`: a slice of seed arrays, one per PDA that needs to sign.
+
+Here's a complete example. A vault PDA holds tokens. When a user withdraws, the vault PDA must sign the token transfer:
+
+```rust
+use anchor_spl::token::{self, Transfer as TokenTransfer};
+
+#[program]
+pub mod vault_program {
+    use super::*;
+
+    pub fn withdraw_tokens(ctx: Context<WithdrawTokens>, amount: u64) -> Result<()> {
+        let vault = &ctx.accounts.vault;
+
+        // Build signer seeds
+        let authority_key = vault.authority;
+        let seeds = &[
+            b"vault",
+            authority_key.as_ref(),
+            &[vault.bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        // CPI to token program
+        let cpi_accounts = TokenTransfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.user_token_account.to_account_info(),
+            authority: vault.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_context = CpiContext::new_with_signer(
+            cpi_program,
+            cpi_accounts,
+            signer_seeds,
+        );
+
+        token::transfer(cpi_context, amount)?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        seeds = [b"vault", vault.authority.as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(mut)]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[account]
+pub struct Vault {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+```
+
+The critical part:
+
+```rust
+let seeds = &[
+    b"vault",
+    authority_key.as_ref(),
+    &[vault.bump],
+];
+let signer_seeds = &[&seeds[..]];
+```
+
+`seeds` is an array of byte slices matching the PDA derivation. The bump is wrapped in a single-element array `&[vault.bump]` because it needs to be a slice.
+
+`signer_seeds` is a slice of slices. This format allows multiple PDAs to sign the same CPI. If only one PDA signs, it's `&[&seeds[..]]`. If two PDAs sign, it's `&[&seeds1[..], &seeds2[..]]`.
+
+When the Token Program executes the transfer, the runtime sees the signer seeds, derives the address, verifies it matches the `authority` account, and allows the transfer. Without the seeds, the transfer would fail with a missing signature error.
+
+The seeds must match the PDA derivation exactly. If the order is wrong, or a seed is missing, the address won't match and the CPI fails.
+
+<ArticleSection name="Multiple PDA Signers" id="multiple-signers" level="h2" />
+
+Some CPIs require multiple signers. Suppose you have two PDAs: one for the vault and one for fee collection. Both need to sign a complex operation.
+
+The pattern extends naturally:
+
+```rust
+pub fn complex_operation(ctx: Context<ComplexOperation>) -> Result<()> {
+    let vault = &ctx.accounts.vault;
+    let fee_account = &ctx.accounts.fee_account;
+
+    // Vault seeds
+    let vault_seeds = &[
+        b"vault",
+        vault.authority.as_ref(),
+        &[vault.bump],
+    ];
+
+    // Fee account seeds
+    let fee_seeds = &[
+        b"fees",
+        &[fee_account.bump],
+    ];
+
+    // Combine into signer_seeds
+    let signer_seeds = &[&vault_seeds[..], &fee_seeds[..]];
+
+    // CPI with both PDAs signing
+    let cpi_context = CpiContext::new_with_signer(
+        ctx.accounts.some_program.to_account_info(),
+        SomeAccounts { /* ... */ },
+        signer_seeds,
+    );
+
+    some_cpi_function(cpi_context)?;
+    Ok(())
+}
+```
+
+Each PDA gets its own seed array. Both arrays go into `signer_seeds`. The runtime verifies each one independently.
+
+This is rare in practice. Most CPIs involve one signer, occasionally two. But the pattern supports any number up to the limits of stack size and transaction complexity.
+
+<ArticleSection name="Invoking Custom Programs" id="custom-programs" level="h2" />
+
+So far we've used Anchor helpers for the System Program and Token Program. But you can invoke any program—including your own or third-party protocols.
+
+The structure is the same. You need:
+
+1. The target program's `Program<'info, T>` account
+2. An accounts struct matching the target instruction
+3. A CPI helper function or manual instruction building
+
+If the target program is an Anchor program, you can import its types and use them directly:
+
+```rust
+use other_program::{
+    cpi::{accounts::SomeInstruction, some_instruction},
+    program::OtherProgram,
+};
+
+pub fn call_other_program(ctx: Context<CallOtherProgram>) -> Result<()> {
+    let cpi_accounts = SomeInstruction {
+        account1: ctx.accounts.account1.to_account_info(),
+        account2: ctx.accounts.account2.to_account_info(),
+    };
+
+    let cpi_program = ctx.accounts.other_program.to_account_info();
+    let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
+
+    some_instruction(cpi_context, arg1, arg2)?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct CallOtherProgram<'info> {
+    pub account1: AccountInfo<'info>,
+    pub account2: AccountInfo<'info>,
+    pub other_program: Program<'info, OtherProgram>,
+}
+```
+
+Anchor generates a `cpi` module in every program that exports the accounts structs and CPI helpers. You import these into your program and use them like System Program or Token Program CPIs.
+
+If the target program is not an Anchor program (native Solana or a different framework), you build the instruction manually using `solana_program::instruction::Instruction` and invoke it with `solana_program::program::invoke` or `invoke_signed`. Anchor's CPI system is a wrapper around these low-level functions.
+
+<ArticleSection name="Error Handling in CPIs" id="error-handling" level="h2" />
+
+CPI errors propagate up the call stack. If a CPI fails, your program receives the error and can handle it or forward it.
+
+The standard pattern is `?`:
+
+```rust
+token::transfer(cpi_context, amount)?;
+```
+
+If the transfer fails (insufficient funds, wrong authority, closed account), the error propagates and the transaction reverts. No need to check explicitly.
+
+Sometimes you want to add context or map the error to a custom type:
+
+```rust
+token::transfer(cpi_context, amount)
+    .map_err(|_| ErrorCode::TransferFailed)?;
+```
+
+This converts any CPI error into your custom `TransferFailed` error. The user sees your error code, not the Token Program's.
+
+You can also log additional context:
+
+```rust
+token::transfer(cpi_context, amount)
+    .map_err(|err| {
+        msg!("Transfer failed: {:?}", err);
+        ErrorCode::TransferFailed
+    })?;
+```
+
+The `msg!` macro emits a log visible in transaction explorers. This helps debugging without exposing low-level errors to users.
+
+Common CPI errors:
+
+- **Missing signer**: An account required to sign is not a signer. For PDAs, the seeds don't match the address.
+- **Insufficient funds**: The sender doesn't have enough lamports or tokens.
+- **Wrong program ID**: The account owner doesn't match expectations (e.g., passing a System Account where a Token Account is required).
+- **Account closed**: An account has been closed and its data zeroed.
+- **Compute budget exceeded**: The transaction ran out of compute units during the CPI.
+
+Anchor's error messages are often clearer than raw Solana errors. Use Anchor's account types (`Account<'info, T>`, `Signer<'info>`, `Program<'info, T>`) to catch mismatches at validation time rather than during CPI execution.
+
+<ArticleSection name="CPI and Compute Budget" id="compute-budget" level="h2" />
+
+Every transaction has a compute budget of 1.4 million units (expandable with a compute budget instruction). CPIs consume part of this budget.
+
+Simple CPIs like System Program transfers cost a few thousand units. Complex CPIs like token operations or invoking custom programs can cost tens of thousands.
+
+When you invoke multiple programs, the costs add up. A program that transfers SOL, then transfers tokens, then updates state in another program might use 100,000+ units. If the transaction also does substantial work in your program (hashing, validation, loops), you can hit the compute limit.
+
+Strategies to stay under the limit:
+
+- **Reduce CPI count**: Batch operations where possible. Instead of multiple small transfers, one larger transfer.
+- **Optimize instruction logic**: Avoid unnecessary loops or redundant checks.
+- **Request additional compute**: Use the `ComputeBudget` program to increase the limit (up to 1.4M for priority fees).
+- **Split transactions**: If atomicity isn't required, split the operation into multiple transactions.
+
+Compute usage is visible in transaction logs. Tools like Solana Explorer show per-instruction compute consumption. Profile your program to see where units go and optimize accordingly.
+
+<ArticleSection name="CPI Security Considerations" id="security" level="h2" />
+
+CPIs introduce security considerations. Your program is invoking another program's code. That code could do anything.
+
+**Trust the program you invoke.** The System Program and Token Program are audited and widely trusted. Custom programs vary. Read the code or rely on audits before invoking third-party programs.
+
+**Validate accounts before CPIs.** Anchor's account constraints help, but double-check critical accounts. Ensure the token account belongs to the expected mint, the PDA seeds are correct, the authority is who you think it is.
+
+**Avoid reentrancy.** Solana doesn't have traditional reentrancy (your program can't call itself mid-execution), but a program you invoke could invoke another program that modifies shared state in unexpected ways. Design your state to be resilient to interleaved operations.
+
+**Check return values.** Most CPI helpers return `Result`. Use `?` to propagate errors. Don't silently ignore failures unless you have a specific reason.
+
+**PDA seed security.** When signing with a PDA, ensure the seeds are derived from trusted sources. If a user can manipulate seeds, they might trick your program into signing unauthorized operations. Store seeds in program state or derive them deterministically from validated accounts.
+
+**Cross-program account ownership.** The program you invoke can modify accounts. If you pass a mutable account, the invoked program can write to it. Ensure the invoked program won't corrupt your state. The Solana runtime enforces ownership (only the owner can modify account data), but be aware of which accounts you're handing off.
+
+CPIs are powerful but require the same caution as any code integration. Trust, validate, and test thoroughly.
+
+<ArticleSection name="What You've Learned" id="what-youve-learned" level="h2" />
+
+You now know how to call other programs via `CpiContext::new` and `CpiContext::new_with_signer`, handle SOL and token operations, and sign with PDA signer seeds. For composability patterns, see the Designing for Composability lesson in Building with Anchor. For CPI trust boundaries and reentrancy risks, see the CPI Trust Boundaries lesson in Securing Anchor Programs.

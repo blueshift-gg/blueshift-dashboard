@@ -1,0 +1,300 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Testing Strategy
+
+![Testing Anchor Programs](/graphics/course-banners/testing-anchor-programs.png)
+
+A deployed Solana program handles real value. Bugs become exploits, and exploits drain funds. Testing catches these bugs before deployment — and costs nothing compared to an audit or a post-mortem.
+
+This lesson covers why testing matters for Solana programs, what the testing pyramid looks like in practice, what aspects of your program need coverage, and which tools to reach for at each layer.
+
+<ArticleSection name="Why Test Solana Programs" id="why-test" level="h2" />
+
+Solana programs are immutable by default once deployed. If you retain the upgrade authority, you can push fixes — but every upgrade introduces risk and requires coordination. If you revoke the upgrade authority to make the program fully trustless, a single bug becomes permanent.
+
+The cost of a production bug on Solana is high:
+
+- **Lost funds.** A vulnerability in a DeFi protocol can drain user deposits in minutes. There is no rollback mechanism on Solana.
+- **Reputation damage.** Users lose trust. Protocols lose TVL. Recovery takes months or years.
+- **Audit costs.** A full security audit for a Solana program costs tens of thousands of dollars. Testing costs developer time.
+
+Testing is not a replacement for audits, but it is the first line of defense. A well-tested program catches logic errors, access control bugs, and arithmetic issues before they reach production.
+
+<ArticleSection name="The Testing Pyramid for Solana" id="testing-pyramid" level="h2" />
+
+The testing pyramid describes the ratio of tests at each layer. For Solana programs, the pyramid has three layers:
+
+### Unit Tests
+
+Unit tests run at the Rust level. They test individual functions in isolation, without touching the Solana runtime. You pass in raw data, call the function, and assert the output.
+
+**Example use case:** Testing a math function that calculates interest rates. You do not need accounts or instructions — only inputs and outputs.
+
+**Pros:** Fast. No dependencies. Easy to write.
+
+**Cons:** Limited coverage. Most program logic depends on accounts, which unit tests cannot simulate.
+
+### Integration Tests
+
+Integration tests run full instructions against a local Solana runtime. You create accounts, call instructions, and check the resulting state. This is where most of your tests should live.
+
+**Example use case:** Testing a `deposit` instruction. You create a vault account, call `deposit` with a user account, and assert the vault balance increased.
+
+**Pros:** High confidence. Tests the full instruction flow, including account validation, serialization, and state changes.
+
+**Cons:** Slower than unit tests. Requires setting up accounts and context.
+
+### End-to-End Tests
+
+End-to-end tests run multi-instruction flows, simulating real user behavior. You might initialize a protocol, create a user, deposit funds, and withdraw — all in one test.
+
+**Example use case:** Testing a lending protocol. A user deposits collateral, borrows against it, and repays the loan. You assert the final balances and protocol state.
+
+**Pros:** Catches integration issues between instructions. Validates user flows.
+
+**Cons:** Slow. Hard to debug. Brittle when instructions change.
+
+### Recommended Distribution
+
+For most Solana programs, aim for:
+
+- **5% unit tests.** Only for pure functions that do not touch accounts.
+- **80% integration tests.** The bulk of your coverage. One test per instruction variant.
+- **15% end-to-end tests.** Key user flows and protocol invariants.
+
+Integration tests give the best return on investment. They run fast enough to iterate quickly, but cover the full instruction logic that matters in production.
+
+<ArticleSection name="What to Test" id="what-to-test" level="h2" />
+
+A thorough test suite covers five categories:
+
+### 1. Happy Paths
+
+Does the instruction work when given valid inputs? This is the baseline. If your happy path tests fail, nothing else matters.
+
+**Example:** A `transfer` instruction moves tokens from one account to another. The test creates two accounts, calls `transfer`, and asserts the balances updated correctly.
+
+### 2. Error Cases
+
+Does the instruction fail correctly when given invalid inputs? Every error path in your program should have a corresponding test.
+
+**Example:** A `withdraw` instruction should fail if the user tries to withdraw more than their balance. The test calls `withdraw` with an excessive amount and asserts the program returns `InsufficientFunds`.
+
+### 3. Edge Cases
+
+What happens at boundary conditions? Zero amounts, maximum values, empty accounts, and overflows are common sources of bugs.
+
+**Example:** A `stake` instruction accepts an amount. Test what happens when the amount is zero. Test what happens when the amount is `u64::MAX`. Test what happens when the user has exactly enough tokens.
+
+### 4. Access Control
+
+Can unauthorized accounts call restricted instructions? Every permission check in your program needs a test that verifies rejection.
+
+**Example:** An `admin_withdraw` instruction should only be callable by the protocol admin. The test calls the instruction with a non-admin signer and asserts the program returns `Unauthorized`.
+
+### 5. State Transitions
+
+Does the program state update correctly after each operation? Check the immediate effects along with derived state and invariants.
+
+**Example:** A liquidity pool tracks total deposits and individual user shares. After a deposit, test that both values updated correctly and that the sum of all user shares equals the total deposits.
+
+<ArticleSection name="Testing Tools Overview" id="testing-tools" level="h2" />
+
+Anchor and the Solana ecosystem provide several testing tools, each suited for different layers of the pyramid.
+
+### Anchor Test (TypeScript)
+
+Anchor's built-in test framework uses TypeScript and Mocha. You write tests in `tests/`, run them with `anchor test`, and Anchor handles starting a local validator, deploying your program, and tearing down after tests complete.
+
+**When to use:** Integration and end-to-end tests. This is the default for most Anchor projects.
+
+**Strengths:** Full Solana runtime. Easy to write. Good for testing client-side interactions.
+
+**Limitations:** Slower than Rust-based tools. Requires a validator process.
+
+**Example:**
+
+```typescript
+it("deposits tokens into vault", async () => {
+  await program.methods
+    .deposit(new BN(1000))
+    .accounts({ vault, user: userKeypair.publicKey })
+    .signers([userKeypair])
+    .rpc();
+
+  const vaultAccount = await program.account.vault.fetch(vault);
+  assert.equal(vaultAccount.balance.toNumber(), 1000);
+});
+```
+
+### LiteSVM
+
+LiteSVM is a lightweight Solana runtime that runs in-process. It skips the overhead of starting a validator, making tests 10-100x faster than `anchor test`.
+
+**When to use:** Integration tests where speed matters. When your test suite grows beyond a few dozen tests and iteration time is critical.
+
+**Strengths:** Very fast. No validator process. Works with TypeScript or Rust.
+
+**Limitations:** Not a full validator. Some edge cases may behave differently than mainnet.
+
+For setup, configuration, and advanced patterns, see the [Testing with LiteSVM](/content/courses/testing-with-litesvm) course.
+
+### Mollusk
+
+Mollusk is a Rust-based testing framework for unit and integration tests. You write tests in Rust, directly in your program's `tests/` directory, and run them with `cargo test`.
+
+**When to use:** Unit tests for pure functions. Integration tests when you prefer Rust over TypeScript.
+
+**Strengths:** Native Rust. No client-side overhead. Easy to test internal functions.
+
+**Limitations:** Requires more setup than TypeScript tests. Less ergonomic for client-side logic.
+
+For a complete guide to Mollusk testing, see the [Testing with Mollusk](/content/courses/testing-with-mollusk) course.
+
+### Surfpool (Mainnet Fork Testing)
+
+Surfpool lets you fork mainnet state and run tests against real accounts. This is useful for testing integrations with existing protocols or reproducing production bugs.
+
+**When to use:** Testing interactions with live protocols (Raydium, Jupiter, etc.). Debugging production issues.
+
+**Strengths:** Real account data. Validates assumptions about external programs.
+
+**Limitations:** Slower than local tests. Requires access to RPC nodes with full history.
+
+**Example use case:** You are building a vault that deposits into Marinade. You fork mainnet, fetch the real Marinade state, and test your deposit instruction against the live program.
+
+For setup and advanced features, see the [Testing with Surfpool](/content/courses/testing-with-surfpool) course.
+
+### Tool Selection Summary
+
+| Layer               | Tool             | Speed  | Fidelity |
+| ------------------- | ---------------- | ------ | -------- |
+| Unit                | Mollusk (Rust)   | Fastest| Low      |
+| Integration         | LiteSVM          | Fast   | High     |
+| Integration         | Anchor Test (TS) | Medium | High     |
+| End-to-End          | Anchor Test (TS) | Medium | High     |
+| Mainnet Fork        | Surfpool         | Slow   | Highest  |
+
+For most projects, start with Anchor's TypeScript tests. Add LiteSVM when your test suite grows beyond a few dozen tests. Use Mollusk for pure functions. Reach for Surfpool only when you need mainnet state.
+
+<ArticleSection name="Test Organization" id="test-organization" level="h2" />
+
+A well-organized test suite is easier to maintain and faster to debug. Follow these conventions:
+
+### One Describe Block Per Instruction
+
+Group all tests for a single instruction under one `describe` block. This makes it clear what the test is covering and makes it easy to run a subset of tests.
+
+```typescript
+describe("deposit", () => {
+  it("deposits tokens into vault", async () => { /* ... */ });
+  it("fails if user has insufficient balance", async () => { /* ... */ });
+  it("fails if amount is zero", async () => { /* ... */ });
+});
+
+describe("withdraw", () => {
+  it("withdraws tokens from vault", async () => { /* ... */ });
+  it("fails if user has insufficient shares", async () => { /* ... */ });
+});
+```
+
+### Setup Helpers for Account Creation
+
+Most instructions require setting up accounts: creating keypairs, airdropping SOL, initializing token accounts, and so on. Extract this logic into helper functions so tests stay focused on the instruction being tested.
+
+```typescript
+async function createVault(program, payer) {
+  const vault = Keypair.generate();
+  await program.methods
+    .initializeVault()
+    .accounts({ vault: vault.publicKey, payer: payer.publicKey })
+    .signers([vault, payer])
+    .rpc();
+  return vault.publicKey;
+}
+
+describe("deposit", () => {
+  it("deposits tokens into vault", async () => {
+    const vault = await createVault(program, payer);
+    // Test logic here
+  });
+});
+```
+
+### Shared State vs Isolated Tests
+
+There are two approaches to test state:
+
+**Shared state:** All tests in a `describe` block share the same accounts, initialized in a `before` hook. This is faster, but tests can interfere with each other if one test modifies shared state.
+
+**Isolated tests:** Each test creates its own accounts in a `beforeEach` hook. This is slower, but tests are independent and easier to debug.
+
+For most projects, prefer isolated tests. The performance cost is small, and the reliability is worth it.
+
+```typescript
+describe("deposit", () => {
+  let vault;
+  let user;
+
+  beforeEach(async () => {
+    vault = await createVault(program, payer);
+    user = Keypair.generate();
+    await airdrop(user.publicKey, 10 * LAMPORTS_PER_SOL);
+  });
+
+  it("deposits tokens into vault", async () => {
+    // vault and user are fresh for this test
+  });
+});
+```
+
+### Test Naming Conventions
+
+Test names should describe the behavior being tested, not the implementation. Use the format:
+
+```
+"<action> when <condition>"
+```
+
+**Good examples:**
+
+- `"deposits tokens into vault"`
+- `"fails if user has insufficient balance"`
+- `"emits DepositEvent after successful deposit"`
+
+**Bad examples:**
+
+- `"test_deposit"` (not descriptive)
+- `"should call process_deposit with correct args"` (tests implementation, not behavior)
+
+### Grouping Error Tests
+
+If an instruction has many error cases, group them under a nested `describe` block:
+
+```typescript
+describe("deposit", () => {
+  it("deposits tokens into vault", async () => { /* ... */ });
+
+  describe("errors", () => {
+    it("fails if user has insufficient balance", async () => { /* ... */ });
+    it("fails if amount is zero", async () => { /* ... */ });
+    it("fails if vault is paused", async () => { /* ... */ });
+  });
+});
+```
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Testing Solana programs is not optional. Programs handle real value, and bugs in production cost real money. A strong testing strategy catches issues early, reduces audit costs, and gives you confidence to deploy.
+
+Key takeaways:
+
+- **Immutability matters.** Once deployed, bugs are permanent unless you retain upgrade authority.
+- **Focus on integration tests.** They provide the best coverage per line of test code.
+- **Test five categories.** Happy paths, error cases, edge cases, access control, and state transitions.
+- **Use the right tool.** Anchor Test for most cases. LiteSVM for speed. Mollusk for unit tests. Surfpool for mainnet forks.
+- **Organize for maintainability.** One describe block per instruction. Setup helpers for common tasks. Isolated tests over shared state.
+
+Of course, testing is only one half of the observability story — once your program is live, the Anchor in Production course covers monitoring and indexing in its indexing-and-monitoring lesson, giving you the production observation layer that complements the testing strategy you build here.
+
+Each tool covered here has a dedicated standalone course — [Testing with LiteSVM](/content/courses/testing-with-litesvm), [Testing with Mollusk](/content/courses/testing-with-mollusk), and [Testing with Surfpool](/content/courses/testing-with-surfpool) — for in-depth setup, configuration, and advanced patterns.
