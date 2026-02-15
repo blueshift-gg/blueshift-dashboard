@@ -126,7 +126,7 @@ export default function CourseCard({
           "flex flex-col gap-y-8 grow justify-between px-4 py-5"
         )}
       >
-        <div className="flex flex-col min-h-[125px] sm:min-h-[100px]">
+        <div className="flex flex-col min-h-[132px] sm:min-h-[132px]">
           <AnimatePresence>
             {!isHovered && (
               <motion.div
