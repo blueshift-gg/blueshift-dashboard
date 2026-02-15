@@ -46,9 +46,45 @@ export default function CourseFooter({
   challenge,
 }: CourseFooterProps) {
   const t = useTranslations();
-  const { pathSlug } = usePathContent();
+  const { pathSlug, steps } = usePathContent();
 
   const articles = getResearchForCourse(courseMetadata.slug as CourseId);
+
+  // When in a path, find the next course/challenge to navigate to
+  const currentPathIndex =
+    pathSlug && steps
+      ? steps.findIndex(
+          (s) => s.type === "course" && s.slug === courseMetadata.slug
+        )
+      : -1;
+  const nextStep =
+    pathSlug && steps && currentPathIndex >= 0
+      ? steps[currentPathIndex + 1]
+      : undefined;
+
+  const nextPathUnit = pathSlug && nextStep
+    ? (() => {
+        if (nextStep.type === "course" && nextStep.defaultLessonSlug) {
+          return {
+            href: `/paths/${pathSlug}/courses/${nextStep.slug}/${nextStep.defaultLessonSlug}`,
+            label: t("lessons.next_unit"),
+          };
+        }
+        if (nextStep.type === "course") {
+          return {
+            href: `/paths/${pathSlug}/courses/${nextStep.slug}`,
+            label: t("lessons.next_unit"),
+          };
+        }
+        return {
+          href: `/paths/${pathSlug}/challenges/${nextStep.slug}?fromCourse=${courseMetadata.slug}`,
+          label: t("lessons.next_unit"),
+        };
+      })()
+    : null;
+
+  const isLastPathUnit =
+    !!pathSlug && !!steps && currentPathIndex >= 0 && !nextStep;
   const topic = COURSE_TOPICS[courseMetadata.slug] || "advanced Solana topics";
 
   const handleArticleClick = useCallback(
@@ -141,14 +177,32 @@ export default function CourseFooter({
               <div className="max-w-[800px] mx-auto">
                 <div className="gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12">
                   <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
-                    {t("lessons.lesson_completed")}
+                    {isLastPathUnit
+                      ? t("lessons.path_completed")
+                      : t("lessons.lesson_completed")}
                   </span>
-                  <Link href={`/courses`} className="w-max">
+                  <Link
+                    href={
+                      nextPathUnit?.href ??
+                      (isLastPathUnit ? "/paths" : "/courses")
+                    }
+                    className="w-max"
+                  >
                     <Button
                       variant="primary"
                       size="md"
-                      label="Explore More Courses"
-                      icon={{ name: "Lessons" }}
+                      label={
+                        nextPathUnit?.label ??
+                        (isLastPathUnit
+                          ? t("lessons.explore_more_paths")
+                          : t("lessons.explore_more_courses"))
+                      }
+                      iconPosition={nextPathUnit?.href ? "right" : "left"}
+                      icon={
+                        nextPathUnit?.href
+                          ? { name: "ArrowRight" }
+                          : { name: "Lessons" }
+                      }
                     />
                   </Link>
                 </div>
