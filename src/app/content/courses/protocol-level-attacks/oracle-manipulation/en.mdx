@@ -1,0 +1,388 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Oracle Manipulation
+
+Oracles are the bridge between on-chain protocols and off-chain reality. Every lending protocol, perpetuals exchange, and structured product on Solana depends on oracle price feeds to make critical decisions: liquidations, collateral valuations, swap pricing, and risk parameter adjustments. When that bridge is compromised, the protocol's entire economic model collapses.
+
+Oracle manipulation is not about hacking the oracle itself. It is about exploiting how your protocol consumes oracle data. A correct Pyth feed can still be the vector for a protocol drain if your code trusts it without proper validation.
+
+<ArticleSection name="Price Feed Trust Model" id="price-feed-trust-model" level="h2" />
+
+Every oracle integration embeds a trust model. When your protocol reads a price from Pyth or Switchboard, it is implicitly trusting that:
+
+1. The price is recent enough to reflect current market conditions
+2. The price is accurate within an acceptable confidence band
+3. The price has not been manipulated by a single data source
+4. The oracle account being read is the genuine oracle, not a spoofed account
+
+Each of these trust assumptions is a potential attack surface. Production protocols have been drained because they violated just one of these.
+
+On Solana, oracle accounts are passed as regular `AccountInfo` parameters. The first and most basic check is verifying that the oracle account is actually owned by the oracle program (Pyth, Switchboard, etc.) and corresponds to the expected price feed. Without this, an attacker can pass in a fake account with whatever price they want.
+
+```rust
+// Vulnerable: no verification that the oracle account is legitimate
+pub fn process_trade(ctx: Context<Trade>) -> Result<()> {
+    let price_feed = &ctx.accounts.price_oracle;
+    let price_data = price_feed.try_borrow_data()?;
+    // Directly parsing price data from an unverified account
+    let price = parse_price(&price_data)?;
+
+    execute_trade(price)?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Trade<'info> {
+    #[account(mut)]
+    pub trader: Signer<'info>,
+    /// CHECK: No verification at all
+    pub price_oracle: UncheckedAccount<'info>,
+}
+```
+
+An attacker creates their own account, writes fabricated price data into it, and passes it in. The fix is to validate the oracle account's owner and address:
+
+```rust
+#[derive(Accounts)]
+pub struct Trade<'info> {
+    #[account(mut)]
+    pub trader: Signer<'info>,
+    #[account(
+        address = EXPECTED_SOL_USD_FEED @ ErrorCode::InvalidOracle,
+        owner = PYTH_PROGRAM_ID @ ErrorCode::InvalidOracleOwner,
+    )]
+    /// CHECK: Validated by address and owner constraints
+    pub price_oracle: UncheckedAccount<'info>,
+}
+```
+
+<ArticleSection name="Stale Price Exploitation" id="stale-price-exploitation" level="h2" />
+
+Stale prices are the most common oracle vulnerability in production. A price feed that was accurate 30 seconds ago might be catastrophically wrong now, especially during periods of high volatility.
+
+Consider a lending protocol that uses Pyth's SOL/USD feed for liquidation decisions. Pyth publishes price updates roughly every 400 milliseconds on Solana. But network congestion, validator downtime, or publisher issues can cause gaps. If the protocol reads a price that is 30 seconds old during a 15% market crash, it will overvalue collateral and fail to liquidate positions that are already underwater.
+
+Here is the vulnerable pattern:
+
+```rust
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+
+pub fn check_liquidation(ctx: Context<CheckLiquidation>) -> Result<()> {
+    let price_update = &ctx.accounts.pyth_price_update;
+
+    // Vulnerable: no staleness check, no confidence check
+    let price = price_update.get_price_no_older_than(
+        &Clock::get()?,
+        600, // 10 MINUTES! Far too long
+        &SOL_USD_FEED_ID,
+    )?;
+
+    let collateral_value = calculate_collateral(
+        ctx.accounts.position.sol_amount,
+        price.price as u64,
+        price.exponent,
+    );
+
+    if collateral_value < ctx.accounts.position.debt {
+        liquidate(&ctx)?;
+    }
+
+    Ok(())
+}
+```
+
+The 600-second staleness window is the problem. In 10 minutes, SOL can move 10% or more during volatile conditions. An attacker who sees a stale price can:
+
+1. Observe that the on-chain Pyth price is 30 seconds stale at $100
+2. Know the real market price has dropped to $85
+3. Deposit SOL as collateral valued at $100 (the stale price)
+4. Borrow USDC against the inflated collateral value
+5. Profit from the difference when the oracle updates
+
+The fix requires enforcing a tight staleness threshold:
+
+```rust
+pub fn check_liquidation(ctx: Context<CheckLiquidation>) -> Result<()> {
+    let price_update = &ctx.accounts.pyth_price_update;
+    let clock = Clock::get()?;
+
+    // Enforce 30-second maximum staleness
+    let price = price_update.get_price_no_older_than(
+        &clock,
+        30, // 30 seconds maximum
+        &SOL_USD_FEED_ID,
+    )?;
+
+    // Also reject if confidence interval is too wide
+    let confidence = price.conf;
+    let price_abs = price.price.unsigned_abs();
+
+    // Confidence should be within 2% of price
+    require!(
+        confidence * 50 <= price_abs,
+        ErrorCode::OracleConfidenceTooWide
+    );
+
+    let collateral_value = calculate_collateral(
+        ctx.accounts.position.sol_amount,
+        price.price as u64,
+        price.exponent,
+    );
+
+    if collateral_value < ctx.accounts.position.debt {
+        liquidate(&ctx)?;
+    }
+
+    Ok(())
+}
+```
+
+The appropriate staleness threshold depends on the asset and use case. For major assets like SOL/USD, 30 seconds is reasonable. For less liquid assets, you may need to accept 60 seconds but should compensate with wider safety margins on collateral ratios.
+
+<ArticleSection name="Spot Price vs TWAP" id="spot-price-vs-twap" level="h2" />
+
+Spot prices represent the current instantaneous price. Time-Weighted Average Prices (TWAPs) smooth out short-term fluctuations by averaging prices over a window, typically 5 to 30 minutes.
+
+Using spot prices for critical protocol decisions is dangerous because they can be manipulated within a single transaction. An attacker who controls enough liquidity can:
+
+1. Flash loan a large amount of tokens
+2. Execute a massive swap that moves the spot price
+3. Interact with your protocol at the manipulated price
+4. Reverse the swap
+5. Repay the flash loan
+
+TWAPs resist this because the manipulation only affects a small portion of the averaging window. A 5-minute TWAP requires the attacker to sustain the price manipulation for the entire window, which is economically prohibitive for liquid assets.
+
+```rust
+// Vulnerable: using spot price for a critical lending decision
+pub fn calculate_ltv(spot_price: i64, exponent: i32, collateral_amount: u64) -> u64 {
+    // Spot price can be manipulated within a single transaction
+    apply_exponent(spot_price as u64, exponent) * collateral_amount
+}
+
+// Safer: using TWAP with exponential moving average
+pub fn calculate_ltv_safe(
+    ema_price: i64,
+    ema_exponent: i32,
+    collateral_amount: u64,
+) -> u64 {
+    // Pyth EMA price is resistant to single-transaction manipulation
+    apply_exponent(ema_price as u64, ema_exponent) * collateral_amount
+}
+```
+
+Pyth provides an EMA (Exponential Moving Average) price alongside the spot price. For lending protocols, liquidation engines, and any operation where manipulation could extract value, prefer the EMA price. Use the spot price only for display purposes or non-critical operations.
+
+<ArticleSection name="Pyth Confidence Intervals" id="pyth-confidence-intervals" level="h2" />
+
+Pyth publishes a confidence interval with every price update. This interval represents the uncertainty in the aggregated price. For SOL/USD, the confidence interval is typically between 0.01% and 0.05% of the price during normal conditions. During high volatility or when publishers disagree, it can widen to 1% or more.
+
+A wide confidence interval signals that the oracle is uncertain about the true price. Protocols that ignore this signal expose themselves to manipulation:
+
+```rust
+// Vulnerable: ignoring confidence interval entirely
+pub fn value_collateral(
+    price_update: &PriceUpdateV2,
+    amount: u64,
+    feed_id: &[u8; 32],
+) -> Result<u64> {
+    let clock = Clock::get()?;
+    let price = price_update.get_price_no_older_than(&clock, 30, feed_id)?;
+
+    // Uses price.price directly, ignores price.conf
+    let value = (price.price as u64)
+        .checked_mul(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    Ok(value)
+}
+```
+
+The problem: during periods of oracle uncertainty, the reported price could be far from the true market price. An attacker monitors for wide confidence intervals and trades against the protocol when the oracle price deviates from reality.
+
+The fix uses confidence intervals to apply conservative pricing:
+
+```rust
+pub fn value_collateral_safe(
+    price_update: &PriceUpdateV2,
+    amount: u64,
+    feed_id: &[u8; 32],
+    is_collateral: bool, // true = we're valuing collateral, false = we're valuing debt
+) -> Result<u64> {
+    let clock = Clock::get()?;
+    let price = price_update.get_price_no_older_than(&clock, 30, feed_id)?;
+
+    // Reject if confidence is wider than 2% of price
+    let conf = price.conf;
+    let price_abs = price.price.unsigned_abs();
+    require!(
+        conf.checked_mul(50).unwrap() <= price_abs,
+        ErrorCode::OracleConfidenceTooWide
+    );
+
+    // Use conservative pricing: lower bound for collateral, upper bound for debt
+    let adjusted_price = if is_collateral {
+        // Collateral: use price - confidence (pessimistic)
+        price.price.saturating_sub(conf as i64)
+    } else {
+        // Debt: use price + confidence (pessimistic from protocol's perspective)
+        price.price.saturating_add(conf as i64)
+    };
+
+    let value = (adjusted_price as u64)
+        .checked_mul(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    Ok(value)
+}
+```
+
+This pattern, using the lower bound of the confidence interval for collateral and the upper bound for debt, ensures the protocol always prices conservatively. Kamino Finance applies this pattern across its lending markets, adjusting the confidence multiplier based on asset tier.
+
+<ArticleSection name="Switchboard Staleness" id="switchboard-staleness" level="h2" />
+
+Switchboard oracles operate on a pull model where data feeds are updated by a network of off-chain oracles. The staleness risk is similar to Pyth but requires different validation logic.
+
+Switchboard feeds expose a `latest_confirmed_round` with a `round_open_timestamp` that indicates when the last update was confirmed. Unlike Pyth, Switchboard feeds can have longer update intervals depending on the feed configuration, and the staleness check must account for this.
+
+```rust
+use switchboard_on_demand::on_demand::accounts::pull_feed::PullFeedAccountData;
+
+// Vulnerable: no staleness check on Switchboard feed
+pub fn get_switchboard_price(feed_account: &AccountInfo) -> Result<f64> {
+    let feed = PullFeedAccountData::parse(feed_account.data.borrow())
+        .map_err(|_| ErrorCode::InvalidOracleData)?;
+
+    // No timestamp check at all
+    let price = feed.value().ok_or(ErrorCode::NoOracleValue)?;
+
+    Ok(price.to_f64())
+}
+```
+
+The fix validates staleness against the current slot timestamp:
+
+```rust
+use switchboard_on_demand::on_demand::accounts::pull_feed::PullFeedAccountData;
+
+pub fn get_switchboard_price_safe(feed_account: &AccountInfo) -> Result<f64> {
+    let feed = PullFeedAccountData::parse(feed_account.data.borrow())
+        .map_err(|_| ErrorCode::InvalidOracleData)?;
+
+    let clock = Clock::get()?;
+    let current_timestamp = clock.unix_timestamp;
+
+    // Get the timestamp of the last successful update
+    let last_update = feed
+        .last_update_timestamp()
+        .ok_or(ErrorCode::OracleStale)?;
+
+    // Enforce 60-second maximum staleness for Switchboard
+    let staleness = current_timestamp
+        .checked_sub(last_update)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    require!(staleness <= 60, ErrorCode::OracleStale);
+
+    let price = feed.value().ok_or(ErrorCode::NoOracleValue)?;
+
+    // Also check that the standard deviation is within acceptable bounds
+    let std_dev = feed.std_dev().ok_or(ErrorCode::NoOracleValue)?;
+    let price_f64 = price.to_f64();
+    let std_dev_f64 = std_dev.to_f64();
+
+    // Standard deviation should be within 3% of price
+    require!(
+        std_dev_f64 / price_f64 <= 0.03,
+        ErrorCode::OracleDeviationTooHigh
+    );
+
+    Ok(price_f64)
+}
+```
+
+Switchboard's standard deviation serves a similar purpose to Pyth's confidence interval: it indicates how much the oracle sources disagree. A standard deviation above 3% of the price signals high uncertainty and should trigger conservative pricing or transaction rejection.
+
+<ArticleSection name="Multi-Oracle Patterns" id="multi-oracle-patterns" level="h2" />
+
+Relying on a single oracle creates a single point of failure. If Pyth goes down, your protocol halts. If a single oracle is manipulated, your protocol is drained. Production-grade protocols use multi-oracle patterns to achieve resilience and manipulation resistance.
+
+The simplest multi-oracle pattern uses a primary and fallback oracle:
+
+```rust
+pub fn get_price_multi_oracle(
+    pyth_update: &PriceUpdateV2,
+    switchboard_feed: &AccountInfo,
+    feed_id: &[u8; 32],
+) -> Result<OraclePrice> {
+    let clock = Clock::get()?;
+
+    // Try Pyth first (primary oracle)
+    let pyth_result = pyth_update.get_price_no_older_than(&clock, 30, feed_id);
+
+    // Try Switchboard (secondary oracle)
+    let switchboard_result = get_switchboard_price_safe(switchboard_feed);
+
+    match (pyth_result, switchboard_result) {
+        // Both available: cross-validate
+        (Ok(pyth_price), Ok(sb_price)) => {
+            let pyth_normalized = normalize_pyth_price(&pyth_price);
+            let sb_normalized = sb_price;
+
+            // If oracles diverge by more than 5%, something is wrong
+            let divergence = if pyth_normalized > sb_normalized {
+                (pyth_normalized - sb_normalized) / sb_normalized
+            } else {
+                (sb_normalized - pyth_normalized) / pyth_normalized
+            };
+
+            require!(divergence <= 0.05, ErrorCode::OracleDivergence);
+
+            // Use the more conservative price (lower for collateral)
+            let final_price = pyth_normalized.min(sb_normalized);
+            Ok(OraclePrice {
+                price: final_price,
+                source: OracleSource::CrossValidated,
+            })
+        }
+        // Only Pyth available
+        (Ok(pyth_price), Err(_)) => {
+            let pyth_normalized = normalize_pyth_price(&pyth_price);
+            Ok(OraclePrice {
+                price: pyth_normalized,
+                source: OracleSource::PythOnly,
+            })
+        }
+        // Only Switchboard available
+        (Err(_), Ok(sb_price)) => {
+            Ok(OraclePrice {
+                price: sb_price,
+                source: OracleSource::SwitchboardOnly,
+            })
+        }
+        // Neither available: reject the transaction
+        (Err(_), Err(_)) => {
+            Err(ErrorCode::NoOracleAvailable.into())
+        }
+    }
+}
+```
+
+Cross-validation matters most here. If Pyth reports SOL at $100 and Switchboard reports it at $108, there is either a data issue or a manipulation attempt. A 5% divergence threshold catches most manipulation attempts while allowing for normal variance between oracle networks.
+
+Jupiter's limit order system and Kamino's lending markets both use multi-oracle validation. When oracles diverge beyond acceptable thresholds, these protocols pause affected operations rather than proceeding with unreliable prices.
+
+<ArticleSection name="Defense Checklist" id="defense-checklist" level="h2" />
+
+Every oracle integration should validate these properties:
+
+1. **Account authenticity**: The oracle account is owned by the expected oracle program and matches the expected feed address
+2. **Staleness**: The price update timestamp is within an acceptable window (30 seconds for major assets, 60 seconds for less liquid assets)
+3. **Confidence/deviation**: The uncertainty in the price is within acceptable bounds (under 2% for lending, under 1% for liquidations)
+4. **Cross-validation**: When possible, a second oracle confirms the price is within expected range
+5. **Conservative pricing**: Collateral is valued at the lower bound, debt at the upper bound of the confidence interval
+6. **TWAP preference**: Time-weighted prices are used for critical decisions instead of spot prices
+7. **Graceful degradation**: If the oracle is stale or uncertain, the protocol pauses rather than proceeding with bad data
+
+Missing any single check on this list has led to real protocol losses. Oracle manipulation is not theoretical. It is one of the most frequently exploited vulnerability classes in DeFi.
+

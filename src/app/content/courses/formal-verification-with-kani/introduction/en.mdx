@@ -1,0 +1,67 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Formal Verification with Kani
+
+You have seen how testing and fuzzing find bugs by sampling inputs. Formal verification takes a different approach: it proves properties hold for ALL possible inputs within defined bounds.
+
+This course covers formal verification of Rust code using Kani, an open-source bounded model checker developed by AWS. You will learn how model checking works, how to write proof harnesses, how to interpret counterexamples, and how to apply verification to Solana program code.
+
+<ArticleSection name="What Kani Is" id="what-kani-is" level="h2" />
+
+Kani is a bounded model checker for Rust, developed by Amazon Web Services and released as open source. It verifies properties of Rust programs by converting Rust code into a mathematical model and exhaustively checking that model against your specified properties.
+
+Core characteristics:
+
+- **Rust-native**: Kani works directly on Rust code through the compiler. You write proof harnesses in Rust, using Rust assertions. No separate specification language is needed.
+- **Bounded model checking**: Kani explores all possible executions up to a configurable bound (loop iterations, recursion depth). Within those bounds, verification is exhaustive. For functions without loops, there is no bound, and verification is complete.
+- **Counterexample generation**: When a property fails, Kani produces a concrete input that violates it. This is not a vague "might fail" warning; it is a specific test case you can reproduce and debug.
+- **No runtime overhead**: Verification happens at compile time through static analysis. The verified code runs unchanged in production.
+
+Kani uses CBMC (C Bounded Model Checker) as its backend solver, translating Rust's MIR (Mid-level Intermediate Representation) into a mathematical formula that CBMC can analyze. This means Kani handles Rust's type system, ownership model, and standard library functions natively.
+
+Several formal verification approaches exist. Theorem provers (Coq, Lean) can prove unbounded properties but require manual proof construction in a specialized language. Deductive verifiers (Prusti, Creusot) verify Rust code against pre/postconditions but require more annotation effort. Kani occupies the sweet spot for Solana developers: low setup effort, concrete results, and strong guarantees within bounds.
+
+<ArticleSection name="When to Use Formal Verification" id="when-to-use-it" level="h2" />
+
+Formal verification is not free. It requires writing proof harnesses, configuring bounds, and sometimes restructuring code to be verifiable. Use it where the cost of a bug is highest:
+
+**Critical arithmetic**: Token share calculations, fee computations, interest accrual, liquidation thresholds. These functions handle financial logic where an overflow or rounding error can mean direct fund loss.
+
+**Safety invariants**: Properties like "this function never panics," "this value is always within range," or "this state transition preserves the total supply." These are universal properties: they must hold for every input, not just tested cases.
+
+**No-panic guarantees**: For on-chain programs, a panic means a failed transaction and lost compute fees at best, and a denial-of-service vector at worst. Kani can prove that a function never panics for any input. This is particularly valuable for functions called by other programs via CPI.
+
+**Boundary conditions**: Edge cases around zero, maximum values, and transition points. These are exactly the inputs that developers forget to test and fuzzers take time to discover. Verification checks all of them instantly because it reasons about all values simultaneously.
+
+Do not use formal verification for:
+
+- UI code or client-side logic (test coverage is sufficient)
+- External system interactions (verification cannot model external behavior)
+- Full program behavior with unbounded loops (verification time becomes impractical)
+- Properties that depend on runtime environment (block timestamps, oracle prices)
+
+The sweet spot is pure functions with bounded inputs and clear mathematical properties. Solana program arithmetic fits this profile exactly.
+
+<ArticleSection name="Verification vs Fuzzing" id="verification-vs-fuzzing" level="h2" />
+
+| Aspect | Fuzzing | Formal Verification |
+|--------|---------|-------------------|
+| Coverage | Probabilistic (millions of inputs) | Exhaustive (all inputs within bounds) |
+| Bug types | Crashes, panics, invariant violations | Any expressible property |
+| Setup effort | Moderate (write invariants, configure accounts) | Higher (write proof harnesses, configure bounds) |
+| Execution time | Minutes to hours (continuous) | Seconds to minutes (per proof) |
+| Output on failure | Crash artifact (input sequence) | Counterexample (specific values) |
+| Output on success | "No bugs found in N iterations" | "Property holds for all inputs" |
+| Limitations | Cannot prove absence of bugs | Bounded: only proves within configured limits |
+| Best for | Stateful multi-instruction bugs | Arithmetic and single-function correctness |
+
+In practice, use fuzzing for broad exploration during development. Use formal verification for critical functions where you need mathematical certainty. A fuzzer might discover that a specific deposit-withdraw sequence triggers a panic in your share calculation. You fix the panic. Then you write a Kani proof harness to verify that the fixed function never panics for any valid inputs. The fuzzer found the bug; the verifier proves it is gone permanently.
+
+<ArticleSection name="What You Will Learn" id="what-you-will-learn" level="h2" />
+
+This course covers four areas:
+
+1. **Verification Concepts**: Bounded model checking, how solvers reason about programs, and what verification can and cannot prove
+2. **Kani for Rust**: Installing Kani, writing proof harnesses, using symbolic inputs, interpreting counterexamples, and managing verification bounds
+3. **Verifying Solana Programs**: Applying Kani to on-chain code, verifying arithmetic safety, proving invariants, and working within Kani's practical limitations for Solana-specific patterns
+4. **Real-World Applications**: OtterSec's verification of Squads multisig v4, and practical strategies for integrating verification into your security workflow

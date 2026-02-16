@@ -1,0 +1,492 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Verifying Solana Programs
+
+Kani was built for general Rust code, but its capabilities map directly to the problems Solana developers face: integer overflow in token arithmetic, state invariant violations across instructions, and panic-freedom guarantees for on-chain execution. This lesson shows how to apply Kani to real Solana program code, referencing OtterSec's production use of Kani on Squads multisig v4 and walking through concrete verification examples.
+
+<ArticleSection name="Applying Kani to On-Chain Code" id="applying-kani-to-onchain" level="h2" />
+
+Solana programs present specific challenges for formal verification:
+
+**Account model**: Programs receive accounts as runtime inputs. Kani cannot model the full Solana runtime, but you can create symbolic representations of account state and verify your program's logic against all possible account states within bounds.
+
+**CPI (Cross Program Invocation)**: Your program calls other programs. Kani cannot verify the correctness of external programs, but you can stub CPI calls and verify that your program's behavior is correct assuming the external program behaves as documented.
+
+**Anchor framework**: Anchor generates validation code from derive macros. You can verify the logic inside your instruction handlers assuming Anchor's validation has already passed. This is a valid decomposition: Anchor's account validation is well-tested, and your custom logic is where novel bugs live.
+
+The practical approach is to extract pure functions from your instruction handlers and verify them in isolation:
+
+```rust
+// In your Anchor program
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    let shares = calculate_shares(amount, vault.total_deposits, vault.total_shares)?;
+    vault.total_deposits = vault.total_deposits.checked_add(amount)
+        .ok_or(VaultError::Overflow)?;
+    vault.total_shares = vault.total_shares.checked_add(shares)
+        .ok_or(VaultError::Overflow)?;
+    // ... CPI transfer ...
+    Ok(())
+}
+
+// Extract this for verification
+pub fn calculate_shares(
+    amount: u64,
+    total_deposits: u64,
+    total_shares: u64,
+) -> Result<u64> {
+    if total_deposits == 0 {
+        Ok(amount)
+    } else {
+        let numerator = (amount as u128)
+            .checked_mul(total_shares as u128)
+            .ok_or(VaultError::Overflow)?;
+        let shares = numerator
+            .checked_div(total_deposits as u128)
+            .ok_or(VaultError::Overflow)?;
+        Ok(shares as u64)
+    }
+}
+```
+
+Now `calculate_shares` is a pure function with no account dependencies, no CPI calls, and no framework code. It is an ideal verification target.
+
+<ArticleSection name="OtterSec Squads v4 Verification" id="ottersec-squads-v4" level="h2" />
+
+OtterSec used Kani to formally verify critical components of the Squads multisig program (v4), one of the most notable real-world applications of formal verification in the Solana ecosystem.
+
+Their approach focused on three areas:
+
+**Threshold arithmetic**: Proving that the M-of-N signature threshold is computed correctly -- if fewer than M signers approve, the transaction cannot execute; if M or more approve, it can; and the threshold count never overflows.
+
+**Member management**: Verifying that adding and removing members preserves the invariant that the threshold is always achievable (never greater than the number of members).
+
+**Configuration changes**: Proving that changing the threshold value cannot put the multisig into an unrecoverable state.
+
+The key takeaway is the verification strategy: they did not attempt to verify the entire program end-to-end. They identified the critical arithmetic and state-transition functions, extracted them, and verified those in isolation. Their proof harnesses followed a consistent pattern:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_threshold_check() {
+    let total_members: u16 = kani::any();
+    let threshold: u16 = kani::any();
+    let approvals: u16 = kani::any();
+
+    // Preconditions: valid multisig configuration
+    kani::assume(total_members > 0);
+    kani::assume(total_members <= 65535);
+    kani::assume(threshold > 0);
+    kani::assume(threshold <= total_members);
+    kani::assume(approvals <= total_members);
+
+    let can_execute = approvals >= threshold;
+    let check_result = check_threshold(approvals, threshold);
+
+    // The check function must agree with the mathematical definition
+    assert!(can_execute == check_result);
+}
+```
+
+<ArticleSection name="Verifying Arithmetic Safety" id="verifying-arithmetic" level="h2" />
+
+The most common application of Kani in Solana programs is verifying that arithmetic operations never overflow, underflow, or produce incorrect results — the exact class of bugs covered in the Arithmetic and Accounting course.
+
+Here is a complete verification of a share calculation function that uses 128-bit intermediate arithmetic. This is the same withdrawal math that the first depositor attack in the Protocol-Level Attacks course exploits through integer truncation:
+
+```rust
+pub fn calculate_withdrawal(
+    shares_to_withdraw: u64,
+    total_deposits: u64,
+    total_shares: u64,
+) -> Result<u64, ProgramError> {
+    if total_shares == 0 {
+        return Err(ProgramError::Custom(1)); // No shares exist
+    }
+    if shares_to_withdraw > total_shares {
+        return Err(ProgramError::Custom(2)); // Cannot withdraw more than total
+    }
+
+    let numerator = (shares_to_withdraw as u128)
+        .checked_mul(total_deposits as u128)
+        .ok_or(ProgramError::Custom(3))?;
+
+    let amount = numerator / (total_shares as u128);
+
+    if amount > u64::MAX as u128 {
+        return Err(ProgramError::Custom(4));
+    }
+
+    Ok(amount as u64)
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_withdrawal_never_overflows() {
+    let shares: u64 = kani::any();
+    let total_deposits: u64 = kani::any();
+    let total_shares: u64 = kani::any();
+
+    // Preconditions
+    kani::assume(total_shares > 0);
+    kani::assume(shares <= total_shares);
+    kani::assume(total_deposits > 0);
+
+    let result = calculate_withdrawal(shares, total_deposits, total_shares);
+
+    // Must succeed (preconditions guarantee valid inputs)
+    assert!(result.is_ok());
+
+    let amount = result.unwrap();
+
+    // Amount must not exceed total deposits
+    assert!(amount <= total_deposits);
+
+    // Full withdrawal must return all deposits
+    if shares == total_shares {
+        assert!(amount == total_deposits);
+    }
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_withdrawal_proportionality() {
+    let shares_a: u64 = kani::any();
+    let shares_b: u64 = kani::any();
+    let total_deposits: u64 = kani::any();
+    let total_shares: u64 = kani::any();
+
+    kani::assume(total_shares > 0);
+    kani::assume(shares_a <= total_shares);
+    kani::assume(shares_b <= total_shares);
+    kani::assume(shares_a <= shares_b);
+    kani::assume(total_deposits > 0);
+
+    let amount_a = calculate_withdrawal(shares_a, total_deposits, total_shares).unwrap();
+    let amount_b = calculate_withdrawal(shares_b, total_deposits, total_shares).unwrap();
+
+    // More shares must yield more (or equal) tokens
+    assert!(amount_a <= amount_b);
+}
+```
+
+The first harness verifies safety properties: no overflow, no excessive withdrawal, and full withdrawal returns everything. The second verifies a correctness property: withdrawing more shares always yields at least as many tokens.
+
+<ArticleSection name="Verifying Fee Calculations" id="verifying-fees" level="h2" />
+
+Fee calculations are another high-risk verification target — the Arithmetic and Accounting course covered how basis point math, fee-on-transfer tokens, and rounding direction create exploitable gaps. A fee that exceeds the transfer amount drains users. A fee that rounds to zero on small amounts leaks value from the protocol. Both are verifiable with Kani.
+
+Consider a basis-point fee function:
+
+```rust
+fn calculate_fee(amount: u64, fee_bps: u16) -> u64 {
+    ((amount as u128) * (fee_bps as u128) / 10_000) as u64
+}
+```
+
+This looks correct at first glance: upcast to `u128` to avoid overflow, divide by 10,000. But the `as u64` downcast at the end is unchecked. Let us verify:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_fee_bounded() {
+    let amount: u64 = kani::any();
+    let fee_bps: u16 = kani::any();
+    kani::assume(fee_bps <= 10_000);
+    kani::assume(amount > 0);
+
+    let fee = calculate_fee(amount, fee_bps);
+    assert!(fee <= amount, "Fee must not exceed amount");
+}
+```
+
+Kani verifies this property succeeds: since `fee_bps <= 10_000`, the intermediate `u128` value `amount * fee_bps / 10_000` is at most `amount`, which fits in `u64`. The downcast is safe under this assumption.
+
+But what if the protocol allows `fee_bps` above 10,000 (e.g., a penalty multiplier)? Remove the assumption:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_fee_unbounded_bps() {
+    let amount: u64 = kani::any();
+    let fee_bps: u16 = kani::any();
+    kani::assume(amount > 0);
+
+    let fee = calculate_fee(amount, fee_bps);
+    assert!(fee <= amount, "Fee must not exceed amount");
+}
+```
+
+Kani finds a counterexample: `amount = u64::MAX, fee_bps = 10_001` produces a fee larger than `amount` because `u64::MAX * 10_001 / 10_000` overflows `u64` after the downcast. The fix uses checked arithmetic:
+
+```rust
+fn calculate_fee_safe(amount: u64, fee_bps: u16) -> Result<u64, ProgramError> {
+    let fee_128 = (amount as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or(ProgramError::Custom(1))?
+        / 10_000;
+
+    if fee_128 > amount as u128 {
+        return Err(ProgramError::Custom(2)); // Fee exceeds amount
+    }
+
+    Ok(fee_128 as u64)
+}
+```
+
+You can also verify that fees do not round to zero for non-dust amounts:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_fee_nonzero_for_nondust() {
+    let amount: u64 = kani::any();
+    let fee_bps: u16 = kani::any();
+    kani::assume(fee_bps > 0);
+    kani::assume(fee_bps <= 10_000);
+    // "Non-dust" means the amount is large enough that the fee should be at least 1
+    kani::assume(amount >= 10_000);
+
+    let fee = calculate_fee(amount, fee_bps);
+    assert!(fee > 0, "Fee must not round to zero for non-dust amounts");
+}
+```
+
+This combination of harnesses -- fee bounded by amount, fee nonzero for reasonable inputs -- covers the two most common fee calculation bugs in DeFi protocols.
+
+<ArticleSection name="Verifying Authority Checks" id="verifying-authority" level="h2" />
+
+Formal verification is not limited to arithmetic. You can also verify that access control logic is exhaustive: every code path that modifies state checks the authority.
+
+Consider a simple authority transfer function:
+
+```rust
+#[derive(PartialEq, Clone, Copy)]
+struct Pubkey([u8; 32]);
+
+#[derive(Debug, PartialEq)]
+enum AuthError {
+    Unauthorized,
+    InvalidAuthority,
+}
+
+fn transfer_authority(
+    current_authority: Pubkey,
+    new_authority: Pubkey,
+    signer: Pubkey,
+) -> Result<Pubkey, AuthError> {
+    if signer != current_authority {
+        return Err(AuthError::Unauthorized);
+    }
+    if new_authority == Pubkey([0u8; 32]) {
+        return Err(AuthError::InvalidAuthority);
+    }
+    Ok(new_authority)
+}
+```
+
+The verification proves two properties: only the current authority can transfer, and the result is always the intended new authority:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_authority_transfer() {
+    let current: Pubkey = Pubkey(kani::any());
+    let new_auth: Pubkey = Pubkey(kani::any());
+    let signer: Pubkey = Pubkey(kani::any());
+
+    match transfer_authority(current, new_auth, signer) {
+        Ok(result) => {
+            // If it succeeded, signer MUST have been the current authority
+            assert!(signer == current, "Only current authority can transfer");
+            // And the result MUST be the requested new authority
+            assert!(result == new_auth, "Result must be new authority");
+            // And the new authority must not be the zero address
+            assert!(new_auth != Pubkey([0u8; 32]), "Zero address must be rejected");
+        }
+        Err(AuthError::Unauthorized) => {
+            // If unauthorized, signer must NOT have been the authority
+            assert!(signer != current, "Should not reject valid authority");
+        }
+        Err(AuthError::InvalidAuthority) => {
+            // If invalid, the new authority must have been zero
+            assert!(new_auth == Pubkey([0u8; 32]), "Should only reject zero address");
+        }
+    }
+}
+```
+
+Kani checks all possible 32-byte values for each pubkey. If any code path allows a state modification without an authority check, or rejects a valid authority, the proof fails with a concrete counterexample showing which pubkey combination breaks the invariant.
+
+This pattern generalizes to any access control logic: admin gates, multisig approvals, freeze authorities. Extract the authorization check into a pure function, write a harness that asserts the security property for all possible signers, and let Kani prove it exhaustively.
+
+<ArticleSection name="Proving Invariants Hold" id="proving-invariants" level="h2" />
+
+Beyond individual functions, you can verify that state invariants are preserved across instruction execution. This requires modeling the state transition:
+
+```rust
+#[derive(Clone)]
+struct VaultState {
+    total_deposits: u64,
+    total_shares: u64,
+}
+
+impl VaultState {
+    fn invariant(&self) -> bool {
+        // If deposits exist, shares must exist (and vice versa)
+        (self.total_deposits == 0) == (self.total_shares == 0)
+    }
+}
+
+fn apply_deposit(state: &VaultState, amount: u64) -> Result<VaultState, ProgramError> {
+    let shares = calculate_shares(amount, state.total_deposits, state.total_shares)?;
+    Ok(VaultState {
+        total_deposits: state.total_deposits.checked_add(amount)
+            .ok_or(ProgramError::Custom(1))?,
+        total_shares: state.total_shares.checked_add(shares)
+            .ok_or(ProgramError::Custom(2))?,
+    })
+}
+
+fn apply_withdraw(state: &VaultState, shares: u64) -> Result<VaultState, ProgramError> {
+    let amount = calculate_withdrawal(shares, state.total_deposits, state.total_shares)?;
+    Ok(VaultState {
+        total_deposits: state.total_deposits.checked_sub(amount)
+            .ok_or(ProgramError::Custom(3))?,
+        total_shares: state.total_shares.checked_sub(shares)
+            .ok_or(ProgramError::Custom(4))?,
+    })
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_deposit_preserves_invariant() {
+    let state = VaultState {
+        total_deposits: kani::any(),
+        total_shares: kani::any(),
+    };
+    let amount: u64 = kani::any();
+
+    // Precondition: current state satisfies the invariant
+    kani::assume(state.invariant());
+    kani::assume(amount > 0);
+
+    // Apply the deposit
+    if let Ok(new_state) = apply_deposit(&state, amount) {
+        // Post-condition: invariant still holds
+        assert!(new_state.invariant());
+    }
+    // If deposit fails (overflow), that is acceptable;
+    // the state is unchanged
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_withdraw_preserves_invariant() {
+    let state = VaultState {
+        total_deposits: kani::any(),
+        total_shares: kani::any(),
+    };
+    let shares: u64 = kani::any();
+
+    kani::assume(state.invariant());
+    kani::assume(state.total_shares > 0);
+    kani::assume(shares > 0);
+    kani::assume(shares <= state.total_shares);
+
+    if let Ok(new_state) = apply_withdraw(&state, shares) {
+        assert!(new_state.invariant());
+    }
+}
+```
+
+These proofs verify that the vault invariant (deposits and shares are always both zero or both non-zero) is preserved by every deposit and withdrawal, regardless of amounts and regardless of current state. This is an inductive argument: if the invariant holds before the operation, it holds after. Combined with an initialization proof (the initial state satisfies the invariant), this proves the invariant holds for all reachable states.
+
+<ArticleSection name="Modeling Account Constraints" id="modeling-account-constraints" level="h2" />
+
+Anchor programs use account constraints (`#[account(constraint = ...)]`) to validate inputs. When verifying instruction logic, you need to model these constraints as Kani assumptions.
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_transfer_with_constraints() {
+    // Model the account state
+    let sender_balance: u64 = kani::any();
+    let receiver_balance: u64 = kani::any();
+    let amount: u64 = kani::any();
+    let sender_is_signer: bool = kani::any();
+
+    // Model Anchor constraints
+    kani::assume(sender_is_signer);           // Signer check
+    kani::assume(amount > 0);                  // Data validation
+    kani::assume(sender_balance >= amount);     // has_one constraint equivalent
+
+    // Execute the transfer logic
+    let new_sender = sender_balance.checked_sub(amount);
+    let new_receiver = receiver_balance.checked_add(amount);
+
+    // Verify safety properties
+    assert!(new_sender.is_some());
+    assert!(new_receiver.is_some());
+
+    // Verify conservation
+    let new_sender = new_sender.unwrap();
+    let new_receiver = new_receiver.unwrap();
+    assert!(
+        (new_sender as u128) + (new_receiver as u128)
+            == (sender_balance as u128) + (receiver_balance as u128)
+    );
+}
+```
+
+The principle: model external guarantees (Anchor validation, runtime checks) as assumptions, and verify your custom logic against all inputs that satisfy those assumptions.
+
+<ArticleSection name="Practical Limitations and Workarounds" id="practical-limitations" level="h2" />
+
+Applying Kani to Solana programs requires working around several limitations:
+
+<ArticleSection name="CPI Modeling" id="cpi-modeling" level="h3" />
+
+Kani cannot execute CPI calls. Use stubs to model external program behavior, as shown in the `#[kani::stub]` examples in the previous lesson. The stub captures the essential behavior without the full program implementation; this is sound as long as your stub accurately models the external program's behavior for the properties you are verifying.
+
+<ArticleSection name="Account Constraint Encoding" id="account-constraint-encoding" level="h3" />
+
+Anchor's derive macros generate complex validation code that Kani may struggle to process. Instead of verifying through the Anchor layer, extract and verify the logic separately:
+
+```rust
+// Instead of this (may not work with Kani):
+// pub fn handler(ctx: Context<MyInstruction>, amount: u64) -> Result<()>
+
+// Verify this:
+pub fn handler_logic(
+    vault_total: u64,
+    vault_shares: u64,
+    user_shares: u64,
+    amount: u64,
+) -> Result<(u64, u64, u64), ProgramError> {
+    // Pure logic, no account dependencies
+    // Returns (new_total, new_shares, new_user_shares)
+    todo!()
+}
+```
+
+This decomposition is standard practice in verified software: separate the pure computational core from the I/O and validation shell.
+
+<ArticleSection name="Verification Time Bounds" id="verification-time-bounds" level="h3" />
+
+Complex functions may exceed practical verification time. Strategies for managing this:
+
+1. **Reduce input ranges**: If amounts in practice are capped at 10 to the 15th (roughly the total SOL supply in lamports), assume that bound
+2. **Limit loop unrolling**: Use `#[kani::unwind(N)]` with the smallest N that covers your program's actual loop bounds
+3. **Use `--solver cadical`**: Different SAT solvers perform better on different problems. Try alternative solvers if the default times out
+
+```shellscript
+cargo kani --harness my_proof --solver cadical
+```
+
+A realistic verification budget for a Solana program:
+
+- Core arithmetic functions: 5-10 proof harnesses, under 1 minute each
+- State transition invariants: 3-5 proof harnesses, 1-5 minutes each
+- Total verification time: under 30 minutes for a complete pass
+- Integration into CI: run on every PR that modifies program logic

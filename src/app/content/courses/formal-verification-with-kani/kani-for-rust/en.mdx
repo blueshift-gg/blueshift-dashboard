@@ -1,0 +1,336 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Kani for Rust
+
+This lesson is hands-on. You will install Kani, write proof harnesses, generate symbolic inputs, constrain them with assumptions, interpret counterexamples, and learn to manage verification bounds for practical performance. By the end, you will be able to formally verify properties of any Rust function.
+
+<ArticleSection name="Installation and Setup" id="installation-and-setup" level="h2" />
+
+Kani requires a recent Rust toolchain and runs on Linux and macOS. Install it with:
+
+```shellscript
+cargo install --locked kani-verifier
+kani setup
+```
+
+The `kani setup` command downloads and configures CBMC and its dependencies. Verify the installation:
+
+```shellscript
+kani --version
+```
+
+For a Rust project, add Kani as a dev dependency or use it directly on individual files. Kani operates on your existing Rust code; no separate specification files are needed.
+
+To verify a single file:
+
+```shellscript
+kani src/math.rs
+```
+
+To verify a Cargo project:
+
+```shellscript
+cargo kani
+```
+
+Kani automatically discovers all functions annotated with `#[kani::proof]` and verifies them.
+
+<ArticleSection name="Proof Harnesses" id="proof-harnesses" level="h2" />
+
+A proof harness is a function that sets up symbolic inputs, calls the function under verification, and asserts the property you want to prove. It looks similar to a unit test but operates on all possible values rather than specific ones.
+
+Here is a simple example. Consider a function that performs checked addition with a cap:
+
+```rust
+fn add_capped(a: u64, b: u64) -> u64 {
+    match a.checked_add(b) {
+        Some(sum) => sum,
+        None => u64::MAX,
+    }
+}
+```
+
+The property we want to verify: this function never panics and always returns a value greater than or equal to both inputs (or `u64::MAX` on overflow).
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_add_capped() {
+    let a: u64 = kani::any();
+    let b: u64 = kani::any();
+
+    let result = add_capped(a, b);
+
+    // Property 1: result is always >= a (or u64::MAX on overflow)
+    assert!(result >= a || result == u64::MAX);
+
+    // Property 2: result is always >= b (or u64::MAX on overflow)
+    assert!(result >= b || result == u64::MAX);
+
+    // Property 3: if no overflow, result == a + b
+    if let Some(expected) = a.checked_add(b) {
+        assert!(result == expected);
+    } else {
+        assert!(result == u64::MAX);
+    }
+}
+```
+
+Run it:
+
+```shellscript
+cargo kani --harness verify_add_capped
+```
+
+Output:
+
+```shellscript
+Checking harness verify_add_capped...
+ - Status: SUCCESS
+ - Description: "assertion failed: result >= a || result == u64::MAX"
+ - Status: SUCCESS
+ - Description: "assertion failed: result >= b || result == u64::MAX"
+ - Status: SUCCESS
+ - Description: "assertion failed: result == expected"
+ - Status: SUCCESS
+ - Description: "assertion failed: result == u64::MAX"
+
+VERIFICATION:- SUCCESSFUL
+
+Verification Time: 0.8s
+```
+
+In 0.8 seconds, Kani proved these properties for all possible `(a, b)` combinations across the full `u64` range.
+
+<ArticleSection name="Symbolic Inputs with kani::any" id="symbolic-inputs" level="h2" />
+
+The `kani::any()` function creates a symbolic value that represents every possible value of its type. When Kani encounters `kani::any::<u64>()`, it does not generate a random number. It creates a symbolic variable that the solver reasons about algebraically.
+
+`kani::any()` generates symbolic values covering the full range of any primitive type. It also works for arrays and compound types:
+
+```rust
+let arr: [u32; 4] = kani::any();  // All possible 4-element u32 arrays
+```
+
+<ArticleSection name="Assumptions and Assertions" id="assumptions-and-assertions" level="h2" />
+
+Symbolic inputs represent all possible values, but real programs have preconditions. The `kani::assume()` function constrains symbolic values to a specific domain without affecting soundness.
+
+Consider verifying a division function:
+
+```rust
+fn safe_divide(numerator: u64, denominator: u64) -> Option<u64> {
+    if denominator == 0 {
+        None
+    } else {
+        Some(numerator / denominator)
+    }
+}
+```
+
+If you want to verify that the function returns `Some` when the denominator is non-zero:
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+fn verify_safe_divide_nonzero() {
+    let numerator: u64 = kani::any();
+    let denominator: u64 = kani::any();
+
+    // Precondition: we only care about non-zero denominators
+    kani::assume(denominator > 0);
+
+    let result = safe_divide(numerator, denominator);
+    assert!(result.is_some());
+
+    // The result times the denominator should be <= numerator
+    // (integer division truncates)
+    let quotient = result.unwrap();
+    assert!(quotient * denominator <= numerator);
+}
+```
+
+The `kani::assume(denominator > 0)` tells the solver: "Only consider executions where this condition holds." The solver prunes all paths where `denominator == 0`, focusing verification on the relevant domain.
+
+Important: assumptions must reflect real preconditions. An overly restrictive assumption (e.g., `kani::assume(denominator == 42)`) reduces verification to a single case, defeating the purpose. An incorrect assumption might hide real bugs.
+
+Now let us see Kani find a real bug. Here is an unchecked division:
+
+```rust
+fn unsafe_divide(numerator: u64, denominator: u64) -> u64 {
+    numerator / denominator  // Panics on zero!
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_unsafe_divide() {
+    let numerator: u64 = kani::any();
+    let denominator: u64 = kani::any();
+
+    // No assumption: denominator can be anything
+    let _result = unsafe_divide(numerator, denominator);
+}
+```
+
+Running this:
+
+```shellscript
+cargo kani --harness verify_unsafe_divide
+```
+
+Output:
+
+```shellscript
+Checking harness verify_unsafe_divide...
+ - Status: FAILURE
+ - Description: "attempt to divide by zero"
+ - Location: src/math.rs:2:5
+
+VERIFICATION:- FAILED
+
+Counterexample:
+  numerator = 0u64
+  denominator = 0u64
+
+Verification Time: 0.3s
+```
+
+Kani found a concrete counterexample: `numerator = 0, denominator = 0` causes a division-by-zero panic. The counterexample is a specific input you can use to reproduce the bug in a regular test.
+
+<ArticleSection name="Interpreting Counterexamples" id="interpreting-counterexamples" level="h2" />
+
+When verification fails, Kani provides a counterexample: concrete values for every symbolic variable that lead to the property violation. This turns abstract verification failures into reproducible test cases.
+
+Consider a more complex example. Here is a share calculation function with a subtle bug:
+
+```rust
+fn calculate_shares(
+    deposit_amount: u64,
+    total_deposits: u64,
+    total_shares: u64,
+) -> u64 {
+    if total_deposits == 0 {
+        deposit_amount
+    } else {
+        // Bug: intermediate multiplication can overflow
+        deposit_amount * total_shares / total_deposits
+    }
+}
+
+#[cfg(kani)]
+#[kani::proof]
+fn verify_share_calculation() {
+    let deposit_amount: u64 = kani::any();
+    let total_deposits: u64 = kani::any();
+    let total_shares: u64 = kani::any();
+
+    // Preconditions: valid state
+    kani::assume(total_deposits > 0);
+    kani::assume(total_shares > 0);
+    kani::assume(deposit_amount > 0);
+
+    let shares = calculate_shares(deposit_amount, total_deposits, total_shares);
+
+    // Property: shares should be proportional
+    // If deposit_amount <= total_deposits, shares <= total_shares
+    if deposit_amount <= total_deposits {
+        assert!(
+            shares <= total_shares,
+            "Shares exceed total for proportional deposit"
+        );
+    }
+}
+```
+
+Kani's output:
+
+```shellscript
+VERIFICATION:- FAILED
+
+Counterexample:
+  deposit_amount = 2u64
+  total_deposits = 3u64
+  total_shares = 13835058055282163713u64
+
+Verification Time: 1.2s
+```
+
+The counterexample reveals the bug: when `total_shares` is very large, the multiplication `deposit_amount * total_shares` overflows in `u64`, producing a small value that is then divided by `total_deposits`. The result is much smaller than the correct proportional value, violating the assertion.
+
+This is precisely the kind of bug that unit tests miss (who tests with `total_shares = 13835058055282163713`?) and that fuzzing might take hours to find. Kani found it in 1.2 seconds.
+
+The fix uses 128-bit intermediate arithmetic:
+
+```rust
+fn calculate_shares(
+    deposit_amount: u64,
+    total_deposits: u64,
+    total_shares: u64,
+) -> u64 {
+    if total_deposits == 0 {
+        deposit_amount
+    } else {
+        let numerator = (deposit_amount as u128) * (total_shares as u128);
+        let result = numerator / (total_deposits as u128);
+        result as u64
+    }
+}
+```
+
+<ArticleSection name="Verification Bounds and Performance" id="bounds-and-performance" level="h2" />
+
+Verification time depends on:
+
+- **Number of symbolic variables**: Each symbolic variable adds dimensions to the search space. More variables mean more complex formulas.
+- **Control flow complexity**: Each branch doubles the number of paths. A function with 20 branch points has up to 1,048,576 paths.
+- **Loop bounds**: Each loop unrolling adds a copy of the loop body to the formula.
+- **Data structure size**: Arrays and structs with symbolic contents multiply the state space.
+
+Typical verification times for Solana program functions:
+
+| Function Type | Symbolic Inputs | Typical Time |
+|--------------|----------------|--------------|
+| Pure arithmetic (no branches) | 2-3 u64 | Under 1 second |
+| Arithmetic with branches | 2-4 u64 | 1-5 seconds |
+| State transition with validation | 3-5 u64 + struct | 5-30 seconds |
+| Multi-step computation with loops | 3-5 u64, loop bound 10 | 30-120 seconds |
+| Complex function with many paths | 5 or more u64, nested branches | 2-10 minutes |
+
+If verification takes more than 10 minutes, consider:
+
+1. **Reducing the bound**: Lower `#[kani::unwind(N)]` to explore fewer loop iterations. Verify at bound 10 first, then increase.
+
+```rust
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(10)]  // Unroll loops at most 10 times
+fn verify_with_bound() {
+    // ...
+}
+```
+
+2. **Adding assumptions**: Constrain symbolic inputs to realistic ranges. If deposit amounts in practice never exceed 10 billion tokens, add `kani::assume(amount <= 10_000_000_000)`.
+
+3. **Decomposing the proof**: Instead of verifying an entire instruction handler, verify individual helper functions. Prove `calculate_shares` is correct, then prove `calculate_withdrawal` is correct, then reason about their composition.
+
+4. **Using `#[kani::stub]`**: Replace complex functions (like CPI calls) with simplified models that preserve the properties you care about.
+
+```rust
+#[cfg(kani)]
+mod stubs {
+    pub fn transfer_tokens(_from: &Pubkey, _to: &Pubkey, amount: u64) -> Result<()> {
+        // Stub: assume the transfer succeeds
+        // We are verifying arithmetic, not the token program
+        Ok(())
+    }
+}
+
+#[cfg(kani)]
+#[kani::proof]
+#[kani::stub(crate::transfer_tokens, stubs::transfer_tokens)]
+fn verify_deposit_arithmetic() {
+    // ...
+}
+```
+
+Memory usage scales similarly. Expect 500 MB to 2 GB for typical proofs, and up to 8 GB for complex ones. If Kani runs out of memory, reduce bounds or decompose the proof.

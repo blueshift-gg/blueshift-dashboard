@@ -1,0 +1,130 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Verification Concepts
+
+Before writing proof harnesses, you need to understand what happens when a model checker runs. This lesson covers how bounded model checking explores program behavior, what it means for verification to be sound, and what formal verification can and cannot prove.
+
+These concepts directly affect how you write proof harnesses, how you interpret results, and how you understand the guarantees verification provides.
+
+<ArticleSection name="Bounded Model Checking" id="bounded-model-checking" level="h2" />
+
+A model checker answers the question: "Does this program satisfy this property for all possible inputs?" It does this by exploring the program's state space systematically, not by running the program with individual inputs.
+
+An unbounded model checker would explore every possible execution path, including infinite loops. This is computationally undecidable in general (the halting problem). Bounded model checking sidesteps this by limiting exploration: loops are unrolled up to a fixed bound, recursion is limited to a fixed depth, and data structures have bounded sizes.
+
+Here is the intuition. Consider a simple function that sums three values:
+
+```rust
+fn sum_three(values: [u32; 3]) -> u64 {
+    let mut total: u64 = 0;
+    for v in values.iter() {
+        total += *v as u64;
+    }
+    total
+}
+```
+
+To verify that this function never overflows, a bounded model checker:
+
+1. Treats `values[0]`, `values[1]`, and `values[2]` as **symbolic variables** representing all possible `u32` values simultaneously
+2. Unrolls the loop into straight-line code (since the bound is 3):
+
+```rust
+let total_1 = 0 + values[0] as u64;
+let total_2 = total_1 + values[1] as u64;
+let total_3 = total_2 + values[2] as u64;
+```
+
+3. Reasons algebraically: each `values[i]` is at most `u32::MAX`, so `total_3` is at most `3 * u32::MAX`, which fits in `u64`. Verification succeeds.
+
+Each unrolled iteration adds variables and constraints to the formula the solver must check. With bound 3, this is trivial. With bound 1,000,000, the formula grows large and verification slows.
+
+The good news for Solana programs: most loops iterate over fixed-size structures. A multisig with a maximum of 10 signers has loops bounded by 10. A token account balance update has no loop at all. The bounded model checking approach is well-suited to this domain.
+
+<ArticleSection name="How Solvers Reason About Programs" id="how-solvers-reason" level="h2" />
+
+Kani translates Rust into logical formulas and uses SAT/SMT solvers to check them. These solvers reason algebraically about constraints rather than enumerating inputs, which is how they handle input spaces with 2 to the 128th possible values.
+
+The process works as follows:
+
+1. Every variable becomes a symbolic value
+2. Every operation becomes a constraint (addition, comparison, branching)
+3. The property to verify becomes the negation: "Is there any input that violates this property?"
+4. The solver searches for a satisfying assignment to the negated property
+
+If the solver finds an assignment (a set of concrete values for all symbolic variables), that assignment is a **counterexample**: a specific input that violates the property. If no assignment exists, the property holds for all inputs within the bounds.
+
+For example, to verify `a.checked_add(b).is_some() implies a + b >= a`, the solver does not try all combinations. It reasons symbolically: if `a + b` does not overflow, then by the definition of unsigned addition, `a + b >= a`. This takes milliseconds.
+
+Solana programs operate on bounded types (`u64`, `u128`) with bounded loop iterations, which makes bounded model checking a natural fit. The question that matters is whether your bounds are sufficient. Kani reports when a verification is "complete at bound N," meaning it checked all paths that execute up to N loop iterations. If your program's loops never exceed N iterations in practice, the verification is effectively unbounded for real-world usage.
+
+<ArticleSection name="Soundness vs Completeness" id="soundness-vs-completeness" level="h2" />
+
+Two properties define the quality of a verification tool:
+
+**Soundness**: If the tool says "verified," the property truly holds. A sound tool never produces false negatives (missed bugs). Kani is sound within its bounds: if it reports verification success at bound N, the property holds for all executions up to N loop iterations.
+
+**Completeness**: If the tool says "failed," the property truly fails. A complete tool never produces false positives (spurious warnings). Kani is complete within its bounds: every counterexample it produces is a genuine bug, not a tool artifact.
+
+Together, soundness and completeness within bounds mean:
+- **Verification succeeds**: The property holds for all inputs at this bound. You can trust this result.
+- **Verification fails with counterexample**: The property is violated by the given input. You can reproduce this bug.
+- **Verification times out or exceeds memory**: No conclusion. Increase resources or reduce bounds.
+
+This is qualitatively stronger than what fuzzing provides. A fuzzer that finds no bugs gives you no formal guarantee. Kani's "verified" result is a mathematical proof (within bounds) that the property holds.
+
+<ArticleSection name="When Soundness Breaks Down" id="soundness-limits" level="h3" />
+
+Even sound tools have limits. Kani's soundness guarantees apply within its modeling assumptions:
+
+- **Compiler correctness**: Kani verifies the MIR representation, not the final binary. If the Rust compiler has a code-generation bug, the verified property might not hold in the compiled program. In practice, this is extremely rare.
+- **Bound sufficiency**: If the actual loop bound exceeds the configured bound, verification is incomplete. Kani warns about this but cannot verify it for you.
+- **Environmental modeling**: Kani models Rust's standard library behavior. If the standard library has a bug that Kani does not model, a false verification is possible.
+
+For all practical purposes with Solana programs, these edge cases are negligible. The main risk is not unsoundness but rather choosing the wrong property to verify.
+
+<ArticleSection name="What Verification Can and Cannot Prove" id="can-and-cannot-prove" level="h2" />
+
+Formal verification is powerful but not omniscient. Understanding its limits prevents misplaced confidence.
+
+**Verification can prove:**
+- A function never panics for any input in its domain
+- Arithmetic operations never overflow (or always overflow gracefully)
+- Output values are always within specified ranges
+- State transitions preserve specified invariants
+- Two implementations produce the same output for all inputs (equivalence checking)
+
+**Verification cannot prove:**
+- Correctness of the specification itself. If your invariant is wrong, verification proves the wrong thing.
+- Properties of external systems. Verification cannot model oracle behavior, network latency, or other programs' responses to CPI calls.
+- Properties that require unbounded resources. If a function contains a loop that runs for `n` iterations where `n` is user-provided and unbounded, verification at bound 100 only covers `n <= 100`.
+- Absence of all bugs. Verification proves specific properties. A program can be verified overflow-free while still containing a logic bug that allows unauthorized withdrawals.
+
+The practical implication: verification proves what you ask it to prove. The quality of your verification depends entirely on the quality of your properties.
+
+<ArticleSection name="A Framework for Choosing Properties" id="choosing-properties" level="h3" />
+
+When deciding what to verify, prioritize by risk:
+
+1. **Panic-freedom** for all public functions. This is the lowest-effort, highest-value verification target. A single proof harness with `kani::any()` inputs proves the function never panics. Start here.
+
+2. **Arithmetic safety** for financial calculations. Verify that checked arithmetic is used correctly, that intermediate results do not overflow, and that the final result is within expected bounds.
+
+3. **Conservation properties** for state transitions. Verify that total supply, total deposits, or total shares are conserved across individual operations.
+
+4. **Monotonicity properties** for economic functions. Verify that more input always produces more output: more shares always yields at least as many tokens, a higher fee rate always produces a higher fee.
+
+5. **Equivalence properties** for optimized code. If you replace a naive implementation with an optimized one, verify that both produce identical outputs for all inputs.
+
+<ArticleSection name="Connecting Theory to Practice" id="theory-to-practice" level="h2" />
+
+With these concepts in place, you can understand what happens when you run Kani:
+
+1. You write a **proof harness**: a Rust function that creates symbolic inputs and asserts a property
+2. Kani compiles your Rust code to MIR, then translates MIR to CBMC's input format
+3. CBMC converts the program into a SAT/SMT formula where the assertion is negated
+4. The solver searches for a satisfying assignment
+5. If found: Kani reports a **counterexample** with concrete values
+6. If not found: Kani reports **verification successful**
+
+The entire process is automatic. You write the harness, run `cargo kani`, and read the result. The next lesson makes this concrete: installing Kani, writing your first proof harness, and interpreting the output.

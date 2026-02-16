@@ -1,0 +1,357 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# State and Timing Vulnerabilities
+
+Solana transactions can contain multiple instructions that execute sequentially within a single atomic transaction. This means account state can change between instruction boundaries. State and timing vulnerabilities exploit this gap: a condition that was true when you checked it may no longer be true when you act on it.
+
+These vulnerabilities are subtle because each individual instruction may be correct in isolation. The bug only manifests when instructions interact in unexpected sequences within the same transaction or across closely timed transactions.
+
+<ArticleSection name="Stale State Across Instructions" id="stale-state-across-instructions" level="h2" />
+
+When a Solana transaction contains multiple instructions, each instruction sees the state left behind by the previous one. But if your program validates state in one instruction and acts on that validation in a separate instruction, an attacker can insert their own instruction between the two.
+
+Consider a two-instruction pattern for a governed treasury withdrawal:
+
+```rust
+// Instruction 1: Validate and authorize withdrawal
+pub fn authorize_withdrawal(ctx: Context<AuthorizeWithdrawal>) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury;
+    let governance = &ctx.accounts.governance;
+
+    // Verify governance approval
+    require!(
+        governance.has_approved_withdrawal,
+        ErrorCode::NotApproved
+    );
+
+    // Check treasury has sufficient funds
+    require!(
+        treasury.balance >= ctx.accounts.requested_amount,
+        ErrorCode::InsufficientFunds
+    );
+
+    // Set authorization flag
+    treasury.withdrawal_authorized = true;
+    treasury.authorized_amount = ctx.accounts.requested_amount;
+
+    Ok(())
+}
+
+// Instruction 2: Execute the authorized withdrawal
+pub fn execute_withdrawal(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury;
+
+    // Check authorization
+    require!(
+        treasury.withdrawal_authorized,
+        ErrorCode::NotAuthorized
+    );
+
+    // Execute transfer based on authorized amount
+    transfer_tokens(&ctx, treasury.authorized_amount)?;
+
+    // Clear authorization
+    treasury.withdrawal_authorized = false;
+    treasury.authorized_amount = 0;
+    treasury.balance = treasury.balance
+        .checked_sub(ctx.accounts.requested_amount)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+The vulnerability: within a single transaction, an attacker can call `authorize_withdrawal` once and then call `execute_withdrawal` multiple times before the authorization is properly cleared. Or more subtly, the attacker can insert their own instruction between authorization and execution that modifies the `authorized_amount` if the account is writable.
+
+The fix combines authorization and execution into a single instruction:
+
+```rust
+// Safe: single instruction handles both validation and execution
+pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury;
+    let governance = &ctx.accounts.governance;
+
+    // Validate
+    require!(
+        governance.has_approved_withdrawal,
+        ErrorCode::NotApproved
+    );
+    require!(
+        treasury.balance >= amount,
+        ErrorCode::InsufficientFunds
+    );
+    require!(
+        amount == governance.approved_amount,
+        ErrorCode::AmountMismatch
+    );
+
+    // Execute (effects before interactions)
+    treasury.balance = treasury.balance.checked_sub(amount).unwrap();
+    governance.has_approved_withdrawal = false;
+
+    // Transfer
+    transfer_tokens(&ctx, amount)?;
+
+    Ok(())
+}
+```
+
+When multi-instruction flows are architecturally necessary, use nonces or single-use authorization tokens:
+
+```rust
+#[account]
+pub struct WithdrawalAuthorization {
+    pub nonce: u64,
+    pub amount: u64,
+    pub authorized_by: Pubkey,
+    pub executed: bool,
+    pub bump: u8,
+}
+
+pub fn execute_authorized_withdrawal(
+    ctx: Context<ExecuteAuthorized>,
+) -> Result<()> {
+    let auth = &mut ctx.accounts.authorization;
+
+    // Single-use: check and immediately mark as executed
+    require!(!auth.executed, ErrorCode::AlreadyExecuted);
+    auth.executed = true;
+
+    // Now safe to proceed
+    let treasury = &mut ctx.accounts.treasury;
+    treasury.balance = treasury.balance
+        .checked_sub(auth.amount)
+        .unwrap();
+
+    transfer_tokens(&ctx, auth.amount)?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="TOCTOU in Multi-Instruction Transactions" id="toctou-in-multi-instruction-transactions" level="h2" />
+
+Time-of-Check to Time-of-Use (TOCTOU) vulnerabilities occur when the state verified by a check changes before the program acts on it. On Solana, TOCTOU manifests in two forms: within a single transaction (inter-instruction) and across transactions (inter-slot).
+
+The inter-instruction TOCTOU is the more dangerous variant. A single transaction can contain instructions from multiple programs. If program A checks a condition and program B modifies the relevant state before program A's next instruction executes, the check is invalidated.
+
+Here is a vulnerable multisig pattern:
+
+```rust
+// Vulnerable: multisig that separates approval count check from execution
+pub fn check_approvals(ctx: Context<CheckApprovals>) -> Result<()> {
+    let proposal = &ctx.accounts.proposal;
+
+    // Count approvals
+    let approval_count = proposal.signers
+        .iter()
+        .filter(|s| s.has_signed)
+        .count();
+
+    require!(
+        approval_count >= proposal.threshold,
+        ErrorCode::InsufficientApprovals
+    );
+
+    // Mark as ready for execution
+    let proposal = &mut ctx.accounts.proposal;
+    proposal.ready_to_execute = true;
+
+    Ok(())
+}
+
+pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
+    let proposal = &ctx.accounts.proposal;
+
+    require!(proposal.ready_to_execute, ErrorCode::NotReady);
+
+    // Between check_approvals and execute_proposal,
+    // an approver could have revoked their signature
+    // but the "ready_to_execute" flag persists
+
+    execute_cpi(&ctx, &proposal.instruction_data)?;
+
+    Ok(())
+}
+```
+
+The fix re-validates the condition at execution time:
+
+```rust
+pub fn execute_proposal_safe(ctx: Context<ExecuteProposal>) -> Result<()> {
+    let proposal = &mut ctx.accounts.proposal;
+
+    // Re-validate approvals at execution time
+    let approval_count = proposal.signers
+        .iter()
+        .filter(|s| s.has_signed)
+        .count();
+
+    require!(
+        approval_count >= proposal.threshold,
+        ErrorCode::InsufficientApprovals
+    );
+
+    // Mark as executed to prevent replay
+    require!(!proposal.executed, ErrorCode::AlreadyExecuted);
+    proposal.executed = true;
+
+    execute_cpi(&ctx, &proposal.instruction_data)?;
+
+    Ok(())
+}
+```
+
+Squads protocol addressed TOCTOU issues in their multisig implementation by re-validating all conditions at execution time and using single-use execution flags that prevent any form of replay.
+
+<ArticleSection name="Cross-Program State Dependencies" id="cross-program-state-dependencies" level="h2" />
+
+Many protocols depend on state owned by other programs. A lending protocol reads oracle prices. A DEX aggregator reads pool reserves. A yield optimizer reads vault share prices. When your protocol depends on external state, you inherit the timing properties of that state.
+
+The dangerous pattern is reading external state, performing a computation, and then acting on the result without considering that the external state may have changed:
+
+```rust
+// Vulnerable: reading pool reserves to calculate a swap amount
+pub fn calculate_and_swap(ctx: Context<CalculateAndSwap>) -> Result<()> {
+    // Read AMM pool state
+    let pool = deserialize_pool(&ctx.accounts.amm_pool)?;
+
+    // Calculate expected output based on current reserves
+    let expected_output = calculate_output(
+        ctx.accounts.input_amount,
+        pool.reserve_a,
+        pool.reserve_b,
+    );
+
+    // The pool state could have changed between the read above
+    // and the CPI below (another instruction in the same tx)
+
+    // Execute swap via CPI
+    let actual_output = cpi_swap(
+        &ctx,
+        ctx.accounts.input_amount,
+    )?;
+
+    // No slippage check against expected output
+    // If pool was manipulated, actual_output could be much less
+
+    Ok(())
+}
+```
+
+Slippage protection, covered in the Front-Running and MEV lesson, prevents stale-state exploitation by bounding acceptable price movement. The user supplies a minimum output computed off-chain from a recent quote, and the transaction reverts if the actual output falls below this threshold.
+
+For lending protocols that depend on oracle state, the defense is defense-in-depth: validate oracle staleness, use TWAPs, apply confidence intervals, and cap the maximum price movement that the protocol will accept within a single slot:
+
+```rust
+pub fn validate_price_movement(
+    current_price: u64,
+    last_stored_price: u64,
+    last_update_slot: u64,
+    current_slot: u64,
+) -> Result<()> {
+    let slots_elapsed = current_slot.saturating_sub(last_update_slot);
+
+    // Maximum allowed price change: 10% per 100 slots (~40 seconds)
+    let max_change_bps = 1000u64 // 10% in basis points
+        .checked_mul(slots_elapsed)
+        .unwrap()
+        .checked_div(100)
+        .unwrap()
+        .min(5000); // Cap at 50% maximum regardless of time
+
+    let price_change_bps = if current_price > last_stored_price {
+        (current_price - last_stored_price) * 10000 / last_stored_price
+    } else {
+        (last_stored_price - current_price) * 10000 / last_stored_price
+    };
+
+    require!(
+        price_change_bps <= max_change_bps,
+        ErrorCode::PriceMovementTooLarge
+    );
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Slot-Based Assumptions" id="slot-based-assumptions" level="h2" />
+
+Solana programs frequently use slot numbers as a proxy for time. The assumption is that slots are produced at a consistent rate of approximately 400 milliseconds each. This assumption is often wrong.
+
+Slot times vary. During periods of network congestion, slots can take 600 milliseconds or longer. During normal operation, they average closer to 400 milliseconds. Occasionally, leader slots are skipped entirely, creating gaps in the slot sequence.
+
+Programs that assume a fixed slot-to-time mapping introduce timing vulnerabilities:
+
+```rust
+// Vulnerable: assuming fixed slot timing
+pub fn check_lock_expired(ctx: Context<CheckLock>) -> Result<()> {
+    let lock = &ctx.accounts.time_lock;
+    let current_slot = Clock::get()?.slot;
+
+    // Assumes 400ms per slot: 150,000 slots = ~24 hours
+    // But variable slot times mean this could be 16 hours or 36 hours
+    const SLOTS_PER_DAY: u64 = 150_000;
+
+    require!(
+        current_slot >= lock.start_slot + SLOTS_PER_DAY,
+        ErrorCode::LockNotExpired
+    );
+
+    // Unlock funds
+    unlock(&ctx)?;
+
+    Ok(())
+}
+```
+
+The fix uses `unix_timestamp` from the `Clock` sysvar for time-based logic:
+
+```rust
+// Safe: using unix_timestamp for time-based logic
+pub fn check_lock_expired_safe(ctx: Context<CheckLock>) -> Result<()> {
+    let lock = &ctx.accounts.time_lock;
+    let clock = Clock::get()?;
+
+    const SECONDS_PER_DAY: i64 = 86_400;
+
+    require!(
+        clock.unix_timestamp >= lock.start_timestamp + SECONDS_PER_DAY,
+        ErrorCode::LockNotExpired
+    );
+
+    unlock(&ctx)?;
+
+    Ok(())
+}
+```
+
+`unix_timestamp` is not perfect either. It is derived from validator votes and can drift slightly. The Solana runtime guarantees that `unix_timestamp` is monotonically non-decreasing and accurate within a few seconds, but it is not a precision clock.
+
+For operations where timing precision matters (auction endings, vesting cliffs), use `unix_timestamp` and add a buffer:
+
+```rust
+pub fn check_auction_ended(ctx: Context<CheckAuction>) -> Result<()> {
+    let auction = &ctx.accounts.auction;
+    let clock = Clock::get()?;
+
+    // Add 30-second buffer to account for clock drift
+    let effective_end_time = auction.end_timestamp
+        .checked_add(30)
+        .unwrap();
+
+    require!(
+        clock.unix_timestamp >= effective_end_time,
+        ErrorCode::AuctionNotEnded
+    );
+
+    finalize_auction(&ctx)?;
+
+    Ok(())
+}
+```
+
+Slots are still useful for ordering-related checks (ensuring something happened in a previous slot, not the current one) and for rate limiting. But for anything that maps to real-world time (lock periods, vesting schedules, auction durations), use `unix_timestamp`.
+
+The common thread across all state and timing vulnerabilities is this: never assume that state observed at one point in time will still be valid at a later point. Always re-validate at the point of use, enforce invariants that hold regardless of timing, and use the appropriate time source for the precision your protocol requires.
+

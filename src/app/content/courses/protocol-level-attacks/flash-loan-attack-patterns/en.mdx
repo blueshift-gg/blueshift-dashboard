@@ -1,0 +1,193 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Flash Loan Attack Patterns
+
+Flash loans let anyone borrow unlimited capital with zero collateral, as long as the loan is repaid within the same transaction. On Ethereum, this is a single atomic transaction. On Solana, the equivalent is a sequence of instructions within a single transaction, all executed atomically. If any instruction fails, the entire transaction reverts and the loan is never issued.
+
+This atomic composability is one of DeFi's greatest features. It is also one of its most dangerous attack surfaces. Flash loans transform theoretical vulnerabilities into practical exploits by removing the capital requirement. A bug that would require $10M to exploit becomes exploitable by anyone with enough SOL to pay transaction fees.
+
+<ArticleSection name="Atomic Composability as Weapon" id="atomic-composability-as-weapon" level="h2" />
+
+Solana transactions can contain multiple instructions that execute sequentially within a single atomic unit. If any instruction fails, the entire transaction rolls back. This means an attacker can:
+
+1. Borrow 100M USDC from a flash loan provider (instruction 1)
+2. Execute an arbitrary number of operations using that capital (instructions 2 through N-1)
+3. Repay the flash loan plus fees (instruction N)
+
+If the repayment fails, everything reverts. The attacker loses nothing except the transaction fee. If the repayment succeeds, the attacker keeps whatever profit they extracted between borrowing and repaying.
+
+The attack surface is any protocol state that can be profitably manipulated when the attacker has access to unlimited short-term capital.
+
+```rust
+// A typical flash loan transaction on Solana looks like this:
+// Transaction {
+//   instructions: [
+//     flash_loan_borrow(100_000_000 USDC),  // Borrow 100M
+//     swap_on_amm(100_000_000 USDC -> SOL), // Manipulate price
+//     exploit_target_protocol(),             // Extract value
+//     swap_back(SOL -> USDC),               // Restore price
+//     flash_loan_repay(100_050_000 USDC),   // Repay + 0.05% fee
+//   ]
+// }
+```
+
+The net cost to the attacker is only the flash loan fee (typically 5 to 9 basis points on Solana) plus transaction fees. For a 100M USDC flash loan, that is roughly 50,000 to 90,000 USDC, a tiny price for the ability to temporarily command $100M in capital.
+
+<ArticleSection name="Price Manipulation Within a Transaction" id="price-manipulation-within-a-transaction" level="h2" />
+
+The most common flash loan attack pattern manipulates an AMM's spot price to exploit a protocol that reads from that AMM.
+
+Consider a lending protocol that values collateral using the spot price from an on-chain AMM pool rather than an oracle:
+
+```rust
+// Vulnerable: reading spot price from AMM for collateral valuation
+pub fn calculate_collateral_value(ctx: Context<CalcCollateral>) -> Result<u64> {
+    let pool = &ctx.accounts.amm_pool;
+    let pool_data = AmmPool::try_deserialize(
+        &mut pool.try_borrow_data()?.as_ref()
+    )?;
+
+    // Spot price = reserve_b / reserve_a
+    let spot_price = pool_data.reserve_b
+        .checked_div(pool_data.reserve_a)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    let collateral_value = ctx.accounts.position.collateral_amount
+        .checked_mul(spot_price)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    Ok(collateral_value)
+}
+```
+
+The attack constructs a single transaction:
+
+```rust
+// Attack transaction structure:
+//
+// 1. Flash borrow 50M USDC from Solend
+// 2. Swap 50M USDC -> SOL on Raydium pool
+//    - This massively inflates the SOL/USDC spot price in the pool
+//    - SOL spot price jumps from $100 to $400 due to the massive swap
+// 3. Deposit 1,000 SOL as collateral on the vulnerable lending protocol
+//    - Protocol values collateral at $400/SOL (manipulated price)
+//    - Collateral valued at $400,000 instead of real value of $100,000
+// 4. Borrow $350,000 USDC against the inflated collateral
+// 5. Swap SOL back to USDC on Raydium (restore pool state)
+// 6. Repay flash loan (50M + fee)
+//
+// Net profit: ~$250,000 USDC
+// The 1,000 SOL collateral is now underwater and won't be redeemed
+```
+
+The fix is to never use AMM spot prices for critical protocol decisions. The oracle manipulation lesson covers Pyth TWAP, confidence intervals, and multi-oracle validation in detail. The key principle: never price assets using a spot price that can be manipulated within the same transaction.
+
+<ArticleSection name="Flash Loan Amplification" id="flash-loan-amplification" level="h2" />
+
+Some protocol bugs are only marginally profitable per invocation. A rounding error that leaks 0.01% per transaction does not seem dangerous. But flash loans enable an attacker to amplify the exploitation by iterating the buggy operation within a single transaction.
+
+Consider a staking protocol with a rounding error in its reward calculation:
+
+```rust
+// Vulnerable: rounding error in reward calculation
+pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
+    let pool = &mut ctx.accounts.reward_pool;
+    let user = &mut ctx.accounts.user_stake;
+
+    // Calculate rewards (vulnerable to rounding exploitation)
+    let reward = user.staked_amount
+        .checked_mul(pool.reward_rate)
+        .unwrap()
+        .checked_div(pool.total_staked)
+        .unwrap();
+
+    // Rounding always favors the user due to intermediate calculations
+    // For small stakes, the user might get 1 token when they deserve 0.4 tokens
+    let reward_with_bonus = reward.checked_add(1).unwrap(); // Off-by-one "dust"
+
+    transfer_rewards(&ctx, reward_with_bonus)?;
+
+    pool.total_rewards = pool.total_rewards
+        .checked_sub(reward_with_bonus)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+Each call leaks 1 extra token. Negligible. But an attacker can call this thousands of times within a single transaction using a CPI loop:
+
+```rust
+// Attacker's program: amplify the rounding error
+pub fn exploit(ctx: Context<Exploit>) -> Result<()> {
+    let flash_loan_amount = 10_000_000; // 10M tokens
+
+    // Step 1: Flash borrow
+    flash_borrow(&ctx, flash_loan_amount)?;
+
+    // Step 2: Stake and claim in a loop
+    for _ in 0..5000 {
+        // Stake minimum amount
+        stake(&ctx, 1)?;
+        // Claim rewards (gets 1 extra token each time)
+        claim_rewards(&ctx)?;
+        // Unstake
+        unstake(&ctx, 1)?;
+    }
+
+    // Step 3: Repay flash loan
+    flash_repay(&ctx, flash_loan_amount)?;
+
+    // Net profit: ~5,000 tokens from rounding errors
+    Ok(())
+}
+```
+
+The fix addresses the rounding error directly, but the general defense is to ensure that no operation leaks value regardless of how many times it is called:
+
+```rust
+// Safe: round down (truncate) so the protocol never overpays
+pub fn claim_rewards_safe(ctx: Context<ClaimRewards>) -> Result<()> {
+    let pool = &mut ctx.accounts.reward_pool;
+    let user = &mut ctx.accounts.user_stake;
+
+    // Ensure minimum stake to prevent dust exploitation
+    require!(
+        user.staked_amount >= MIN_STAKE_AMOUNT,
+        ErrorCode::StakeTooSmall
+    );
+
+    // Calculate rewards with explicit floor division (no +1 bonus)
+    let reward = user.staked_amount
+        .checked_mul(pool.reward_rate)
+        .unwrap()
+        .checked_div(pool.total_staked)
+        .unwrap();
+
+    // Never pay zero-value rewards (prevents claim spam)
+    require!(reward > 0, ErrorCode::NoRewardsAvailable);
+
+    // Track last claim time to prevent rapid re-claiming
+    let clock = Clock::get()?;
+    require!(
+        clock.unix_timestamp - user.last_claim_ts >= MIN_CLAIM_INTERVAL,
+        ErrorCode::ClaimTooFrequent
+    );
+    user.last_claim_ts = clock.unix_timestamp;
+
+    transfer_rewards(&ctx, reward)?;
+
+    pool.total_rewards = pool.total_rewards
+        .checked_sub(reward)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+Three defenses against amplification: enforce minimum amounts, use time-based rate limiting, and always round in the protocol's favor.
+
+CPI re-entrancy and checks-effects-interactions are covered in the State and Timing Vulnerabilities lesson.
+
+Flash loan attacks exploit the gap between what a protocol assumes about capital constraints and what atomicity actually allows. The defense is to never assume a user's capital is limited, never use manipulable spot prices for critical decisions, always round in the protocol's favor, and verify invariants after every state transition.
+

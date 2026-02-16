@@ -1,0 +1,230 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Front-Running and MEV on Solana
+
+Maximal Extractable Value (MEV) is the profit that can be captured by reordering, inserting, or censoring transactions within a block. On Ethereum, MEV is a well-studied phenomenon driven by a public mempool where pending transactions are visible to everyone. Solana's architecture differs in every way that matters: there is no public mempool, the leader schedule is known in advance, and transactions are processed in the order they arrive at the current leader. This does not eliminate MEV. It changes how it works.
+
+Protocol developers must understand how MEV works on Solana because the mitigations differ from Ethereum. Slippage protection, commit-reveal schemes, and protocol-level ordering guarantees all require Solana-specific design.
+
+<ArticleSection name="Solana vs Ethereum MEV" id="solana-vs-ethereum-mev" level="h2" />
+
+On Ethereum, the MEV supply chain is mature: searchers find opportunities, builders construct blocks, and proposers select the most profitable block. The public mempool gives searchers complete visibility into pending transactions, enabling precise front-running and sandwich attacks.
+
+Solana's architecture disrupts this model in several ways:
+
+**No public mempool.** Transactions are sent directly to the current leader (validator). There is no global pool of pending transactions for searchers to monitor. However, transactions pass through RPC nodes and relayers, and some of this traffic is observable.
+
+**Deterministic leader schedule.** The leader schedule for each epoch (roughly 2 to 3 days) is known in advance. Searchers know which validator will produce blocks at any given time and can target their transaction submission accordingly.
+
+**Continuous block production.** Solana produces blocks continuously (every 400ms) rather than in discrete intervals. This means the time window for MEV extraction is much shorter than Ethereum's 12-second block time.
+
+**Gulf Stream.** Transactions are forwarded to upcoming leaders before their slot begins. This pipelining means transactions can arrive at the leader out of order relative to when they were submitted.
+
+These architectural differences do not eliminate MEV. Jito's own data shows MEV extraction on Solana exceeding $100M annually, primarily through arbitrage and liquidation extraction.
+
+<ArticleSection name="Jito Bundles and Tips" id="jito-bundles-and-tips" level="h2" />
+
+Jito Labs operates the dominant MEV infrastructure on Solana. Jito's modified validator client (run by over 80% of stake-weighted validators as of 2024) introduces a bundle mechanism similar to Flashbots on Ethereum.
+
+A Jito bundle is an ordered sequence of transactions that execute atomically: either all transactions in the bundle succeed, or none of them do. Searchers submit bundles to Jito's block engine along with a "tip" (priority payment) that incentivizes validators to include the bundle.
+
+The bundle mechanism enables several MEV strategies:
+
+**Atomic arbitrage.** A searcher detects a price discrepancy between two DEXes. They construct a bundle containing: (1) buy on the cheap DEX, (2) sell on the expensive DEX, (3) tip the validator. The atomic execution ensures the searcher cannot be left holding an intermediate position.
+
+**Liquidation.** When a lending position becomes liquidatable, multiple searchers compete to liquidate it. Jito bundles allow searchers to bid for the right to liquidate by increasing their tip. The highest tipper gets their bundle included first.
+
+**Back-running.** After a large swap moves the price on a DEX, a searcher can back-run it with an arbitrage trade that restores the price and captures the difference. Jito bundles ensure the back-run executes immediately after the target transaction.
+
+```typescript
+// Example: constructing a Jito bundle for an arbitrage
+import { SearcherClient } from "jito-ts/dist/sdk/block-engine/searcher";
+
+const bundle = new Bundle([
+    // Transaction 1: Buy SOL on Raydium (cheaper)
+    buyTransaction,
+    // Transaction 2: Sell SOL on Orca (more expensive)
+    sellTransaction,
+    // Transaction 3: Tip the validator
+    tipTransaction,
+]);
+
+// Tip amount determines priority: higher tip = more likely inclusion
+const tipAmount = 10_000; // lamports (0.00001 SOL)
+
+const result = await searcherClient.sendBundle(bundle);
+```
+
+The tip market is competitive. For high-value opportunities (large arbitrages, profitable liquidations), tips can reach thousands of SOL. For smaller opportunities, tips as low as 1,000 lamports (0.000001 SOL) are common.
+
+Without Jito, Solana processes transactions in roughly the order they arrive at the leader. Transactions touching the same accounts are first-come, first-served (they contend for the same write lock), while transactions touching different accounts can be reordered for parallel execution. Validators running Jito's modified client can further reorder transactions by including bundles at specific positions within the block. Because the leader schedule is known 1-2 epochs in advance, sophisticated searchers can co-locate with upcoming leaders for lower-latency submission, and time-sensitive attacks (oracle updates, auction endings) can be positioned optimally.
+
+<ArticleSection name="Sandwich Attacks on Solana" id="sandwich-attacks-on-solana" level="h2" />
+
+A sandwich attack surrounds a victim's swap transaction with two attacker transactions: one before (front-run) and one after (back-run). The front-run moves the price against the victim, the victim's swap executes at a worse price, and the back-run captures the difference.
+
+On Ethereum, sandwich attacks are straightforward because the attacker can see the victim's pending transaction in the mempool. On Solana, the attacker typically observes the victim's transaction as it passes through RPC infrastructure or Jito's relay network.
+
+Here is the anatomy of a sandwich attack on a constant-product AMM:
+
+```
+Initial pool state: 1,000 SOL / 100,000 USDC (price: 100 USDC/SOL)
+
+1. Attacker front-run: Buy 100 SOL for ~11,111 USDC
+   Pool after: 900 SOL / 111,111 USDC (price: ~123 USDC/SOL)
+
+2. Victim's swap: Buy 10 SOL for ~1,370 USDC (expected ~1,000 USDC at fair price)
+   Pool after: 890 SOL / 112,481 USDC (price: ~126 USDC/SOL)
+
+3. Attacker back-run: Sell 100 SOL for ~11,245 USDC
+   Pool after: 990 SOL / 101,236 USDC
+
+Attacker profit: 11,245 - 11,111 = ~134 USDC
+Victim overpaid: ~370 USDC compared to fair price
+```
+
+The attacker profits from the price impact of their own front-run trade, which the victim absorbs.
+
+On Solana, this attack requires the attacker to get their front-run transaction processed before the victim's and their back-run after. Jito bundles make this trivial: the attacker constructs a bundle with [front-run, victim-tx, back-run] and submits it with a tip.
+
+<ArticleSection name="Mitigation Strategies" id="mitigation-strategies" level="h2" />
+
+Protecting users from MEV requires protocol-level design decisions. There is no single solution; the right approach depends on the protocol's architecture and threat model.
+
+<ArticleSection name="Slippage Protection" id="slippage-protection" level="h3" />
+
+The first defense to implement: every swap instruction must accept a minimum output amount specified by the user.
+
+```rust
+pub fn swap(
+    ctx: Context<Swap>,
+    amount_in: u64,
+    minimum_amount_out: u64, // User-specified minimum
+) -> Result<()> {
+    let amount_out = calculate_swap_output(
+        &ctx.accounts.pool,
+        amount_in,
+    )?;
+
+    // Revert if output is below user's minimum
+    require!(
+        amount_out >= minimum_amount_out,
+        ErrorCode::SlippageExceeded
+    );
+
+    execute_swap(&ctx, amount_in, amount_out)?;
+
+    Ok(())
+}
+```
+
+The slippage parameter limits the maximum MEV that can be extracted from a single swap. If the user sets a tight slippage tolerance (0.5%), a sandwich attacker can extract at most 0.5% of the swap value, which may not be profitable after accounting for fees and tips.
+
+The challenge is setting slippage appropriately. Too tight, and the transaction fails during normal market movement. Too loose, and the user is exposed to sandwich attacks. Front-ends should compute dynamic slippage based on current market volatility and pool depth.
+
+<ArticleSection name="Commit-Reveal Schemes" id="commit-reveal-schemes" level="h3" />
+
+For operations where order knowledge is valuable (auctions, large orders), a commit-reveal scheme hides the transaction details until it is too late to front-run:
+
+```rust
+// Phase 1: User commits a hash of their order
+pub fn commit_order(
+    ctx: Context<CommitOrder>,
+    order_hash: [u8; 32], // hash(amount, price, nonce)
+) -> Result<()> {
+    let commitment = &mut ctx.accounts.commitment;
+    commitment.hash = order_hash;
+    commitment.user = ctx.accounts.user.key();
+    commitment.slot = Clock::get()?.slot;
+
+    Ok(())
+}
+
+// Phase 2: User reveals the order (must be in a later slot)
+pub fn reveal_order(
+    ctx: Context<RevealOrder>,
+    amount: u64,
+    price: u64,
+    nonce: u64,
+) -> Result<()> {
+    let commitment = &ctx.accounts.commitment;
+    let current_slot = Clock::get()?.slot;
+
+    // Must reveal in a different slot than commit
+    require!(
+        current_slot > commitment.slot,
+        ErrorCode::RevealTooEarly
+    );
+
+    // Verify the revealed data matches the commitment
+    let expected_hash = hash_order(amount, price, nonce);
+    require!(
+        expected_hash == commitment.hash,
+        ErrorCode::HashMismatch
+    );
+
+    // Execute the order
+    execute_order(&ctx, amount, price)?;
+
+    Ok(())
+}
+```
+
+The attacker cannot front-run the commit because they do not know the order details. By the time the reveal happens in a later slot, the commit is already on-chain and the attacker cannot insert a transaction before it.
+
+The downside is UX complexity: users must submit two transactions and wait at least one slot between them. This is acceptable for large trades and auctions but impractical for routine swaps.
+
+<ArticleSection name="Protocol-Level Ordering" id="protocol-level-ordering" level="h3" />
+
+Some protocols implement their own ordering mechanisms to prevent MEV:
+
+**Batch auctions.** Instead of processing swaps individually, collect all swaps within a time window and execute them at a single clearing price. This eliminates ordering-based MEV because all participants receive the same price.
+
+**Sealed-bid mechanisms.** For liquidations and other competitive operations, use sealed bids that are revealed simultaneously. This prevents the escalation dynamics of open competition.
+
+**Frequent batch settlement.** Process operations in batches at fixed intervals (every N slots), making it impossible to front-run individual transactions within a batch.
+
+```rust
+// Batch auction pattern: collect orders, then settle at uniform price
+pub fn submit_order(ctx: Context<SubmitOrder>, amount: u64) -> Result<()> {
+    let batch = &mut ctx.accounts.current_batch;
+    let clock = Clock::get()?;
+
+    // Orders are accepted during the collection window
+    require!(
+        clock.unix_timestamp < batch.collection_end_timestamp,
+        ErrorCode::BatchCollectionClosed
+    );
+
+    batch.orders.push(Order {
+        user: ctx.accounts.user.key(),
+        amount,
+    });
+
+    Ok(())
+}
+
+pub fn settle_batch(ctx: Context<SettleBatch>) -> Result<()> {
+    let batch = &mut ctx.accounts.current_batch;
+    let clock = Clock::get()?;
+
+    // Settlement only after collection window closes
+    require!(
+        clock.unix_timestamp >= batch.collection_end_timestamp,
+        ErrorCode::BatchNotReady
+    );
+
+    // Calculate uniform clearing price from all orders
+    let clearing_price = calculate_clearing_price(&batch.orders)?;
+
+    // Execute all orders at the same price
+    for order in batch.orders.iter() {
+        execute_at_price(order, clearing_price)?;
+    }
+
+    Ok(())
+}
+```
+
+MEV on Solana is not going away. It is an inherent property of any system where transaction ordering has economic value. The goal for protocol developers is not to eliminate MEV entirely but to minimize the value that can be extracted from users through protocol design, slippage protection, and ordering mechanisms that reduce the attacker's information advantage.
+

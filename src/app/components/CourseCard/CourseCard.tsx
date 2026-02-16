@@ -156,8 +156,14 @@ export default function CourseCard({
                 <Divider direction="vertical" className="h-[20px]" />
                 <Badge
                   size="sm"
-                  variant="beginner"
-                  label="Beginner"
+                  variant={
+                    badgeDifficulty.toLowerCase() as
+                      | "beginner"
+                      | "intermediate"
+                      | "advanced"
+                      | "expert"
+                  }
+                  label={badgeDifficulty}
                   className="leading-[100%] min-h-[20px]!"
                   crosshair={{
                     size: 4,
@@ -165,7 +171,7 @@ export default function CourseCard({
                     animationDelay: 0,
                     animationDuration: 0.01,
                   }}
-                  icon={<Difficulty size={12} difficulties={[1]} />}
+                  icon={<Difficulty size={12} difficulties={[difficulty ?? 1]} />}
                 />
               </motion.div>
             )}

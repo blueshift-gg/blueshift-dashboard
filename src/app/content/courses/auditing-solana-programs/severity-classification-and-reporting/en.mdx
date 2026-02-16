@@ -1,0 +1,206 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Severity Classification and Reporting
+
+The vulnerability is real. Your PoC works. Now you need to communicate the finding in a way that the protocol team, their investors, and the broader security community can understand, prioritize, and act on. Severity classification and report writing are where technical findings become actionable intelligence.
+
+A poorly written report buries critical findings in noise. A well-written report gets the critical fix deployed within hours.
+
+<ArticleSection name="Severity Framework" id="severity-framework" level="h2" />
+
+Most Solana audit firms use a four-tier severity framework, sometimes with a fifth "Informational" tier. The tiers are:
+
+**Critical** -- Direct loss of user funds or protocol funds with no special conditions required. The attacker needs only a wallet and a transaction. Examples: missing signer check on withdraw, unconstrained CPI allowing vault drain, arithmetic overflow enabling infinite minting.
+
+**High** -- Direct loss of funds with preconditions, or permanent denial of service. The attacker needs specific timing, a particular state to exist, or a moderate capital requirement. Examples: oracle manipulation enabling undercollateralized borrowing, flash loan attack draining LP reserves, reentrancy via CPI callback.
+
+**Medium** -- Conditional loss of funds with substantial prerequisites, theft of yield or fees, or temporary denial of service. Examples: rounding errors that leak dust per transaction (accumulating to meaningful amounts at scale), fee bypass on small transactions, griefing attacks that force costly state recovery.
+
+**Low** -- Issues that do not directly cause fund loss but weaken security posture or violate best practices. Examples: missing event emissions, suboptimal gas usage, admin powers without timelock, unused error variants.
+
+**Informational** -- Suggestions for code quality, documentation, or minor improvements with no security impact. Examples: inconsistent naming conventions, redundant constraints, missing comments on complex logic.
+
+<ArticleSection name="Impact vs Likelihood Matrix" id="impact-vs-likelihood-matrix" level="h2" />
+
+Severity is not just about impact. It is the combination of impact (how bad is it) and likelihood (how likely is it to be exploited).
+
+| | **High Likelihood** | **Medium Likelihood** | **Low Likelihood** |
+|---|---|---|---|
+| **High Impact** | Critical | High | Medium |
+| **Medium Impact** | High | Medium | Low |
+| **Low Impact** | Medium | Low | Informational |
+
+**Likelihood factors:**
+
+- Does the attacker need special permissions? (admin, oracle operator, whitelisted account)
+- Does the exploit require specific market conditions? (price at exact level, pool at specific utilization)
+- Does the exploit require large capital? (flash loan available vs millions in stable capital)
+- Is the exploit front-runnable or detectable before execution completes?
+- Is the vulnerable code path commonly executed or only triggered in rare edge cases?
+
+**Impact factors:**
+
+- How much money is at risk? (specific dollar amounts or percentage of TVL)
+- Is the loss permanent or recoverable?
+- Does the exploit affect one user or all users?
+- Can the exploit be repeated?
+- Does the exploit compromise governance or admin controls?
+
+<ArticleSection name="Same Bug Different Severity" id="same-bug-different-severity" level="h3" />
+
+Consider a rounding error in a swap function that rounds in the user's favor by 1 lamport per swap:
+
+**Scenario A: High-volume DEX with $500M daily volume**
+- Impact: 1 lamport per swap, approximately 2,000,000 swaps/day = 2 SOL/day = 730 SOL/year at protocol's expense
+- Likelihood: Automatic, happens on every swap
+- Severity: **Medium** -- Meaningful cumulative loss, no prerequisites
+
+**Scenario B: Low-volume NFT marketplace with $10K daily volume**
+- Impact: 1 lamport per swap, approximately 50 swaps/day = 0.00005 SOL/day
+- Likelihood: Automatic but negligible
+- Severity: **Low** -- Technically a bug but economically irrelevant
+
+**Scenario C: Same rounding error but attacker can force it with zero-amount swaps**
+- Impact: Attacker can call swap(0) in a loop, extracting 1 lamport per call, draining the pool over time
+- Likelihood: Trivial to exploit, no capital needed
+- Severity: **High** -- Active exploitation possible with minimal effort
+
+Same root cause. Three different severities. The context determines the classification.
+
+<ArticleSection name="Writing Clear Findings" id="writing-clear-findings" level="h2" />
+
+A finding is a structured document that communicates a vulnerability completely and unambiguously. Every finding should contain these sections:
+
+<ArticleSection name="Finding Template" id="finding-template" level="h3" />
+
+Here is a complete finding write-up for a real vulnerability pattern:
+
+---
+
+**[H-01] Missing signer verification on `withdraw` allows any user to drain any position**
+
+**Severity:** High
+
+**Status:** Confirmed
+
+**Location:** `programs/lending/src/instructions/withdraw.rs`, lines 14-38
+
+**Description:**
+
+The `withdraw` instruction accepts a `user` account that is validated against the position's `owner` field via `has_one = user`, but the `user` account is typed as `UncheckedAccount` rather than `Signer`. This means the instruction verifies that the correct public key is provided but does not verify that the account holder actually signed the transaction.
+
+An attacker can read any position's owner field from on-chain data, pass that public key as the `user` parameter without signing, and withdraw the position's entire balance to an arbitrary destination token account.
+
+**Vulnerable Code:**
+
+```rust
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    /// CHECK: validated via has_one but NOT as signer
+    pub user: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        has_one = user,
+        seeds = [b"position", pool.key().as_ref(), user.key().as_ref()],
+        bump = position.bump,
+    )]
+    pub position: Account<'info, UserPosition>,
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+    // ...
+}
+```
+
+**Impact:**
+
+Any user with a funded position can have their entire balance stolen by any attacker. The attack requires no capital, no special timing, and no prerequisites. At current TVL of $12,400,000 across 3,847 active positions, the maximum extractable value is $12,400,000.
+
+The attack is repeatable and can drain all positions in approximately 3,847 transactions (one per position), executable within a single block given Solana's throughput.
+
+**Proof of Concept:** See `tests/poc_missing_signer_withdraw.ts`
+
+**Recommendation:**
+
+Change the `user` account type from `UncheckedAccount` to `Signer`:
+
+```rust
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        has_one = user,
+        seeds = [b"position", pool.key().as_ref(), user.key().as_ref()],
+        bump = position.bump,
+    )]
+    pub position: Account<'info, UserPosition>,
+    // ...
+}
+```
+
+---
+
+<ArticleSection name="Recommendation Quality" id="recommendation-quality" level="h2" />
+
+A finding without a recommendation is incomplete. A finding with a bad recommendation is worse, because the team might implement it and introduce a new vulnerability.
+
+<ArticleSection name="Good Recommendations" id="good-recommendations" level="h3" />
+
+Good recommendations are:
+
+- **Specific** -- Show the exact code change, not "add a check."
+- **Minimal** -- Change as little as possible. The smaller the diff, the less likely it introduces new bugs.
+- **Complete** -- Address the root cause, not just the symptom. If the issue is a missing signer check, do not recommend adding a constraint that happens to prevent the specific attack you found. Change the account type.
+- **Tested** -- If possible, modify the PoC to verify the fix works.
+
+```rust
+// BAD recommendation: "Add validation to the withdraw function"
+// (Too vague. The team will ask: what validation?)
+
+// BAD recommendation: "Add a constraint to check user.key() == position.owner"
+// (Redundant with has_one, does not fix the actual issue)
+
+// GOOD recommendation: "Change user type from UncheckedAccount to Signer"
+// (Specific, minimal, addresses root cause)
+```
+
+<ArticleSection name="Recommendations for Design-Level Issues" id="recommendations-for-design-level-issues" level="h3" />
+
+Some findings require architectural changes rather than one-line fixes. For these, provide:
+
+1. A description of the design change needed
+2. Pseudocode or a high-level implementation sketch
+3. An acknowledgment of the migration complexity
+4. A suggestion for interim mitigation if the full fix requires extensive development time
+
+For example, if a protocol uses a single global pool where a design-level flaw enables cross-user interference, the recommendation might be to migrate to isolated per-user vaults. This is a multi-week engineering effort. In the interim, recommend a pause mechanism that the admin can trigger if exploitation is detected.
+
+<ArticleSection name="Executive Summary Craft" id="executive-summary-craft" level="h2" />
+
+The executive summary is the first thing the protocol team, their investors, and any public reader will see. It must communicate the overall security posture in 2 to 3 paragraphs.
+
+<ArticleSection name="What to Include" id="what-to-include" level="h3" />
+
+- Total number of findings by severity (e.g., "2 Critical, 3 High, 5 Medium, 4 Low, 7 Informational")
+- One sentence summarizing the most severe finding
+- Overall assessment: is the protocol safe to deploy, or are there blocking issues?
+- Positive observations: what did the team do well?
+- Scope limitations: what was not reviewed?
+
+<ArticleSection name="Example Executive Summary" id="example-executive-summary" level="h3" />
+
+> We audited the Meridian Lending Protocol v2 (commit a3f7b2e) over a 3-week engagement with 2 auditors. The review covered 5,000 lines of Anchor code across 2 programs.
+>
+> We identified 21 findings: 2 Critical, 3 High, 5 Medium, 4 Low, and 7 Informational. The two critical findings, a missing signer check on withdrawals (H-01) and an arithmetic overflow in liquidation calculations (H-02), would allow direct theft of user funds and must be resolved before mainnet deployment. Three high-severity findings relate to oracle staleness handling and could enable undercollateralized borrowing under specific market conditions.
+>
+> The codebase demonstrates strong account validation patterns overall, with consistent use of Anchor constraints and well-structured instruction handlers. The team's use of checked arithmetic throughout most of the codebase prevented what would otherwise be numerous overflow vulnerabilities. We recommend resolving all Critical and High findings and re-auditing the affected code paths before deployment.
+
+Avoid these common reporting anti-patterns:
+
+- **Over-inflating severity** -- If the finding requires $10M in capital and perfect timing to extract $50, it is not Critical. Be honest about prerequisites.
+- **Under-describing impact** -- "Attacker can steal funds" gets triaged for next sprint. "Attacker can drain the entire pool of $12.4M in a single transaction" creates urgency. Use concrete numbers.
+- **Vague recommendations** -- "Improve input validation" is not actionable. Show the specific code change.
+- **Missing context** -- Always include file paths, line numbers, function names, and the specific accounts or conditions involved.
+

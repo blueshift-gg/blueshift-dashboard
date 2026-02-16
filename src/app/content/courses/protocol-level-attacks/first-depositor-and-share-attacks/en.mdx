@@ -1,0 +1,186 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# First Depositor and Share Attacks
+
+Vaults, staking pools, and liquidity pools on Solana commonly use a share-based accounting model: depositors receive shares proportional to their deposit, and the value of each share increases as the pool earns yield. This model, borrowed from ERC-4626 on Ethereum, contains a subtle but devastating vulnerability when the pool is empty or nearly empty.
+
+The Arithmetic and Accounting course covered integer rounding direction and how truncation can leak value across calculations. The first depositor attack weaponizes that arithmetic into a complete fund-extraction exploit. It requires no oracle manipulation, no flash loans, and no complex transaction construction. Just a well-timed deposit, a donation, and basic integer truncation working against the victim.
+
+<ArticleSection name="Share Inflation Mechanics" id="share-inflation-mechanics" level="h2" />
+
+The share formula `shares = deposit * total_shares / total_assets` truncates toward zero. When a vault has substantial assets and shares, this rounding is negligible. But when the vault is empty or nearly empty, an attacker can exploit the rounding to steal from subsequent depositors. The attack does not require any special tooling: just a well-timed deposit and a direct token donation.
+
+<ArticleSection name="Donation Attack Step by Step" id="donation-attack-step-by-step" level="h2" />
+
+The attack proceeds in four steps. Let us trace through with concrete numbers.
+
+**Step 1: Attacker becomes the first depositor**
+
+The attacker deposits 1 lamport (0.000000001 SOL) into the empty vault.
+
+```
+deposit_amount = 1
+total_shares = 0 (empty vault)
+shares_minted = 1 (1:1 for first depositor)
+
+Vault state after:
+  total_shares = 1
+  total_assets = 1
+```
+
+The attacker now holds 1 share, and the vault holds 1 lamport.
+
+**Step 2: Attacker donates tokens directly to the vault**
+
+The attacker transfers 1,000,000 tokens (1M) directly to the vault's token account, bypassing the deposit function. This is a direct SPL token transfer, not a protocol interaction.
+
+```
+Vault token account balance: 1,000,001
+Vault state (not updated by donation):
+  total_shares = 1
+  total_assets = 1 (still 1, because donation bypassed the protocol)
+```
+
+Wait. The vault state says `total_assets = 1` but the actual token balance is 1,000,001. This discrepancy is what matters. If the vault reads its actual token balance instead of relying solely on internal accounting (a common pattern for "rebasing" or "auto-compounding" vaults), then `total_assets` effectively becomes 1,000,001.
+
+Many vault implementations sync their internal accounting with the actual token balance:
+
+```rust
+// Common pattern: sync vault accounting with actual balance
+pub fn sync_vault(ctx: Context<SyncVault>) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+    let actual_balance = ctx.accounts.vault_token_account.amount;
+    vault.total_assets = actual_balance;
+    Ok(())
+}
+```
+
+After sync (or if the vault reads the token account balance directly):
+
+```
+Vault state:
+  total_shares = 1
+  total_assets = 1,000,001
+```
+
+**Step 3: Victim deposits**
+
+An innocent user deposits 1,000,000 tokens (the same amount the attacker donated).
+
+```
+shares_minted = (1,000,000 * 1) / 1,000,001 = 0
+```
+
+Integer division truncates the result to 0. The victim deposited 1,000,000 tokens and received 0 shares.
+
+**Step 4: Attacker withdraws**
+
+The attacker redeems their 1 share.
+
+```
+assets_returned = (1 * 2,000,001) / 1 = 2,000,001
+```
+
+The attacker withdraws all 2,000,001 tokens in the vault: their original 1 lamport, their 1,000,000 donation, and the victim's entire 1,000,000 deposit.
+
+**Net result**: The attacker spent 1,000,001 tokens and extracted 2,000,001 tokens. Profit: 1,000,000 tokens (the victim's entire deposit).
+
+<ArticleSection name="Why the Math Breaks" id="why-the-math-breaks" level="h3" />
+
+The core issue is that when `total_shares` is very small (especially 1), the share price can be inflated to the point where any deposit smaller than the inflated share price rounds down to 0 shares.
+
+The critical inequality is:
+
+```
+victim_deposit < total_assets / total_shares
+```
+
+When this holds, the victim gets 0 shares. The attacker controls `total_assets` (through donation) and `total_shares` (by being the first depositor with minimal shares). By making `total_assets / total_shares` larger than any expected deposit, the attacker ensures all subsequent depositors receive nothing.
+
+Even when the victim does not receive exactly 0 shares, the rounding can still steal substantial value. If the victim deposits 1,500,000 tokens with the same vault state:
+
+```
+shares_minted = (1,500,000 * 1) / 1,000,001 = 1
+```
+
+The victim gets 1 share. Now there are 2 shares and 2,500,001 assets. The attacker redeems 1 share and gets 1,250,000 tokens. The victim redeems 1 share and gets 1,250,001 tokens. The attacker profited 250,000 tokens from the victim's deposit.
+
+<ArticleSection name="Virtual Reserves Mitigation" id="virtual-reserves-mitigation" level="h2" />
+
+The most effective fix is virtual reserves (also called virtual offsets). By adding a constant (e.g. 1e6) to both `total_assets` and `total_shares` in the share calculation, the share price becomes impossible to inflate through small deposits and donations.
+
+Let us trace through the same attack with virtual reserves (using a virtual offset of 1,000,000 on each side):
+
+**Step 1**: Attacker deposits 1 lamport into the empty vault.
+
+```
+shares_minted = (1 * (0 + 1,000,000)) / (0 + 1,000,000) = 1
+
+Vault state: total_shares = 1, total_assets = 1
+```
+
+**Step 2**: Attacker donates 1,000,000 tokens.
+
+```
+Vault state: total_shares = 1, total_assets = 1,000,001
+```
+
+**Step 3**: Victim deposits 1,000,000 tokens.
+
+```
+shares_minted = (1,000,000 * (1 + 1,000,000)) / (1,000,001 + 1,000,000)
+             = (1,000,000 * 1,000,001) / 2,000,001
+             = 500,000 (approximately)
+```
+
+The victim receives approximately 500,000 shares instead of 0. The donation attack fails because the virtual reserves prevent the share price from being inflated enough to round the victim's shares to zero.
+
+The cost of attempting the attack now exceeds the potential profit. The attacker's 1,000,000 token donation is diluted by the virtual reserves, making the attack economically irrational.
+
+<ArticleSection name="Dead Shares" id="dead-shares" level="h2" />
+
+A complementary defense is the "dead shares" pattern, used by Raydium and other Solana protocols. On the first deposit, the protocol permanently locks a small number of shares (e.g. 1,000,000) by minting them to a known burn address. These dead shares mean `total_shares` can never be 1, which prevents the attacker from controlling the share price through a single-lamport deposit. Combined with virtual reserves, dead shares make share inflation attacks economically infeasible.
+
+<ArticleSection name="Internal Accounting vs Token Balance" id="internal-accounting-vs-token-balance" level="h3" />
+
+A critical architectural decision is whether the vault tracks assets through internal state (`vault.total_assets`) or reads the actual token account balance. Reading the token balance makes the donation attack trivial because anyone can transfer tokens to the vault account. Internal accounting requires the attacker to find another way to inflate the asset count.
+
+The safer pattern is strict internal accounting where `total_assets` is only modified through the protocol's deposit and withdraw functions:
+
+```rust
+pub fn deposit_strict_accounting(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    // NEVER read from the token account balance
+    // ALWAYS use internal accounting
+    let total_assets_virtual = vault.total_assets
+        .checked_add(VIRTUAL_ASSETS)
+        .unwrap();
+    let total_shares_virtual = vault.total_shares
+        .checked_add(VIRTUAL_SHARES)
+        .unwrap();
+
+    let shares = (amount as u128)
+        .checked_mul(total_shares_virtual as u128)
+        .unwrap()
+        .checked_div(total_assets_virtual as u128)
+        .unwrap() as u64;
+
+    require!(shares > 0, ErrorCode::DepositTooSmall);
+
+    transfer_tokens(&ctx, amount)?;
+
+    // Internal accounting: only increment by the actual deposit
+    vault.total_shares = vault.total_shares.checked_add(shares).unwrap();
+    vault.total_assets = vault.total_assets.checked_add(amount).unwrap();
+
+    mint_shares(&ctx, shares)?;
+
+    Ok(())
+}
+```
+
+With strict internal accounting, direct token donations do not affect the share calculation. The attacker would need to use the deposit function, which distributes shares correctly.
+
+The combination of virtual reserves, minimum first deposits, dead shares, and strict internal accounting makes share inflation attacks economically infeasible. Production vaults should implement at least two of these four mitigations.
+

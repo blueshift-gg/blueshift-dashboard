@@ -1,0 +1,236 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Reading Unfamiliar Code
+
+Auditors rarely have the luxury of familiarity. Every engagement begins with a codebase you have never seen before, written by developers with their own conventions, naming patterns, and architectural preferences. Your job is to understand the entire system deeply enough to find its flaws, typically within 2 to 3 days of initial review.
+
+This lesson teaches the systematic techniques that professional auditors use to rapidly comprehend unfamiliar Solana programs.
+
+<ArticleSection name="Entry Point Identification" id="entry-point-identification" level="h2" />
+
+Every Anchor program has a single entry point: the `#[program]` module in `lib.rs`. This is where you start. Do not begin by reading utility functions, helper modules, or account structs. Start at the top.
+
+Open `lib.rs` and read the `#[program]` module to get a complete list of every instruction the program exposes:
+
+```rust
+#[program]
+pub mod meridian_lending {
+    use super::*;
+
+    pub fn initialize_pool(ctx: Context<InitializePool>, params: PoolParams) -> Result<()> {
+        instructions::initialize_pool::handler(ctx, params)
+    }
+
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        instructions::deposit::handler(ctx, amount)
+    }
+
+    pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+        instructions::borrow::handler(ctx, amount)
+    }
+
+    pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
+        instructions::repay::handler(ctx, amount)
+    }
+
+    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+        instructions::liquidate::handler(ctx)
+    }
+
+    pub fn update_price(ctx: Context<UpdatePrice>) -> Result<()> {
+        instructions::update_price::handler(ctx)
+    }
+
+    pub fn set_pool_params(ctx: Context<SetPoolParams>, params: PoolParams) -> Result<()> {
+        instructions::set_pool_params::handler(ctx, params)
+    }
+}
+```
+
+From this alone, you know the protocol has 7 instructions. You can already classify them by risk: `borrow`, `liquidate`, and `update_price` are likely the most dangerous because they involve external data dependencies and token movement based on computed values.
+
+Write down the full instruction list. This is your audit map. Every instruction must be reviewed before the engagement ends.
+
+<ArticleSection name="Control Flow Tracing in Anchor" id="control-flow-tracing-in-anchor" level="h2" />
+
+Anchor programs follow a consistent control flow pattern. Understanding this pattern lets you read any Anchor program without studying its specific conventions first.
+
+For every instruction, the flow is:
+
+1. **Account deserialization and validation** -- Anchor reads the `#[derive(Accounts)]` struct, deserializes each account, and checks constraints (`has_one`, `seeds`, `constraint`, `init`, etc.). This happens before your handler code executes.
+2. **Handler execution** -- Your instruction handler runs business logic, modifies account state, and performs CPIs.
+3. **Account serialization** -- Anchor writes modified account data back to their accounts on exit.
+
+This means you must read two things for each instruction: the `Accounts` struct (which defines validation) and the handler function (which defines logic). Read the struct first, because it tells you what the handler is allowed to work with.
+
+```rust
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool", pool.mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, LendingPool>,
+
+    #[account(
+        mut,
+        associated_token::mint = pool.mint,
+        associated_token::authority = pool,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        associated_token::mint = pool.mint,
+        associated_token::authority = user,
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserPosition::INIT_SPACE,
+        seeds = [b"position", pool.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub position: Account<'info, UserPosition>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+From this struct, you can immediately identify several things without reading a single line of handler code:
+
+- The user must be a signer (authorization is enforced).
+- The pool is a PDA derived from its mint (one pool per token).
+- The vault is the pool's associated token account (tokens are held by the PDA).
+- The user's token account is validated against the correct mint and authority.
+- The position is a PDA per-user per-pool, created on first deposit.
+
+You also notice potential issues to investigate: `init_if_needed` can be dangerous if the position can be reinitialized after closure. Note this for deeper review in the handler.
+
+<ArticleSection name="Trust Boundary Mapping" id="trust-boundary-mapping" level="h2" />
+
+A trust boundary is a line between "trusted" and "untrusted" in your program. Everything inside the boundary is assumed correct. Everything outside must be validated.
+
+In Solana programs, trust boundaries exist at multiple levels:
+
+<ArticleSection name="Instruction-Level Boundaries" id="instruction-level-boundaries" level="h3" />
+
+Every instruction receives accounts from the caller. The caller is untrusted. Therefore, every account passed to an instruction crosses a trust boundary and must be validated. Anchor handles most of this through account constraints, but you must verify the constraints are sufficient.
+
+Map each instruction to its trust requirements:
+
+| Instruction | Who Can Call | What Is Trusted | What Must Be Verified |
+|---|---|---|---|
+| `deposit` | Any user | Token program, system program | User owns token account, pool PDA correct, vault belongs to pool |
+| `borrow` | Position holder | Oracle price data | Collateral sufficient, oracle not stale, borrow amount within limits |
+| `liquidate` | Anyone | Oracle price data | Position actually undercollateralized, liquidation math correct |
+| `set_pool_params` | Admin only | Nothing external | Signer is admin authority, parameters within safe ranges |
+
+<ArticleSection name="CPI Boundaries" id="cpi-boundaries" level="h3" />
+
+When your program invokes another program via CPI, the called program crosses a trust boundary. You trust the SPL Token program to correctly transfer tokens. But do you trust an arbitrary program passed as an account? If the instruction accepts a `program` account that is not validated against a known program ID, an attacker can substitute a malicious program.
+
+```rust
+// DANGEROUS: program_id not validated
+pub fn execute_strategy<'info>(
+    ctx: Context<ExecuteStrategy>,
+    data: Vec<u8>,
+) -> Result<()> {
+    let ix = solana_program::instruction::Instruction {
+        program_id: ctx.accounts.strategy_program.key(),
+        accounts: vec![/* ... */],
+        data,
+    };
+    solana_program::program::invoke(&ix, &[/* ... */])?;
+    Ok(())
+}
+
+// SAFE: program validated against known ID
+#[derive(Accounts)]
+pub struct ExecuteStrategy<'info> {
+    #[account(
+        constraint = strategy_program.key() == APPROVED_STRATEGY_ID
+    )]
+    /// CHECK: Validated against known program ID
+    pub strategy_program: UncheckedAccount<'info>,
+}
+```
+
+<ArticleSection name="IDL as Roadmap" id="idl-as-roadmap" level="h2" />
+
+The Interface Definition Language (IDL) file is generated by Anchor during build and provides a machine-readable description of the program's interface. While the code is the source of truth, the IDL is an excellent starting point for rapid comprehension.
+
+The IDL tells you:
+
+- Every instruction name and its arguments (types included)
+- Every account struct and its fields with types and sizes
+- Every account required by each instruction (with `isMut`, `isSigner`, and PDA seeds)
+- Custom error codes and their messages
+- Event definitions
+
+You can view the IDL using the Anchor CLI:
+
+```shellscript
+anchor idl parse --file programs/lending/src/lib.rs
+```
+
+Or if the program is already deployed, fetch the IDL from chain:
+
+```shellscript
+anchor idl fetch <PROGRAM_ID> --provider.cluster mainnet
+```
+
+Use the IDL to generate a quick reference table of all instructions and their account requirements. This table becomes your working checklist during the audit.
+
+<ArticleSection name="State Machine Reconstruction" id="state-machine-reconstruction" level="h2" />
+
+Every protocol implements a state machine, even if the developers did not think of it that way. Accounts transition between states based on instruction execution, and valid transitions are implicitly defined by the code's constraints.
+
+Your job as an auditor is to make the implicit state machine explicit. For a lending position, the state machine might look like this:
+
+**States:**
+- `NonExistent` -- The position account does not exist yet.
+- `Active` -- The position has deposited collateral and may have an open loan.
+- `Liquidatable` -- The position's health factor has dropped below 1.0 (collateral value dropped or loan value increased).
+- `Closed` -- The position has been fully repaid and collateral withdrawn.
+
+**Transitions:**
+- `NonExistent` -> `Active`: via `deposit` (creates position, adds collateral)
+- `Active` -> `Active`: via `deposit`, `borrow`, `repay`, `withdraw` (modifies position)
+- `Active` -> `Liquidatable`: implicit (oracle price change reduces health factor)
+- `Liquidatable` -> `Active`: via `repay` or `deposit` (restores health factor)
+- `Liquidatable` -> `Closed`: via `liquidate` (liquidator closes position)
+- `Active` -> `Closed`: via `withdraw_all` (user closes their own position)
+- `Closed` -> `NonExistent`: via account closure (lamports reclaimed)
+
+Now look for illegal transitions. Can an attacker:
+
+- Move from `Closed` back to `Active`? (reinitialization attack)
+- Move from `Active` directly to `Closed` while still owing a loan? (bad debt attack)
+- Stay in `Active` when they should be in `Liquidatable`? (oracle manipulation)
+- Move from `Liquidatable` to `Closed` with remaining collateral not returned? (liquidator theft)
+
+Each illegal transition is a potential vulnerability. Reconstruct the state machine, enumerate the transitions, and then verify that the code enforces every transition constraint correctly.
+
+<ArticleSection name="Practical Checklist for First-Day Code Review" id="practical-checklist-for-first-day-code-review" level="h2" />
+
+Security-critical code reads at roughly 100 lines per hour including note-taking and constraint verification, so prioritize ruthlessly. When you open an unfamiliar codebase on Day 1, follow this sequence:
+
+1. Read `Cargo.toml` -- Check Anchor version, dependencies, and features. Outdated dependencies are findings themselves.
+2. Read `lib.rs` -- List every instruction. Count them. This is your scope.
+3. Read account structs in `state/` -- Understand every data type the program stores. Draw relationships between accounts.
+4. Read the IDL or generate one -- Create your instruction reference table.
+5. Trace one complete user flow -- Pick the most important flow (e.g., deposit -> borrow -> repay) and trace it end to end. This builds your mental model faster than reading files sequentially.
+6. Identify admin powers -- Find every instruction gated by an admin or authority signer. Understand what the admin can do.
+7. Map token flows -- For every instruction that moves tokens, note the source, destination, and amount calculation.
+8. List your invariants -- Based on everything you have read, write down the properties that must always be true.
+
+By the end of Day 1, you should have a complete instruction list, an account relationship map, a set of invariants, and a prioritized list of what to review in depth starting on Day 2.
+

@@ -1,0 +1,306 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Denial of Service Vectors
+
+Not every attack drains funds. Some attacks make the protocol unusable, permanently lock assets, or grief other users by exploiting resource constraints. Denial of service (DoS) on Solana takes forms unique to its execution model: panics that abort transactions, compute unit exhaustion, dust attacks that bloat state, and error conditions that permanently brick accounts.
+
+Auditors often underestimate DoS vulnerabilities because they do not directly extract value. But a protocol that cannot process liquidations during a market crash, or a vault where funds are permanently locked, can cause losses just as severe as a direct exploit.
+
+<ArticleSection name="Panics in Production" id="panics-in-production" level="h2" />
+
+Rust's `unwrap()`, `expect()`, and array index panics abort the entire transaction. In a smart contract, a panic means the instruction fails and reverts. If an attacker can trigger a panic on critical paths, they can prevent the protocol from functioning.
+
+The most common source of panics in production Solana programs is `unwrap()` on user-controlled data:
+
+```rust
+// Vulnerable: unwrap on user-provided data
+pub fn process_order(ctx: Context<ProcessOrder>, order_data: Vec<u8>) -> Result<()> {
+    // This panics if order_data is too short
+    let price = u64::from_le_bytes(order_data[0..8].try_into().unwrap());
+    let amount = u64::from_le_bytes(order_data[8..16].try_into().unwrap());
+
+    // This panics if index is out of bounds
+    let order_type = order_data[16];
+
+    execute_order(price, amount, order_type)?;
+
+    Ok(())
+}
+```
+
+An attacker submits `order_data` with fewer than 17 bytes. The program panics, and if this instruction is part of a larger transaction (for example, a crank that processes multiple orders), the entire transaction fails.
+
+The fix uses proper error handling:
+
+```rust
+// Safe: proper error handling instead of panics
+pub fn process_order_safe(
+    ctx: Context<ProcessOrder>,
+    order_data: Vec<u8>,
+) -> Result<()> {
+    require!(order_data.len() >= 17, ErrorCode::InvalidOrderData);
+
+    let price = u64::from_le_bytes(
+        order_data[0..8]
+            .try_into()
+            .map_err(|_| ErrorCode::InvalidOrderData)?
+    );
+    let amount = u64::from_le_bytes(
+        order_data[8..16]
+            .try_into()
+            .map_err(|_| ErrorCode::InvalidOrderData)?
+    );
+    let order_type = order_data[16];
+
+    execute_order(price, amount, order_type)?;
+
+    Ok(())
+}
+```
+
+Beyond user input, panics can lurk in arithmetic operations. Any `checked_*` result that is unwrapped becomes a panic vector:
+
+```rust
+// Vulnerable: chain of unwraps that can panic
+pub fn calculate_fee(amount: u64, fee_bps: u64) -> u64 {
+    amount.checked_mul(fee_bps).unwrap()
+        .checked_div(10_000).unwrap()
+}
+```
+
+If `amount * fee_bps` overflows `u64` (for example, amount = `u64::MAX`, fee_bps = 2), `checked_mul` returns `None` and `unwrap()` panics. Use `Result` propagation:
+
+```rust
+// Safe: propagate errors instead of panicking
+pub fn calculate_fee_safe(amount: u64, fee_bps: u64) -> Result<u64> {
+    let fee = (amount as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or(ErrorCode::MathOverflow)?
+        .checked_div(10_000)
+        .ok_or(ErrorCode::MathOverflow)? as u64;
+
+    Ok(fee)
+}
+```
+
+<ArticleSection name="Division by Zero on Empty State" id="division-by-zero-on-empty-state" level="h2" />
+
+Division by zero is a special case of panic that deserves its own attention because it occurs at protocol state boundaries -- most often when a pool, vault, or market reaches zero total supply.
+
+```rust
+// Vulnerable: division by total_supply which can be zero
+pub fn calculate_share_price(
+    total_assets: u64,
+    total_supply: u64,
+) -> Result<u64> {
+    // Panics when total_supply is 0 (empty pool)
+    let price = total_assets
+        .checked_div(total_supply)
+        .unwrap(); // PANIC if total_supply == 0
+
+    Ok(price)
+}
+```
+
+This is dangerous because `total_supply` reaching zero is a normal state transition. The last user withdraws, the pool is empty, and then any operation that reads the share price (including informational queries) panics.
+
+An attacker can exploit this to DoS a pool: withdraw all shares, then trigger any instruction that calculates the share price. If that instruction is on a critical path (like the liquidation engine reading collateral value), the entire liquidation system halts.
+
+```rust
+// Safe: handle the zero case explicitly
+pub fn calculate_share_price_safe(
+    total_assets: u64,
+    total_supply: u64,
+) -> Result<u64> {
+    if total_supply == 0 {
+        // Empty pool: share price is 1:1 by convention
+        return Ok(1);
+    }
+
+    let price = total_assets
+        .checked_div(total_supply)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    Ok(price)
+}
+```
+
+Audit every division in your program. For each one, determine whether the divisor can ever be zero through normal protocol operation or attacker-induced state transitions.
+
+<ArticleSection name="Resource Exhaustion" id="resource-exhaustion" level="h2" />
+
+Solana transactions have a hard limit of 200,000 compute units (CU) per instruction by default, with a maximum of 1,400,000 CU per transaction when using `SetComputeUnitLimit`. If an attacker can force your instruction to consume more CU than the limit, the transaction fails.
+
+The most common resource exhaustion vector is unbounded iteration over user-controlled data:
+
+```rust
+// Vulnerable: unbounded iteration
+pub fn process_all_orders(ctx: Context<ProcessOrders>) -> Result<()> {
+    let order_book = &ctx.accounts.order_book;
+    let orders = order_book.load_orders()?;
+
+    // If an attacker creates 10,000 orders, this exceeds CU limits
+    for order in orders.iter() {
+        process_single_order(order)?;
+    }
+
+    Ok(())
+}
+```
+
+The fix bounds the iteration and uses pagination:
+
+```rust
+// Safe: bounded iteration with pagination
+pub fn process_orders_batch(
+    ctx: Context<ProcessOrders>,
+    start_index: u32,
+    max_count: u32,
+) -> Result<()> {
+    let order_book = &ctx.accounts.order_book;
+    let orders = order_book.load_orders()?;
+
+    // Hard cap on items per batch
+    let batch_size = max_count.min(50) as usize;
+    let start = start_index as usize;
+    let end = start.saturating_add(batch_size).min(orders.len());
+
+    for order in orders[start..end].iter() {
+        process_single_order(order)?;
+    }
+
+    Ok(())
+}
+```
+
+Another resource exhaustion vector is deeply nested account structures or recursive CPI chains:
+
+```rust
+// Vulnerable: CPI depth can exhaust stack or CU
+pub fn recursive_process(ctx: Context<Process>, depth: u8) -> Result<()> {
+    if depth > 0 {
+        // Each CPI call costs ~25,000 CU base overhead
+        // At depth 10, that's 250,000 CU just for invocation overhead
+        cpi_call_self(&ctx, depth - 1)?;
+    }
+
+    // Actual processing
+    do_work(&ctx)?;
+
+    Ok(())
+}
+```
+
+Solana limits CPI depth to 4 levels, which provides some natural protection. But even within this limit, each CPI call adds approximately 25,000 CU of overhead. Design your CPI chains to be as shallow as possible.
+
+<ArticleSection name="Griefing Through Dust" id="griefing-through-dust" level="h2" />
+
+Dust attacks exploit the minimum balance (rent-exempt) requirement for Solana accounts. An attacker creates many small positions, accounts, or deposits that each hold the minimum amount, bloating the protocol's state and increasing costs for legitimate operations.
+
+Consider a lending protocol where each user's position is a separate PDA account:
+
+```rust
+// Vulnerable: no minimum position size
+pub fn open_position(ctx: Context<OpenPosition>, amount: u64) -> Result<()> {
+    let position = &mut ctx.accounts.position;
+
+    position.owner = ctx.accounts.user.key();
+    position.collateral = amount;
+    position.debt = 0;
+
+    transfer_tokens(&ctx, amount)?;
+
+    Ok(())
+}
+```
+
+An attacker creates 10,000 positions, each with 1 lamport of collateral. Each position creates a new PDA that costs the attacker about 0.002 SOL in rent. But the protocol now has 10,000 position accounts that must be iterated over during liquidation checks, interest accrual, and other batch operations.
+
+The griefing cost to the attacker is about 20 SOL. The operational cost imposed on the protocol can be orders of magnitude higher, enough to push critical operations like liquidations past compute unit limits.
+
+```rust
+// Safe: enforce minimum position size and charge account creation to user
+pub fn open_position_safe(ctx: Context<OpenPosition>, amount: u64) -> Result<()> {
+    // Minimum position: 0.1 SOL (100M lamports)
+    const MIN_POSITION: u64 = 100_000_000;
+
+    require!(amount >= MIN_POSITION, ErrorCode::PositionTooSmall);
+
+    let position = &mut ctx.accounts.position;
+    position.owner = ctx.accounts.user.key();
+    position.collateral = amount;
+    position.debt = 0;
+
+    transfer_tokens(&ctx, amount)?;
+
+    Ok(())
+}
+```
+
+For protocols that cannot enforce a minimum (orderbooks, for example), use a different state architecture. Store positions in a single account using a vector or a zero-copy data structure, so the attacker cannot force account creation:
+
+```rust
+// Alternative: store positions in a shared account (zero-copy)
+#[account(zero_copy)]
+pub struct PositionBook {
+    pub positions: [Position; 1024], // Fixed-size array, no new accounts
+    pub position_count: u32,
+}
+```
+
+<ArticleSection name="Permanently Locked Funds" id="permanently-locked-funds" level="h2" />
+
+The most severe DoS outcome is permanently locked funds: a state where tokens exist in a program-controlled account but no instruction can ever retrieve them. This is not a temporary DoS; it is a permanent loss.
+
+Common causes include:
+
+**1. Missing close/withdraw instructions for edge cases:**
+
+```rust
+// Vulnerable: no way to withdraw if pool enters certain state
+pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
+    let pool = &ctx.accounts.pool;
+
+    // If pool is paused (e.g., by governance), no one can withdraw
+    require!(!pool.paused, ErrorCode::PoolPaused);
+
+    // If the governance key is compromised or lost, pause is permanent
+    // and funds are locked forever
+
+    // ... withdraw logic ...
+    Ok(())
+}
+```
+
+The fix includes emergency withdrawal paths:
+
+```rust
+// Safe: emergency withdrawal that bypasses pause
+pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
+    let pool = &ctx.accounts.pool;
+
+    // Emergency withdrawal is allowed if:
+    // 1. Pool has been paused for more than 7 days, OR
+    // 2. Called by the timelock governance (not the admin)
+    let clock = Clock::get()?;
+
+    let paused_too_long = pool.paused
+        && clock.unix_timestamp - pool.pause_timestamp > 7 * 86_400;
+
+    let is_timelock = ctx.accounts.authority.key() == pool.timelock_authority;
+
+    require!(
+        paused_too_long || is_timelock,
+        ErrorCode::EmergencyNotAvailable
+    );
+
+    // Withdraw user's proportional share regardless of pool state
+    let user_share = calculate_user_share(&pool, &ctx.accounts.user_position)?;
+    transfer_tokens(&ctx, user_share)?;
+
+    Ok(())
+}
+```
+
+Analyze every instruction that modifies protocol state for edge cases where the state transition leads to permanently unreachable funds. The question to ask: "Is there any sequence of events, including adversarial ones, where tokens in this account can never be retrieved?"
+

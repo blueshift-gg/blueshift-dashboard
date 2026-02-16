@@ -1,0 +1,252 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Audit Methodology
+
+The difference between a productive audit and wasted time is methodology. An auditor without a systematic approach will skim surface-level code, miss non-obvious state transitions, and produce a report full of informational findings but empty of critical vulnerabilities. A structured methodology ensures that every instruction, every account relationship, and every invariant receives deliberate attention.
+
+This lesson covers the methodology that professional Solana auditors use on real engagements, from scoping through final review.
+
+<ArticleSection name="Scoping and Time Allocation" id="scoping-and-time-allocation" level="h2" />
+
+Every audit begins with scoping: defining exactly what will be reviewed, how long it will take, and what resources are needed. Poor scoping is the most common reason audits fail to find critical bugs. If the scope is too broad for the time allocated, coverage becomes shallow. If critical components are excluded, entire attack surfaces go unexamined.
+
+A well-structured scope document covers these elements:
+
+```json
+{
+  "project": "Meridian Lending Protocol",
+  "repository": "https://github.com/meridian-fi/lending-v2",
+  "commit": "a3f7b2e1c9d4f6a8b0e2d4c6a8f0b2e4d6c8a0b2",
+  "programs_in_scope": [
+    {
+      "name": "meridian_lending",
+      "path": "programs/lending/src/",
+      "loc": 4200,
+      "description": "Core lending pool logic: deposits, borrows, repayments, liquidations"
+    },
+    {
+      "name": "meridian_oracle",
+      "path": "programs/oracle/src/",
+      "loc": 800,
+      "description": "Price feed aggregation from Pyth and Switchboard"
+    }
+  ],
+  "out_of_scope": [
+    "Frontend application",
+    "Off-chain liquidation bots",
+    "Deployment scripts"
+  ],
+  "documentation": [
+    "docs/architecture.md",
+    "docs/invariants.md",
+    "docs/economic-model.md"
+  ],
+  "timeline": "3 weeks, 2 auditors",
+  "prior_audits": ["OtterSec Q3 2024 - v1.0"]
+}
+```
+
+<ArticleSection name="Time Budgeting" id="time-budgeting" level="h3" />
+
+For a 5,000-line Anchor codebase with two auditors over three weeks, time allocation typically follows this distribution:
+
+- **Days 1-2 (15%)**: Initial read-through, documentation review, architecture understanding, and threat model construction.
+- **Days 3-10 (55%)**: Deep instruction-by-instruction review. Each auditor works independently to maximize coverage diversity.
+- **Days 11-13 (20%)**: Cross-review of findings, exploration of complex interactions, and targeted fuzzing of suspicious areas.
+- **Days 14-15 (10%)**: Report writing, finding deduplication, severity calibration, and recommendation drafting.
+
+A common mistake is spending too much time on documentation review and architecture diagrams. Documentation lies. Code does not. Spend the majority of your time reading actual instruction handlers.
+
+<ArticleSection name="Threat Modeling for Solana" id="threat-modeling-for-solana" level="h2" />
+
+Threat modeling is the process of systematically identifying who might attack the protocol, what they would target, and how they would do it. On Solana, the threat model differs significantly from traditional web applications or even EVM-based protocols.
+
+<ArticleSection name="Actors" id="actors" level="h3" />
+
+Every protocol has a set of actors with different privilege levels and different incentives. For a lending protocol, the actor model looks like this:
+
+- **Depositors** -- Supply assets to lending pools. Incentive: earn yield. Attack motivation: extract more yield than entitled, withdraw more than deposited.
+- **Borrowers** -- Take loans against collateral. Incentive: leverage. Attack motivation: borrow without sufficient collateral, avoid liquidation.
+- **Liquidators** -- Close undercollateralized positions for a bonus. Incentive: profit from liquidation bonus. Attack motivation: force liquidations on healthy positions, extract excess bonus.
+- **Protocol admin** -- Manages pool parameters, fee rates, oracle sources. Incentive: protocol health. Attack motivation (if malicious): rug pull, parameter manipulation.
+- **Oracle operators** -- Supply price data. Incentive: accuracy. Attack motivation: price manipulation for liquidation cascades.
+- **Anonymous attackers** -- No relationship with the protocol. Incentive: direct profit. Attack motivation: any exploitable vulnerability.
+
+<ArticleSection name="Assets at Risk" id="assets-at-risk" level="h3" />
+
+Enumerate every asset the protocol holds or controls:
+
+- Token balances in pool vaults (USDC, SOL, mSOL, etc.)
+- Accumulated protocol fees
+- User collateral positions
+- Oracle price data integrity
+- Governance authority over protocol parameters
+
+<ArticleSection name="Attack Surfaces" id="attack-surfaces" level="h3" />
+
+Map every entry point where an external actor interacts with the protocol:
+
+| Instruction | Caller | Critical Accounts | Risk Level |
+|---|---|---|---|
+| `deposit` | Any user | Pool vault, user token account | Medium |
+| `borrow` | Depositor with collateral | Pool vault, oracle, user position | Critical |
+| `repay` | Borrower | Pool vault, user position | Low |
+| `liquidate` | Any user | Borrower position, oracle, pool vault | Critical |
+| `update_oracle` | Oracle authority | Price feed account | Critical |
+| `set_parameters` | Admin | Pool config account | High |
+
+Instructions marked Critical are where auditors should spend the most time. Any instruction that moves tokens based on external data (oracle prices) or involves complex math (liquidation calculations) deserves disproportionate attention.
+
+<ArticleSection name="Review Phases" id="review-phases" level="h2" />
+
+A thorough audit proceeds through three distinct review phases, each with a different focus and technique.
+
+<ArticleSection name="Phase 1: Architecture Review" id="phase-1-architecture-review" level="h3" />
+
+Read the entire codebase once at a high level. Do not try to find bugs yet. Your goal is to answer these questions:
+
+- What accounts exist and how do they relate to each other?
+- What is the lifecycle of a user position (created, modified, closed)?
+- Where do tokens move? Which instructions transfer tokens, and under what conditions?
+- What external dependencies exist (oracles, other programs via CPI)?
+- What admin powers exist and are they time-locked or unconstrained?
+
+Produce an account relationship diagram and a state transition diagram. These artifacts guide the rest of the audit.
+
+<ArticleSection name="Phase 2: Instruction-Level Review" id="phase-2-instruction-level-review" level="h3" />
+
+Review each instruction handler in isolation. For every instruction, verify:
+
+1. **Account validation** -- Are all accounts properly validated? Are ownership checks, signer checks, PDA derivations, and type constraints correct?
+2. **State transitions** -- Does the instruction modify state correctly? Are all fields updated atomically? Can partial execution leave state inconsistent?
+3. **Arithmetic** -- Are calculations safe from overflow, underflow, and precision loss? Is rounding direction correct (protocol-favorable)?
+4. **Authorization** -- Can only authorized actors invoke this instruction? Are there privilege escalation paths?
+5. **Economic logic** -- Do fees, rates, and exchange calculations match the protocol specification? Are there extractable value opportunities?
+
+For each instruction, write a one-line summary of what it does and whether you found issues:
+
+```rust
+// deposit: moves tokens from user to vault, mints shares
+// FINDING: share calculation rounds down, allowing dust extraction
+// STATUS: Medium severity, reported
+
+// borrow: issues loan against collateral, checks health factor
+// FINDING: oracle staleness not checked, stale price enables undercollateralized borrow
+// STATUS: High severity, reported
+
+// liquidate: closes undercollateralized position, pays liquidation bonus
+// No findings
+```
+
+<ArticleSection name="Phase 3: Cross-Instruction Analysis" id="phase-3-cross-instruction-analysis" level="h3" />
+
+The most dangerous bugs live in the interactions between instructions. Phase 3 focuses on:
+
+- **Ordering attacks** -- Can an attacker sequence instructions to reach a state the developers did not anticipate? For example: deposit, borrow max, transfer collateral via a separate mechanism, then default on the loan.
+- **Reentrancy via CPI** -- If the program invokes another program (CPI), can that program call back into the original program before state is finalized?
+- **Flash loan interactions** -- Can an attacker use flash-borrowed funds to manipulate prices, inflate collateral, or drain pools within a single transaction?
+- **Multi-transaction attacks** -- Can an attacker spread an attack across multiple transactions within the same slot to exploit state transitions that are safe individually but dangerous in sequence?
+
+<ArticleSection name="Checklist-Driven vs Exploration-Driven" id="checklist-driven-vs-exploration-driven" level="h2" />
+
+Auditors broadly use two complementary approaches.
+
+<ArticleSection name="Checklist-Driven Review" id="checklist-driven-review" level="h3" />
+
+A checklist ensures that known vulnerability classes are systematically checked. For Solana Anchor programs, the minimum checklist includes:
+
+- [ ] All accounts validated with correct constraints (`has_one`, `seeds`, `constraint`)
+- [ ] All authority accounts use `Signer` type, not `UncheckedAccount`
+- [ ] PDA seeds include sufficient entropy (user pubkey, pool identifier, etc.)
+- [ ] No PDA sharing between logically distinct entities
+- [ ] Account close instructions zero out data and transfer lamports correctly
+- [ ] Arithmetic uses checked operations (`checked_add`, `checked_mul`, `checked_div`)
+- [ ] No unsafe `as` casts between integer types
+- [ ] Oracle prices checked for staleness and confidence intervals
+- [ ] CPI targets validated against expected program IDs
+- [ ] Token account mint and owner validated before transfer
+- [ ] Remaining accounts array, if used, validated per-element
+- [ ] Account reallocation does not overwrite existing data
+- [ ] Fee calculations use correct rounding direction (favor protocol)
+- [ ] No duplicate mutable account aliasing possible
+
+The checklist catches the common 80%. It will not catch design-level flaws, economic exploits, or novel attack vectors.
+
+<ArticleSection name="Exploration-Driven Review" id="exploration-driven-review" level="h3" />
+
+Exploration-driven review follows the auditor's intuition. When something feels wrong, you follow the thread: trace the data flow, construct attack scenarios, and attempt to break the assumption. This approach finds the bugs that checklists miss: the novel economic attack, the three-instruction sequence that violates an invariant, the edge case where zero-amount deposits break share accounting.
+
+The best auditors alternate between both approaches. Use the checklist to ensure coverage. Use exploration to find the critical bugs that matter.
+
+<ArticleSection name="The Invariant-First Approach" id="the-invariant-first-approach" level="h2" />
+
+The most powerful auditing technique is to identify the protocol's invariants first, then verify that every instruction preserves them.
+
+An invariant is a property that must be true at all times, regardless of which instructions have been executed and in what order. For a lending protocol, the core invariants might be:
+
+```rust
+// Invariant 1: Total deposited shares * share price >= total vault balance
+// (the protocol is always solvent)
+
+// Invariant 2: For every active loan,
+//   collateral_value * collateral_factor >= loan_value
+// (all loans are sufficiently collateralized at origination)
+
+// Invariant 3: sum(all_user_shares) == pool.total_shares
+// (share accounting is consistent)
+
+// Invariant 4: pool.vault_balance == token_account.amount
+// (tracked balance matches actual token balance)
+
+// Invariant 5: No user can withdraw more value than they deposited + earned yield
+// (no value extraction beyond entitlement)
+```
+
+Once you have the invariants, the audit becomes systematic. For each instruction, ask: "Can this instruction, given any possible input and any possible program state, cause any invariant to become false?"
+
+This approach is powerful because it reframes the audit from "find bugs" to "prove correctness." You are not looking for specific vulnerability patterns. You are looking for any execution path that breaks a fundamental property of the protocol.
+
+<ArticleSection name="Applying Invariants in Practice" id="applying-invariants-in-practice" level="h3" />
+
+Consider Invariant 4 from the list above: `pool.vault_balance == token_account.amount`. This says the protocol's internal accounting must always match the actual SPL token balance.
+
+Now audit the `deposit` instruction against this invariant:
+
+```rust
+pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    // Step 1: Transfer tokens from user to vault
+    transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.user_token_account.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.mint.decimals,
+    )?;
+
+    // Step 2: Update internal accounting
+    let pool = &mut ctx.accounts.pool;
+    pool.total_deposited = pool.total_deposited.checked_add(amount)
+        .ok_or(ErrorCode::Overflow)?;
+
+    Ok(())
+}
+```
+
+Does this preserve the invariant? If the token is a standard SPL token, yes: the vault receives `amount` tokens, and `total_deposited` increases by `amount`.
+
+But what if the token has a transfer fee (Token-2022 with transfer fee extension)? The vault receives `amount - fee` tokens, but `total_deposited` increases by `amount`. The invariant breaks. Over many deposits, the tracked balance drifts above the actual balance, and eventually a withdrawal will fail or the protocol becomes insolvent.
+
+This is the kind of finding that invariant-first auditing surfaces naturally. You did not need to know about Token-2022 transfer fees specifically. You just needed to ask: "Does this instruction preserve the accounting invariant under all conditions?"
+
+<ArticleSection name="Documenting Your Work" id="documenting-your-work" level="h2" />
+
+Maintain a working log throughout the audit that tracks invariants identified, instruction review status, questions for the development team, and findings in progress. This is not the final report -- it is your working document that ensures nothing is lost if you need to hand off to another auditor mid-engagement.
+
+A disciplined methodology does not guarantee finding every bug. But it guarantees that the bugs you miss are the genuinely hard ones, not the ones you would have caught if you had been more systematic.
+
