@@ -1,4 +1,4 @@
-import { AnchorProvider, Program } from "@coral-xyz/anchor";
+import { AnchorProvider, Program } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import type { BlueshiftCredentials } from "@/lib/nft/blueshift_credentials_idl";
 import idl from "@/lib/nft/blueshift_credentials_idl.json";
