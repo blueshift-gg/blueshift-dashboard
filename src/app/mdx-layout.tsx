@@ -20,6 +20,27 @@ export default function MdxLayout({ children }: { children: React.ReactNode }) {
       sm:prose-h2:text-[24px]
       sm:prose-h3:text-[20px]
       sm:prose-h4:text-base
+      prose-table:max-w-full
+      prose-table:w-full
+      prose-table:min-w-max
+      prose-thead:min-w-full
+      prose-td:px-2.5
+      prose-thead:font-mono
+      prose-thead:text-[13px]
+      prose-table:border
+      prose-td:whitespace-nowrap
+      prose-th:whitespace-nowrap
+      prose-th:text-left
+      prose-td:text-left
+      prose-table:border-border-light
+      prose-thead:text-shade-primary
+      prose-td:py-2
+      prose-thead:border-b-border-light
+      prose-tr:border-b-border
+      prose-tr:even:bg-background
+      prose-table:bg-card-solid
+      prose-thead:bg-card-foreground
+      prose-table:font-medium
       prose-blockquote:text-brand-secondary
       prose-blockquote:pr-4
       prose-blockquote:[font-style:normal]

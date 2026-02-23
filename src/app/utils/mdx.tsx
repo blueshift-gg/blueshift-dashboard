@@ -66,6 +66,14 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             </div>
           </blockquote>
         ),
+        table: ({
+          children,
+          ...props
+        }: React.ComponentPropsWithoutRef<"table">) => (
+          <div className="w-full overflow-x-auto custom-scrollbar min-w-0">
+            <table {...props}>{children}</table>
+          </div>
+        ),
       }}
       renderNode={(node) => {
         if (node.type === "code") {
