@@ -70,7 +70,7 @@ export default function PathStepsList({
       return course.lessons[0].slug;
     }
     if (progress > 0 && progress < (course.lessons?.length || 0)) {
-      return course.lessons[progress]?.slug;
+      return course.lessons[progress - 1]?.slug;
     }
     return course.lessons?.[0]?.slug;
   };
