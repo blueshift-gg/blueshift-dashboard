@@ -1,44 +1,291 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Chương trình Metaplex Token Metadata
+# Các phần mở rộng token và Token-2022
 
-Hãy tưởng tượng bạn ra mắt một token trên Solana, chỉ để thấy nó xuất hiện trong mọi ví như một chuỗi ký tự vô nghĩa như "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU".
+SPL Token ra mắt vào năm 2020. Đến năm 2024, các nhà phát triển muốn các tính năng mà nó không thể cung cấp: metadata được nhúng trong tài khoản mint, các hook chuyển tiền thực thi logic tùy chỉnh, token lãi suất, chuyển bí mật. Giải pháp không phải là triển khai các hợp đồng tùy chỉnh—mà là mở rộng tiêu chuẩn.
 
-Người dùng sẽ không biết mình đang giữ gì, và dự án của bạn sẽ không thể phân biệt được với hàng ngàn token vô danh khác đang tràn lan trên mạng.
+Token-2022 (còn được gọi là chương trình Token Extensions) thêm 16 phần mở rộng tùy chọn cho SPL Token trong khi vẫn duy trì khả năng tương thích ngược. Các chương trình cũ hoạt động với các token mới. Các tính năng mới chỉ được kích hoạt khi cần thiết. Không có sự phân mảnh hệ sinh thái.
 
-Chương trình Metaplex Token Metadata giải quyết vấn đề này bằng cách biến các mục blockchain vô danh thành các tài sản kỹ thuật số có thương hiệu, dễ nhận dạng.
+<ArticleSection name="Tại sao các phần mở rộng token tồn tại" id="why-extensions" level="h2" />
 
-Trong khi chương trình SPL-Token hoạt động xuất sắc trong các cơ chế kỹ thuật theo dõi tính sở hữu, quản lý nguồn cung và chuyển giao, nó thiết kế các token như các cấu trúc dữ liệu cơ bản mà không có bất kỳ ngữ cảnh có thể đọc được nào.
+SPL Token được thiết kế tối giản. Nó xử lý việc đúc, chuyển và đốt token. Không có gì khác. Cần metadata? Sử dụng chương trình Metaplex Token Metadata. Cần hạn chế chuyển? Viết trình xác thực tùy chỉnh. Cần lãi suất? Xây dựng trên đó.
 
-Đây là nơi Metaplex thực hiện ma thuật của mình, kết nối các chức năng blockchain thô và trải nghiệm người dùng. Thay vì địa chỉ mã hóa, người dùng thấy "Solana (SOL)" với các logo quen thuộc, các mô tả rõ ràng, và tất cả các thông tin ngữ cảnh mà làm cho token thực sự có thể sử dụng trong thực tế.
+Điều này đã hoạt động trong nhiều năm. Nhưng mỗi tính năng mới đều yêu cầu các chương trình bên ngoài, tạo ra sự phức tạp:
 
-<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+**Metadata yêu cầu các tài khoản riêng biệt:**
 
-Account `Metadata` hoạt động như thẻ định danh kỹ thuật số của token của bạn, lưu trữ tất cả các thông tin mà biến đổi một địa chỉ mint thành một tài sản có thể nhận dạng.
+Tài khoản mint SPL Token: 82 byte. Metaplex metadata PDA: 679+ byte. Hai tài khoản, hai khoản tiền thuê, hai chương trình để tương tác. Đối với metadata đơn giản (tên, ký hiệu, URI), điều này cho cảm giác phức tạp.
 
-Điều này không chỉ nói về tên và hình ảnh đẹp mắt: đó là việc tạo nền tảng cho cách thức mà token của bạn xuất hiện trên toàn bộ hệ sinh thái Solana.
+**Việc hạn chế chuyển yêu cầu các chương trình bao bọc:**
 
-Sử dụng hệ thống địa chỉ PDA của Solana, mỗi token có được chính xác một account metadata được liên kết toán học với mint của nó. Điều này tạo ra một liên kết không thể phá vỡ giữa token kỹ thuật số và thông tin mô tả của nó, đảm bảo tính nhất quán trên tất cả các ứng dụng và ngăn ngừa xung đột nhận dạng:
+Muốn token chỉ chuyển trong các giờ cụ thể? Bao bọc SPL Token trong chương trình tùy chỉnh. Mỗi mẫu hạn chế đều cần triển khai chương trình mới. Không có tiêu chuẩn cụ thể.
+
+**Token lãi suất yêu cầu tái cơ cấu liên tục:**
+
+Các giao thức cho vay muốn token mà số dư tăng theo thời gian. SPL Token có số lượng cố định. Các giao thức theo dõi số dư bên ngoài và tính toán lại liên tục. Không được hỗ trợ mặc định.
+
+Token Extensions giải quyết những vấn đề này bằng cách mở rộng cấu trúc tài khoản mint và token với các trường tùy chọn. Kích hoạt phần mở rộng metadata? Tài khoản mint lưu trữ tên/ký hiệu/URI trực tiếp. Kích hoạt hook chuyển? Chương trình thực thi trên mỗi lần chuyển. Kích hoạt lãi suất? Token tính toán số dư động.
+
+<ArticleSection name="Các phần mở rộng có sẵn" id="available-extensions" level="h2" />
+
+Token-2022 cung cấp 16 phần mở rộng. Các phần quan trọng:
+
+**Phần mở rộng Metadata:**
+
+Nhúng tên, ký hiệu, URI trực tiếp trong tài khoản mint:
 
 ```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+pub struct TokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
+```
 
-const PREFIX: &str = "metadata";
+Không cần tài khoản Metaplex bên ngoài—metadata nằm trong tài khoản mint, giúp tiết kiệm chi phí, đơn giản hơn và chỉ yêu cầu tra cứu một tài khoản duy nhất.
 
-let (metadata, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-    ], 
-    &ID  
+**Hook chuyển:**
+
+Thực thi logic chương trình tùy chỉnh trên mỗi lần chuyển:
+
+```rust
+pub struct TransferHook {
+    pub authority: Pubkey,
+    pub program_id: Pubkey,
+}
+```
+
+Các giao thức có thể thực thi các hạn chế khi chuyển, phí bản quyền, ghi nhật ký hoặc bất kỳ xác thực nào trước khi chuyển hoàn tất. Cho phép token tuân thủ, logic vật phẩm trò chơi, chuyển có điều kiện.
+
+**Ủy quyền vĩnh viễn:**
+
+Quyền Mint có thể đặt một địa chỉ với quyền chi tiêu vĩnh viễn trên tất cả các tài khoản token:
+
+```rust
+pub struct PermanentDelegate {
+    pub delegate: Pubkey,
+}
+```
+
+Sử dụng cho các token được quản lý, nơi nhà phát hành phải có khả năng thu hồi quỹ (trừng phạt, tuân thủ). Khác với ủy quyền tạm thời—đây là quyền không thể thu hồi trên tất cả các tài khoản.
+
+**Phí chuyển:**
+
+Tính phí trên mỗi lần chuyển, gửi đến các tài khoản được chỉ định.
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_basis_points: u16,
+    pub maximum_fee: u64,
+}
+```
+
+Cho phép các mô hình kinh tế nơi các lần chuyển tạo ra doanh thu. Tiền tệ trong trò chơi, token giảm phát, phí giao thức được tích hợp trong chính token.
+
+**Token lãi suất:**
+
+Số dư token tăng theo thời gian dựa trên lãi suất:
+
+```rust
+pub struct InterestBearingConfig {
+    pub rate: i16,  // Basis points per year
+    pub last_update_timestamp: i64,
+}
+```
+
+Các giao thức cho vay phát hành token đại diện cho các khoản tiền gửi. Số dư tăng tự động dựa trên lãi suất. Không cần tái cơ cấu thủ công.
+
+**Chuyển bí mật:**
+
+Mã hóa số lượng chuyển sử dụng bằng chứng không kiến thức:
+
+```rust
+pub struct ConfidentialTransferMint {
+    pub authority: Pubkey,
+    pub auto_approve_new_accounts: bool,
+}
+```
+
+Thực thi các lần chuyển với số lượng ẩn. Chỉ người gửi/người nhận thấy số dư. Các cơ quan tuân thủ (với các khóa đặc biệt) có thể giải mã nếu cần. Bảo mật + khả năng kiểm toán.
+
+**Các token không thể chuyển nhượng:**
+
+Các token không thể chuyển nhượng sau khi được đúc:
+
+```rust
+pub struct NonTransferable {}
+```
+
+Sử dụng cho các token soulbound, chứng chỉ, thành tích. Một khi được đúc cho một địa chỉ, chúng sẽ ở đó mãi mãi. Không chuyển nhượng, không được bán.
+
+**Quyền sở hữu không đổi:**
+
+Các tài khoản token mà quyền sở hữu không thể thay đổi:
+
+```rust
+pub struct ImmutableOwner {}
+```
+
+Ngăn chặn việc chuyển quyền sở hữu tài khoản token. Tính năng bảo mật ngăn chặn một số mô hình khai thác.
+
+**Yêu cầu cho ghi chú khi chuyển:**
+
+Bắt buộc ghi chú (tin nhắn) trên mỗi lần chuyển:
+
+```rust
+pub struct MemoTransfer {
+    pub require_incoming_transfer_memos: bool,
+}
+```
+
+Tính năng tuân thủ. Các sàn giao dịch có thể yêu cầu mục đích giao dịch trong trường memo. Sử dụng cho các môi trường cụ thể.
+
+**Trạng thái tài khoản mặc định:**
+
+Xác định xem liệu các tài khoản token mới có bị đóng băng mặc định hay không:
+
+```rust
+pub struct DefaultAccountState {
+    pub state: AccountState,
+}
+```
+
+Nhà phát hành token có thể yêu cầu tất cả các tài khoản token mới sẽ bị đóng băng. Nhà phát hành phải mở khóa chúng một cách tường minh. Kiểm soát tuân thủ.
+
+Các phần mở rộng khác: **CPI Guard**, **Metadata Pointer**, **Group Pointer**, **Group Member Pointer**, **Close Authority**, **Reallocate**.
+
+<ArticleSection name="Tương thích ngược" id="backward-compatibility" level="h2" />
+
+Các Token-2022 tokens cũng hoạt động với các chương trình SPL Token. Cấu trúc tài khoản chỉ mở rộng bố cục của SPL Token mà không phá vỡ các trường hiện có.
+
+**Điều này có nghĩa là:**
+
+Các chương trình đọc tổng cung, số thập phân, quyền hạn? Chúng hoạt động với các token Token-2022. Các trường cơ bản nằm ở cùng vị trí.
+
+Các chương trình chuyển token? Chúng hoạt động nếu không dựa vào giả định về kích thước tài khoản. Logic chuyển nhượng là giống nhau.
+
+Các phần mở rộng xuất hiện sau dữ liệu cơ bản. Các chương trình bỏ qua phần mở rộng chỉ thấy các trường SPL Token. Các chương trình nhận biết phần mở rộng có thể đọc dữ liệu bổ sung.
+
+**Lộ trình di chuyển:**
+
+Không có sự phân tách hệ sinh thái. Token-2022 không phân mảnh Solana như ERC-777 phân mảnh Ethereum. DEXs hỗ trợ cả SPL Token và Token-2022. Ví hiển thị cả hai. Các giao thức cho vay chấp nhận cả hai.
+
+Các dự án mới có thể sử dụng Token-2022 cho các tính năng nâng cao trong khi vẫn duy trì khả năng tương thích với toàn bộ hệ sinh thái.
+
+<ArticleSection name="Khi nào nên sử dụng Token-2022" id="when-to-use" level="h2" />
+
+**Sử dụng SPL Token khi:**
+
+Token có thể thay thế cơ bản. Không cần các tính năng đặc biệt. Mong muốn khả năng tương thích tối đa. Đơn giản là tốt nhất.
+
+**Sử dụng Token-2022 khi:**
+
+Cần metadata nhúng (tránh chi phí và độ phức tạp của tài khoản Metaplex).
+
+Cần hạn chế chuyển nhượng (vật phẩm trò chơi, token tuân thủ, logic có điều kiện).
+
+Cần phí chuyển nhượng (cơ chế giảm phát, doanh thu giao thức).
+
+Cần số dư sinh lãi (cho vay, biên lai cổ phần).
+
+Cần bảo mật (số lượng chuyển nhượng ẩn).
+
+Cần token không thể chuyển nhượng (chứng chỉ, thành tích).
+
+**Sự đánh đổi:**
+
+Các tài khoản mint sử dụng Token-2022 có kích thước lớn hơn (các phần mở rộng thêm byte, tăng chi phí thuê). Phức tạp hơn (các phần mở rộng cần được cấu hình). Mới hơn một chút (ít được kiểm tra hơn SPL Token).
+
+Nhưng nếu bạn cần bất kỳ tính năng mở rộng nào, Token-2022 là cách tiêu chuẩn để có được nó. Đừng xây dựng các chương trình bao bọc hoặc theo dõi bên ngoài—hãy sử dụng các phần mở rộng.
+
+<ArticleSection name="Các ví dụ thực tiễn" id="practical-examples" level="h2" />
+
+**Tiền tệ trò chơi với phí chuyển nhượng:**
+
+Tạo mint Token-2022 với phần mở rộng phí chuyển nhượng. Mỗi giao dịch/chuyển nhượng tự động tính phí 1%. Phí tích lũy trong tài khoản được chỉ định. Nhà phát triển trò chơi kiếm doanh thu từ hoạt động kinh tế trong trò chơi.
+
+**Các stablecoin tuân thủ với hook chuyển nhượng:**
+
+Sử dụng phần mở rộng hook chuyển nhượng. Chương trình hook xác minh các giao dịch chuyển nhượng theo các quy tắc cần tuân thủ (danh sách trừng phạt, yêu cầu KYC). Các giao dịch không tuân thủ sẽ tự động thất bại. Nhà phát hành duy trì các quy định cần tuân thủ mà không cần đóng băng toàn bộ tài khoản.
+
+**Các token biên lai cho vay với lãi suất:**
+
+Tạo các token Token-2022 với phần mở rộng sinh lãi. Người dùng gửi USDC, nhận token biên lai. Số dư token biên lai tăng dựa trên APY cho vay. Không cần tái cơ cấu thủ công—tính toán số dư là động.
+
+**Các chứng chỉ không thể chuyển nhượng:**
+
+Đúc các token không thể chuyển nhượng đại diện cho chứng chỉ, thành tích, uy tín. Một khi được đúc cho người dùng, chúng không thể bán hoặc chuyển nhượng. Tạo ra các chứng chỉ có thể xác minh trên chuỗi.
+
+**Các token số dư riêng tư:**
+
+Sử dụng phần mở rộng chuyển nhượng bí mật. Người dùng có thể chuyển token với số lượng được mã hóa. Bên thứ ba chỉ thấy các giao dịch đã xảy ra nhưng không thấy số lượng. Bảo mật cho các ứng dụng tài chính.
+
+<ArticleSection name="Kiểm tra các phần mở rộng" id="checking-extensions" level="h2" />
+
+**Trên Solana Explorer:**
+
+Tìm kiếm địa chỉ mint. Nếu là Token-2022, phần "Extensions" sẽ hiển thị các phần mở rộng đã được kích hoạt cùng với cấu hình của chúng.
+
+**Bằng cách lập trình:**
+
+```typescript
+const mint = await getMint(
+    connection,
+    mintAddress,
+    'confirmed',
+    TOKEN_2022_PROGRAM_ID
+);
+
+// Check for metadata extension
+const metadata = getMetadataPointerState(mint);
+
+// Check for transfer fee extension
+const transferFeeConfig = getTransferFeeConfig(mint);
+```
+
+Các phần mở rộng là tùy chọn. Hầu hết các mint kích hoạt 0-3 phần mở rộng. Một mint với 10+ phần mở rộng là không bình thường—mỗi phần thêm độ phức tạp và chi phí thuê.
+
+<ArticleSection name="Tạo tài khoản mint dùng Token-2022" id="creating-token2022" level="h2" />
+
+Tạo mint Token-2022 tương tự như SPL Token nhưng chỉ định thêm các phần mở rộng:
+
+```typescript
+const mint = await createMint(
+    connection,
+    payer,
+    mintAuthority,
+    freezeAuthority,
+    decimals,
+    keypair,
+    confirmOptions,
+    TOKEN_2022_PROGRAM_ID  // Use Token-2022 program
+);
+
+// Enable metadata extension
+await createInitializeMetadataPointerInstruction(
+    mint,
+    mintAuthority,
+    metadataAddress,
+    TOKEN_2022_PROGRAM_ID
 );
 ```
 
-Account metadata trở thành 1 tấm hộ chiếu thống nhất của token của bạn, chứa tất cả những thông tin mà các ứng dụng cần để hiển thị tài sản của bạn đúng cách.
+Các phần mở rộng phải được bật trong quá trình tạo mint (hoặc ngay sau đó, trước khi đúc lần đầu tiên). Không thể thêm phần mở rộng vào các mint đã có với nguồn cung. Thiết kế cẩn thận từ đầu.
 
-Tên token thay thế các địa chỉ vô nghĩa, các ký hiệu cung cấp nhận dạng ngay lập tức (hãy nghĩ đến "SOL" thay vì chuỗi dài ở trên), và các tham chiếu URI trỏ đến các tài nguyên phong phú như logo và mô tả chi tiết.
+<ArticleSection name="Các phần mở rộng trong tương lai" id="future-extensions" level="h2" />
 
-Kết qủa là gì? Token của bạn không chỉ tồn tại trên chuỗi khối, mà còn hiện diện trong các ví, xuất hiện một cách chuyên nghiệp trong các trình khám phá, và tích hợp liền mạch với các ứng dụng trên toàn bộ hệ sinh thái Solana.
+Token-2022 có khả năng mở rộng. Các phần mở rộng mới có thể được thêm khi nhu cầu xuất hiện. Các phần mở rộng trong tương lai có thể bao gồm:
 
-> Để tìm hiểu thêm về cách sử dụng chương trình `Token Metadata`, tham khảo [tài liệu chính thức](https://developers.metaplex.com/token-metadata)
+**Chuyển nhượng bị khóa theo thời gian** - Tokens mở khóa sau các ngày cụ thể.
+
+**Yêu cầu đa chữ ký** - Chuyển nhượng yêu cầu phê duyệt M-trong-N.
+
+**Phân phối cổ tức** - Thanh toán tự động theo tỷ lệ cho tất cả các chủ sở hữu.
+
+**Điều chỉnh quyền biểu quyết** - Trọng số quản trị tách biệt với số dư.
+
+Các phần mở rộng không phá vỡ các chức năng hiện có thì có thể được thêm mà không cần phân nhánh. Thiết kế của chương trình dự phòng cho sự phát triển.
+
+Các phần mở rộng của Token đại diện cho cách tiếp cận của Solana: không phân mảnh hệ sinh thái với các tiêu chuẩn mới, mà mở rộng tiêu chuẩn hiện có. Token-2022 không phải là sự thay thế—nó là SPL Token với các siêu năng lực tùy chọn.
+
+Tiếp theo: tổng kết những gì bạn đã học và nơi để triển khai.

@@ -1,102 +1,282 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Mint và Token Account
+# Các tài khoản mint và kiểm soát nguồn cung
 
-Như chúng ta đã nói trong phần trước, các khối xây dựng của chương trình `SPL Token` là các account: mint account đại diện cho tất cả thông tin về token và token account đại diện cho tất cả thông tin về quyền sở hữu của những token cụ thể đó.
+USDC có 28 tỷ đô la trong nguồn cung lưu hành. Circle kiểm soát quyền mint. Một tổ chức quyết định có bao nhiêu token USDC tồn tại. Tài khoản mint khiến điều này trở nên rõ ràng.
 
-Đối với mỗi mint duy nhất, có hàng nghìn token account khác nhau đại diện cho có bao nhiêu người nắm giữ token đó trong sổ cái.
+Mỗi token trên Solana đều có một tài khoản mint xác định các quy tắc của token: tổng cung, số thập phân, ai có thể tạo thêm token, ai có thể đóng băng tài khoản. Những thông tin này không bị ẩn trong mã hợp đồng—chúng được lưu trữ trong một tài khoản công khai mà bất kỳ ai cũng có thể kiểm tra.
 
-Trong phần này, chúng ta sẽ nói sâu hơn về những account khác nhau này:
+Các tài khoản mint xác định ai kiểm soát nguồn cung, quyền hạn tồn tại và cách token thực thi tính khan hiếm.
 
-<ArticleSection name="Mint Account" id="the-mint-account" level="h2" />
+<ArticleSection name="Cấu trúc tài khoản mint" id="mint-structure" level="h2" />
 
-Token trên Solana được xác định duy nhất bởi địa chỉ của Mint Account thuộc sở hữu của Token Program. Account này hoạt động như một bộ đếm toàn cầu cho một token cụ thể và lưu trữ dữ liệu như:
-- Supply: Tổng cung của token
-- Decimal: Độ chính xác thập phân của token
-- Mint authority: Account được ủy quyền tạo các đơn vị mới của token, tăng supply
-- Freeze authority: Account được ủy quyền đóng băng token trong Token Account, ngăn chúng được chuyển giao hoặc đốt
-
-Đây là cách dữ liệu đó trông như thế nào trên onchain:
+Dưới đây là những gì một tài khoản mint chứa:
 
 ```rust
 pub struct Mint {
-    /// Optional authority used to mint new tokens. The mint authority may only
-    /// be provided during mint creation. If no mint authority is present
-    /// then the mint has a fixed supply and no further tokens may be
-    /// minted.
     pub mint_authority: COption<Pubkey>,
-    /// Total supply of tokens.
     pub supply: u64,
-    /// Number of base 10 digits to the right of the decimal place.
     pub decimals: u8,
-    /// Is `true` if this structure has been initialized
     pub is_initialized: bool,
-    /// Optional authority to freeze token accounts.
     pub freeze_authority: COption<Pubkey>,
 }
 ```
 
-### Metadata
+**`mint_authority`** - Ai có thể tạo token mới:
+- Đặt thành một địa chỉ: Tài khoản đó có thể đúc token, tăng nguồn cung
+- Đặt thành `None`: Không ai có thể đúc thêm. Nguồn cung được cố định vĩnh viễn
+- Có thể thay đổi một lần, sau đó bị thu hồi
 
-Trên các explorer và ví, token thường xuất hiện có thể được nhận dạng và dễ đọc hơn nhờ tên và hình ảnh cụ thể được liên kết với chúng.
+**`supply`** - Tổng số token tồn tại:
+- Tăng khi token được đúc
+- Giảm khi token bị đốt
+- Lưu trữ dưới dạng đơn vị cơ sở thô (không tính đến số thập phân)
 
-Chúng ta gọi tên, ký hiệu và hình ảnh đó là `Metadata` của token. Bởi vì ở dạng gốc, `Mint` account chỉ là một public key dài 32 byte không có thông tin dễ đọc nào được đính kèm.
+**`decimals`** - Số chữ số thập phân:
+- `0` chữ số thập phân = không thể chia (1 token = 1 đơn vị cơ sở)
+- `6` chữ số thập phân = có thể chia đến phần triệu (1 token = 1,000,000 đơn vị cơ sở)
+- `9` chữ số thập phân = độ chính xác giống SOL (1 token = 1,000,000,000 đơn vị cơ sở)
 
-Về cơ bản, trong chương trình SPL Token ban đầu, không thể đặt metadata trực tiếp trên token. Vì lý do này, các giao thức như [Metaplex](https://www.metaplex.com/) đã phát triển chương trình [MPL-token-metadata](https://github.com/metaplex-foundation/mpl-token-metadata) để cung cấp cách cho mọi token có metadata được liên kết.
+**`freeze_authority`** - Ai có thể đóng băng tài khoản token:
+- Đặt thành một địa chỉ: Tài khoản đó có thể ngăn chặn các giao dịch từ các tài khoản token cụ thể
+- Đặt thành `None`: Không có khả năng đóng băng
+- Độc lập với quyền mint
 
-> Với Token Extensions và [chương trình Token2022](/vi/courses/token-2022-program), điều này thay đổi hoàn toàn. Extension Metadata cho phép bạn nhúng metadata trực tiếp vào chính mint account, loại bỏ sự cần thiết của các chương trình bên ngoài.
+**`is_initialized`** - Liệu tài khoản mint đã được khởi tạo hay chưa:
+- Ngăn chặn việc sử dụng dữ liệu tài khoản chưa được khởi tạo
+- Đặt thành true khi tài khoản mint được tạo
 
-### Non-fungible Token
+<ArticleSection name="Quyền đúc và kiểm soát nguồn cung" id="mint-authority" level="h2" />
 
-Trong khi tiện ích của token được ủy quyền cụ thể cho người tạo, người có thể quyết định làm cho token cụ thể đó thành token quản trị, token tiện ích hoặc token cộng đồng, có một số đặc điểm mà chúng ta có thể tuân theo để phân biệt giữa fungible và non-fungible token:
+Quyền đúc xác định ai kiểm soát nguồn cung token. Trường duy nhất này xác định liệu một token có khan hiếm cố định hay lạm phát không giới hạn.
 
-Non-fungible token cần có:
-- Supply là 1 vì chúng là duy nhất
-- 0 decimal vì chúng không thể chia
-- Không có mint authority vì chúng ta không muốn thêm token nào có cùng đặc điểm đó, vì nó sẽ "phá hủy" tính độc nhất của token
-
-Về cơ bản, không thể thực thi các đặc điểm này trong Token program. Vì lý do này, các chương trình như `MPL-token-metadata` không chỉ cung cấp triển khai cho metadata mà chúng cũng cung cấp triển khai để thực thi các ràng buộc này và dễ dàng tạo NFT.
-
-<ArticleSection name="Token Account" id="the-token-account" level="h2" />
-
-Token Program tạo Token Account để theo dõi quyền sở hữu cá nhân của từng đơn vị token. Token Account lưu trữ dữ liệu như:
-- Mint: Token mint mà Token Account giữ các đơn vị của nó
-- Owner: Account được ủy quyền chuyển token từ Token Account
-- Amount: Số lượng token mà Token Account hiện đang giữ
-
-Đây là cách dữ liệu đó trông như thế nào trên onchain:
+**Token với nguồn cung cố định:**
 
 ```rust
-pub struct Account {
-    /// The mint associated with this account
-    pub mint: Pubkey,
-    /// The owner of this account.
-    pub owner: Pubkey,
-    /// The amount of tokens this account holds.
-    pub amount: u64,
-    /// If `delegate` is `Some` then `delegated_amount` represents
-    /// the amount authorized by the delegate
-    pub delegate: COption<Pubkey>,
-    /// The account's state
-    pub state: AccountState,
-    /// If is_native.is_some, this is a native token, and the value logs the
-    /// rent-exempt reserve. An Account is required to be rent-exempt, so
-    /// the value is used by the Processor to ensure that wrapped SOL
-    /// accounts do not drop below this threshold.
-    pub is_native: COption<u64>,
-    /// The amount delegated
-    pub delegated_amount: u64,
-    /// Optional authority to close the account.
-    pub close_authority: COption<Pubkey>,
-}
+mint_authority: None
 ```
 
-Mỗi ví cần có một token account cho mỗi token (mint) mà nó muốn giữ, với địa chỉ ví được đặt làm chủ sở hữu token account. Mỗi ví có thể sở hữu nhiều token account cho cùng một token (mint), nhưng một token account chỉ có thể có một chủ sở hữu và giữ các đơn vị của một token (mint).
+Không ai có thể tạo thêm token. Nguồn cung bị giới hạn vĩnh viễn. Ví dụ:
+- NFTs (nguồn cung 1, không có quyền đúc)
+- Meme coin với nguồn cung cố định (tổng nguồn cung được đúc khi ra mắt, quyền đúc bị thu hồi)
+- Token có giới hạn (nguồn cung tối đa được đúc, sau đó quyền đúc bị từ bỏ)
 
-<ArticleSection name="Associated Token Account" id="the-associated-token-account" level="h2" />
+Khi quyền đúc được đặt thành `None`, nó không thể thay đổi. Bạn không thể khôi phục khả năng đúc. Nguồn cung tối đa của token là bất kỳ số lượng nào tồn tại tại thời điểm đó.
 
-Associated Token Account đơn giản hóa quá trình tìm địa chỉ của token account cho một mint và owner cụ thể. Hãy nghĩ về Associated Token Account như token account "mặc định" cho một mint và owner cụ thể.
+**Token với nguồn cung không giới hạn:**
 
-Associated Token Account được tạo với địa chỉ được dẫn xuất từ địa chỉ của owner và địa chỉ của mint account. Điều quan trọng cần hiểu là Associated Token Account chỉ là một token account với địa chỉ cụ thể.
+```rust
+mint_authority: Some(authority_pubkey)
+```
 
-Điều này giới thiệu một khái niệm chính trong phát triển Solana: [Program Derived Address](https://solana.com/docs/core/pda) (PDA). PDA dẫn xuất một địa chỉ một cách cụ thể bằng cách sử dụng các đầu vào được xác định trước, giúp dễ dàng tìm địa chỉ của một account.
+Một địa chỉ có thể đúc token mới bất cứ khi nào họ muốn. Ví dụ:
+- USDC (Circle đúc khi người dùng gửi USD)
+- Stablecoins (nhà phát hành đúc dựa trên tài sản thế chấp)
+- Token quản trị được phát hành liên tục
+
+Địa chỉ gán quyền có thể là một ví (kiểm soát tập trung), một địa chỉ dẫn xuất từ chương trình (kiểm soát theo chương trình), hoặc một ví đa chữ ký (kiểm soát phi tập trung).
+
+**Việc đúc được kiểm soát bởi chính phủ:**
+
+Nhiều giao thức đặt quyền đúc cho một chương trình quản trị. Người nắm giữ token bỏ phiếu về việc đúc nguồn cung mới. Chương trình quản trị có quyền đúc và thực hiện các hoạt động đúc đã được phê duyệt.
+
+Điều này tạo ra sự khan hiếm theo chương trình: nguồn cung có thể tăng, nhưng chỉ thông qua các quy trình quản trị đã được xác định.
+
+<ArticleSection name="Quyền đóng băng" id="freeze-authority" level="h2" />
+
+Quyền đóng băng là quyền kiểm soát độc lập đối với việc đóng băng tài khoản token. Một tài khoản có quyền đóng băng có thể ngăn chặn các tài khoản token cụ thể thực hiện các giao dịch.
+
+**Tại sao quyền đóng băng tồn tại:**
+
+Tuân thủ các quy định quản lý của stablecoin. Quyền đóng băng của USDC cho phép Circle đóng băng các tài khoản liên quan đến hoạt động bất hợp pháp hoặc lệnh của tòa án. Tài khoản token USDC của bạn có thể bị đóng băng mà không cần sự đồng ý của bạn.
+
+Ngăn chặn gian lận đối với các nền tảng tập trung. Các sàn giao dịch có thể đóng băng tài khoản token nếu họ phát hiện hoạt động đáng ngờ.
+
+**Cách hoạt động của quyền đóng băng:**
+
+Quyền đóng băng gọi instruction `FreezeAccount` trên các tài khoản token cụ thể. Các tài khoản bị đóng băng không thể:
+- Chuyển token ra ngoài
+- Đốt token
+- Đóng tài khoản
+
+Chúng vẫn có thể:
+- Nhận token
+- Tồn tại như các tài khoản hợp lệ
+
+Việc rã đông đảo ngược quá trình đóng băng. Chỉ quyền đóng băng mới có thể rã đông các tài khoản bị đóng băng.
+
+**Các token không có quyền đóng băng:**
+
+```rust
+freeze_authority: None
+```
+
+Không ai có thể đóng băng bất kỳ tài khoản token nào. Việc chuyển token luôn khả dụng (giả sử có đủ số dư). Ví dụ:
+- Token phi tập trung nơi việc đóng băng mâu thuẫn với sứ mệnh
+- Token có nguồn cung cố định nơi quyền kiểm soát hoàn toàn bị từ bỏ
+- Token cộng đồng coi trọng khả năng chống kiểm duyệt
+
+Giống như quyền đúc, việc từ bỏ quyền đóng băng là vĩnh viễn. Khi được đặt thành `None`, việc đóng băng trở nên không thể thực hiện mãi mãi.
+
+<ArticleSection name="Phần thập phân và độ chính xác" id="decimals" level="h2" />
+
+Phần thập phân Decimals xác định cách token được chia thành các đơn vị nhỏ hơn.
+
+**0 decimals - Token không thể chia nhỏ:**
+
+```rust
+decimals: 0
+```
+
+Bạn có thể sở hữu 1 token hoặc 5 token, nhưng không thể sở hữu 0.5 token. Sử dụng cho:
+- NFTs (bạn sở hữu 1, không phải 0.3 của một NFT)
+- Vé (1 vé, không phải một phần vé)
+- Cổ phần bỏ phiếu (bỏ phiếu toàn bộ)
+
+**6 decimals - Chuẩn stablecoin:**
+
+```rust
+decimals: 6
+```
+
+USDC và USDT sử dụng 6 decimals, khớp với cent USD với độ chính xác cao hơn:
+- 1 USDC = 1,000,000 đơn vị cơ sở
+- 0.01 USDC (1 cent) = 10,000 đơn vị cơ sở
+- $0.000001 USDC = 1 đơn vị cơ sở
+
+**9 decimals - độ chính xác của SOL:**
+
+```rust
+decimals: 9
+```
+
+SOL sử dụng 9 decimals. 1 SOL = 1,000,000,000 lamports. Nhiều token Solana sử dụng độ chính xác này để đảm bảo tính nhất quán.
+
+**Tại sao điều này quan trọng:**
+
+Phân thập phân được đặt khi tạo mint và không thể thay đổi. Hãy chọn cẩn thận:
+- Phần thập phân quá ít = độ chính xác không đủ cho các số lượng nhỏ
+- Phần thập phân quá nhiều = số lượng lớn không cần thiết trong các đơn vị cơ sở
+
+Các chương trình làm việc với các đơn vị cơ sở bên trong, chỉ chuyển đổi sang biểu diễn thập phân để hiển thị. 1 USDC trong ví của bạn được lưu trữ dưới dạng 1,000,000 đơn vị cơ sở. Các giao dịch chuyển tiền chỉ định dùng các đơn vị cơ sở. Trường decimals cho ví và trình khám phá biết cách hiển thị số lượng.
+
+<ArticleSection name="Các ví dụ thực tế" id="real-examples" level="h2" />
+
+**USDC (EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v):**
+
+```
+mint_authority: Some(Circle's authority address)
+supply: 28,000,000,000,000,000 (28 billion with 6 decimals)
+decimals: 6
+freeze_authority: Some(Circle's freeze authority address)
+```
+
+Circle có thể đúc USDC mới khi người dùng gửi USD. Circle có thể đóng băng các tài khoản để tuân thủ quy định. Nguồn cung dao động dựa trên việc gửi/rút tiền.
+
+**BONK (DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263):**
+
+```
+mint_authority: None
+supply: 93,000,000,000,000,000,000 (93 trillion with 5 decimals)
+decimals: 5
+freeze_authority: None
+```
+
+Nguồn cung cố định. Không ai có thể đúc thêm BONK. Không ai có thể đóng băng các tài khoản. Toàn bộ quyền kiểm soát nguồn cung được phi tập trung hoàn toàn.
+
+**Đúc NFT thuần:**
+
+```
+mint_authority: None
+supply: 1
+decimals: 0
+freeze_authority: None
+```
+
+Một token không thể chia nhỏ. Không có khả năng đúc thêm. Không có quyền đóng băng. Sự khan hiếm là thuần túy và tự do chuyển nhượng.
+
+<ArticleSection name="Xem dữ liệu tài khoản mint" id="viewing-mint-data" level="h2" />
+
+Mỗi tài khoản mint đều công khai. Bất kỳ ai cũng có thể kiểm tra cấu hình của bất kỳ token nào.
+
+**Trên Solana Explorer:**
+
+Điều hướng đến địa chỉ mint (ví dụ: mint của USDC). Trong tab "Token", bạn sẽ thấy:
+- Nguồn cung hiện tại
+- Phần thập phân
+- Quyền đúc (hoặc "vô hiệu hóa" nếu None)
+- Quyền đóng băng (hoặc "vô hiệu hóa" nếu None)
+
+**Trên Solscan:**
+
+Tìm kiếm địa chỉ mint. "Token Info" hiển thị tất cả các trường tài khoản mint với định dạng dễ đọc.
+
+**Theo cách lập trình:**
+
+Truy vấn dữ liệu tài khoản mint bằng cách sử dụng Solana RPC:
+
+```typescript
+const mint = await getMint(connection, mintAddress);
+
+console.log("Supply:", mint.supply.toString());
+console.log("Decimals:", mint.decimals);
+console.log("Mint Authority:", mint.mintAuthority);
+console.log("Freeze Authority:", mint.freezeAuthority);
+```
+
+Sự minh bạch này là kiến trúc. Token Ethereum ẩn quyền hạn trong mã hợp đồng. Token Solana khai báo quyền hạn trong các trường tài khoản công khai. Không cần đọc mã—chỉ cần kiểm tra tài khoản.
+
+<ArticleSection name="Tạo và quản lý các tài khoản mint" id="creating-mints" level="h2" />
+
+Tạo một tài khoản mint yêu cầu:
+1. Cấp phát không gian cho tài khoản mint (82 bytes)
+2. Chuyển SOL miễn phí thuê vào tài khoản (hiện tại ~0.00144 SOL)
+3. Gán quyền sở hữu cho chương trình SPL Token
+4. Khởi tạo tài khoản mint với phần thập phân và quyền hạn
+
+Sau khi tạo, quyền đúc có thể:
+- Đúc token mới vào bất kỳ tài khoản token nào
+- Chuyển quyền đúc sang địa chỉ khác
+- Thu hồi quyền đúc (đặt thành None)
+
+Sau khi tạo, quyền đóng băng có thể:
+- Đóng băng các tài khoản token cụ thể
+- Mở khóa các tài khoản bị đóng băng
+- Chuyển quyền đóng băng sang địa chỉ khác
+- Thu hồi quyền đóng băng (đặt thành None)
+
+Nguồn cung tăng thông qua việc đúc, giảm thông qua việc đốt. Tài khoản mint tự động theo dõi tổng nguồn cung. Các chương trình truy vấn nguồn cung mint thấy tổng số theo thời gian thực.
+
+<ArticleSection name="Các tác động về bảo mật" id="security-implications" level="h2" />
+
+Quyền đúc được tin tưởng. Nắm giữ một token với quyền đúc có nghĩa là tin tưởng rằng quyền hạn đó sẽ không làm tăng nguồn cung một cách không lường trước được.
+
+**Rủi ro của quyền đúc tập trung:**
+- Quyền hạn có thể đúc vô hạn token, làm loãng giá trị của người nắm giữ
+- Một khóa riêng kiểm soát nguồn cung (rủi ro bị đánh cắp hoặc mất)
+- Không có sự minh bạch về các quyết định đúc token
+
+**Các giải pháp phi tập trung:**
+- Đặt quyền đúc thành None (nguồn cung cố định)
+- Sử dụng chương trình quản trị làm quyền đúc (kiểm soát bởi người nắm giữ token)
+- Sử dụng ví đa chữ ký làm quyền đúc (kiểm soát phi tập trung)
+- Công bố lịch trình đúc và thực thi theo chương trình
+
+Quyền đóng băng có sức mạnh lớn. Tokens với quyền đóng băng có thể ngăn bạn chuyển. Ví của bạn giữ các token mà bạn không thể di chuyển đi nơi khác.
+
+**Quyền đóng băng là hợp lý khi:**
+- Stablecoin được quản lý (yêu cầu tuân thủ pháp lý)
+- Nền tảng tập trung (ngăn chặn gian lận)
+- Token thử nghiệm (kiểm soát khẩn cấp)
+
+**Tránh dùng nó khi:**
+- Giao thức phi tập trung (cần kháng kiểm duyệt)
+- Token lưu trữ giá trị (tự do chuyển nhượng là cần thiết)
+- Token cộng đồng (không nên có một quyền lực duy nhất kiểm soát)
+
+Luôn kiểm tra quyền đúc và quyền đóng băng trước khi nắm giữ giá trị đáng kể. Một token với quyền kiểm soát tập trung có thể ổn cho giao dịch nhưng rủi ro cho lưu trữ lâu dài.
+
+Tài khoản mint tiết lộ cấu trúc quyền lực. Ai kiểm soát nguồn cung? Ai có thể đóng băng tài khoản? Tài khoản mint trả lời những câu hỏi này một cách rõ ràng.
+
+Tiếp theo: hiểu các tài khoản token và cách theo dõi số dư theo chủ sở hữu.
+

@@ -1,71 +1,263 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Các chức năng
+# Các tài khoản token và quyền sở hữu
 
-Token Program hoạt động thông qua một tập hợp instruction cho phép bạn tạo token mint, khởi tạo token account, chuyển token giữa các account và quản lý authority.
+Địa chỉ ví của bạn giữ SOL. Nó không giữ USDC, BONK hoặc bất kỳ token SPL nào khác. Những token đó tồn tại trong các tài khoản token riêng biệt do ví của bạn sở hữu nhưng được quản lý bởi chương trình SPL Token.
 
-Nó cũng hỗ trợ multisignature account để tăng cường bảo mật và cung cấp cơ chế đóng băng account và ủy quyền token authority.
+Sự tách biệt này là kiến trúc. Các tài khoản Solana lưu trữ dữ liệu có kiểu. Tài khoản ví của bạn lưu trữ số dư SOL và thông tin cơ bản về tài khoản. Các tài khoản token lưu trữ dữ liệu cụ thể về token: token nào, số lượng bao nhiêu, ai sở hữu.
 
-<ArticleSection name="Khởi tạo Account" id="intializing-an-account" level="h2" />
+Một ví có thể sở hữu hàng trăm tài khoản token—mỗi loại token một tài khoản. Các tài khoản token xác định cách Solana theo dõi ai sở hữu gì.
 
-Token program có các instruction và hàm bổ trợ khác nhau trừu tượng hóa sự phức tạp của việc khởi tạo account mới.
+<ArticleSection name="Kiến trúc tài khoản token" id="token-account-structure" level="h2" />
 
-Có các instruction khác nhau nếu chúng ta muốn khởi tạo `Mint` account hoặc `Token` account, trong trường hợp của `Associated Token` account, associated token program sử dụng instruction `initializeAccount` bên dưới sau khi đã tìm ra program derived address đúng.
+Đây là những gì một tài khoản token chứa:
 
-> Hàm này chỉ khởi tạo account, vì vậy chúng ta cần đảm bảo rằng chúng ta sử dụng instruction `createAccount()` từ System Program trước đó, và đặt owner đúng (token program), kích thước và lamport để làm cho nó đươc miễn phí thuê.
+```rust
+pub struct Account {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub delegate: COption<Pubkey>,
+    pub state: AccountState,
+    pub is_native: COption<u64>,
+    pub delegated_amount: u64,
+    pub close_authority: COption<Pubkey>,
+}
+```
 
-<ArticleSection name="Transfer" id="transfer" level="h2" />
+**`mint`** - Token mà tài khoản này giữ:
+- Địa chỉ mint USDC = tài khoản token USDC
+- Địa chỉ mint BONK = tài khoản token BONK
+- Một tài khoản token = một loại token duy nhất
 
-Di chuyển token từ account này sang account khác. Đây là hoạt động cơ bản để gửi token giữa các người dùng.
+**`owner`** - Ai kiểm soát tài khoản token này:
+- Thường là địa chỉ ví của bạn
+- Có thể là địa chỉ dẫn xuất từ chương trình (vault, escrow)
+- Chủ sở hữu có thể chuyển token ra ngoài
 
-Owner của token account cần là `Signer` của giao dịch đó, và đích của lệnh chuyển đó cần là token account khác.
+**`amount`** - Số dư hiện tại:
+- Lưu trữ bằng đơn vị cơ sở (tính theo số thập phân)
+- 1,000,000 amount trong tài khoản USDC = 1 USDC (6 số thập phân)
+- Cập nhật bởi các hoạt động mint, transfer và burn
 
-> Số lượng mà chúng ta quyết định chuyển là không có decimal. Vì vậy nếu chúng ta muốn gửi 1 token có decimal là 6, chúng ta sẽ cần sử dụng ký hiệu `1e6`.
+**`delegate`** - Tùy chọn: Ai đó có thể chi tiêu token thay mặt chủ sở hữu:
+- Sử dụng bởi DEXs (bạn phê duyệt DEX để hoán đổi token của bạn)
+- Sử dụng bởi escrows (chương trình tạm thời kiểm soát token)
+- Ủy quyền là rõ ràng và có giới hạn
 
-<ArticleSection name="Approve" id="approve" level="h2" />
+**`state`** - Trạng thái tài khoản:
+- `Initialized`: Tài khoản bình thường, có thể gửi/nhận token
+- `Frozen`: Quyền đóng băng đã đóng băng tài khoản này, không thể chuyển ra
+- `Uninitialized`: Tài khoản tồn tại nhưng chưa được thiết lập
 
-Cấp cho authority được ủy nhiệm để chuyển một số lượng token cụ thể thay mặt cho chủ sở hữu account. Điều này cho phép chuyển token theo chương trình mà không cần cấp toàn quyền kiểm soát account.
+**`delegated_amount`** - Số lượng token mà ủy quyền có thể chi tiêu:
+- Nếu ủy quyền tồn tại, điều này đặt giới hạn chi tiêu của họ
+- Không thể vượt quá số dư của tài khoản
+- Có thể thu hồi bởi chủ sở hữu
 
-> Chúng ta đặt số lượng "approved", và đối tượng được ủy nhiệm chỉ có thể transfer tối đa số lượng đó
+**`close_authority`** - Tùy chọn: Ai có thể đóng tài khoản này:
+- Thường là chủ sở hữu
+- Có thể được đặt cho một chương trình trong các trường hợp đặc biệt
+- Đóng tài khoản sẽ thu hồi lại SOL thuê
 
-<ArticleSection name="Revoke" id="revoke" level="h2" />
+<ArticleSection name="Tại sao cần tách các tài khoản token" id="why-separate-accounts" level="h2" />
 
-Loại bỏ authority của ủy nhiệm hiện tại đối với account, trả lại toàn quyền kiểm soát cho chủ sở hữu account.
+Mỗi token bạn sở hữu yêu cầu một tài khoản riêng biệt. Sở hữu 10 token khác nhau? Bạn có 10 tài khoản token.
 
-> Ngay lập tức hủy bỏ bất kỳ đối tượng được ủy nhiệm hiện có nào và chỉ chủ sở hữu account mới có thể thu hồi ủy nhiệm (không phải chính đối tượng được ủy nhiệm)
+**Lưu trữ dữ liệu có kiểu:**
 
-<ArticleSection name="Set Authority" id="set-authority" level="h2" />
+Các tài khoản Solana có chủ sở hữu (chương trình) và dữ liệu. Chương trình SPL Token sở hữu các tài khoản token. Dữ liệu tài khoản token tuân theo cấu trúc cố định ở trên. Trộn nhiều token trong một tài khoản sẽ phá vỡ cấu trúc này.
 
-Thay đổi authority của mint hoặc account. Điều này cho phép chuyển quyền sở hữu hoặc cập nhật các loại authority cụ thể.
+**Cách ly chương trình:**
 
-> Có thể thay đổi mint authority, freeze authority, hoặc chủ sở hữu account và đặt authority thành `None` là hành động không thể đảo ngược loại bỏ vĩnh viễn khả năng đó
+Chương trình SPL Token xác thực các hoạt động token. Nó kiểm tra chủ sở hữu tài khoản token, xác minh mint khớp, xác nhận số dư đủ. Nhiều token trong một tài khoản sẽ yêu cầu theo dõi số dư riêng cho từng mint, làm phức tạp mọi xác thực.
 
-<ArticleSection name="Mint To" id="mint-to" level="h2" />
+**Thuê và vòng đời:**
 
-Đúc một số lượng token mới và gửi chúng vào account được chỉ định. Chỉ mint authority mới có thể thực hiện hoạt động này.
+Mỗi tài khoản yêu cầu khoản tiền thuê SOL (hiện tại 0.00203928 SOL cho mỗi tài khoản token). Điều này bao gồm chi phí lưu trữ. Khi bạn đóng một tài khoản token với số dư bằng 0, bạn sẽ thu hồi lại SOL đó.
 
-> Tăng tổng cung của token và số lượng tuân theo cấu hình decimal của mint
+**Ranh giới bảo mật:**
 
-<ArticleSection name="Burn" id="burn" level="h2" />
+Các tài khoản riêng biệt có nghĩa là quyền hạn riêng biệt. Bạn có thể ủy quyền quyền kiểm soát USDC của mình mà không ảnh hưởng đến BONK. Các chương trình có thể xác thực quyền hạn theo từng token mà không cần kiểm tra chéo giữa các token.
 
-Phá hủy vĩnh viễn token bằng cách loại bỏ chúng khỏi lưu thông. Điều này làm giảm tổng cung của token.
+<ArticleSection name="Các tài khoản liên kết với token" id="associated-token-accounts" level="h2" />
 
-> Giảm vĩnh viễn tổng cung của token và hành động này có thể được thực hiện bởi chủ sở hữu account hoặc đối tượng được ủy nhiệm
+Nếu không có một tiêu chuẩn, việc tìm tài khoản token của ai đó yêu cầu phải hỏi họ. "Địa chỉ tài khoản token USDC của bạn là gì?" Mỗi ví sẽ cần phải truyền đạt địa chỉ tài khoản token riêng biệt.
 
-<ArticleSection name="Close Account" id="close-account" level="h2" />
+Các tài khoản liên kết với token (ATAs) giải quyết vấn đề này thông qua việc dẫn xuất địa chỉ xác định trước. Địa chỉ ATA USDC của bạn có thể tính toán từ địa chỉ ví của bạn + địa chỉ mint USDC. Mọi người đều biết nó mà không cần hỏi.
 
-Đóng token account và chuyển phí thuê SOL còn lại của nó đến account đích. Token account phải có số dư bằng không trừ khi nó là native SOL account.
+**Cách các ATA hoạt động:**
 
-> Từ Token2022, có thể đóng `Mint` account có supply bằng 0
+Program Derived Address (PDA) dẫn xuất ATA từ:
+- Địa chỉ ví của bạn (chủ sở hữu)
+- Địa chỉ mint USDC (token nào)
+- Địa chỉ Chương trình Token Liên kết (hằng số)
 
-<ArticleSection name="Freeze Account" id="set-mint-to" level="h2" />
+```typescript
+const ata = getAssociatedTokenAddressSync(
+    mintAddress,   // USDC mint
+    ownerAddress   // Your wallet
+);
+```
 
-Ngăn chặn tất cả hoạt động token trên account cho đến khi nó được thaw. Chỉ freeze authority của mint mới có thể thực hiện hoạt động này.
+Cùng một đầu vào luôn tạo ra cùng một địa chỉ. ATA USDC của bạn không bao giờ thay đổi. Gửi ai đó USDC? Dẫn xuất ATA của họ từ ví + mint USDC, gửi đến đó.
 
-> Hoàn toàn vô hiệu hóa transfer, approval và burn và nó chỉ ảnh hưởng đến account bị đóng băng cụ thể
+**Ràng buộc của ATA:**
 
-<ArticleSection name="Thaw Account" id="thaw-account" level="h2" />
+Một ATA cho mỗi chủ sở hữu cho mỗi mint. Bạn có chính xác một ATA USDC. Không thể tạo ATA USDC thứ hai cho ví của bạn—việc dẫn xuất tạo ra cùng một địa chỉ.
 
-Kích hoạt lại hoạt động token trên account đã bị đóng băng trước đó. Chỉ freeze authority của mint mới có thể thaw account.
+Chủ sở hữu của ATA phải khớp với việc dẫn xuất. Nếu ATA dẫn xuất nên thuộc về Alice, chỉ Alice mới có thể là chủ sở hữu. Điều này ngăn chặn các cuộc tấn công nhầm lẫn tài khoản.
 
-> Khôi phục đầy đủ chức năng cho account bị đóng băng và chỉ có thể được thực hiện bởi freeze authority của mint
+**Các tài khoản token không phải ATA:**
+
+Bạn có thể tạo các tài khoản token tại các địa chỉ ngẫu nhiên. Các trường hợp sử dụng:
+- Nhiều tài khoản token cho cùng một token (số dư riêng cho các mục đích riêng)
+- Các tài khoản do chương trình kiểm soát (escrows, vaults)
+- Các tài khoản tạm thời (đóng sau khi sử dụng)
+
+Hầu hết các ứng dụng sử dụng ATA để đơn giản hóa. Các tài khoản không phải ATA là các trường hợp sử dụng nâng cao.
+
+<ArticleSection name="Vòng đời của các tài khoản token" id="lifecycle" level="h2" />
+
+**Tạo:**
+
+Các tài khoản token không tồn tại cho đến khi được tạo rõ ràng. Lần đầu tiên bạn nhận USDC? Người gửi (hoặc bạn) phải tạo tài khoản token USDC của bạn trước.
+
+Tạo một tài khoản token yêu cầu:
+1. Cấp phát 165 byte cho dữ liệu tài khoản
+2. Chuyển 0.00203928 SOL (tối thiểu để được miễn thuê)
+3. Gán quyền sở hữu cho chương trình SPL Token
+4. Khởi tạo với mint và chủ sở hữu
+
+Các ví và ứng dụng hiện đại xử lý việc này tự động. Bạn không cần tạo tài khoản token thủ công—lần chuyển token đầu tiên sẽ tạo tài khoản nếu cần.
+
+**Sử dụng:**
+
+Các tài khoản token đã khởi tạo có thể:
+- Nhận token (hoạt động mint, chuyển từ người khác)
+- Gửi token (nếu chủ sở hữu ký)
+- Ủy quyền quyền chi tiêu
+- Bị đóng băng (nếu có quyền đóng băng)
+
+Số dư bằng 0 không đóng tài khoản. Một tài khoản token với 0 token vẫn tồn tại và chiếm không gian, giữ 0.00203928 SOL.
+
+**Đóng:**
+
+Đóng các tài khoản token để thu hồi SOL thuê:
+- Số dư phải chính xác là 0
+- Không có ủy quyền nào được đặt
+- Chủ sở hữu (hoặc quyền đóng) phải ký
+
+Đóng sẽ chuyển SOL thuê đến một đích được chỉ định (thường là ví của chủ sở hữu). Tài khoản token sẽ ngừng tồn tại. Các hoạt động trong tương lai yêu cầu tài khoản đó phải tạo lại.
+
+<ArticleSection name="Các chi phí thuê và lưu trữ" id="rent-costs" level="h2" />
+
+Solana thu phí thuê cho việc lưu trữ tài khoản. Các tài khoản token yêu cầu 0.00203928 SOL để được miễn thuê (ngăn chặn việc thu gom rác).
+
+**Mức miễn thuê tối thiểu:**
+
+Kích thước tài khoản token = 165 byte. Tính toán miễn thuê:
+- 165 byte × tỷ lệ thuê (hiện tại ~6,960 lamports mỗi byte-epoch)
+- Số dư tối thiểu: 2,039,280 lamports = 0.00203928 SOL
+
+Số SOL này vẫn ở trong tài khoản token. Nó không bị khóa bởi chương trình SPL Token—đó là số dư lamport của tài khoản ngăn chặn việc thu phí thuê.
+
+**Các tác động về chi phí:**
+
+Giữ 10 token = 10 tài khoản token = 0.0203928 SOL trong các khoản đặt cọc thuê. Không đắt, nhưng nó cộng dồn cho các ví giữ hàng trăm token hoặc các chương trình quản lý hàng nghìn tài khoản người dùng.
+
+**Thu hồi phí thuê:**
+
+Đóng các tài khoản token không sử dụng để thu hồi phí thuê. Nhiều ví hiển thị tùy chọn "Đóng tài khoản" cho các token có số dư bằng 0. Thực hiện lệnh đóng, nhận lại 0.00203928 SOL của bạn.
+
+Một số token ngăn chặn việc đóng thông qua các ủy nhiệm vĩnh viễn hoặc các cờ đặc biệt. Kiểm tra xem có thể đóng trước khi thử.
+
+<ArticleSection name="Ủy quyền và phê duyệt" id="delegation" level="h2" />
+
+Ủy quyền tài khoản token cho phép cấp quyền chi tiêu tạm thời cho một địa chỉ khác mà không chuyển quyền sở hữu.
+
+**Các trường hợp sử dụng ủy quyền phổ biến:**
+
+DEX swaps: Bạn phê duyệt chương trình DEX để chi tiêu X token từ tài khoản token của bạn. DEX thực hiện hoán đổi, chi tiêu số lượng đã phê duyệt, quyền sở hữu của bạn vẫn giữ nguyên.
+
+Dịch vụ ký quỹ: Bạn ủy quyền quyền chi tiêu cho một chương trình ký quỹ. Chương trình giữ quyền chi tiêu, giải phóng khi điều kiện được đáp ứng.
+
+Lệnh giới hạn: Ủy quyền quyền cho chương trình đặt lệnh. Chương trình chi tiêu token khi điều kiện giá được kích hoạt.
+
+**Các trường hợp sử dụng ủy quyền phổ biến:**
+
+```rust
+delegate: Some(dex_program_address)
+delegated_amount: 1000000  // 1 USDC with 6 decimals
+```
+
+Ủy quyền có thể chi tiêu tối đa `delegated_amount` từ tài khoản token. Không thể chi tiêu nhiều hơn. Không thể thay đổi chủ sở hữu. Không thể đóng tài khoản.
+
+**Thu hồi:**
+
+Chủ sở hữu có thể thu hồi ủy quyền bất cứ lúc nào:
+
+```rust
+delegate: None
+delegated_amount: 0
+```
+
+Thu hồi trước khi token được chi tiêu? Người được ủy quyền mất tất cả quyền hạn. Mẫu phổ biến: phê duyệt, chờ thao tác, thu hồi nếu không thực hiện.
+
+<ArticleSection name="Đóng băng và rã đông" id="freeze-thaw" level="h2" />
+
+Nếu mint có quyền đóng băng, quyền đó có thể đóng băng các tài khoản token riêng lẻ.
+
+**Các tài khoản token bị đóng băng:**
+
+```rust
+state: Frozen
+```
+
+Không thể chuyển token ra ngoài. Không thể đốt token. Không thể đóng tài khoản. Vẫn có thể nhận token.
+
+Các trường hợp sử dụng:
+- Tuân thủ (stablecoins đóng băng các địa chỉ bị trừng phạt)
+- Ngăn chặn gian lận (nền tảng đóng băng các tài khoản đáng ngờ)
+- Cơ chế trò chơi (đóng băng tài sản trong trò chơi tạm thời)
+
+**Rã đông:**
+
+Chỉ quyền đóng băng mới có thể rã đông:
+
+```rust
+state: Initialized
+```
+
+Tài khoản trở lại bình thường. Các giao dịch chuyển tiếp tục. Thường dùng cho các đóng băng tạm thời trong quá trình điều tra.
+
+**Các token không có quyền đóng băng:**
+
+Nhiều token đặt quyền đóng băng thành None. Những token này không bao giờ có thể đóng băng bất kỳ tài khoản nào. Các giao dịch chuyển luôn hoạt động (giả sử có số dư). Tự do chuyển tối đa, không có kiểm soát tuân thủ.
+
+<ArticleSection name="Ví dụ thực tiễn" id="practical-examples" level="h2" />
+
+**Kiểm tra các tài khoản token của bạn:**
+
+Sử dụng Solana Explorer hoặc ví. Xem tất cả các tài khoản token do ví của bạn sở hữu. Mỗi tài khoản hiển thị:
+- Mint (token nào)
+- Balance (số lượng bạn nắm giữ)
+- Status (initialized, frozen)
+- Delegate (nếu quyền chi tiêu được cấp)
+
+**Tìm ATA của ai đó:**
+
+Với địa chỉ ví của họ và địa chỉ mint, tính toán địa chỉ ATA của họ. Gửi token đến đó. Hoạt động với bất kỳ token SPL nào.
+
+**Đóng các tài khoản trống:**
+
+Số dư bằng 0 trong một token bạn sẽ không sử dụng nữa? Đóng tài khoản, thu hồi 0.00203928 SOL. Thực hiện điều này cho hàng chục tài khoản token, thu hồi số lượng SOL đáng kể.
+
+**Quản lý ủy quyền:**
+
+Đã phê duyệt một DEX để chi tiêu token nhưng giao dịch không thực hiện? Thu hồi phê duyệt. Ngăn người được ủy quyền chi tiêu sau này. Thực hành bảo mật tốt: thu hồi các phê duyệt bạn không còn cần.
+
+Các tài khoản token là các bản ghi quyền sở hữu. Tài khoản mint xác định token. Các tài khoản token xác định ai sở hữu nó. Chương trình SPL Token thực thi các quy tắc. Kiến trúc này tạo ra hệ thống token của Solana.
+
+Tiếp theo: Phần mở rộng của token và cách Token-2022 mở rộng vượt ra ngoài các khả năng cơ bản của SPL Token.
+

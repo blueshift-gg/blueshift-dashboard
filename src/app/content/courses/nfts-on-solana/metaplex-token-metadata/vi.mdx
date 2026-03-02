@@ -1,119 +1,321 @@
 import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
 
-# Chương trình Metaplex Token Metadata
+# Metaplex Token Metadata
 
-Chương trình Metaplex Token Metadata giải quyết một hạn chế cơ bản trong chương trình SPL-Token bằng cách cho phép đính kèm dữ liệu mô tả phong phú cho cả token có thể thay thế và token không thể thay thế.
+Các tài khoản SPL Token mint lưu trữ các thông tin về số chữ số thập phân, tổng cung, quyền hạn. Chúng không lưu trữ tên, hình ảnh, mô tả. Mint của USDC là `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`. Ví của bạn hiển thị "USDC" với logo. Thông tin đó đến từ metadata.
 
-Trong khi chương trình SPL-Token hiệu quả xử lý các cơ chế cơ bản của token như sở hữu và nguồn cung, các token không có metadata xuất hiện trong ví và các trình khám phá như các public key vô danh.
+Metaplex Token Metadata là tiêu chuẩn thêm thông tin có thể đọc được cho con người vào các token Solana. Một chương trình riêng tạo các tài khoản metadata liên kết với các tài khoản mint. Mọi NFT lớn trên Solana đã sử dụng tiêu chuẩn này trong nhiều năm.
 
-Metaplex chuyển đổi các mục blockchain cơ bản này thành tài sản kỹ thuật số có ý nghĩa bằng cách cung cấp thông tin ngữ cảnh mà các ứng dụng và người dùng cần.
+<ArticleSection name="Token Metadata hoạt động như thế nào" id="how-it-works" level="h2" />
 
-<ArticleSection name="Metadata Account" id="metadata-account" level="h2" />
+Token Metadata sử dụng hai tài khoản:
 
-Account `Metadata` được dùng là, lớp mô tả cung cấp ngữ cảnh và tiện ích cho các token. Cấu trúc account này sử dụng hệ thống PDA của Solana để tạo ra một mối quan hệ tin cậy giữa mỗi token và thông tin liên quan của nó.
+**1. Tài khoản Mint (SPL Token):**
 
-Việc sinh địa chỉ một cách xác định đảm bảo rằng mỗi account mint có chính xác một account metadata tương ứng, thiết lập quyền sở hữu dữ liệu rõ ràng và ngăn chặn xung đột.
+Tài khoản SPL Token mint chuẩn. Đối với NFT: supply=1, decimals=0, mint authority=None.
 
-Account `Metadata` được trích xuất địa chỉ bằng một quy trình xác định bằng việc kết hợp các giá trị seed cụ thể với public key của account mint:
+**2. Metadata PDA (chương trình Metaplex):**
 
-```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+PDA được sở hữu bởi chương trình Metaplex Token Metadata. Lưu trữ tên, biểu tượng, URI, người tạo, tiền bản quyền, thông tin bộ sưu tập.
 
-const PREFIX: &str = "metadata";
+Được dẫn xuất ra một cách xác định từ địa chỉ mint:
 
-let (metadata, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-    ], 
-    &ID  
-);
+```typescript
+const metadataPDA = PublicKey.findProgramAddressSync(
+    [
+        Buffer.from("metadata"),
+        METADATA_PROGRAM_ID.toBuffer(),
+        mintAddress.toBuffer(),
+    ],
+    METADATA_PROGRAM_ID
+)[0];
 ```
 
-Account `Metadata` lưu trữ thông tin phong phú giúp mở rộng vượt xa các định danh token cơ bản.
+Với bất kỳ địa chỉ mint nào, bất kỳ ai cũng có thể tính toán địa chỉ metadata PDA. Không cần lưu trữ hoặc truyền đạt nó riêng biệt. Ví và trình khám phá tự động dẫn xuất nó.
 
-Hệ thống xác thực người tạo duy trì danh sách các người tạo token, mỗi người tạo được xác thực bằng một thuộc tính mang tính mật mã để chứng minh quyền tác giả hợp pháp. Việc xác minh này giúp ngăn chặn hành vi mạo danh và thiết lập khả năng theo dõi nguồn gốc đáng tin cậy cho các tài sản kỹ thuật số.
+<ArticleSection name="Cấu trúc tài khoản Metadata" id="metadata-structure" level="h2" />
 
-Hệ thống tính phí bản quyền tich hợp cho phép tự động phân phối thu nhập cho các người tạo thông qua các thuộc tính phần trăm chia sẻ được gán cho mỗi người tạo. Các chợ có thể tham chiếu vào các phần trăm chia sẻ này để phân phối các khoản thu nhập từ các giao dịch thứ câp theo các thỏa thuận được xác định trước, loại bỏ tính toán thủ công và sự phụ thuộc vào niềm tin.
-
-Việc này tạo ra các mô hình kinh tế bền vững trong đó người tạo tiếp tục kiếm tiền từ công việc của họ sau lần bán đầu tiên.
-
-Chương trình Token Metadata thành công kết nối lỗ hổng giữa dữ liệu blockchain thô và các tài sản kỹ thuật số có thể truy cập bởi người dùng. Bằng cách tăng thêm các thông tin ngữ cảnh phong phú vào các account mint, chương trình cho phép các ứng dụng hiển thị, phân loại và tương tác với các token một cách có ý nghĩa.
-
-Lớp metadata này cung cấp cơ sở cho hệ sinh thái tài sản kỹ thuật số phong phú hiện tại trên Solana.
-
-<ArticleSection name="Master Edition Account" id="master-edition-account" level="h2" />
-
-Mặc dù Account `Master Edition` đáp ứng hiệu quả cho cả token có thể thay thế và token không thể thay thế, việc đảm bảo các đặc điểm NFT hợp pháp yêu cầu các biện pháp kiểm soát bổ sung.
-
-Account `Master Edition` đáp ứng nhu cầu này bằng một PDA đặc biệt để quản lý quyền của token. Account này chỉ được tạo sau khi chương trình Token Metadata xác thực rằng các thuộc tính token không thể thay thế đã được thiết lập.
-
-Hệ thống Master Edition sử dụng cách tiếp cận quản lý quyền hạn tinh vi hơn. Thay vì hoàn toàn hủy quyền đúc token, chương trình chuyển cả hai quyền đúc và đóng băng cho PDA Master Edition. Thiết kế này cung cấp tính bảo mật và chức năng cao hơn so với các quyền hạn bị hủy vĩnh viễn, đồng thời duy trì kiểm soát chặt chẽ trên việc tạo và quản lý token.
-
-> Đọc [phần FAQ](https://developers.metaplex.com/token-metadata/faq#why-are-the-mint-and-freeze-authorities-transferred-to-the-edition-pda) để hiểu lý do của lựa chọn này.
-
-Seed của account `Master Edition` như sau:
+Tài khoản metadata chứa dữ liệu có cấu trúc:
 
 ```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-
-const PREFIX: &str = "metadata";
-const EDITION: &str = "edition";
-
-let (master_edition, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-        EDITION.as_bytes(),
-    ], 
-    &ID  
-);
+pub struct Metadata {
+    pub key: Key,                   // Account type discriminator
+    pub update_authority: Pubkey,   // Who can update metadata
+    pub mint: Pubkey,               // Associated token mint
+    pub data: Data,                 // Name, symbol, URI, creators, royalty
+    pub primary_sale_happened: bool,
+    pub is_mutable: bool,           // Can metadata be changed?
+    pub edition_nonce: Option<u8>,
+    pub token_standard: Option<TokenStandard>,
+    pub collection: Option<Collection>,
+    pub uses: Option<Uses>,
+    pub collection_details: Option<CollectionDetails>,
+    pub programmable_config: Option<ProgrammableConfig>,
+}
 ```
 
-<ArticleSection name="NFTs có thể lập trình" id="programmable-nfts" level="h2" />
+**`update_authority`** - Ai có thể cập nhật metadata:
+- Thường là người tạo ban đầu
+- Có thể thay đổi hoặc thu hồi (đặt thành None để không thể thay đổi)
+- Độc lập với quyền hạn của mint
 
-NFTs có thể lập trình (pNFTs) đại diện cho một tiêu chuẩn token nâng cao mà áp đặt các hành vi và ràng buộc có thể tùy chỉnh ở mức giao thức.
+**`mint`** - Token mà metadata này mô tả:
+- Liên kết metadata với tài khoản mint cụ thể
+- Một tài khoản metadata cho mỗi mint
 
-Lớp tài sản này giải quyết các hạn chế của NFT truyền thống bằng cách cho phép người tạo định nghĩa các quy tắc vòng đời riêng biệt được thực hiện tự động trong các tương tác token, đảm bảo tuân thủ quy tắc mà không phụ thuộc vào các biện pháp kiểm soát bên ngoài.
-
-Kiến trúc kiểm soát được thực hiện thông qua hệ thống tài khoản token đóng băng. Khi một NFT trở thành có thể lập trình, tài khoản token liên kết với nó vẫn bị đóng băng vĩnh viễn, yêu cầu tất cả các hoạt động phải truyền qua chương trình Token Metadata.
-
-Thiết kế này tạo ra một điểm kiểm tra bắt buộc để xác minh các quy tắc trước khi bất kỳ hành động nào có thể tiếp tục thực hiện, làm cho việc bỏ qua các ràng buộc được định nghĩa bởi người tạo là không thể thực hiện.
-
-Các quy tắc được định nghĩa bởi người tạo được lưu trữ trong các account `RuleSet` kết nối với account `Token Record`, một loại account mới được liên kết với mint để chỉ ra trạng thái của NFT có thể lập trình.
-
-Account `Token Record` trích xuất địa chỉ của nó bằng các seed cụ thể liên kết nó với cả hai account mint và token:
+**`data`** - Metadata thực tế:
 
 ```rust
-const ID: Pubkey = solana_pubkey::pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-
-const PREFIX: &str = "metadata";
-const TOKEN_RECORD_SEED: &str = "token_record";
-
-let (master_edition, _) = Pubkey::find_program_address(
-    &[
-        PREFIX.as_bytes(), 
-        &ID, 
-        mint.as_ref()
-        TOKEN_RECORD_SEED.as_bytes(),
-        token.as_ref(),
-    ], 
-    &ID  
-);
+pub struct Data {
+    pub name: String,              // "Okay Bear #1234"
+    pub symbol: String,            // "OKAY"
+    pub uri: String,               // Link to off-chain JSON
+    pub seller_fee_basis_points: u16,  // Royalty %
+    pub creators: Option<Vec<Creator>>,
+}
 ```
 
-Các `RuleSet` này cho phép logic điều kiện phức tạp bao gồm danh sách cho phép của các chợ tuân thử các khoản thanh toán phí bản quyền, yêu cầu đa ký cho các giao dịch, các ràng buộc dựa trên thời gian cho các hoạt động hoặc các luồng phê duyệt phức tạp.
+**`primary_sale_happened`** - Theo dõi lần bán đầu tiên:
+- Ban đầu là False
+- Đặt thành True sau lần bán đầu tiên trên thị trường
+- Sử dụng cho logic tiền bản quyền (một số người tạo từ bỏ tiền bản quyền trên lần bán đầu tiên)
 
-Chương trình [Token Auth Rules](https://developers.metaplex.com/token-auth-rules) quản lý các account `RuleSet` này và xử lý logic xác minh của chúng, cung cấp một kiến trúc linh hoạt để thực hiện các biện pháp quản lý tùy chỉnh.
+**`is_mutable`** - Metadata có thể thay đổi không?:
+- True: Update authority có thể sửa đổi metadata
+- False: Metadata bị đóng băng vĩnh viễn
+- Thường đặt false sau khi mint để đảm bảo tính bất biến
 
-Tương tác của nhà phát triển với pNFTs diễn ra thông qua chương trình Token Metadata thay vì chương trình SPL-Token trực tiếp. Chương trình này cung cấp các instruction được tối ưu hóa như `Create` và `Update` để thay thế các hoạt động truyền thống như `CreateMetadataAccount` và `UpdateMetadata`.
+**`collection`** - Thành viên bộ sưu tập:
+- Tham chiếu đến NFT bộ sưu tập
+- Cờ xác minh (collection authority đã ký)
+- Cho phép lọc và xác minh bộ sưu tập
 
-Mỗi instruction yêu cầu một tham số account `authorization_rules` tham chiếu đến `RuleSet` có thể được khám phá thông qua việc trích xuất on-chain hoặc thông qua API đọc của Metaplex.
+<ArticleSection name="Off-Chain Metadata (JSON)" id="offchain-metadata" level="h2" />
 
-Kiến trúc có thể lập trình này cho phép người tạo thực hiện các mô hình kinh tế phức tạp và các cấu trúc quản lý với sự kiểm soát được đảm bảo.
+Trường `uri` trong metadata on-chain trỏ đến tệp JSON off-chain chứa thông tin chi tiết.
 
-Bằng việc ứng dụng vào các giao dịch có điều kiện, cấu trúc phí bản quyền động hoặc các yêu cầu sở hữu phức tạp, pNFT đảm bảo rằng tất cả các hành vi được thực hiện tự động ở mức giao thức mà không phụ thuộc vào sự hợp tác của các chợ hoặc sự tuân thủ tự nguyện của người dùng.
+**Cấu trúc JSON điển hình:**
 
-> Để học thêm về cách sử dụng chương trình `Token Metadata`, tham khảo [tài liệu chính thức](https://developers.metaplex.com/token-metadata)
+```json
+{
+  "name": "Okay Bear #1234",
+  "symbol": "OKAY",
+  "description": "Okay Bear is a collection of 10,000 bears.",
+  "image": "https://arweave.net/...",
+  "attributes": [
+    { "trait_type": "Background", "value": "Blue" },
+    { "trait_type": "Fur", "value": "Brown" },
+    { "trait_type": "Eyes", "value": "Happy" },
+    { "trait_type": "Clothing", "value": "T-Shirt" }
+  ],
+  "properties": {
+    "files": [
+      { "uri": "https://arweave.net/...", "type": "image/png" }
+    ],
+    "category": "image"
+  }
+}
+```
+
+**Tại sao tách on-chain/off-chain?**
+
+Lưu trữ on-chain rất tốn kém. Lưu một tệp JSON 2KB trên chuỗi tốn ~0.01 SOL mỗi NFT. Với 10,000 NFT: 100 SOL = $15,000+ tiền thuê.
+
+Lưu trữ off-chain (IPFS, Arweave, centralized) rẻ hơn nhiều. URI trỏ đến JSON. Ví và trình duyệt tự động lấy và hiển thị.
+
+**Tùy chọn lưu trữ:**
+
+**Arweave**: Lưu trữ phi tập trung vĩnh viễn. Trả một lần, lưu trữ mãi mãi. Hầu hết các dự án NFT sử dụng dịch vụ này. Chi phí: ~$0.01 mỗi tệp.
+
+**IPFS**: Phi tập trung nhưng không đảm bảo vĩnh viễn. Tệp có thể biến mất nếu không ai ghim chúng. Rẻ hơn nhưng ít đáng tin cậy hơn.
+
+**Centralized (AWS, Cloudflare)**: Rẻ nhất và nhanh nhất. Người tạo kiểm soát. Rủi ro: Người tạo có thể thay đổi hoặc xóa. Không thực sự phi tập trung.
+
+**On-chain (hiếm)**: Tối đa tính vĩnh viễn và phi tập trung. Rất tốn kém. Một số NFT giá trị cao làm điều này thông qua inscriptions.
+
+<ArticleSection name="Tác giả và tiền bản quyền" id="creators-royalties" level="h2" />
+
+Metadata bao gồm danh sách tác giả và cấu hình tiền bản quyền:
+
+```rust
+pub struct Creator {
+    pub address: Pubkey,
+    pub verified: bool,    // Creator signed approval
+    pub share: u8,         // Percentage of royalties (0-100)
+}
+```
+
+**Xác minh tác giả:**
+
+Bất kỳ ai cũng có thể mint một NFT và tuyên bố các tác giả tùy ý. Việc xác minh chứng minh rằng các tác giả đã phê duyệt điều này.
+
+Chưa xác minh: NFT liệt kê tác giả, nhưng tác giả chưa ký. Có thể là giả mạo.
+
+Đã xác minh: Tác giả đã ký giao dịch chứng minh họ đồng ý được liệt kê. Xác thực.
+
+Các thị trường hiển thị trạng thái xác minh. Tác giả đã xác minh tăng tính hợp pháp.
+
+**Phân phối tiền bản quyền:**
+
+```rust
+seller_fee_basis_points: 500  // 5% royalty
+creators: [
+    { address: Artist, verified: true, share: 70 },   // Artist gets 3.5%
+    { address: Platform, verified: true, share: 30 },  // Platform gets 1.5%
+]
+```
+
+Thị trường thứ cấp chia sẻ: 95% cho người bán, 5% cho các tác giả (dựa trên tỷ lệ phần trăm chia sẻ).
+
+Các thị trường tôn trọng tiền bản quyền một cách tự nguyện. Giao thức không thực thi. Hầu hết các thị trường lớn tôn trọng tiền bản quyền của tác giả theo mặc định, nhưng một số cung cấp giao dịch không có tiền bản quyền.
+
+<ArticleSection name="Bộ sưu tập và xác minh" id="collections" level="h2" />
+
+Bộ sưu tập nhóm các NFT có mối liên quan với nhau. Okay Bears là một bộ sưu tập. Mad Lads là một bộ sưu tập.
+
+**Cấu trúc bộ sưu tập:**
+
+Bộ sưu tập tự nó là một NFT (supply=1).
+
+Các NFT riêng lẻ tham chiếu đến bộ sưu tập:
+
+```rust
+pub struct Collection {
+    pub verified: bool,    // Collection authority signed
+    pub key: Pubkey,       // Collection NFT address
+}
+```
+
+**Quy trình xác minh:**
+
+1. Đúc một NFT bộ sưu tập (supply=1)
+2. Đúc các NFT riêng lẻ với trường collection trỏ đến NFT bộ sưu tập
+3. Quyền cập nhật bộ sưu tập ký xác minh cho từng NFT
+4. Cờ `verified` được đặt thành true
+
+Các thành viên bộ sưu tập chưa được xác minh có nghĩa là NFT tự tuyên bố thuộc về nhưng bộ sưu tập chưa xác minh. Có khả năng là giả mạo. Các thị trường lọc các NFT chưa được xác minh hoặc hiển thị cảnh báo.
+
+**Tại sao việc xác minh quan trọng:**
+
+Bất kỳ ai cũng có thể tạo NFT tuyên bố "Okay Bear #10001." Nếu không có xác minh, các thị trường không thể phân biệt thật giả. Xác minh chứng minh rằng quyền lực bộ sưu tập đã phê duyệt NFT này.
+
+NFT giả không thể được xác minh (chúng không có chữ ký quyền lực bộ sưu tập). NFT thật có cờ `verified`. Cách đơn giản để chống giả mạo.
+
+<ArticleSection name="Phiên bản chính và bản in" id="master-edition" level="h2" />
+
+Metaplex hỗ trợ cơ chế phiên bản: một NFT chính, nhiều bản in.
+
+**Phiên bản chính:**
+
+NFT gốc được đánh dấu là phiên bản chính. Supply=1. Có PDA phiên bản chính theo dõi số lượng bản in tồn tại và số lượng tối đa cho phép.
+
+**Phiên bản in:**
+
+Bản in giới hạn hoặc không giới hạn của phiên bản chính. Mỗi bản in là một NFT riêng biệt (supply=1) nhưng được đánh dấu là phiên bản sao chép của phiên bản chính.
+
+Bản in #1, Bản in #2, v.v. Được đánh số và có thể truy xuất đến phiên bản chính.
+
+**Trường hợp sử dụng:**
+
+Các phiên bản giới hạn của tác phẩm kỹ thuật số. Nghệ sĩ tạo phiên bản chính, đúc 100 bản in. Bản in #37 trong 100.
+
+Ảnh sự kiện với bản gốc có chữ ký. Nhiếp ảnh gia giữ phiên bản chính, bán các bản in có đánh số.
+
+**Đánh đổi:**
+
+Thêm độ phức tạp. Mỗi bản in là một NFT riêng biệt với các tài khoản riêng. Chi phí cao hơn so với một NFT duy nhất.
+
+Giá trị thị trường: Phiên bản chính thường có giá trị cao hơn bản in. Số lượng bản in ảnh hưởng đến giá trị (bản in sớm hơn có giá trị cao hơn).
+
+Không được sử dụng rộng rãi so với NFT 1/1 duy nhất. Tăng độ phức tạp cho hầu hết các dự án NFT.
+
+<ArticleSection name="Các NFT lập trình được" id="programmable-nfts" level="h2" />
+
+Mới được thêm vào Token Metadata gần đây: Các NFT lập trình được (pNFTs).
+
+**Những gì chúng cho phép:**
+
+Thực thi tiền bản quyền ở cấp giao thức (các giao dịch chuyển nhượng yêu cầu thanh toán tiền bản quyền).
+
+Quy tắc chuyển nhượng (hạn chế ai có thể chuyển, khi nào, dưới những điều kiện nào).
+
+Quản lý ủy quyền (hệ thống quyền nâng cao).
+
+**Cách chúng hoạt động:**
+
+Đúc bao gồm cấu hình lập trình. Các giao dịch chuyển nhượng thực hiện thông qua xác thực quy tắc. Các chương trình có thể thực thi logic mà Ethereum ERC-721 không thể.
+
+**Đánh đổi:**
+
+Phức tạp hơn so với NFT tiêu chuẩn. Chi phí giao dịch cao hơn. Thêm các tài khoản bổ sung.
+
+Lợi ích: Thực thi tiền bản quyền thực sự (không phụ thuộc vào thị trường). Kiểm soát chuyển nhượng cho trò chơi, tuân thủ, quyền sở hữu có điều kiện.
+
+**Áp dụng:**
+
+Đang phát triển nhưng vẫn là ít được sử dụng. Hầu hết NFT vẫn là Token Metadata tiêu chuẩn. Sử dụng pNFTs khi việc thực thi là quan trọng (tác phẩm nghệ thuật giá trị cao với tiền bản quyền, vật phẩm trò chơi với hạn chế giao dịch).
+
+<ArticleSection name="Tạo NFT Token Metadata" id="creating-nfts" level="h2" />
+
+**Các bước:**
+
+1. Tạo tài khoản mint (supply=1, decimals=0)
+2. Đúc 1 token vào tài khoản token của chủ sở hữu
+3. Đặt quyền mint thành None (ngăn chặn việc đúc thêm)
+4. Tạo metadata PDA với tên, ký hiệu, URI, người tạo, tiền bản quyền
+5. Nếu là một phần của bộ sưu tập: Đặt trường bộ sưu tập và xác minh
+
+**Công cụ:**
+
+Metaplex JS SDK cung cấp các hàm hỗ trợ:
+
+```typescript
+const { nft } = await metaplex.nfts().create({
+    uri: "https://arweave.net/metadata.json",
+    name: "My NFT",
+    sellerFeeBasisPoints: 500,
+    creators: [
+        {
+            address: creator.publicKey,
+            share: 100,
+        }
+    ],
+});
+```
+
+Xử lý tự động việc tạo mint, đúc token, và tạo metadata PDA.
+
+**Chi phí:**
+
+Tài khoản mint: 0.00144 SOL phí thuê.
+
+Tài khoản Metadata: ~0.012-0.02 SOL (tùy thuộc vào kích thước dữ liệu).
+
+Tổng cộng: ~0.015-0.025 SOL mỗi NFT ≈ $0.02-0.03.
+
+<ArticleSection name="Khi nào nên sử dụng Token Metadata" id="when-to-use" level="h2" />
+
+**Sử dụng Token Metadata khi:**
+
+Cần sự tương thích tối đa. Mọi ví, thị trường, công cụ đều hỗ trợ nó.
+
+Dự án của bạn cần tiêu chuẩn đã được kiểm chứng. Nhiều năm sử dụng trong thực tế.
+
+Bộ sưu tập đã bắt đầu với Token Metadata. Việc di chuyển sẽ phức tạp.
+
+Cần NFT lập trình được. pNFTs yêu cầu Token Metadata.
+
+**Xem xét các lựa chọn thay thế khi:**
+
+Chi phí thấp hơn quan trọng (Metaplex Core rẻ hơn).
+
+Cấu trúc đơn giản hơn được ưu tiên (Core sử dụng một tài khoản).
+
+Cần quy mô lớn (NFT nén rẻ hơn đáng kể).
+
+Bắt đầu từ đầu (Core là tiêu chuẩn mới hơn, sạch hơn cho các dự án mới).
+
+Token Metadata vẫn là tiêu chuẩn được hỗ trợ rộng rãi nhất. Nếu ưu tiên sự tương thích, hãy sử dụng nó. Nếu tối ưu hóa chi phí và bắt đầu từ đầu, hãy xem xét Core hoặc NFT nén.
+
+Tiếp theo: Metaplex Core và NFT nén—các phương pháp mới hơn, hiệu quả hơn cho NFT trên Solana.
+
