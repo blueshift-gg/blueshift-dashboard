@@ -13,6 +13,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
       { slug: "how-blockchains-work" },
       { slug: "achieving-consensus" },
       { slug: "bitcoin-first-blockchain" },
+      { slug: "conclusion" },
     ],
   },
   {
@@ -26,6 +27,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
       { slug: "how-ethereum-works" },
       { slug: "scalability-challenge" },
       { slug: "solutions-landscape" },
+      { slug: "conclusion" },
     ],
   },
   {
@@ -40,6 +42,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
       { slug: "accounts-ownership" },
       { slug: "programs-transactions" },
       { slug: "using-solana" },
+      { slug: "conclusion" },
     ],
   },
   {
