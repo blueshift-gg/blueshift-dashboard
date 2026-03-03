@@ -1,0 +1,160 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Understanding Solana course - Learn Solana architecture from Proof of History to parallel execution](/graphics/course-banners/understanding-solana.png)
+
+# Lý do Solana được xây dựng
+
+[Thực thi tuần tự](/vi/courses/evolution-programmable-blockchains/scalability-challenge#sequential-execution-bottleneck) là nút thắt cổ chai của blockchain. [Ethereum xử lý các giao dịch từng cái một](/vi/courses/evolution-programmable-blockchains/how-ethereum-works#ethereum-virtual-machine) vì nó không biết giao dịch nào sẽ xung đột. Ý tưởng của Solana: nếu bạn có thể sắp xếp mọi thứ trước, sau đó thực hiện các giao dịch không xung đột song song thì sao?
+
+Solana hoạt động như thế nào? Solana sử dụng bằng chứng lịch sử để sắp xếp mọi thứ trước, sau đó thực thi song song. Lựa chọn kiến trúc này cho phép xử lý hơn 5,000 giao dịch mỗi giây với thời gian xác nhận dưới một giây trong khi vẫn duy trì tính phi tập trung. Bằng chứng lịch sử giải quyết vấn đề thứ tự mà các blockchain khác gặp phải.
+
+<ArticleSection name="Vấn đề thứ tự" id="ordering-problem" level="h2" />
+
+Các blockchain đối mặt với một thách thức cơ bản: đồng ý về thứ tự của các sự kiện trên hàng nghìn nút mà không có một đồng hồ trung tâm.
+
+Trong các hệ thống phân tán truyền thống, dấu thời gian giải quyết vấn đề thứ tự. Khi Giao dịch A đến lúc 10:00:01.523 và Giao dịch B đến lúc 10:00:01.891, xử lý A trước. Đơn giản.
+
+Điều này không hoạt động trong các hệ thống phi tập trung. Các nút không thể tin tưởng đồng hồ của nhau. Một kẻ tấn công có thể thao túng đồng hồ của họ để làm cho giao dịch của họ xuất hiện sớm hơn. Độ trễ mạng khiến cho các nút thấy các sự kiện theo thứ tự khác nhau.
+
+Không có dấu thời gian đáng tin cậy, các blockchain phải sử dụng đồng thuận để đồng ý về thứ tự. Trong Ethereum:
+1. Người đề xuất thu thập các giao dịch đang chờ
+2. Người đề xuất sắp xếp chúng (thường theo phí)
+3. Mạng đạt được đồng thuận về thứ tự này
+4. Các giao dịch được thực hiện theo thứ tự đã đồng ý
+
+Điều này hoạt động, nhưng đồng thuận trước khi thực hiện tạo ra nút thắt cổ chai. Mạng không thể bắt đầu thực hiện cho đến khi mọi người đồng ý về thứ tự.
+
+<ArticleSection name="Bằng chứng lịch sử: Một đồng hồ mật mã" id="proof-of-history" level="h2" />
+
+Solana tạo thứ tự trước khi đồng thuận bằng cách sử dụng Bằng chứng Lịch sử (Proof of History) — một đồng hồ mật mã cho blockchain. Thay vì chờ đồng thuận để xác lập thứ tự, Solana sử dụng một hàm độ trễ có thể xác minh để tạo dấu thời gian mà không ai có thể thao túng.
+
+**Cách Bằng chứng Lịch sử hoạt động:**
+
+Hãy tưởng tượng một hàm băm được áp dụng liên tục, trong đó mỗi đầu ra trở thành đầu vào cho phép tính tiếp theo:
+
+```
+hash(data)             → output_1
+hash(output_1 + data)  → output_2
+hash(output_2 + data)  → output_3
+hash(output_3 + data)  → output_4
+```
+
+Mỗi bước yêu cầu thời gian tính toán thực tế — bạn không thể bỏ qua mà không thực hiện công việc. Chuỗi các hàm băm tạo ra một bản ghi thời gian có thể xác minh.
+
+Solana sử dụng SHA-256 trong mô hình này. Trình xác thực dẫn đầu sinh ra chuỗi này liên tục, tạo ra 160,000 mã băm mỗi giây. Mỗi mã băm chứng minh thời gian đã trôi qua kể từ mã băm trước đó.
+
+Khi các giao dịch đến, chúng được băm vào chuỗi này:
+
+```
+hash(output_42)                → output_43
+hash(output_43 + transaction_A) → output_44
+hash(output_44)                → output_45
+hash(output_45 + transaction_B) → output_46
+```
+
+Mã băm của Giao dịch A xuất hiện ở vị trí 44. Mã băm của Giao dịch B xuất hiện ở vị trí 46. Giao dịch A đến trước Giao dịch B — có thể chứng minh bằng mật mã vì bạn không thể tạo vị trí 46 mà không tạo trước các vị trí 43, 44 và 45.
+
+**Tại sao điều này quan trọng:**
+
+- Không ai có thể thao túng thứ tự (bạn không thể bỏ qua các mã băm)
+- Mọi người có thể xác minh thứ tự (tính lại các mã băm)
+- Thứ tự được thiết lập ngay lập tức (không cần chờ đồng thuận)
+- Đồng thuận chỉ xác minh thứ tự là hợp lệ (không tạo ra thứ tự)
+
+Solana tách rời việc xác định thứ tự khỏi đồng thuận. Đây là sự khác biệt kiến trúc cốt lõi so với các blockchain khác.
+
+<ArticleSection name="Từ thứ tự đến song song" id="ordering-to-parallelism" level="h2" />
+
+Biết được thứ tự cho phép thực hiện song song. Khi các giao dịch có thứ tự được chứng minh bằng mật mã, mạng có thể thực thi chúng một cách thông minh.
+
+**Thực thi tuần tự (Ethereum):**
+1. Giao dịch A thực hiện → cập nhật trạng thái
+2. Giao dịch B thực hiện → cập nhật trạng thái
+3. Giao dịch C thực hiện → cập nhật trạng thái
+4. Giao dịch D thực hiện → cập nhật trạng thái
+
+Chỉ có một giao dịch chạy tại một thời điểm. Tổng thời gian = tổng thời gian thực hiện tất cả các giao dịch.
+
+**Thực thi song song (Solana):**
+
+Solana phân tích các giao dịch đã được sắp xếp:
+- Giao dịch A sửa đổi các tài khoản \{1, 2, 3\}
+- Giao dịch B sửa đổi các tài khoản \{4, 5, 6\}
+- Giao dịch C sửa đổi các tài khoản \{2, 7, 8\}
+- Giao dịch D sửa đổi các tài khoản \{9, 10, 11\}
+
+Các giao dịch A và B không sử dụng các tài khoản chung — chúng có thể thực hiện đồng thời. Giao dịch C xung đột với A (cả hai đều sử dụng vào tài khoản 2), vì vậy nó phải chờ. Giao dịch D không xung đột với gì và có thể thực hiện ngay lập tức.
+
+Lịch trình thực thi:
+- CPU Core 1: Giao dịch A, sau đó Giao dịch C
+- CPU Core 2: Giao dịch B
+- CPU Core 3: Giao dịch D
+
+Ba giao dịch thực hiện trong thời gian mà một giao dịch sẽ mất để thực hiện. Đây là thực thi song song được kích hoạt bởi việc sắp xếp của Bằng chứng Lịch sử.
+
+<ArticleSection name="Yêu cầu đối với việc song song hóa giao dịch" id="parallelization-requirements" level="h2" />
+
+Thực thi song song yêu cầu biết trước các tài khoản mà một giao dịch sẽ sử dụng trước khi thực thi. Solana làm điều này một cách tường minh.
+
+Mỗi giao dịch Solana khai báo trước:
+- Các tài khoản mà nó sẽ đọc
+- Các tài khoản mà nó sẽ sửa đổi
+- Các chương trình mà nó sẽ gọi
+
+Việc khai báo này là bắt buộc. Một giao dịch truy cập vào một tài khoản chưa được khai báo sẽ thất bại. Hạn chế này cho phép thực thi song song.
+
+Xem xét hai giao dịch:
+- Giao dịch 1: `[đọc: account_A, ghi: account_B]`
+- Giao dịch 2: `[đọc: account_C, ghi: account_D]`
+
+Runtime thấy các khai báo này và biết ngay lập tức: không có xung đột. Thực hiện đồng thời.
+
+Nếu Giao dịch 3 khai báo `[đọc: account_A, ghi: account_D]`, runtime biết nó xung đột với cả hai giao dịch trước đó. Lên lịch riêng cho nó.
+
+Việc khai báo trước này cho phép máy ảo Solana xây dựng một đồ thị phụ thuộc và tối đa hóa việc thực thi song song trên tất cả các lõi CPU có sẵn.
+
+<ArticleSection name="Thành quả hiệu suất" id="performance-results" level="h2" />
+
+Bằng chứng lịch sử Proof of History kết hợp với thực thi song song mang lại những con số thông lượng này.
+
+**Solana:** 5,000+ giao dịch mỗi giây trong môi trường thực, với khả năng lý thuyết vượt quá 65,000 TPS. Thời gian khối là 400 mili giây. Tính thống nhất cuối cùng thường xảy ra trong 1-2 giây.
+
+**Ethereum:** Khoảng 15 giao dịch mỗi giây. Thời gian khối là 12 giây. Tính thống nhất mất khoảng 13 phút với bằng chứng cổ phần.
+
+**Bitcoin:** Khoảng 7 giao dịch mỗi giây. Thời gian khối là 10 phút. Tính thống nhất yêu cầu 6 xác nhận (60 phút).
+
+Sự khác biệt là về kiến trúc. Ethereum và Bitcoin xử lý tuần tự trong khi Solana xử lý song song. Cả hai đều chạy trên phần cứng tương tự—máy chủ thường dùng với CPU hiện đại—nhưng sử dụng các mô hình thực thi khác nhau.
+
+Mạng lưới duy trì hơn 1,000 trình xác thực độc lập. Chạy một trình xác thực yêu cầu phần cứng cụ thể (12+ lõi CPU, 256GB RAM, SSD nhanh), nhưng vẫn có thể tiếp cận được đối với các cá nhân và tổ chức nhỏ.
+
+<ArticleSection name="Điều này cho phép" id="what-this-enables" level="h2" />
+
+Thông lượng cao và độ trễ thấp cho phép các ứng dụng không thể thực hiện trên các blockchain khác.
+
+**Ứng dụng thời gian thực:** Sổ lệnh với hàng nghìn cập nhật mỗi giây. Trò chơi trên chuỗi với lối chơi tương tác. Đấu giá và đấu thầu trực tiếp.
+
+**Các giao dịch vi mô:** Khi chi phí giao dịch là $0.00025, các khoản thanh toán vi mô trở nên khả thi. Truyền các khoản thanh toán nhỏ mỗi giây. Thanh toán theo lượt gọi API. Kiếm tiền từ các hành động trước đây không thể thực hiện.
+
+**Khả năng kết hợp ở quy mô lớn:** vay nhanh, ăn chênh lệch giá, và các chiến lược DeFi phức tạp hoạt động khi bạn có thể thực hiện nhiều thao tác nhanh chóng và rẻ trong một giao dịch duy nhất.
+
+**Khả năng tiếp cận DeFi:** Phí cao trên Ethereum khó khăn cho người dùng nhỏ. Khi hoán đổi $100 tốn $50 phí, DeFi chỉ dành cho người giàu. Chi phí thấp của Solana mở rộng DeFi cho người dùng nhỏ hơn.
+
+**Cơ sở hạ tầng NFT:** Đúc hàng nghìn NFT là khả thi. Các thị trường có thể xử lý khối lượng giao dịch lớn. Tiền bản quyền có thể thực thi tự động mà không tốn kém.
+
+Solana biến blockchain từ một lớp thanh toán thành một môi trường thực thi cho các ứng dụng tương tác. Các chương trình không chỉ lưu trữ và chuyển giá trị—chúng thực thi logic phức tạp với tốc độ gần bằng cơ sở dữ liệu truyền thống.
+
+<ArticleSection name="Các đánh đổi về kiến trúc" id="architectural-tradeoffs" level="h2" />
+
+Solana đánh đổi một số sự đơn giản để đạt hiệu suất cao.
+
+**Yêu cầu phần cứng cao hơn:** Các trình xác thực cần máy chủ chuyên dụng (12+ lõi CPU, 256GB RAM). Điều này giảm số lượng trình xác thực tiềm năng so với Bitcoin hoặc Ethereum, nơi các máy tính xách tay thường dùng có thể xác thực. 1,000+ trình xác thực vẫn cung cấp sự phi tập trung mạnh mẽ.
+
+**Khai báo tài khoản rõ ràng:** Các giao dịch phải khai báo các tài khoản mà chúng sẽ truy cập. Điều này đòi hỏi việc lập kế hoạch trước từ các nhà phát triển nhưng cho phép runtime lập lịch thực thi song song.
+
+**Mô hình tư duy khác:** Thực thi tuần tự của Ethereum đơn giản hơn về mặt khái niệm. Mô hình song song của Solana yêu cầu hiểu cách các giao dịch tương tác và xung đột. Điều này làm tăng độ phức tạp cho nhà phát triển.
+
+**Yêu cầu mạng:** Thông lượng cao đòi hỏi băng thông cao. Các trình xác thực cần kết nối internet nhanh để theo kịp luồng giao dịch. Phân tán về mặt địa lý có thể gặp thách thức ở các khu vực có cơ sở hạ tầng hạn chế.
+
+Những đánh đổi này là có chủ ý. Solana tối ưu hóa cho hiệu suất và chi phí. Các ứng dụng khác nhau có các yêu cầu khác nhau—Solana nhắm đến các ứng dụng mà thông lượng và độ trễ quan trọng.
+
+Bằng chứng Lịch sử (Proof of History) cho phép thực thi song song bằng cách giải quyết vấn đề thứ tự giao dịch. Thực thi song song đòi hỏi phải suy nghĩ lại cách các chương trình và dữ liệu hoạt động, điều này mang đến [kiến trúc độc đáo của Solana](/vi/courses/understanding-solana/solana-architecture).

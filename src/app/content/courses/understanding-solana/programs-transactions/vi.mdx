@@ -1,0 +1,297 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Chương trình và giao dịch
+
+[Tài khoản lưu trữ dữ liệu](/vi/courses/understanding-solana/accounts-ownership), và các chương trình Solana hoạt động trên dữ liệu đó thông qua các instruction. Giao dịch đóng gói các instruction lại với nhau, và những thành phần này tạo thành mô hình thực thi cốt lõi của Solana.
+
+Chương trình Solana hoạt động như thế nào? [Chương trình phi trạng thái](/vi/courses/understanding-solana/solana-architecture#stateless-programs) xử lý các instruction, giao dịch cung cấp tính nguyên tử, PDAs (Program Derived Addresses) cho phép kiểm soát quyền hạn trên chương trình, và CPI (Cross-Program Invocation) cho phép các chương trình gọi lẫn nhau.
+
+<ArticleSection name="Chương trình: Bộ xử lý phi trạng thái" id="programs-stateless-processors" level="h2" />
+
+Chương trình là các mã phi trạng thái xử lý các instruction. Chúng nhận các tài khoản làm đầu vào, xác thực hoạt động, sửa đổi dữ liệu tài khoản và trả về thành công hoặc lỗi.
+
+Kiến trúc cơ bản của một chương trình:
+
+```rust
+use solana_program::{
+    account_info::AccountInfo,
+    entrypoint,
+    entrypoint::ProgramResult,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    program_id: &Pubkey,        // The program being called
+    accounts: &[AccountInfo],   // Accounts passed to the program
+    instruction_data: &[u8],    // Additional data for the instruction
+) -> ProgramResult {
+    // 1. Parse instruction data to determine which operation to perform
+    // 2. Validate accounts (correct owner, signer, writable, etc.)
+    // 3. Perform the operation (read/modify account data)
+    // 4. Return success or error
+    Ok(())
+}
+```
+
+Chương trình nhận ba tham số: program_id (địa chỉ của chương trình được gọi), accounts (mảng các tài khoản mà giao dịch cung cấp), và instruction_data (dữ liệu được mã hóa dưới dạng byte xác định instruction nào sẽ chạy và các tham số của nó).
+
+Chương trình kiểm tra rằng các tài khoản được cung cấp là đúng, các tài khoản cần thiết để ký, các tài khoản có chủ sở hữu hợp lệ, dữ liệu tài khoản hợp lệ cho hoạt động, và hoạt động đáp ứng các yêu cầu logic nghiệp vụ.
+
+Chương trình không thể có khóa riêng—chúng là mã, không phải người dùng. Tuy nhiên, chương trình cần ủy quyền các hành động như chuyển token mà chúng nắm giữ. PDAs giải quyết vấn đề này: địa chỉ được tạo từ các hạt giống, không có khóa riêng.
+
+<ArticleSection name="Địa chỉ dẫn xuất từ chương trình" id="program-derived-addresses" level="h2" />
+
+PDAs (Program Derived Addresses) tạo ra các địa chỉ mà chương trình có thể ký về mặt toán học.
+
+Runtime tạo ra các địa chỉ này một cách xác định từ các hạt giống (các byte tùy ý do nhà phát triển chọn), program ID (chương trình tạo PDA), và giá trị bump (để đảm bảo kết quả không nằm trên đường cong elliptic).
+
+```rust
+use solana_program::pubkey::Pubkey;
+
+// Find a PDA
+let (pda, bump) = Pubkey::find_program_address(
+    &[
+        b"vault",                      // First seed
+        user_pubkey.as_ref(),          // Second seed
+    ],
+    program_id,                         // Program ID
+);
+```
+
+Hàm này tìm kiếm một giá trị bump (bắt đầu từ 255, giảm dần) cho đến khi nó tìm thấy một địa chỉ ngoài đường cong elliptic. Các địa chỉ trên đường cong có khóa riêng tương ứng, trong khi các địa chỉ ngoài đường cong thì không—chỉ có chương trình tạo ra chúng mới có thể ký cho chúng.
+
+PDAs là xác định—cùng một hạt giống luôn tạo ra cùng một địa chỉ, vì vậy bạn có thể tìm lại PDA mà không cần lưu trữ nó. PDAs tồn tại ngoài đường cong, vì vậy không có khóa riêng nào tồn tại và chỉ có chương trình mới có thể cho phép các hoạt động trên địa chỉ này. Chương trình chứng minh nó đã tạo ra PDA bằng cách cung cấp các hạt giống và giá trị bump, sử dụng xác minh về mặt toán học thay vì chữ ký mật mã.
+
+Chương trình thường dẫn xuất PDAs cho các kho tiền cụ thể của người dùng, trạng thái chương trình toàn cục hoặc tài khoản token:
+
+```rust
+// User-specific vault
+let (vault_pda, _) = Pubkey::find_program_address(
+    &[b"vault", user.key.as_ref()],
+    program_id
+);
+
+// Global program state
+let (state_pda, _) = Pubkey::find_program_address(
+    &[b"state"],
+    program_id
+);
+
+// Token account for a program
+let (program_token_account, _) = Pubkey::find_program_address(
+    &[b"token", mint.key.as_ref()],
+    program_id
+);
+```
+
+Chương trình sử dụng PDAs để sở hữu các tài khoản và ủy quyền các giao dịch mà không cần khóa riêng.
+
+<ArticleSection name="Ký với PDAs" id="signing-with-pdas" level="h2" />
+
+Chương trình ký cho PDAs của chúng bằng `invoke_signed`. Khi gọi một chương trình khác, chương trình gọi có thể bao gồm các hạt giống PDA để chứng minh nó có quyền trên các địa chỉ đó.
+
+```rust
+use solana_program::program::invoke_signed;
+
+// The PDA that owns tokens
+let (pda, bump) = Pubkey::find_program_address(
+    &[b"vault", user.key.as_ref()],
+    program_id
+);
+
+// Seeds used to derive the PDA
+let seeds = &[
+    b"vault",
+    user.key.as_ref(),
+    &[bump],
+];
+
+// Call Token Program to transfer tokens from the PDA
+invoke_signed(
+    &spl_token::instruction::transfer(
+        &token_program.key,
+        &pda_token_account.key,
+        &destination_token_account.key,
+        &pda,                           // Authority is the PDA
+        &[],
+        amount,
+    )?,
+    &[
+        pda_token_account.clone(),
+        destination_token_account.clone(),
+        token_program.clone(),
+    ],
+    &[seeds],                           // Provide seeds to prove authority
+)?;
+```
+
+Runtime xác minh rằng các hạt giống tạo ra địa chỉ PDA được đưa ra. Nếu đúng, runtime sẽ coi PDA là người ký cho lần gọi này, và chương trình token sẽ thấy một chữ ký hợp lệ từ PDA và thực hiện chuyển khoản.
+
+Chương trình quản lý tài sản một cách tự động thông qua cơ chế này.
+
+<ArticleSection name="Giao dịch: Hoạt động nguyên tử" id="transactions-atomic-operations" level="h2" />
+
+Giao dịch là nguyên tử. Tất cả các instruction trong một giao dịch hoặc thành công cùng nhau hoặc thất bại cùng nhau—không có chuyện chỉ thành công một phần.
+
+Cấu trúc của một giao dịch:
+
+```rust
+Transaction {
+    signatures: Vec<Signature>,         // Cryptographic signatures
+    message: Message {
+        header: MessageHeader {
+            num_required_signatures: u8,
+            num_readonly_signed_accounts: u8,
+            num_readonly_unsigned_accounts: u8,
+        },
+        account_keys: Vec<Pubkey>,      // All accounts in the transaction
+        recent_blockhash: Hash,         // Recent blockhash for expiry
+        instructions: Vec<CompiledInstruction>,
+    },
+}
+```
+
+Mỗi instruction xác định ID chương trình (chương trình nào sẽ được gọi), các tài khoản (các tài khoản mà instruction này truy cập, dưới dạng chỉ số trong account_keys), và dữ liệu (tham số cụ thể của instruction).
+
+**Ví dụ về giao dịch:**
+
+```rust
+let transaction = Transaction::new_signed_with_payer(
+    &[
+        // Instruction 1: Transfer SOL
+        system_instruction::transfer(
+            &payer.pubkey(),
+            &recipient.pubkey(),
+            1_000_000,
+        ),
+
+        // Instruction 2: Transfer tokens
+        spl_token::instruction::transfer(
+            &token_program_id,
+            &source_token_account,
+            &dest_token_account,
+            &owner.pubkey(),
+            &[],
+            500_000,
+        )?,
+
+        // Instruction 3: Update user profile
+        my_program::instruction::update_profile(
+            &program_id,
+            &user_account,
+            "New Username".to_string(),
+        )?,
+    ],
+    Some(&payer.pubkey()),
+    &[&payer, &owner],
+    recent_blockhash,
+);
+```
+
+Giao dịch này thực hiện ba hoạt động một cách nguyên tử. Nếu bất kỳ instruction nào thất bại, tất cả sẽ bị hoàn tác và không có thay đổi trạng thái nào được giữ lại.
+
+<ArticleSection name="Kích thước và Phí Giao dịch" id="transaction-size-fees" level="h2" />
+
+Giao dịch bị giới hạn ở tổng cộng 1,232 byte, bao gồm tất cả các chữ ký, địa chỉ tài khoản, dữ liệu instruction và tiêu đề thông điệp. Các giao dịch lớn với nhiều tài khoản hoặc dữ liệu instruction phức tạp có thể vượt quá giới hạn này. Chia các hoạt động thành nhiều giao dịch, sử dụng bảng tra cứu để nén danh sách tài khoản, hoặc giảm thiểu kích thước dữ liệu của instruction.
+
+**Phí giao dịch:**
+
+Mỗi giao dịch đều phát sinh phí:
+
+**Phí cơ bản:** 5,000 lamports cho mỗi chữ ký (0.000005 SOL). Một giao dịch với một chữ ký sẽ tốn 5,000 lamports. Một giao dịch yêu cầu ba chữ ký sẽ tốn 15,000 lamports.
+
+**Phí ưu tiên (tùy chọn):** Phí bổ sung để tăng độ ưu tiên khi xử lý:
+
+```
+prioritization_fee = compute_unit_limit × compute_unit_price
+```
+
+Giới hạn đơn vị tính toán là số đơn vị tính toán tối đa mà giao dịch có thể tiêu thụ (mặc định: 200,000). Giá mỗi đơn vị tính toán là giá trên mỗi đơn vị tính toán tính bằng micro-lamports.
+
+Trong thời gian tắc nghẽn mạng, phí ưu tiên cao hơn sẽ được xử lý nhanh hơn. Lúc thấp điểm, phí cơ bản là đủ.
+
+Tài khoản thanh toán phí phải thuộc sở hữu của Chương trình Hệ thống, điều này cho phép nó ủy quyền thanh toán.
+
+<ArticleSection name="Gọi liên chương trình" id="cross-program-invocation" level="h2" />
+
+CPI (Cross-Program Invocation) cho phép các chương trình gọi các chương trình khác trong cùng một giao dịch. Một chương trình có thể gọi Chương trình Token để chuyển token, Chương trình Hệ thống để tạo tài khoản, hoặc các chương trình tùy chỉnh để tích hợp logic phức tạp. Tất cả các lời gọi này được thực hiện trong một giao dịch nguyên tử duy nhất.
+
+**CPI cơ bản:**
+
+```rust
+use solana_program::program::invoke;
+
+let transfer_instruction = spl_token::instruction::transfer(
+    &token_program.key,
+    &source_account.key,
+    &destination_account.key,
+    &authority.key,
+    &[],
+    amount,
+)?;
+
+invoke(
+    &transfer_instruction,
+    &[
+        source_account.clone(),
+        destination_account.clone(),
+        authority.clone(),
+        token_program.clone(),
+    ],
+)?;
+```
+
+Chương trình gọi xây dựng một instruction cho Chương trình Token và gọi nó. Chương trình Token thực thi trong cùng một giao dịch, và bất kỳ thay đổi trạng thái nào mà nó thực hiện đều là một phần cam kết nguyên tử của giao dịch.
+
+**CPI với chữ ký (sử dụng PDA):**
+
+```rust
+invoke_signed(
+    &transfer_instruction,
+    &[
+        source_account.clone(),
+        destination_account.clone(),
+        pda.clone(),
+        token_program.clone(),
+    ],
+    &[seeds],                           // Provide PDA seeds
+)?;
+```
+
+Khi quyền thuộc về một PDA được kiểm soát bởi chương trình gọi, sử dụng `invoke_signed` với các hạt giống dẫn xuất của PDA. Runtime sẽ xác minh các hạt giống và coi PDA là một người ký cho instruction được gọi.
+
+<ArticleSection name="Hạn chế và khả năng của CPI" id="cpi-constraints-capabilities" level="h2" />
+
+CPI có giới hạn để ngăn chặn đệ quy vô hạn và đảm bảo tính bảo mật.
+
+CPIs có thể lồng nhau lên đến 4 cấp độ—Chương trình A có thể gọi Chương trình B, Chương trình B gọi Chương trình C, Chương trình C gọi Chương trình D, nhưng cấp độ thứ năm sẽ thất bại.
+
+Người ký giao dịch ban đầu duy trì quyền hạn của họ trong suốt chuỗi CPI—nếu người dùng ký giao dịch, các chương trình mà họ gọi (và các chương trình mà các chương trình đó gọi) sẽ thấy người dùng đó là người ký. Nếu một tài khoản được đánh dấu là có thể ghi trong giao dịch ban đầu, nó vẫn có thể ghi qua tất cả các cấp độ CPI, cho phép các chương trình sửa đổi nó. Tất cả các CPI chia sẻ ngân sách tính toán của giao dịch (mặc định 200.000 đơn vị tính toán), và các chuỗi CPI phức tạp vượt quá giới hạn này sẽ không thành công, mặc dù các nhà phát triển có thể yêu cầu giới hạn tính toán cao hơn nếu cần.
+
+CPI cho phép bạn xây dựng các ứng dụng phức tạp bằng cách kết hợp các chương trình hiện có và gọi các chương trình chuyên biệt thay vì triển khai lại chức năng. Nhiều tương tác chương trình thành công hoặc thất bại cùng nhau, và các chương trình không thể vượt ra khỏi môi trường của chúng hoặc bỏ qua quyền hạn.
+
+<ArticleSection name="Đặt tất cả lại với nhau" id="putting-it-all-together" level="h2" />
+
+Một giao dịch điển hình theo đường dẫn thực thi sau:
+
+1. **Người dùng xây dựng giao dịch:** Ví thu thập các instruction, tài khoản và một blockhash mới nhất, sau đó người dùng ký bằng khóa riêng của họ.
+
+2. **Giao dịch được gửi:** Giao dịch được tán sóng tới các trình xác thực thông qua các nút RPC.
+
+3. **Leader nhận giao dịch:** Leader hiện tại (trình xác thực chịu trách nhiệm tạo block tiếp theo) nhận giao dịch.
+
+4. **Lập lịch:** Runtime phân tích các tài khoản mà giao dịch sử dụng và lập lịch thực thi cho giao dịch khi các tài khoản đó sẵn sàng (hiện không đang bị sửa đổi bởi giao dịch khác).
+
+5. **Thực thi:** Runtime gọi chương trình với các tài khoản và dữ liệu instruction được cung cấp, sau đó chương trình xác minh mọi thứ và thực hiện các hoạt động của nó.
+
+6. **CPI nếu cần:** Nếu chương trình gọi các chương trình khác, các lời gọi đó sẽ thực thi đệ quy trong cùng một ngữ cảnh nguyên tử.
+
+7. **Cam kết hoặc hoàn tác:** Nếu tất cả các instruction thành công, các thay đổi trạng thái sẽ được cam kết, nhưng nếu bất kỳ instruction nào thất bại, tất cả các thay đổi sẽ được hoàn tác và giao dịch được xác định là thất bại.
+
+8. **Xác nhận:** Giao dịch được đính kèm trong một block, và sau khi mạng lưới hoàn tất block, giao dịch được xác nhận và không thể đảo ngược.
+
+Hầu hết các giao dịch hoàn tất quá trình này trong vài mili giây. Việc thực thi song song của Solana chạy nhiều giao dịch đồng thời trên các lõi CPU khác nhau.
+
+Các chương trình xử lý các instruction, PDAs cho phép kiểm soát quyền hạn trên trên chương trình, các giao dịch cung cấp tính nguyên tử, và CPI cho phép các chương trình gọi lẫn nhau. Tiếp theo: xây dựng với Solana trong thực tế.

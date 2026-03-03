@@ -1,0 +1,231 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Tài khoản và quyền sở hữu
+
+Tài khoản là cấu trúc dữ liệu cơ bản của Solana. [Trong kiến trúc của Solana, mọi thứ đều là tài khoản](/vi/courses/understanding-solana/solana-architecture#everything-is-account). Bạn cần hiểu cấu trúc tài khoản, quy tắc quyền sở hữu và cơ chế thuê để xây dựng chương trình hoặc sử dụng ứng dụng.
+
+Mỗi tài khoản Solana đều có cùng cấu trúc cơ bản, tuân theo cùng các quy tắc quyền sở hữu và yêu cầu cùng số dư tối thiểu (phí thuê) để tồn tại trên blockchain.
+
+<ArticleSection name="Cấu trúc tài khoản" id="account-structure" level="h2" />
+
+Mỗi tài khoản chứa năm trường chính:
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    pub data: Vec<u8>,
+    /// the program that owns this account
+    pub owner: Pubkey,
+    /// this account's data contains a loaded program (and is now read-only)
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent
+    pub rent_epoch: Epoch,
+}
+```
+
+**Lamports:** Số dư của tài khoản tính bằng lamports (1 SOL = 1,000,000,000 lamports). Tất cả các tài khoản cần lamports để được miễn phí thuê. Các tài khoản có thể nhận thêm lamports vượt quá mức tối thiểu.
+
+**Data:** Các byte tùy ý lưu trữ bất cứ thứ gì mà chương trình sở hữu yêu cầu. Dữ liệu này có thể là hồ sơ người dùng, số dư token, metadata NFT, trạng thái trò chơi hoặc bất kỳ thông tin nào khác. Kích thước tối đa là 10 megabyte (10,485,760 byte).
+
+**Owner:** Chương trình kiểm soát tài khoản này. Chỉ chủ sở hữu mới có thể sửa đổi dữ liệu của tài khoản hoặc rút lamports của nó. Trường này là một khóa công khai 32 byte xác định chương trình sở hữu.
+
+**Executable:** Một cờ boolean cho biết liệu tài khoản này có chứa mã chương trình có thể thực thi hay không. Các tài khoản chương trình có cờ này được đặt thành true. Các tài khoản dữ liệu có cờ này được đặt thành false.
+
+**Rent epoch:** Trường lịch sử từ khi phí thuê được khấu trừ định kỳ. Không còn được sử dụng nữa nhưng vẫn tồn tại trong cấu trúc tài khoản.
+
+Mỗi tài khoản có một địa chỉ duy nhất 32 byte, được hiển thị dưới dạng chuỗi mã hóa base58 như `14grJpemFaf88c8tiVb77W7TYg2W3ir6pfkKz3YjhhZ5`. Địa chỉ này đóng vai trò là định danh của tài khoản trên blockchain.
+
+<ArticleSection name="Các loại tài khoản" id="account-types" level="h2" />
+
+Tất cả các tài khoản đều chia sẻ cùng một cấu trúc nhưng phục vụ các mục đích khác nhau dựa trên chủ sở hữu và cờ thực thi của chúng.
+
+**Tài khoản hệ thống:** Được sở hữu bởi Chương trình Hệ thống. Đây là các tài khoản ví cơ bản mà người dùng tương tác trực tiếp để gửi và nhận SOL. Khi bạn tạo một ví, bạn đang tạo một Tài khoản Hệ thống. Chương trình Hệ thống cho phép chủ sở hữu tài khoản (bất kỳ ai có khóa riêng) chuyển SOL và phân bổ tài khoản cho các chương trình khác.
+
+**Tài khoản token:** Được sở hữu bởi Chương trình Token. Chúng lưu trữ số dư SPL token và metadata. Mỗi token bạn sở hữu (USDC, BONK, bất kỳ SPL token nào) tồn tại trong một tài khoản token do Chương trình Token sở hữu. Chương trình Token thực thi các quy tắc chuyển nhượng và duy trì số dư.
+
+**Tài khoản dữ liệu:** Được sở hữu bởi các chương trình tùy chỉnh. Chúng lưu trữ trạng thái ứng dụng cụ thể: hồ sơ người dùng, dữ liệu trò chơi, metadata NFT, vị thế cho vay, hoặc bất kỳ thông tin nào khác mà chương trình của bạn cần. Chương trình sở hữu xác định định dạng dữ liệu và quy tắc truy cập.
+
+**Tài khoản chương trình:** Chứa mã có thể thực thi và có cờ executable được đặt thành true. Những tài khoản này lưu trữ bytecode chương trình đã biên dịch. Khi các giao dịch gọi một chương trình, runtime sẽ tải mã từ các tài khoản này.
+
+<ArticleSection name="Phí thuê và miễn thuê" id="rent-rent-exemption" level="h2" />
+
+Các tài khoản yêu cầu một số dư lamport tối thiểu để tồn tại. Số dư tối thiểu này phụ thuộc vào kích thước tài khoản. Bạn sẽ nhận lại số dư này khi đóng tài khoản.
+
+Số dư tối thiểu để miễn phí thuê phụ thuộc vào kích thước tài khoản:
+
+```
+rent_exempt_minimum = base_cost + (account_data_size * cost_per_byte)
+```
+
+Các con số cụ thể:
+- Chi phí cơ bản cho bất kỳ tài khoản nào: khoảng 0.00089 SOL
+- Chi phí trên mỗi byte: khoảng 0.00000348 SOL
+- Một tài khoản 165 byte (kích thước phổ biến): khoảng 0.00114 SOL
+
+Những giá trị này có thể thay đổi thông qua quản trị nhưng vẫn tương đối ổn định.
+
+Ví dụ tính toán:
+
+```rust
+// Account with 1000 bytes of data
+let rent = Rent::default();
+let account_size = 1000;
+let minimum_balance = rent.minimum_balance(account_size);
+// minimum_balance ≈ 0.00437 SOL
+```
+
+**Số dư miễn phí thuê:** Khi một tài khoản có số dư tối thiểu cho kích thước của nó, nó được coi là "miễn phí thuê." Không còn phí thuê nào sẽ được tính. Tài khoản tồn tại vô thời hạn miễn là nó duy trì số dư tối thiểu này.
+
+**Đóng tài khoản:** Khi bạn không còn cần một tài khoản, việc đóng nó sẽ hoàn lại khoản tiền thuê. Dữ liệu của tài khoản sẽ bị xóa, lamports của nó sẽ được chuyển ra (thường là trả lại người tạo), và tài khoản sẽ ngừng tồn tại. Điều này khiến cho tiền thuê thực sự trở thành một khoản tiền đặt cọc có thể hoàn lại.
+
+Việc tạo tài khoản tốn SOL. Khi bạn mint một NFT, tạo một tài khoản token, hoặc khởi tạo trạng thái chương trình, bạn phải trả số dư tối thiểu để được miễn phí thuê. Những chi phí này nhỏ nhưng tăng dần. Các ứng dụng với hàng nghìn tài khoản cần lập ngân sách cho tổng chi phí thuê.
+
+<ArticleSection name="Quy tắc sở hữu" id="ownership-rules" level="h2" />
+
+Chỉ chủ sở hữu mới có thể sửa đổi một tài khoản. Quyền sở hữu xác định các thao tác có thể thực hiện.
+
+Chương trình sở hữu có thể:
+- Sửa đổi dữ liệu của tài khoản
+- Giảm số dư lamport của tài khoản (rút tiền)
+- Thay đổi kích thước tài khoản (với việc tái phân bổ)
+- Thay đổi chủ sở hữu của tài khoản (chuyển quyền sở hữu cho chương trình khác)
+
+Bất kỳ ai cũng có thể:
+- Tăng số dư lamport của tài khoản (gửi tiền vào)
+- Đọc dữ liệu của tài khoản (tất cả dữ liệu tài khoản đều công khai)
+
+Chủ sở hữu tài khoản (người có khóa riêng tương ứng với địa chỉ tài khoản) có thể:
+- Ký các giao dịch bao gồm tài khoản này
+- Nếu được sở hữu bởi Chương trình Hệ thống: chuyển SOL, đóng tài khoản hoặc chuyển quyền sở hữu
+
+Sở hữu khóa riêng đối với địa chỉ của một tài khoản khác với chương trình sở hữu nó. Nếu bạn tạo một tài khoản được sở hữu bởi Chương trình Hệ thống, bạn kiểm soát nó bằng khóa riêng của mình. Nếu bạn sau đó chuyển quyền sở hữu cho một chương trình tùy chỉnh, chương trình đó sẽ kiểm soát—khóa riêng của bạn không còn có thể trực tiếp sửa đổi nó. Bạn chỉ có thể tương tác thông qua các lệnh của chương trình sở hữu.
+
+**Ví dụ:**
+1. Bạn tạo một tài khoản token cho USDC
+2. Chương trình Token sở hữu tài khoản này
+3. Bạn có khóa riêng cho ví chính của mình
+4. Nhưng chương trình token kiểm soát dữ liệu của tài khoản token
+5. Bạn chuyển token bằng cách gọi lệnh chuyển của Chương trình Token
+6. Chương trình Token xác minh bạn sở hữu token và thực hiện chuyển
+7. Bạn không thể trực tiếp sửa đổi dữ liệu của tài khoản token—chỉ Chương trình Token mới có thể
+
+<ArticleSection name="Tạo tài khoản" id="creating-accounts" level="h2" />
+
+Các tài khoản Solana phải được tạo và cấp một khoản vốn rõ ràng trước khi sử dụng.
+
+**Chương trình Hệ thống tạo tài khoản:**
+
+Chương trình Hệ thống cung cấp instruction `create_account`:
+
+```rust
+pub fn create_account(
+    from: &Pubkey,          // Who pays for the account
+    to: &Pubkey,            // Address of the new account
+    lamports: u64,          // Rent-exempt minimum + any extra
+    space: u64,             // Size of data in bytes
+    owner: &Pubkey,         // Which program will own it
+) -> Instruction
+```
+
+Instruction này:
+1. Cấp phát không gian cho tài khoản
+2. Chuyển lamports từ người trả phí sang tài khoản mới
+3. Đặt chủ sở hữu của tài khoản
+4. Đánh dấu tài khoản là đã khởi tạo
+
+Ví dụ:
+
+```rust
+// 1. Generate a new keypair for the account address
+let account = Keypair::new();
+
+// 2. Calculate rent-exempt minimum
+let rent = Rent::default();
+let account_size = 165; // bytes
+let lamports = rent.minimum_balance(account_size);
+
+// 3. Create the account
+let instruction = system_instruction::create_account(
+    &payer.pubkey(),
+    &account.pubkey(),
+    lamports,
+    account_size as u64,
+    &my_program_id,
+);
+
+// 4. Send transaction with both payer and new account as signers
+```
+
+<ArticleSection name="Làm việc với dữ liệu tài khoản" id="working-with-account-data" level="h2" />
+
+Chương trình đọc và ghi dữ liệu tài khoản. Chúng tuần tự hóa và giải tuần tự dữ liệu tài khoản bằng cách sử dụng mẫu này:
+
+```rust
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct UserAccount {
+    pub name: String,
+    pub balance: u64,
+    pub posts: Vec<u32>,
+}
+
+pub fn update_user_data(accounts: &[AccountInfo], new_name: String) -> ProgramResult {
+    let user_account = &accounts[0];
+
+    // Deserialize existing data
+    let mut user_data = UserAccount::try_from_slice(&user_account.data.borrow())?;
+
+    // Modify the data
+    user_data.name = new_name;
+
+    // Serialize back to account
+    user_data.serialize(&mut &mut user_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+```
+
+Chương trình:
+1. Đọc các byte từ trường dữ liệu của tài khoản
+2. Giải tuần tự các byte thành một kiểu dữ liệu có cấu trúc
+3. Sửa đổi dữ liệu trong bộ nhớ
+4. Tuần tự hóa lại dữ liệu đã sửa đổi thành các byte
+5. Ghi các byte trở lại trường dữ liệu của tài khoản
+
+Chương trình làm việc với dữ liệu có cấu trúc trong bộ nhớ nhưng lưu trữ nó dưới dạng byte thô trên chuỗi.
+
+<ArticleSection name="Tài khoản liên kết token" id="associated-token-accounts" level="h2" />
+
+Mỗi người dùng có thể có nhiều tài khoản token—một cho USDC, một cho BONK, một cho mỗi token SPL mà họ sở hữu.
+
+Nếu không có một tiêu chuẩn, việc tìm tài khoản token của người dùng cho một token mint cụ thể sẽ yêu cầu theo dõi thủ công. Tài khoản liên kết Token (ATAs) giải quyết vấn đề này bằng cách suy ra địa chỉ một cách xác định:
+
+```
+associated_token_address = derive_address(
+    seeds: [wallet_address, token_program_id, token_mint_address],
+    program: associated_token_program_id
+)
+```
+
+Cho một địa chỉ ví và một địa chỉ mint của token, sẽ có chính xác một địa chỉ tài khoản liên kết token. Ví tự động tìm tài khoản USDC của bạn, các chương trình biết nơi gửi token của bạn, và bạn không cần quản lý địa chỉ thủ công.
+
+Khi ai đó gửi token cho bạn lần đầu tiên, tài khoản liên kết token có thể chưa tồn tại. Người gửi (hoặc một ví hữu ích) sẽ tạo nó như một phần của giao dịch, trả phí tối thiểu miễn trừ thuê thay bạn.
+
+<ArticleSection name="Xem tài khoản trên trình khám phá" id="viewing-accounts-explorers" level="h2" />
+
+Tất cả dữ liệu tài khoản đều công khai. Bạn có thể xem bất kỳ tài khoản nào bằng cách sử dụng các trình khám phá khối như Solana Explorer (https://explorer.solana.com) hoặc Solscan (https://solscan.io). Cả hai đều cho phép bạn xem số dư lamport, chủ sở hữu tài khoản, dữ liệu thô và lịch sử giao dịch. Solscan có trực quan hóa dữ liệu tốt hơn và dễ sử dụng hơn cho người dùng không chuyên.
+
+Hãy thử xem địa chỉ mint của token USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+
+Bạn sẽ thấy:
+- Nó thuộc sở hữu của Chương trình Token
+- Nó được đánh dấu là không thể thực thi (false)
+- Nó chứa dữ liệu mint (nguồn cung, số thập phân, quyền hạn)
+- Toàn bộ lịch sử giao dịch của nó
+
+Bất kỳ ai cũng có thể xác minh bất kỳ dữ liệu nào vào bất kỳ thời điểm nào mà không cần sự cho phép.
+
+Tài khoản lưu trữ dữ liệu. [Chương trình hoạt động trên dữ liệu đó thông qua các giao dịch](/vi/courses/understanding-solana/programs-transactions), xử lý các instruction đọc và sửa đổi trạng thái tài khoản.

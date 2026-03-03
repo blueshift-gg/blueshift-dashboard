@@ -1,0 +1,185 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Kiến trúc Solana
+
+Để [thực thi các giao dịch song song](/vi/courses/understanding-solana/why-solana-built#ordering-to-parallelism), Solana cần biết giao dịch nào có thể chạy đồng thời. Điều này đòi hỏi một quyết định thiết kế cơ bản: mọi thứ đều là một tài khoản.
+
+Chương trình không lưu trữ dữ liệu. Việc tách biệt mã và dữ liệu cho phép thực thi song song. Các giao dịch [khai báo các tài khoản trước](/vi/courses/understanding-solana/why-solana-built#parallelization-requirements), vì vậy runtime biết giao dịch nào có thể chạy đồng thời. Đây là cách Solana đạt được thông lượng cao.
+
+<ArticleSection name="Mọi thứ là một tài khoản" id="everything-is-account" level="h2" />
+
+Mọi thứ là một tài khoản.
+
+Ethereum coi hợp đồng và tài khoản là các khái niệm riêng biệt. Hợp đồng chứa mã và trạng thái. Tài khoản giữ số dư.
+
+Solana hợp nhất điều này. Mọi thứ tồn tại trong các tài khoản:
+- Ví của bạn là một tài khoản
+- Một chương trình (hợp đồng thông minh) là một tài khoản
+- Dữ liệu của chương trình được lưu trữ trong các tài khoản riêng biệt
+- Số dư token là các tài khoản
+- Metadata NFT là các tài khoản
+- Mọi thứ
+
+Một tài khoản là một thùng chứa với:
+- **Dữ liệu:** Các byte tùy ý (tối đa 10 megabyte)
+- **Lamports:** Số dư dưới dạng đơn vị nhỏ nhất của Solana (1 SOL = 1,000,000,000 lamports)
+- **Chủ sở hữu:** Chương trình kiểm soát tài khoản này
+- **Cờ thực thi:** Cho biết tài khoản này có chứa mã chương trình hay không
+
+Chỉ có một khái niệm duy nhất—tài khoản—thay vì nhiều khái niệm tương tác lẫn nhau.
+
+<ArticleSection name="Quyền sở hữu tài khoản" id="account-ownership" level="h2" />
+
+Mỗi tài khoản đều thuộc sở hữu của một chương trình. Chỉ chương trình sở hữu mới có thể sửa đổi dữ liệu của tài khoản hoặc rút lamports của nó.
+
+**Chương trình hệ thống:** Chủ sở hữu mặc định của ví người dùng. Khi bạn tạo một ví mới, Chương trình Hệ thống sở hữu tài khoản của bạn. Chương trình này xử lý các hoạt động cơ bản: chuyển SOL, cấp phát không gian, gán quyền sở hữu cho các chương trình khác.
+
+**Chương trình Token:** Sở hữu tất cả các tài khoản token. Khi bạn giữ USDC, bạn sở hữu một tài khoản lưu trữ số dư của mình. Chương trình Token sở hữu tài khoản này và thực thi các quy tắc chuyển khoản.
+
+**Chương trình tùy chỉnh của bạn:** Khi bạn xây dựng một chương trình Solana, nó có thể sở hữu các tài khoản lưu trữ dữ liệu ứng dụng của bạn. Chỉ chương trình của bạn mới có thể sửa đổi các tài khoản này.
+
+Quyền sở hữu không liên quan đến việc có khóa riêng. Quyền sở hữu có nghĩa là khả năng kiểm soát. Chương trình sở hữu quyết định những gì xảy ra với tài khoản. Các chương trình có thể quản lý tài sản và trạng thái mà không cần khóa riêng—chúng có quyền hạn đương nhiên đối với các tài khoản của mình.
+
+<ArticleSection name="Chương trình phi trạng thái" id="stateless-programs" level="h2" />
+
+Chương trình không lưu trữ dữ liệu vì việc tách biệt cho phép thực thi song song. Chương trình và dữ liệu tồn tại trong các tài khoản riêng biệt.
+
+Trong Ethereum, hợp đồng lưu trữ dữ liệu bên trong. Một hợp đồng đếm số lưu trữ giá trị đếm bên trong hợp đồng cùng với chức năng tăng. Dữ liệu và mã nằm trong cùng một tài khoản hợp đồng.
+
+Trong Solana, các chương trình là phi trạng thái. Chúng chỉ chứa mã thực thi, không có dữ liệu:
+
+```rust
+pub fn increment(accounts: &[AccountInfo]) -> ProgramResult {
+    let counter_account = &accounts[0];
+    let mut count = u64::from_le_bytes(counter_account.data[0..8]);
+    count += 1;
+    counter_account.data[0..8].copy_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+```
+
+Chương trình đọc dữ liệu từ một tài khoản, xử lý nó và ghi lại. Dữ liệu tồn tại trong một tài khoản riêng biệt do chương trình sở hữu.
+
+Việc tách biệt mã và dữ liệu cho phép thực thi song song. Hai giao dịch gọi cùng một chương trình với các tài khoản dữ liệu khác nhau có thể thực thi đồng thời. Mã chương trình chỉ được đọc. Chỉ các tài khoản dữ liệu mới được thay đổi.
+
+Chương trình có thể được nâng cấp mà không cần di chuyển dữ liệu. Thay đổi tài khoản mã, nhưng các tài khoản dữ liệu vẫn không thay đổi và có thể tương thích.
+
+Mỗi tài khoản dữ liệu có một chủ sở hữu rõ ràng. Quyền hạn rất đơn giản—chương trình sở hữu kiểm soát tài khoản.
+
+Bất kỳ ai cũng có thể đọc dữ liệu tài khoản trực tiếp mà không cần gọi mã chương trình. Điều này đơn giản hóa việc lập chỉ mục và truy vấn.
+
+<ArticleSection name="Cấu trúc giao dịch" id="transaction-structure" level="h2" />
+
+Mỗi giao dịch Solana liệt kê rõ ràng các tài khoản mà nó sẽ truy cập. Việc khai báo trước này cho phép thực thi song song.
+
+Một giao dịch bao gồm:
+- **Các Instruction:** Các thao tác riêng lẻ để thực hiện
+- **Các tài khoản:** Danh sách đầy đủ các tài khoản mà mỗi lệnh sẽ truy cập
+- **Chữ ký:** Chữ ký mật mã chứng thực giao dịch
+- **Blockhash mới nhất:** Chứng minh giao dịch được tạo gần đây (ngăn chặn việc phát lại giao dịch cũ)
+
+Đối với mỗi tài khoản, giao dịch cần xác định:
+- **Signer:** Tài khoản này có cần ký giao dịch không?
+- **Writable:** Lệnh này có sửa đổi tài khoản này không?
+
+Ví dụ về cấu trúc giao dịch:
+
+```rust
+Transaction {
+    signatures: [user_signature],
+    message: {
+        instructions: [
+            {
+                program_id: token_program,
+                accounts: [
+                    { pubkey: source_token_account, signer: false, writable: true },
+                    { pubkey: dest_token_account, signer: false, writable: true },
+                    { pubkey: owner_account, signer: true, writable: false },
+                ],
+                data: [transfer, amount: 1000000]
+            }
+        ]
+    }
+}
+```
+
+Giao dịch này gọi Chương trình Token để chuyển token. Nó khai báo chính xác các tài khoản sẽ được truy cập và các tài khoản sẽ được sửa đổi. Runtime sử dụng thông tin này để lập lịch thực thi song song.
+
+<ArticleSection name="Tại sao khai báo rõ ràng cho phép thực thi song song" id="declarations-enable-parallelism" level="h2" />
+
+Nếu các giao dịch sử dụng các tài khoản khác nhau, hãy chạy chúng cùng nhau. Runtime của Solana xây dựng một đồ thị phụ thuộc từ các khai báo của giao dịch.
+
+Xem xét ba giao dịch đang chờ xử lý:
+- Giao dịch A: `[ghi: account_1, ghi: account_2]`
+- Giao dịch B: `[ghi: account_3, ghi: account_4]`
+- Giao dịch C: `[ghi: account_2, ghi: account_5]`
+
+Runtime phân tích:
+- Giao dịch A và B không chia sẻ tài khoản nào → thực thi đồng thời
+- Giao dịch C xung đột với A (cả hai đều truy cập account_2) → chờ đến khi A hoàn thành
+- Giao dịch C không xung đột với B → có thể chạy cùng B
+
+Lịch trình thực thi:
+- CPU Core 1: Giao dịch A, sau đó Giao dịch C
+- CPU Core 2: Giao dịch B
+
+Sự thực thi song song này chỉ có thể xảy ra khi các giao dịch khai báo các tài khoản của chúng trước. Nếu không có khai báo, runtime sẽ cần thực thi các giao dịch theo thứ tự để phát hiện xung đột tự động.
+
+Các giao dịch phải khai báo các tài khoản trước khi thực thi. Ràng buộc này cho phép tối ưu hóa giúp Solana nhanh hơn.
+
+<ArticleSection name="Thuê và Kinh tế Tài khoản" id="rent-account-economics" level="h2" />
+
+Lưu trữ dữ liệu trên chuỗi tốn tài nguyên. Các trình xác thực phải giữ dữ liệu tài khoản trong bộ nhớ hoặc lưu trữ nhanh để xử lý giao dịch nhanh chóng.
+
+Solana tính "phí thuê" cho việc lưu trữ tài khoản. Thuật ngữ này không mới—trước đây, thuê được khấu trừ định kỳ, nhưng hiện nay nó hoạt động giống như một khoản tiền đặt cọc có thể hoàn lại.
+
+Mỗi tài khoản phải duy trì một số dư tối thiểu tỷ lệ với kích thước dữ liệu của nó. Các tài khoản có số dư này được miễn phí thuê và tồn tại vô thời hạn.
+
+Công thức:
+```
+rent_exempt_minimum = (128 + account_data_size) * rent_per_byte * epochs_per_year
+```
+
+Đối với một tài khoản điển hình lưu trữ 165 byte, việc miễn phí thuê yêu cầu khoảng 0.00114 SOL (khoảng $0.11 tại $100 mỗi SOL).
+
+Khi bạn không còn cần một tài khoản, bạn có thể đóng nó và thu hồi khoản phí thuê. Dữ liệu sẽ bị xóa, và lamports sẽ được trả lại cho bạn.
+
+Các nhà phát triển phải tính đến phí thuê khi tạo tài khoản. Người dùng trả tiền đặt cọc thuê khi tạo NFT hoặc tạo tài khoản token. Những chi phí này nhỏ nhưng không phải là không có.
+
+<ArticleSection name="Chương trình là tài khoản" id="programs-as-accounts" level="h2" />
+
+Chương trình là các tài khoản có thể thực thi được đánh dấu bằng một cờ đặc biệt. Khi bạn triển khai một chương trình Solana, bytecode đã biên dịch được tải lên một tài khoản. Cờ có thể thực thi của tài khoản được đặt thành true.
+
+Chương trình mặc định là không thể thay đổi sau khi triển khai. Để cho phép cập nhật, các chương trình chỉ định một quyền nâng cấp khi triển khai. Quyền nâng cấp có thể triển khai bytecode mới lên tài khoản chương trình.
+
+Các nhà phát triển có thể loại bỏ quyền nâng cấp, làm cho chương trình trở nên không thể thay đổi vĩnh viễn. Mã sẽ không bao giờ thay đổi—hữu ích cho các chương trình quan trọng về bảo mật.
+
+**Tài khoản chương trình lưu trữ:**
+- BPF bytecode đã biên dịch (mã thực thi thực tế)
+- Metadata về chương trình
+- Cờ có thể thực thi của chương trình (đặt thành true)
+
+**Tài khoản chương trình KHÔNG lưu trữ:**
+- Trạng thái hoặc dữ liệu ứng dụng
+- Thông tin người dùng
+- Số dư hoặc tài sản
+
+Tất cả dữ liệu chương trình nằm trong các tài khoản riêng biệt do chương trình sở hữu.
+
+<ArticleSection name="Máy ảo Solana" id="solana-virtual-machine" level="h2" />
+
+Máy ảo Solana (SVM) thực thi các chương trình. Nó khác với Máy ảo Ethereum ở một số điểm.
+
+EVM dựa trên ngăn xếp—các thao tác đẩy và lấy giá trị trên ngăn xếp. SVM sử dụng các thanh ghi, điều này giảm chi phí di chuyển dữ liệu trong quá trình tính toán.
+
+Chương trình Solana biên dịch thành BPF (Berkeley Packet Filter) bytecode, sau đó biên dịch tiếp thành mã máy gốc. Điều này loại bỏ chi phí thông dịch và chạy nhanh hơn bytecode.
+
+SVM được thiết kế để thực thi song song. Nó phân tích các phụ thuộc tài khoản và lập lịch cho các giao dịch trên nhiều lõi CPU.
+
+Thay vì trạng thái toàn cục, SVM thực thi quyền truy cập theo từng tài khoản. Chương trình chỉ có thể truy cập các tài khoản được truyền rõ ràng cho chúng và chỉ có thể sửa đổi các tài khoản mà chúng sở hữu.
+
+SVM loại bỏ chi phí thông dịch, sử dụng các cấu trúc dữ liệu hiệu quả và thực thi song song. Runtime tối đa hóa khả năng xử lý giao dịch.
+
+Kiến trúc của Solana—[Bằng chứng lịch sử](/vi/courses/understanding-solana/why-solana-built#proof-of-history), chương trình phi trạng thái, mô hình tài khoản—giải quyết một vấn đề: blockchain ở quy mô lớn mà không làm giảm tính phi tập trung.
+
+Để sử dụng Solana—dù là xây dựng hay giao dịch—bạn cần [hiểu rõ về các tài khoản](/vi/courses/understanding-solana/accounts-ownership).
