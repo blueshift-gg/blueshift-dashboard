@@ -1,0 +1,310 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+import { AnchorDiscriminatorCalculator } from "../../../../components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+
+# Instructions & CPIs
+
+Instructions são os blocos de construção de programas Solana, definindo as ações que podem ser realizadas. No Anchor, instructions são implementadas como funções com atributos e restrições específicos. Vamos explorar como trabalhar com elas de forma eficaz.
+
+<ArticleSection name="Instruction Structure" id="instruction-structure" level="h2" />
+
+No Anchor, instructions são definidas usando o módulo `#[program]` e funções de instruction individuais. Aqui está a estrutura básica:
+
+```rust
+use anchor_lang::prelude::*;
+
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn initialize(ctx: Context<Initialize>, data: u64) -> Result<()> {
+        // Instruction logic here
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Instruction Context" id="instruction-context" level="h3" />
+
+Toda função de instruction recebe uma struct `Context` como seu primeiro parâmetro. Este contexto contém:
+- `accounts`: As accounts passadas para a instruction
+- `program_id`: A chave pública do program
+- `remaining_accounts`: Quaisquer accounts adicionais não definidas explicitamente na struct de contexto
+- `bumps`: O campo `bumps` é particularmente útil ao trabalhar com PDAs, pois fornece as bump seeds que foram usadas para derivar os endereços PDA (somente se você estiver derivando-as na struct de account)
+
+Isso pode ser acessado fazendo:
+
+```rust
+// Accessing accounts
+ctx.accounts.account_1
+ctx.accounts.account_2
+
+// Accessing program ID
+ctx.program_id
+
+// Accessing remaining accounts
+for remaining_account in ctx.remaining_accounts {
+    // Process remaining account
+}
+
+// Accessing bumps for PDAs
+let bump = ctx.bumps.pda_account;
+```
+
+<ArticleSection name="Instruction Discriminator" id="instruction-discriminator" level="h3" />
+
+Assim como as accounts, as instructions no Anchor usam discriminators para identificar diferentes tipos de instruction. O discriminator padrão é um prefixo de 8 bytes gerado usando `sha256("global:<instruction_name>")[0..8]`. O nome da instruction deve estar em snake_case.
+
+<AnchorDiscriminatorCalculator value={"initialize_account"} displayMode="instruction" />
+
+<ArticleSection name="Custom Instruction Discriminator" id="custom-instruction-discriminator" level="h3" />
+
+Você também pode especificar um discriminator personalizado para suas instructions:
+
+```rust
+#[instruction(discriminator = 1)]
+pub fn custom_discriminator(ctx: Context<Custom>) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+<ArticleSection name="Instruction Scaffold" id="instruction-scaffold" level="h2" />
+
+Você pode escrever sua instruction de diferentes formas, nesta seção vamos ensinar alguns dos estilos e formas como você pode configurá-las.
+
+<ArticleSection name="Instruction Logic" id="instruction-logic" level="h3" />
+
+A lógica da instruction pode ser organizada de diferentes maneiras, dependendo da complexidade do seu program e do seu estilo de codificação preferido. Aqui estão as principais abordagens:
+
+1. **Lógica de Instruction Inline**
+
+Para instructions simples, você pode escrever a lógica diretamente na função da instruction:
+
+```rust
+pub fn initialize(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Transfer tokens logic
+
+    // Close token account logic
+    
+    Ok(())
+}
+```
+2. **Implementação em Módulo Separado**
+
+Para programas muito complexos, você pode organizar a lógica em módulos separados:
+
+```rust
+// In a separate file: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // Transfer tokens logic
+
+    // Close token account logic
+ 
+    Ok(())
+}
+
+// In your lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+3. **Implementação com Context Separado**
+
+Para instructions mais complexas, você pode mover a lógica para a implementação da struct de contexto:
+
+```rust
+// In a separate file: transfer.rs
+pub fn execute(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    ctx.accounts.transfer_tokens(amount)?;
+    ctx.accounts.close_token_account()?;
+ 
+    Ok(())
+}
+
+impl<'info> Transfer<'info> {
+    /// Transfers tokens from source to destination account
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Transfer tokens logic
+
+        Ok(())
+    }
+
+    /// Closes the source token account after transfer
+    pub fn close_token_account(&mut self) -> Result<()> {
+        // Close token account logic
+
+    }
+}
+
+// In your lib.rs
+pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    transfer::execute(ctx, amount)
+}
+```
+
+<ArticleSection name="Instruction Parameters" id="instruction-parameters" level="h3" />
+
+Instructions podem aceitar parâmetros além do contexto. Esses parâmetros são serializados e desserializados automaticamente pelo Anchor. Aqui estão os pontos-chave sobre parâmetros de instruction:
+
+1. **Tipos Básicos**
+
+O Anchor suporta todos os tipos primitivos do Rust e tipos comuns da Solana:
+
+```rust
+pub fn complex_instruction(
+    ctx: Context<Complex>,
+    amount: u64,
+    pubkey: Pubkey,
+    vec_data: Vec<u8>,
+) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+2. **Tipos Personalizados**
+
+Você pode usar tipos personalizados como parâmetros, mas eles devem implementar `AnchorSerialize` e `AnchorDeserialize`:
+
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct InstructionData {
+    pub field1: u64,
+    pub field2: String,
+}
+
+pub fn custom_type_instruction(
+    ctx: Context<Custom>,
+    data: InstructionData,
+) -> Result<()> {
+    // Instruction logic
+    Ok(())
+}
+```
+
+<ArticleSection name="Best Practices" id="best-practices" level="h3" />
+
+1. **Mantenha as Instructions Focadas**: Cada instruction deve fazer uma coisa bem. Se uma instruction está fazendo demais, considere dividi-la em múltiplas instructions.
+
+2. **Use Implementação com Context**: Para instructions complexas, use a abordagem de implementação com context para:
+   - Manter seu código organizado
+   - Facilitar os testes
+   - Melhorar a reutilização
+   - Adicionar documentação adequada
+
+3. **Tratamento de Erros**: Sempre use tratamento de erros adequado e retorne mensagens de erro significativas:
+```rust
+#[error_code]
+pub enum TransferError {
+    #[msg("Insufficient balance")]
+    InsufficientBalance,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+
+impl<'info> Transfer<'info> {
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        require!(amount > 0, TransferError::InvalidAmount);
+        require!(
+            self.source.amount >= amount,
+            TransferError::InsufficientBalance
+        );
+
+        // Transfer logic
+        Ok(())
+    }
+}
+```
+
+4. **Documentação**: Sempre documente sua lógica de instruction, especialmente ao usar implementação com context:
+```rust
+impl<'info> Transfer<'info> {
+    /// # Transfers tokens
+    /// 
+    /// Transfers tokens from source to destination account
+    pub fn transfer_tokens(&mut self, amount: u64) -> Result<()> {
+        // Implementation
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Cross-Program Invocations (CPIs)" id="cross-program-invocations" level="h2" />
+
+Cross Program Invocations (CPI) referem-se ao processo de um program invocando instructions de outro program, o que permite a composabilidade dos programas Solana. O Anchor fornece uma forma conveniente de fazer CPIs através do `CpiContext` e builders específicos de program.
+
+**Nota**: Você pode encontrar todas as CPIs do System Program usando o crate principal do anchor fazendo: `use anchor_lang::system_program::*`; e para as relativas ao programa SPL token, precisaremos importar o crate anchor_spl e fazer: `use anchor_spl::token::*`
+
+<ArticleSection name="Basic CPI Structure" id="basic-cpi-structure" level="h3" />
+
+Veja como fazer uma CPI básica:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport(ctx: Context<TransferLamport>, amount: u64) -> Result<()> {
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.from.to_account_info(),
+        to: ctx.accounts.to.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="CPI with PDA Signers" id="cpi-with-pda-signers" level="h3" />
+
+Ao fazer CPIs que exigem assinaturas de PDA, use `CpiContext::new_with_signer`:
+
+```rust
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program::{transfer, Transfer};
+
+pub fn transfer_lamport_with_pda(ctx: Context<TransferLamportWithPda>, amount: u64) -> Result<()> {
+    let seeds = &[
+        b"vault".as_ref(),
+        &[ctx.bumps.vault],
+    ];
+    let signer = &[&seeds[..]];
+    
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault.to_account_info(),
+        to: ctx.accounts.recipient.to_account_info(),
+    };
+    
+    let cpi_program = ctx.accounts.system_program.to_account_info();
+    let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+    transfer(cpi_ctx, amount)?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Error Handling" id="error-handling" level="h2" />
+
+O Anchor fornece um sistema robusto de tratamento de erros para instructions. Veja como implementar erros personalizados e tratá-los nas suas instructions:
+
+```rust
+#[error_code]
+pub enum MyError {
+    #[msg("Custom error message")]
+    CustomError,
+    #[msg("Another error with value: {0}")]
+    ValueError(u64),
+}
+
+pub fn handle_errors(ctx: Context<HandleErrors>, value: u64) -> Result<()> {
+    require!(value > 0, MyError::CustomError);
+    require!(value < 100, MyError::ValueError(value));
+    
+    Ok(())
+}
+```

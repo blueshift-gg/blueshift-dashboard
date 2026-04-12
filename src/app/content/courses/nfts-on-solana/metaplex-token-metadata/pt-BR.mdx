@@ -1,0 +1,320 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Metaplex Token Metadata
+
+Contas mint SPL Token armazenam decimais, fornecimento, autoridades. Elas não armazenam nomes, imagens, descrições. O mint da USDC é `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`. Sua carteira exibe "USDC" com um logo. Essa informação vem dos metadados.
+
+O Metaplex Token Metadata é o padrão que adiciona informações legíveis por humanos aos tokens da Solana. Um programa separado criando contas de metadados vinculadas a contas mint. Todos os principais NFTs na Solana usaram este padrão por anos.
+
+<ArticleSection name="Como o Token Metadata Funciona" id="how-it-works" level="h2" />
+
+O Token Metadata usa duas contas:
+
+**1. Conta mint (SPL Token):**
+
+Mint SPL Token padrão. Para NFTs: supply=1, decimals=0, mint authority=None.
+
+**2. PDA de Metadados (programa Metaplex):**
+
+Program Derived Address pertencente ao programa Metaplex Token Metadata. Armazena nome, símbolo, URI, criadores, royalties, informações de coleção.
+
+Derivado deterministicamente do endereço mint:
+
+```typescript
+const metadataPDA = PublicKey.findProgramAddressSync(
+    [
+        Buffer.from("metadata"),
+        METADATA_PROGRAM_ID.toBuffer(),
+        mintAddress.toBuffer(),
+    ],
+    METADATA_PROGRAM_ID
+)[0];
+```
+
+Dado qualquer endereço mint, qualquer pessoa pode calcular o endereço do PDA de metadados. Não há necessidade de armazená-lo ou comunicá-lo separadamente. Carteiras e exploradores o derivam automaticamente.
+
+<ArticleSection name="Estrutura da Conta de Metadados" id="metadata-structure" level="h2" />
+
+A conta de metadados contém dados estruturados:
+
+```rust
+pub struct Metadata {
+    pub key: Key,                   // Discriminador de tipo de conta
+    pub update_authority: Pubkey,   // Quem pode atualizar os metadados
+    pub mint: Pubkey,               // Token mint associado
+    pub data: Data,                 // Nome, símbolo, URI, criadores, royalty
+    pub primary_sale_happened: bool,
+    pub is_mutable: bool,           // Os metadados podem ser alterados?
+    pub edition_nonce: Option<u8>,
+    pub token_standard: Option<TokenStandard>,
+    pub collection: Option<Collection>,
+    pub uses: Option<Uses>,
+    pub collection_details: Option<CollectionDetails>,
+    pub programmable_config: Option<ProgrammableConfig>,
+}
+```
+
+**`update_authority`** - Quem pode modificar os metadados:
+- Tipicamente o criador inicialmente
+- Pode ser alterada ou revogada (definida como None para imutável)
+- Independente da autoridade de mint
+
+**`mint`** - Qual token estes metadados descrevem:
+- Vincula os metadados a uma conta mint específica
+- Uma conta de metadados por mint
+
+**`data`** - Os metadados propriamente ditos:
+
+```rust
+pub struct Data {
+    pub name: String,              // "Okay Bear #1234"
+    pub symbol: String,            // "OKAY"
+    pub uri: String,               // Link para JSON off-chain
+    pub seller_fee_basis_points: u16,  // % de Royalty
+    pub creators: Option<Vec<Creator>>,
+}
+```
+
+**`primary_sale_happened`** - Rastreamento da primeira venda:
+- False inicialmente
+- Definido como true após a primeira venda em marketplace
+- Usado para lógica de royalties (alguns criadores isentam royalties na venda primária)
+
+**`is_mutable`** - Os metadados podem mudar?:
+- True: A autoridade de atualização pode modificar os metadados
+- False: Metadados permanentemente congelados
+- Comum definir como false após o mint para garantia de imutabilidade
+
+**`collection`** - Associação a coleção:
+- Referência ao NFT da coleção
+- Flag de verificação (autoridade da coleção assinou)
+- Permite filtragem e verificação de coleção
+
+<ArticleSection name="Metadados Off-Chain (JSON)" id="offchain-metadata" level="h2" />
+
+O campo `uri` nos metadados on-chain aponta para um arquivo JSON off-chain contendo informações detalhadas.
+
+**Estrutura JSON típica:**
+
+```json
+{
+  "name": "Okay Bear #1234",
+  "symbol": "OKAY",
+  "description": "Okay Bear é uma coleção de 10.000 ursos.",
+  "image": "https://arweave.net/...",
+  "attributes": [
+    { "trait_type": "Background", "value": "Blue" },
+    { "trait_type": "Fur", "value": "Brown" },
+    { "trait_type": "Eyes", "value": "Happy" },
+    { "trait_type": "Clothing", "value": "T-Shirt" }
+  ],
+  "properties": {
+    "files": [
+      { "uri": "https://arweave.net/...", "type": "image/png" }
+    ],
+    "category": "image"
+  }
+}
+```
+
+**Por que dividir on-chain/off-chain?**
+
+Armazenamento on-chain é caro. Armazenar um arquivo JSON de 2KB on-chain custa ~0,01 SOL por NFT. Para 10.000 NFTs: 100 SOL = $15.000+ em aluguel.
+
+Armazenamento off-chain (IPFS, Arweave, centralizado) custa uma fração disso. O URI aponta para o JSON. Carteiras fazem o fetch e exibem.
+
+**Opções de armazenamento:**
+
+**Arweave**: Armazenamento descentralizado permanente. Pague uma vez, armazene para sempre. A maioria dos projetos NFT usa isso. Custo: ~$0,01 por arquivo.
+
+**IPFS**: Descentralizado, mas não garantido permanente. Arquivos podem desaparecer se ninguém fizer o pin. Mais barato, mas menos confiável.
+
+**Centralizado (AWS, Cloudflare)**: Mais barato e mais rápido. O criador tem controle. Risco: O criador pode alterar ou deletar. Não é verdadeiramente descentralizado.
+
+**On-chain (raro)**: Máxima permanência e descentralização. Muito caro. Alguns NFTs de alto valor fazem isso via inscrições.
+
+<ArticleSection name="Criadores e Royalties" id="creators-royalties" level="h2" />
+
+Os metadados incluem lista de criadores e configuração de royalties:
+
+```rust
+pub struct Creator {
+    pub address: Pubkey,
+    pub verified: bool,    // Criador assinou aprovação
+    pub share: u8,         // Porcentagem dos royalties (0-100)
+}
+```
+
+**Verificação de criador:**
+
+Qualquer pessoa pode mintar um NFT alegando criadores arbitrários. A verificação prova que os criadores aprovaram.
+
+Não verificado: O NFT lista o criador, mas o criador não assinou. Pode ser falso.
+
+Verificado: O criador assinou uma transação provando que aprova ser listado. Autêntico.
+
+Marketplaces exibem o status de verificação. Criadores verificados adicionam legitimidade.
+
+**Distribuição de royalties:**
+
+```rust
+seller_fee_basis_points: 500  // 5% de royalty
+creators: [
+    { address: Artist, verified: true, share: 70 },   // Artista recebe 3,5%
+    { address: Platform, verified: true, share: 30 },  // Plataforma recebe 1,5%
+]
+```
+
+Divisão em vendas secundárias: 95% para o vendedor, 5% para os criadores (baseado nas porcentagens de participação).
+
+Marketplaces honram royalties voluntariamente. O protocolo não aplica. A maioria dos grandes marketplaces respeita os royalties dos criadores por padrão, mas alguns oferecem negociação sem royalties.
+
+<ArticleSection name="Coleções e Verificação" id="collections" level="h2" />
+
+Coleções agrupam NFTs relacionados. Okay Bears é uma coleção. Mad Lads é uma coleção.
+
+**Estrutura da coleção:**
+
+A coleção em si é um NFT (supply=1).
+
+NFTs individuais referenciam a coleção:
+
+```rust
+pub struct Collection {
+    pub verified: bool,    // Autoridade da coleção assinou
+    pub key: Pubkey,       // Endereço do NFT da coleção
+}
+```
+
+**Processo de verificação:**
+
+1. Mintar NFT da coleção (supply=1)
+2. Mintar NFTs individuais com campo de coleção apontando para o NFT da coleção
+3. Autoridade de atualização da coleção assina a verificação para cada NFT
+4. Flag `verified` definida como true
+
+Associação a coleção não verificada significa que o NFT alega pertencer, mas a coleção não verificou. Provavelmente falso. Marketplaces filtram NFTs não verificados ou exibem avisos.
+
+**Por que a verificação importa:**
+
+Qualquer pessoa pode criar um NFT alegando ser "Okay Bear #10001". Sem verificação, os marketplaces não conseguem distinguir o real do falso. A verificação prova que a autoridade da coleção aprovou este NFT.
+
+NFTs falsos não conseguem ser verificados (não têm a assinatura da autoridade da coleção). NFTs reais têm o flag verificado. Prevenção de fraude simples.
+
+<ArticleSection name="Master Edition e Prints" id="master-edition" level="h2" />
+
+O Metaplex suporta um mecanismo de edições: um NFT master, múltiplas prints.
+
+**Master Edition:**
+
+NFT original marcado como master. Supply=1. Tem um PDA de master edition que rastreia quantas prints existem e o máximo permitido.
+
+**Edition Prints:**
+
+Cópias limitadas ou ilimitadas do master. Cada print é um NFT separado (supply=1), mas marcado como edição do master.
+
+Print #1, Print #2, etc. Numerados e rastreáveis até o master.
+
+**Casos de uso:**
+
+Edições limitadas de arte digital. Artista cria o master, minta 100 prints. Print #37 de 100.
+
+Fotos de eventos com originais assinados. Fotógrafo mantém o master, vende prints numerados.
+
+**Trade-offs:**
+
+Adiciona complexidade. Cada print é um NFT separado com contas separadas. Mais caro que um NFT único.
+
+Valor de mercado: Masters geralmente valem mais que prints. Números das prints afetam o valor (prints iniciais mais valiosos).
+
+Não amplamente usado comparado a NFTs únicos 1/1. Adiciona atrito para a maioria dos projetos NFT.
+
+<ArticleSection name="NFTs Programáveis" id="programmable-nfts" level="h2" />
+
+Adição recente ao Token Metadata: NFTs Programáveis (pNFTs).
+
+**O que eles possibilitam:**
+
+Royalties aplicados em nível de protocolo (transferências exigem pagamento de royalties).
+
+Regras de transferência (restrições sobre quem pode transferir, quando, sob quais condições).
+
+Gerenciamento de delegados (sistemas avançados de permissão).
+
+**Como funcionam:**
+
+O mint inclui configuração programável. Transferências são executadas através de validação de regras. Programas podem aplicar lógica que o ERC-721 da Ethereum não consegue.
+
+**Trade-offs:**
+
+Mais complexidade que NFTs padrão. Custos de transação mais altos. Contas adicionais.
+
+Benefício: Verdadeira aplicação de royalties (não dependente de marketplace). Controle de transferência para jogos, conformidade, propriedade condicional.
+
+**Adoção:**
+
+Crescendo, mas ainda minoria. A maioria dos NFTs permanece como Token Metadata padrão. Use pNFTs quando a aplicação for crítica (arte de alto valor com royalties, itens de jogo com restrições de negociação).
+
+<ArticleSection name="Criando NFTs com Token Metadata" id="creating-nfts" level="h2" />
+
+**Passos:**
+
+1. Criar conta mint (supply=1, decimals=0)
+2. Mintar 1 token para a conta de token do proprietário
+3. Definir autoridade de mint como None (impede mint adicional)
+4. Criar PDA de metadados com nome, símbolo, URI, criadores, royalties
+5. Se parte de uma coleção: Definir campo de coleção e verificar
+
+**Ferramentas:**
+
+O Metaplex JS SDK fornece helpers:
+
+```typescript
+const { nft } = await metaplex.nfts().create({
+    uri: "https://arweave.net/metadata.json",
+    name: "My NFT",
+    sellerFeeBasisPoints: 500,
+    creators: [
+        {
+            address: creator.publicKey,
+            share: 100,
+        }
+    ],
+});
+```
+
+Gerencia criação do mint, mint do token, criação do PDA de metadados automaticamente.
+
+**Custo:**
+
+Conta mint: 0,00144 SOL de aluguel.
+
+Conta de metadados: ~0,012-0,02 SOL (varia pelo tamanho dos dados).
+
+Total: ~0,015-0,025 SOL por NFT ≈ $0,02-0,03.
+
+<ArticleSection name="Quando Usar Token Metadata" id="when-to-use" level="h2" />
+
+**Use Token Metadata quando:**
+
+Compatibilidade máxima desejada. Toda carteira, marketplace, ferramenta o suporta.
+
+Seu projeto precisa de um padrão testado em produção. Anos de uso em produção.
+
+Coleção já iniciada com Token Metadata. Migração seria complexa.
+
+NFTs programáveis necessários. pNFTs requerem Token Metadata.
+
+**Considere alternativas quando:**
+
+Menor custo é importante (Metaplex Core é mais barato).
+
+Estrutura mais simples é preferida (Core usa uma conta única).
+
+Escala massiva necessária (NFTs comprimidos são dramaticamente mais baratos).
+
+Começando do zero (Core é mais novo, padrão mais limpo para novos projetos).
+
+O Token Metadata permanece o padrão mais amplamente suportado. Se a compatibilidade é prioridade, use-o. Se estiver otimizando custos e começando do zero, considere Core ou NFTs comprimidos.
+
+Próximo: Metaplex Core e NFTs comprimidos — as abordagens mais novas e eficientes para NFTs na Solana.

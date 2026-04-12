@@ -1,0 +1,120 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso Tokens on Solana - Entenda padrões e implementações de tokens](/graphics/course-banners/tokens-on-solana.png)
+
+# Um Programa, Todos os Tokens
+
+Criar um token na Ethereum custa $50 em taxas de gas. Na Solana: $0,02. Transferir esse token? Ethereum: $15. Solana: $0,00025.
+
+A diferença de custo não é apenas sobre transações mais baratas — é uma escolha arquitetural. A Ethereum exige a implantação de um smart contract completo para cada token. A Solana usa um único programa — SPL Token — que gerencia todos os tokens na rede.
+
+Todos os tokens na Solana funcionam da mesma forma, o que cria composabilidade. Carteiras, DEXs e dApps integram uma única vez e suportam todos os tokens sem código personalizado por token, problemas de compatibilidade ou variações de segurança entre implementações.
+
+<ArticleSection name="O Modelo Baseado em Accounts" id="account-based-model" level="h2" />
+
+A Solana não rastreia transações — ela rastreia estados de accounts. Seu saldo de SOL vive na account da sua carteira. Seu saldo de USDC vive em uma token account separada, pertencente a você, mas gerenciada pelo programa SPL Token. Se você não está familiarizado com o [modelo de accounts da Solana](/en/courses/understanding-solana/solana-architecture), ele é a base essencial para entender tokens.
+
+**Três tipos de account formam o sistema de tokens:**
+
+**Mint Account** - A certidão de nascimento do token:
+- Fornecimento total (quantos tokens existem)
+- Decimals (6 decimals = 1 token = 1.000.000 unidades base)
+- Mint authority (quem pode criar mais tokens)
+- Freeze authority (quem pode congelar token accounts)
+
+Uma mint account por tipo de token: USDC tem uma mint, BONK tem uma mint, o token do seu projeto tem uma mint.
+
+**Token Account** - Armazena saldos para um proprietário:
+- Qual mint (USDC, BONK, etc.)
+- Owner (o endereço da sua carteira)
+- Amount (saldo atual)
+- Delegate (opcional: quem pode gastar em seu nome)
+
+Cada pessoa precisa de uma token account para cada token que possui. Possui 5 tokens diferentes? Você tem 5 token accounts, cada uma pertencente à sua carteira.
+
+**Associated Token Account (ATA)** - A token account padrão:
+- Derivada deterministicamente de owner + mint
+- Qualquer um conhece o endereço da sua USDC ATA sem precisar perguntar
+- Uma por pessoa por tipo de token
+
+ATAs são token accounts normais em endereços previsíveis. Em vez de criar endereços aleatórios e dizer a todos "aqui está minha account de USDC", sua USDC ATA vive em um endereço que qualquer um pode calcular a partir do endereço da sua carteira + endereço da mint de USDC.
+
+<ArticleSection name="Programa Único, Todos os Tokens" id="single-program" level="h2" />
+
+SPL Token é um programa implantado uma única vez que gerencia todos os tokens na Solana. Não é um template — é o programa em execução no endereço `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`.
+
+Quando você cria um token, você não implanta código. Você cria uma mint account pertencente ao programa SPL Token. Quando você transfere tokens, você chama o programa SPL Token com suas token accounts. O programa valida e executa.
+
+Todos os tokens seguem regras idênticas — transferências de USDC funcionam exatamente como transferências do token do seu projeto, com a mesma lógica de validação, garantias de segurança e interface.
+
+Carteiras integram uma única vez. Suportar "todos os tokens SPL" significa suportar o formato de instrução de um programa. Sem integração por token. Sem testes de compatibilidade entre centenas de implementações.
+
+Protocolos DeFi compõem de forma confiável. O agregador Jupiter faz swap de qualquer par de tokens SPL porque todos se comportam de forma idêntica. Protocolos de empréstimo aceitam qualquer token SPL como colateral. Sem casos especiais.
+
+Auditorias de segurança aplicam-se universalmente. O SPL Token foi extensivamente auditado. Essas auditorias protegem todos os tokens que o utilizam. Um programa bem testado protege trilhões em valor.
+
+<ArticleSection name="Comparação com a Ethereum" id="compared-ethereum" level="h2" />
+
+O ERC-20 da Ethereum é um padrão, não um programa. Implantar um token ERC-20 significa implantar um smart contract que implementa a interface do padrão: `transfer()`, `approve()`, `balanceOf()`, etc.
+
+**Cada token é código personalizado:**
+
+O Token A implementa a lógica de transferência. O Token B implementa a mesma lógica de forma diferente. Ambos afirmam ser "ERC-20 compliant", mas podem ter bugs, otimizações de gas ou problemas de segurança únicos à sua implementação.
+
+Carteiras precisam confiar que cada token implementa o padrão corretamente. Sem garantias. Alguns tokens adicionam taxas de transferência. Alguns têm mecanismos de pausa. Alguns têm fornecimento rebasing. Todos se chamam "ERC-20."
+
+A integração DeFi exige cautela. DEXs e protocolos de empréstimo precisam lidar com comportamentos estranhos de tokens: taxas de transferência quebram cálculos, rebasing quebra a contabilidade, pausa quebra saques. Cada token é um caso limite potencial.
+
+**A vantagem da Solana:**
+
+Uma única implementação testada extensivamente. Sem necessidade de revisão de código por token. Sem problemas de "este token implementa transferência de forma diferente". O programa SPL Token define o comportamento. Todos os tokens herdam esse comportamento.
+
+<ArticleSection name="Custo e Velocidade em Escala" id="cost-speed" level="h2" />
+
+**Criação de token:**
+- Ethereum: Implantar contrato ERC-20 = $50-200 dependendo dos preços de gas
+- Solana: Criar mint account = $0,02 (depósito de rent de 0,00144 SOL)
+
+**Transferências de token:**
+- Ethereum: $5-50 dependendo da congestão da rede
+- Solana: $0,00025 (5.000 lamports)
+
+**Minting de 1 milhão de tokens:**
+- Ethereum: Uma transação de mint, custo de gas variável
+- Solana: Múltiplas transações necessárias devido a limites de compute, mas custo total abaixo de $10
+
+**Criando token accounts para 10.000 usuários:**
+- Ethereum: Cada usuário paga gas para implantar seu rastreamento de posição
+- Solana: Criar 10.000 ATA accounts = $200 total (0,00144 SOL × 10.000)
+
+A estrutura de custos permite aplicações diferentes. Distribuir tokens para milhares de usuários torna-se economicamente viável. Itens de jogo como tokens faz sentido quando minting custa $0,00025 em vez de $15. Programas de fidelidade podem emitir tokens para pequenas ações.
+
+O tempo de bloco de 12 segundos da Ethereum significa esperar minutos pela confirmação da transferência. O slot time de 400ms da Solana significa finalidade sub-segundo. Aplicações em tempo real tornam-se práticas.
+
+<ArticleSection name="Token Extensions e Evolução" id="token-extensions" level="h2" />
+
+O SPL Token foi lançado em 2020. Em 2024, desenvolvedores queriam novos recursos: metadata em mint accounts, transfer hooks, permanent delegates, tokens com rendimento, transferências confidenciais.
+
+Solução da Ethereum: Implantar novos padrões ERC (ERC-777, ERC-1155, ERC-4626). Cada um exige implementação de smart contract personalizada. Sem compatibilidade retroativa. O ecossistema se fragmenta.
+
+Solução da Solana: Programa Token Extensions (Token-2022). Ele estende o SPL Token com 16 novas extensões opcionais mantendo compatibilidade retroativa. Programas antigos funcionam com tokens novos. Novos recursos ativam apenas quando explicitamente habilitados.
+
+Essa arquitetura permite evolução sem fragmentação. O ecossistema de tokens evolui junto em vez de se dividir em padrões incompatíveis.
+
+<ArticleSection name="O Que Este Curso Abrange" id="what-this-course-covers" level="h2" />
+
+Tokens na Solana funcionam através de um modelo de accounts: mint accounts definem tokens, token accounts armazenam saldos, o programa SPL Token aplica as regras.
+
+**Você vai aprender:**
+
+Como mint accounts controlam o fornecimento e permissões. O que mint authority e freeze authority significam. Por que alguns tokens podem criar fornecimento infinito enquanto outros têm limites fixos.
+
+Como token accounts funcionam e por que cada token precisa de uma account separada. O que as Associated Token Accounts resolvem e como os programas as encontram deterministicamente. Quando você precisa de múltiplas token accounts para o mesmo token.
+
+O que as token extensions adicionam além do SPL Token básico. Como o Token-2022 habilita metadata, transfer hooks e outros recursos avançados. Quando usar extensões e quais trade-offs elas introduzem.
+
+Como tudo isso se conecta à construção: criar tokens, fazer minting de fornecimento, transferir entre accounts, gerenciar authorities. As operações práticas que toda aplicação de token realiza.
+
+Após este curso, você entenderá por que todos os tokens da Solana funcionam da mesma forma — e por que essa uniformidade é a vantagem da Solana.
+
+Próximo: entendendo mint accounts e como elas controlam o fornecimento de tokens.

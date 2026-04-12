@@ -1,0 +1,297 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Programas e Transações
+
+[Contas armazenam dados](/courses/understanding-solana/accounts-ownership), e os programas Solana operam sobre esses dados através de instruções. Transações agrupam instruções, e essas peças formam o modelo de execução principal da Solana.
+
+Como os programas da Solana funcionam? [Programas stateless](/courses/understanding-solana/solana-architecture#stateless-programs) processam instruções, transações fornecem atomicidade, PDAs (Program Derived Addresses) permitem autoridade de programa, e CPI (Cross-Program Invocation) permite que programas chamem uns aos outros.
+
+<ArticleSection name="Programas: Processadores Stateless" id="programs-stateless-processors" level="h2" />
+
+Programas são código stateless que processa instruções. Eles recebem contas como entrada, validam a operação, modificam dados de contas e retornam sucesso ou erro.
+
+Uma estrutura básica de programa:
+
+```rust
+use solana_program::{
+    account_info::AccountInfo,
+    entrypoint,
+    entrypoint::ProgramResult,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    program_id: &Pubkey,        // The program being called
+    accounts: &[AccountInfo],   // Accounts passed to the program
+    instruction_data: &[u8],    // Additional data for the instruction
+) -> ProgramResult {
+    // 1. Parse instruction data to determine which operation to perform
+    // 2. Validate accounts (correct owner, signer, writable, etc.)
+    // 3. Perform the operation (read/modify account data)
+    // 4. Return success or error
+    Ok(())
+}
+```
+
+Programas recebem três parâmetros: program_id (o endereço do programa sendo chamado), accounts (array de contas que a transação forneceu) e instruction_data (bytes codificando qual instrução executar e seus parâmetros).
+
+O programa verifica se as contas corretas foram fornecidas, se as contas necessárias são signers, se as contas têm o proprietário esperado, se os dados da conta são válidos para a operação, e se a operação atende aos requisitos de lógica de negócio.
+
+Programas não podem ter chaves privadas — são código, não usuários. Ainda assim, programas precisam autorizar ações como transferir tokens que possuem. PDAs resolvem esse problema: endereços derivados de seeds, sem chave privada.
+
+<ArticleSection name="Program Derived Addresses" id="program-derived-addresses" level="h2" />
+
+PDAs (Program Derived Addresses) criam endereços pelos quais programas podem assinar matematicamente.
+
+O runtime gera esses endereços deterministicamente a partir de seeds (bytes arbitrários escolhidos pelo desenvolvedor), o ID do programa (o programa que deriva o PDA) e um valor de bump (para garantir que o resultado não está na curva elíptica).
+
+```rust
+use solana_program::pubkey::Pubkey;
+
+// Find a PDA
+let (pda, bump) = Pubkey::find_program_address(
+    &[
+        b"vault",                      // First seed
+        user_pubkey.as_ref(),          // Second seed
+    ],
+    program_id,                         // Program ID
+);
+```
+
+Essa função busca um valor de bump (começando de 255, decrementando) até encontrar um endereço fora da curva elíptica. Endereços na curva têm chaves privadas correspondentes, enquanto endereços fora da curva não têm — apenas o programa que os derivou pode assinar por eles.
+
+PDAs são determinísticos — mesmas seeds sempre produzem o mesmo endereço, então você pode encontrar o PDA novamente sem armazená-lo. PDAs existem fora da curva, então nenhuma chave privada existe e apenas o programa pode autorizar ações para esse endereço. O programa prova que derivou o PDA fornecendo as seeds e o bump, usando autoridade matemática em vez de assinaturas criptográficas.
+
+Programas tipicamente derivam PDAs para cofres específicos de usuário, estado global do programa ou token accounts:
+
+```rust
+// User-specific vault
+let (vault_pda, _) = Pubkey::find_program_address(
+    &[b"vault", user.key.as_ref()],
+    program_id
+);
+
+// Global program state
+let (state_pda, _) = Pubkey::find_program_address(
+    &[b"state"],
+    program_id
+);
+
+// Token account for a program
+let (program_token_account, _) = Pubkey::find_program_address(
+    &[b"token", mint.key.as_ref()],
+    program_id
+);
+```
+
+Programas usam PDAs para serem donos de contas e autorizar transações sem chaves privadas.
+
+<ArticleSection name="Assinando com PDAs" id="signing-with-pdas" level="h2" />
+
+Programas assinam por seus PDAs usando `invoke_signed`. Ao chamar outro programa, o programa chamador pode incluir seeds do PDA para provar que tem autoridade sobre esses endereços.
+
+```rust
+use solana_program::program::invoke_signed;
+
+// The PDA that owns tokens
+let (pda, bump) = Pubkey::find_program_address(
+    &[b"vault", user.key.as_ref()],
+    program_id
+);
+
+// Seeds used to derive the PDA
+let seeds = &[
+    b"vault",
+    user.key.as_ref(),
+    &[bump],
+];
+
+// Call Token Program to transfer tokens from the PDA
+invoke_signed(
+    &spl_token::instruction::transfer(
+        &token_program.key,
+        &pda_token_account.key,
+        &destination_token_account.key,
+        &pda,                           // Authority is the PDA
+        &[],
+        amount,
+    )?,
+    &[
+        pda_token_account.clone(),
+        destination_token_account.clone(),
+        token_program.clone(),
+    ],
+    &[seeds],                           // Provide seeds to prove authority
+)?;
+```
+
+O runtime verifica se as seeds produzem o endereço PDA reivindicado. Se sim, o runtime trata o PDA como um signer para essa invocação, e o Token Program vê uma assinatura válida do PDA e executa a transferência.
+
+Programas gerenciam ativos de forma autônoma através desse mecanismo.
+
+<ArticleSection name="Transações: Operações Atômicas" id="transactions-atomic-operations" level="h2" />
+
+Transações são atômicas. Todas as instruções dentro de uma transação ou são bem-sucedidas juntas ou falham juntas — sem execução parcial.
+
+Uma estrutura de transação:
+
+```rust
+Transaction {
+    signatures: Vec<Signature>,         // Cryptographic signatures
+    message: Message {
+        header: MessageHeader {
+            num_required_signatures: u8,
+            num_readonly_signed_accounts: u8,
+            num_readonly_unsigned_accounts: u8,
+        },
+        account_keys: Vec<Pubkey>,      // All accounts in the transaction
+        recent_blockhash: Hash,         // Recent blockhash for expiry
+        instructions: Vec<CompiledInstruction>,
+    },
+}
+```
+
+Cada instrução especifica o ID do programa (qual programa invocar), contas (quais contas esta instrução acessa, como índices em account_keys) e dados (parâmetros específicos da instrução).
+
+**Exemplo de transação:**
+
+```rust
+let transaction = Transaction::new_signed_with_payer(
+    &[
+        // Instruction 1: Transfer SOL
+        system_instruction::transfer(
+            &payer.pubkey(),
+            &recipient.pubkey(),
+            1_000_000,
+        ),
+
+        // Instruction 2: Transfer tokens
+        spl_token::instruction::transfer(
+            &token_program_id,
+            &source_token_account,
+            &dest_token_account,
+            &owner.pubkey(),
+            &[],
+            500_000,
+        )?,
+
+        // Instruction 3: Update user profile
+        my_program::instruction::update_profile(
+            &program_id,
+            &user_account,
+            "New Username".to_string(),
+        )?,
+    ],
+    Some(&payer.pubkey()),
+    &[&payer, &owner],
+    recent_blockhash,
+);
+```
+
+Essa transação realiza três operações atomicamente. Se qualquer instrução falhar, todas são revertidas e nenhuma mudança de estado persiste.
+
+<ArticleSection name="Tamanho e Taxas de Transação" id="transaction-size-fees" level="h2" />
+
+Transações são limitadas a 1.232 bytes no total, o que inclui todas as assinaturas, chaves de contas, dados de instrução e o cabeçalho da mensagem. Transações grandes com muitas contas ou dados de instrução complexos podem exceder esse limite. Divida operações em múltiplas transações, use lookup tables para comprimir listas de contas ou minimize o tamanho dos dados de instrução.
+
+**Taxas de transação:**
+
+Toda transação incorre em taxas:
+
+**Taxa base:** 5.000 lamports por assinatura (0,000005 SOL). Uma transação com uma assinatura custa 5.000 lamports. Uma transação exigindo três assinaturas custa 15.000 lamports.
+
+**Taxa de priorização (opcional):** Taxa adicional para aumentar a prioridade de processamento:
+
+```
+prioritization_fee = compute_unit_limit × compute_unit_price
+```
+
+O limite de compute units é o máximo de compute units que a transação pode consumir (padrão: 200.000). O preço por compute unit é o preço em micro-lamports.
+
+Durante congestionamento da rede, taxas de priorização mais altas são processadas mais rápido. Durante baixo uso, a taxa base é suficiente.
+
+A conta pagadora das taxas deve ser de propriedade do System Program, o que permite autorizar o pagamento.
+
+<ArticleSection name="Cross-Program Invocation" id="cross-program-invocation" level="h2" />
+
+CPI (Cross-Program Invocation) permite que programas chamem outros programas dentro da mesma transação. Um programa pode chamar o Token Program para transferir tokens, o System Program para criar contas ou programas personalizados para integrar lógica complexa. Todas essas chamadas compõem em uma única transação atômica.
+
+**CPI básica:**
+
+```rust
+use solana_program::program::invoke;
+
+let transfer_instruction = spl_token::instruction::transfer(
+    &token_program.key,
+    &source_account.key,
+    &destination_account.key,
+    &authority.key,
+    &[],
+    amount,
+)?;
+
+invoke(
+    &transfer_instruction,
+    &[
+        source_account.clone(),
+        destination_account.clone(),
+        authority.clone(),
+        token_program.clone(),
+    ],
+)?;
+```
+
+O programa chamador constrói uma instrução para o Token Program e a invoca. O Token Program executa dentro da mesma transação, e quaisquer mudanças de estado que fizer são parte do commit atômico da transação.
+
+**CPI com signers (usando PDAs):**
+
+```rust
+invoke_signed(
+    &transfer_instruction,
+    &[
+        source_account.clone(),
+        destination_account.clone(),
+        pda.clone(),
+        token_program.clone(),
+    ],
+    &[seeds],                           // Provide PDA seeds
+)?;
+```
+
+Quando a autoridade é um PDA controlado pelo programa chamador, use `invoke_signed` com as seeds de derivação do PDA. O runtime verifica as seeds e trata o PDA como um signer para a instrução invocada.
+
+<ArticleSection name="Limites e Capacidades do CPI" id="cpi-constraints-capabilities" level="h2" />
+
+CPI tem limites para prevenir recursão infinita e garantir segurança.
+
+CPIs podem ser aninhadas até 4 níveis de profundidade — o Programa A pode chamar o Programa B, que chama o Programa C, que chama o Programa D, mas um quinto nível de aninhamento falha.
+
+Signers originais da transação mantêm sua autoridade ao longo das cadeias de CPI — se um usuário assinou a transação, programas que ele chama (e programas que esses programas chamam) veem esse usuário como signer. Se uma conta é marcada como writable na transação original, ela permanece writable por todos os níveis de CPI, permitindo que programas a modifiquem. Todas as CPIs compartilham o orçamento de compute da transação (padrão 200.000 compute units), e cadeias de CPI complexas que excedem esse limite falham, embora desenvolvedores possam solicitar limites de compute maiores se necessário.
+
+CPI permite construir aplicações complexas combinando programas existentes e chamando programas especializados em vez de reimplementar funcionalidade. Múltiplas interações de programas são bem-sucedidas ou falham juntas, e programas não podem escapar de suas sandboxes ou bypassar permissões.
+
+<ArticleSection name="Juntando Tudo" id="putting-it-all-together" level="h2" />
+
+Uma transação típica segue este caminho de execução:
+
+1. **Usuário constrói a transação:** A carteira coleta instruções, contas e um blockhash recente, depois o usuário assina com sua chave privada.
+
+2. **Transação enviada:** A transação é transmitida aos validadores via nós RPC.
+
+3. **Líder recebe a transação:** O líder atual (o validador responsável por produzir o próximo bloco) recebe a transação.
+
+4. **Agendamento:** O runtime analisa quais contas a transação toca e agenda a transação para executar quando essas contas estiverem disponíveis (não sendo modificadas por outra transação no momento).
+
+5. **Execução:** O runtime invoca o programa com as contas fornecidas e os dados de instrução, depois o programa valida tudo e realiza suas operações.
+
+6. **CPI se necessário:** Se o programa chama outros programas, essas invocações executam recursivamente dentro do mesmo contexto atômico.
+
+7. **Commit ou revert:** Se todas as instruções são bem-sucedidas, as mudanças de estado são commitadas; mas se qualquer instrução falhar, todas as mudanças são revertidas e a transação é marcada como falha.
+
+8. **Confirmação:** A transação é incluída em um bloco, e após a rede finalizar o bloco, a transação está confirmada e irreversível.
+
+A maioria das transações completa esse processo em milissegundos. A execução paralela da Solana roda muitas transações simultaneamente em diferentes núcleos de CPU.
+
+Programas processam instruções, PDAs permitem autoridade de programa, transações fornecem atomicidade e CPI permite que programas chamem uns aos outros. A seguir: construção com a Solana na prática.
