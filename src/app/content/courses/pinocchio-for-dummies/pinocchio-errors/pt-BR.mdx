@@ -1,0 +1,114 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Erros
+
+Tipos de erro claros e descritivos são essenciais em programas Solana construídos com Pinocchio. Eles facilitam a depuração e fornecem feedback significativo para usuários e clients que interagem com seu programa.
+
+### O Enum PinocchioError
+
+Ao definir tipos de erro personalizados em Rust, você tem várias opções, como `thiserror`, `anyhow` e `failure`. Para programas Pinocchio, `thiserror` é a escolha preferida porque:
+- Permite anotar cada variante de erro com uma mensagem legível usando o atributo `#[error("...")]`.
+- Implementa automaticamente as traits `core::error::Error` e `Display`, tornando seus erros fáceis de imprimir e depurar.
+- Todas as mensagens de erro e formatação são verificadas em tempo de compilação, reduzindo o risco de problemas em tempo de execução.
+- Mais importante, `thiserror` suporta ambientes `no_std` quando você desabilita seus recursos padrão, o que é necessário para programas Pinocchio.
+
+Para usar thiserror em um programa Pinocchio, adicione-o ao seu `Cargo.toml` assim:
+
+```
+[dependencies]
+thiserror = { version = "2.0", default-features = false }
+```
+
+Veja como você pode definir um tipo de erro personalizado para seu programa Pinocchio:
+
+```rust
+use {
+    num_derive::FromPrimitive,
+    pinocchio::program_error::{ProgramError, ToStr},
+    thiserror::Error,
+};
+
+#[derive(Clone, Debug, Eq, Error, FromPrimitive, PartialEq)]
+pub enum PinocchioError {
+    // 0
+    /// Saldo de lamports abaixo do limite de isenção de renda.
+    #[error("Lamport balance below rent-exempt threshold")]
+    NotRentExempt,
+}
+```
+
+Cada variante é anotada com uma mensagem que será exibida quando o erro ocorrer.
+
+Para retornar seus erros personalizados a partir de instruções Solana, implemente `From<PinocchioError>` para `ProgramError`:
+
+```rust
+impl From<PinocchioError> for ProgramError {
+    fn from(e: PinocchioError) -> Self {
+        ProgramError::Custom(e as u32)
+    }
+}
+```
+
+Isso permite usar o operador `?` e retornar seus erros personalizados de forma transparente.
+
+### Deserializar Erros a Partir de Valores Brutos
+
+Se você precisar converter códigos de erro brutos (como os de logs ou invocações entre programas) de volta para seu enum de erro, implemente `TryFrom<u32>`:
+
+```rust
+impl TryFrom<u32> for PinocchioError {
+    type Error = ProgramError;
+    fn try_from(error: u32) -> Result<Self, Self::Error> {
+        match error {
+            0 => Ok(PinocchioError::NotRentExempt),
+            _ => Err(ProgramError::InvalidArgument),
+        }
+    }
+}
+```
+
+> Isso é opcional, mas útil para tratamento de erros avançado e testes.
+
+### Erros Legíveis por Humanos
+
+Para logging e depuração, você pode querer fornecer uma representação em string dos seus erros. Implementar a trait `ToStr` permite que você faça isso:
+
+```rust
+impl ToStr for PinocchioError {
+    fn to_str<E>(&self) -> &'static str {
+        match self {
+            PinocchioError::NotRentExempt => "Erro: Saldo de lamports abaixo do limite de isenção de renda",
+        }
+    }
+}
+```
+
+> Esta etapa também é opcional, mas pode tornar o relatório de erros mais amigável.
+
+### Macro `require!`
+
+Talvez você esteja acostumado com a forma do Anchor de validação com a macro `require!`. Você pode definir uma macro similar no seu programa Pinocchio para simplificar a verificação de erros:
+
+```rust
+[macro_export]
+macro_rules! require {
+    ( $constraint:expr, $error:expr ) => {
+        if !$constraint {
+            return Err($error.into());
+        }
+    };
+}
+```
+
+Esta macro verifica uma condição e retorna o erro especificado se a condição for falsa, tornando seu código mais limpo e legível.
+Com essas práticas, você pode gerenciar erros efetivamente em seus programas Pinocchio, tornando-os robustos e amigáveis.
+
+Então, as verificações do capítulo de `accounts` ficarão assim:
+
+```rust
+// verificação de signer
+require!(account.is_signer(), PinocchioError::NotSigner);
+
+// verificação de conta do sistema
+require!(account.is_owned_by(&pinocchio_system::ID), PinocchioError::InvalidOwner);
+```

@@ -1,0 +1,462 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Testando no Dispositivo](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Testando no Dispositivo
+
+Embora o protocolo MWA principal seja projetado para dispositivos Android físicos e dependa de intents, sockets locais e um app de carteira real, você pode usar o [Mock MWA](https://github.com/solana-mobile/mock-mwa-wallet) para simular interações MWA em um emulador.
+
+> A configuração inicial leva 30 minutos. Depois disso, você pode usar hot-reload e testar em segundos.
+
+<ArticleSection name="Requisitos" id="requirements" level="h2" />
+
+Você precisa de:
+
+| Item | Notas |
+|------|-------|
+| Dispositivo Android | Android 8.0+ (API 26+). Saga ou qualquer telefone Android funciona. |
+| Cabo USB | Cabo com capacidade de dados, não apenas carga |
+| App de carteira instalado | Phantom, Solflare ou qualquer carteira compatível com MWA |
+| Modo desenvolvedor habilitado | Configurações → Sobre o Telefone → Toque em Build Number 7 vezes |
+| Depuração USB habilitada | Configurações → Opções do Desenvolvedor → Depuração USB |
+| SOL de Devnet | Para testar transações |
+
+**Nota sobre Emulador**: O Mock MWA requer que o emulador tenha algum tipo de autenticação (PIN/biometria). A conexão com a carteira falha sem autenticação.
+
+**Nota sobre iOS**: MWA é exclusivo para Android. O protocolo requer Android Intents para iniciar apps de carteira e servidores WebSocket locais para comunicação, nenhum dos quais tem equivalentes no iOS. A especificação oficial observa: "Suporte ao iOS está planejado para uma versão futura." Para usuários iOS, embedded wallets (Curso 3) ou deeplinks do Phantom fornecem alternativas.
+
+<ArticleSection name="Configuração do Dispositivo Android" id="device-setup" level="h2" />
+
+### Habilitar Modo Desenvolvedor
+
+1. Vá para **Configurações** → **Sobre o Telefone**
+2. Encontre **Build Number**
+3. Toque 7 vezes até ver "Você agora é um desenvolvedor"
+4. Volte para Configurações, encontre **Opções do Desenvolvedor**
+5. Habilite **Depuração USB**
+
+### Conectar ao Computador
+
+1. Conecte o cabo USB
+2. No telefone: Permita depuração USB quando solicitado
+3. Marque "Sempre permitir deste computador"
+
+Verifique a conexão:
+
+```shellscript
+adb devices
+```
+
+Você deve ver seu dispositivo listado:
+
+```
+List of devices attached
+XXXXXXXXX    device
+```
+
+Se disser `unauthorized`, verifique seu telefone para o prompt de permissão.
+
+<ArticleSection name="Executando o App" id="running" level="h2" />
+
+### React Native CLI
+
+```shellscript
+# Inicie o Metro bundler em um terminal
+npx react-native start
+
+# Em outro terminal, construa e execute no dispositivo
+npx react-native run-android
+```
+
+### Expo Development Build
+
+Como MWA requer código nativo, você precisa de um development build (não Expo Go):
+
+```shellscript
+# Criar development build
+npx expo run:android
+```
+
+Isso constrói e instala o app no seu dispositivo. Execuções subsequentes usam:
+
+```shellscript
+# Iniciar servidor de desenvolvimento
+npx expo start --dev-client
+```
+
+Escaneie o código QR com a câmera do seu dispositivo para conectar.
+
+<ArticleSection name="Instalar uma Carteira" id="install-wallet" level="h2" />
+
+Instale um app de carteira que suporta MWA:
+
+**Phantom**: [play.google.com/store/apps/details?id=app.phantom](https://play.google.com/store/apps/details?id=app.phantom)
+
+**Solflare**: [play.google.com/store/apps/details?id=com.solflare.mobile](https://play.google.com/store/apps/details?id=com.solflare.mobile)
+
+Após instalar:
+1. Crie ou importe uma carteira
+2. Mude para Devnet (Configurações → Configurações do Desenvolvedor → Devnet)
+3. Obtenha SOL de devnet de uma faucet
+
+<ArticleSection name="Obtendo SOL de Devnet" id="devnet-sol" level="h2" />
+
+Financie sua carteira para testes:
+
+**Web Faucet**: [faucet.solana.com](https://faucet.solana.com)
+
+**CLI**:
+```shellscript
+solana airdrop 2 YOUR_WALLET_ADDRESS --url devnet
+```
+
+**Programaticamente** (do seu app):
+```typescript
+const connection = new Connection('https://api.devnet.solana.com');
+const signature = await connection.requestAirdrop(
+  walletPublicKey,
+  2 * LAMPORTS_PER_SOL
+);
+await connection.confirmTransaction(signature);
+```
+
+<ArticleSection name="Testando a Conexão" id="testing-connection" level="h2" />
+
+Crie uma tela de teste mínima:
+
+```typescript
+// TestScreen.tsx
+import React, { useState } from 'react';
+import { View, Text, Button, StyleSheet, ScrollView } from 'react-native';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { PublicKey } from '@solana/web3.js';
+import { toByteArray } from 'react-native-quick-base64';
+
+const APP_IDENTITY = {
+  name: 'MWA Test',
+  uri: 'https://test.app',
+  icon: 'favicon.ico',
+};
+
+export function TestScreen() {
+  const [logs, setLogs] = useState<string[]>([]);
+
+  const log = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs((prev) => [...prev, `[${timestamp}] ${message}`]);
+  };
+
+  const testConnect = async () => {
+    log('Iniciando transact...');
+    
+    try {
+      await transact(async (wallet) => {
+        log('Sessão estabelecida');
+        
+        const result = await wallet.authorize({
+          identity: APP_IDENTITY,
+          chain: 'solana:devnet',
+        });
+        
+        const address = new PublicKey(
+          toByteArray(result.accounts[0].address)
+        );
+        
+        log(`Autorizado: ${address.toBase58()}`);
+        log(`Auth token: ${result.auth_token.slice(0, 20)}...`);
+        log(`Contas: ${result.accounts.length}`);
+      });
+      
+      log('Sessão encerrada com sucesso');
+    } catch (error) {
+      log(`ERRO: ${error}`);
+    }
+  };
+
+  const clearLogs = () => setLogs([]);
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Teste de Conexão MWA</Text>
+      
+      <View style={styles.buttons}>
+        <Button title="Testar Conexão" onPress={testConnect} />
+        <Button title="Limpar Logs" onPress={clearLogs} />
+      </View>
+      
+      <ScrollView style={styles.logContainer}>
+        {logs.map((log, index) => (
+          <Text key={index} style={styles.log}>{log}</Text>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 16 },
+  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 16 },
+  buttons: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  logContainer: { flex: 1, backgroundColor: '#1a1a1a', padding: 8, borderRadius: 8 },
+  log: { color: '#0f0', fontFamily: 'monospace', fontSize: 12, marginBottom: 4 },
+});
+```
+
+Quando você tocar em "Testar Conexão":
+1. Seu app abre a carteira
+2. A carteira mostra o prompt de autorização
+3. Você aprova
+4. O controle retorna ao seu app
+5. Os logs mostram o resultado
+
+<ArticleSection name="Dicas de Depuração" id="debugging" level="h2" />
+
+### Ver Logs
+
+Use `adb logcat` filtrado para React Native:
+
+```shellscript
+adb logcat *:S ReactNative:V ReactNativeJS:V
+```
+
+Ou use Flipper para uma interface mais agradável:
+
+```shellscript
+npx react-native-flipper
+```
+
+### Problemas Comuns
+
+**"Nenhuma carteira instalada encontrada"**
+- Verifique se Phantom/Solflare está instalado
+- Verifique se o app da carteira é a versão correta do MWA
+
+**"Timeout da sessão"**
+- A carteira ficou em segundo plano por muito tempo
+- O Android encerrou o processo da carteira
+- Tente manter a carteira em primeiro plano
+
+**"Autorização falhou" imediatamente**
+- Seu auth token está desatualizado
+- Limpe o token em cache e tente novamente
+- Verifique se o URI de identidade corresponde ao seu app
+
+**App crasha no transact()**
+- Polyfills ausentes (verifique a ordem do arquivo de entrada)
+- Metro bundler precisa reiniciar
+- Execute `npx react-native start --reset-cache`
+
+**Assinatura de transação falha mas sem erro**
+- Verifique se a carteira está na devnet (se testando com devnet)
+- Verifique se a transação é válida (simule primeiro)
+- Verifique se há SOL suficiente para as taxas
+
+### Inspecionar Requisições de Rede
+
+Para depuração RPC, registre todas as requisições Solana:
+
+```typescript
+// Patch Connection para logging (apenas desenvolvimento)
+if (__DEV__) {
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options) => {
+    if (typeof url === 'string' && url.includes('solana')) {
+      console.log('[RPC]', options?.body);
+    }
+    return originalFetch(url, options);
+  };
+}
+```
+
+<ArticleSection name="Hot Reloading" id="hot-reload" level="h2" />
+
+O hot reload do Metro funciona com desenvolvimento MWA:
+
+1. Faça alterações no código
+2. Salve o arquivo
+3. O app recarrega automaticamente
+4. Teste o fluxo MWA novamente
+
+Para iteração mais rápida, crie uma conexão de carteira de teste no topo da sua tela de teste e mantenha o logging habilitado.
+
+**Ressalva do Fast Refresh**: Se você alterar o componente que chama `transact()`, pode precisar reiniciar o app para um estado limpo.
+
+<ArticleSection name="Testando Assinatura de Transações" id="test-transactions" level="h2" />
+
+Adicione um teste de transação à sua tela de debug:
+
+```typescript
+import { 
+  Connection, 
+  PublicKey, 
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+} from '@solana/web3.js';
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+async function testSendTransaction(log: (msg: string) => void) {
+  log('Construindo transação...');
+  
+  await transact(async (wallet) => {
+    const result = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const publicKey = new PublicKey(
+      toByteArray(result.accounts[0].address)
+    );
+    
+    log(`Usando conta: ${publicKey.toBase58()}`);
+    
+    // Verificar saldo
+    const balance = await connection.getBalance(publicKey);
+    log(`Saldo: ${balance / 1e9} SOL`);
+    
+    if (balance < 0.001 * 1e9) {
+      log('ERRO: Saldo insuficiente para teste');
+      return;
+    }
+    
+    // Construir transação (enviar 0.001 SOL para si mesmo)
+    const { blockhash } = await connection.getLatestBlockhash();
+    
+    const transaction = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: publicKey,
+        recentBlockhash: blockhash,
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: publicKey, // Enviar para si mesmo
+            lamports: 0.001 * 1e9,
+          }),
+        ],
+      }).compileToV0Message()
+    );
+    
+    log('Assinando transação...');
+    
+    const [signature] = await wallet.signAndSendTransactions({
+      transactions: [transaction],
+    });
+    
+    log(`Assinatura: ${signature}`);
+    
+    // Confirmar
+    log('Aguardando confirmação...');
+    const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+    
+    if (confirmation.value.err) {
+      log(`ERRO: ${JSON.stringify(confirmation.value.err)}`);
+    } else {
+      log('Transação confirmada!');
+    }
+  });
+}
+```
+
+<ArticleSection name="Testando Assinatura de Mensagens" id="test-messages" level="h2" />
+
+Teste a assinatura de mensagens separadamente:
+
+```typescript
+import nacl from 'tweetnacl';
+
+async function testSignMessage(log: (msg: string) => void) {
+  const testMessage = 'Olá do teste MWA!';
+  const messageBytes = new TextEncoder().encode(testMessage);
+  
+  log(`Assinando mensagem: "${testMessage}"`);
+  
+  await transact(async (wallet) => {
+    const result = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    const publicKey = new PublicKey(
+      toByteArray(result.accounts[0].address)
+    );
+    
+    const signResult = await wallet.signMessages({
+      addresses: [result.accounts[0].address],
+      payloads: [messageBytes],
+    });
+    
+    const signature = signResult[0];
+    log(`Assinatura: ${Buffer.from(signature).toString('hex').slice(0, 40)}...`);
+    
+    // Verificar
+    const isValid = nacl.sign.detached.verify(
+      messageBytes,
+      signature,
+      publicKey.toBytes()
+    );
+    
+    log(`Verificação: ${isValid ? 'APROVADO ✓' : 'FALHOU ✗'}`);
+  });
+}
+```
+
+<ArticleSection name="Teste Multi-Device" id="multi-device" level="h2" />
+
+Se você tem múltiplos dispositivos Android:
+
+```shellscript
+# Listar dispositivos
+adb devices
+
+# Executar em dispositivo específico
+npx react-native run-android --deviceId DEVICE_SERIAL
+```
+
+Teste com diferentes carteiras em diferentes dispositivos para garantir compatibilidade:
+- Phantom (mais popular)
+- Solflare (bom suporte MWA)
+- Backpack (se disponível)
+
+<ArticleSection name="Teste de Build de Release" id="release-testing" level="h2" />
+
+Teste builds de release antes de publicar:
+
+```shellscript
+# Construir APK de release
+cd android
+./gradlew assembleRelease
+
+# Instalar no dispositivo
+adb install app/build/outputs/apk/release/app-release.apk
+```
+
+Para Expo:
+
+```shellscript
+npx eas build --platform android --profile preview
+```
+
+Builds de release podem se comportar diferente:
+- Sem logs de debug
+- Caminhos de código otimizados
+- Mensagens de erro diferentes
+
+Sempre teste fluxos MWA em modo release antes de publicar.
+
+<ArticleSection name="Checklist" id="checklist" level="h2" />
+
+Antes de considerar a integração MWA completa:
+
+- [ ] Fluxo de conexão funciona com Phantom
+- [ ] Fluxo de conexão funciona com Solflare
+- [ ] Assinatura de transação tem sucesso
+- [ ] Assinatura de mensagem tem sucesso
+- [ ] Tratamento de erros mostra mensagens amigáveis ao usuário
+- [ ] Caso "nenhuma carteira instalada" é tratado
+- [ ] Cancelamento do usuário não mostra erro
+- [ ] Cache de auth token funciona (reconexão é rápida)
+- [ ] Funciona em build de release
+- [ ] Funciona em dispositivo Android 8.0 (API 26) se suportar telefones mais antigos
+
+Com seu dApp testado em hardware real, você está pronto para construir uma aplicação completa. A lição final reúne tudo com um projeto capstone.

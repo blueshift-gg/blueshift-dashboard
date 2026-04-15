@@ -1,0 +1,164 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Middleware de Entrypoint
+
+Pinocchio é incrível para construir programas Solana, mas usar a macro `entrypoint!` do Pinocchio significa que sua lógica de programa inteira será gerada dentro de uma única função. Isso pode tornar seu código difícil de ler e manter à medida que seu programa cresce.
+
+Ao usar a macro `lazy_program_entrypoint!` do Pinocchio, você obtém muito mais flexibilidade na forma como estrutura seu programa.
+
+<ArticleSection name="O Problema" id="the-problem" level="h2" />
+
+Vamos dar uma olhada em como é a macro `entrypoint!` padrão do Pinocchio:
+
+```rust
+use pinocchio::{
+    account_info::AccountInfo,
+    entrypoint,
+    entrypoint::ProgramResult,
+    instruction::{AccountMeta, InstructionData, Signer},
+    msg,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
+
+entrypoint!(process_instruction);
+
+fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    // processar instrução
+
+    Ok(())
+}
+```
+
+Isso funciona perfeitamente para programas simples com uma ou duas instruções. Mas quando seu programa cresce para dezenas de instruções, ficar encapsulando toda essa lógica dentro de uma única função torna-se difícil de gerenciar.
+
+Enquanto isso, a alternativa atual para muitos desenvolvedores é escrever o entrypoint bruto (raw) e fazer o roteamento manual, o que é propenso a erros.
+
+<ArticleSection name="A Solução" id="the-solution" level="h2" />
+
+A macro `lazy_program_entrypoint!` do Pinocchio resolve isso retornando um `InstructionContext` que é apenas um wrapper em volta dos argumentos `program_id`, `accounts` e `instruction_data`, permitindo que você construa seu programa de forma mais modular.
+
+Vejamos um exemplo:
+
+```rust
+use pinocchio::{
+    account_info::AccountInfo,
+    entrypoint::InstructionContext,
+    lazy_program_entrypoint,
+    no_allocator,
+    nostd_panic_handler,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
+
+lazy_program_entrypoint!(process_instruction);
+
+nostd_panic_handler!();
+no_allocator!();
+
+pub fn process_instruction(context: InstructionContext) -> ProgramResult {
+    // Sua lógica de programa aqui
+
+    Ok(())
+}
+```
+
+Isso é muito mais limpo e fácil de gerenciar! O `InstructionContext` fornece métodos convenientes para acessar os mesmos argumentos de que você precisa:
+
+```rust
+pub fn process_instruction(context: InstructionContext) -> ProgramResult {
+    let program_id: &Pubkey = context.program_id();
+    let accounts: &[AccountInfo] = context.accounts();
+    let instruction_data: &[u8] = context.instruction_data();
+
+    // processar instrução
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Roteamento de Instruções" id="instruction-routing" level="h2" />
+
+O `InstructionContext` facilita o roteamento de instruções para diferentes handlers com base no discriminador de instrução:
+
+```rust
+pub fn process_instruction(context: InstructionContext) -> ProgramResult {
+    let instruction_data = context.instruction_data();
+
+    // Obter o discriminador de instrução (primeiro byte)
+    let discriminator = instruction_data.first().ok_or(ProgramError::InvalidInstructionData)?;
+
+    match discriminator {
+        0 => instructions::Initialize::try_from(context)?.execute(),
+        1 => instructions::Update::try_from(context)?.execute(),
+        2 => instructions::Close::try_from(context)?.execute(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+<ArticleSection name="Benefícios" id="benefits" level="h2" />
+
+Usar `lazy_program_entrypoint!` fornece vários benefícios:
+
+- **Modularidade**: Cada instrução pode ser sua própria struct com seu próprio handler
+- **Legibilidade**: Fácil ver todas as instruções suportadas em um único lugar
+- **Testabilidade**: Instruções individuais podem ser testadas isoladamente
+- **Segurança**: Melhor separação de preocupações e validação de estado
+- **Eficiência**: Tratamento de argumentos sob demanda com baixa sobrecarga
+
+<ArticleSection name="Padrão de Struct de Instrução" id="instruction-struct-pattern" level="h2" />
+
+Com o middleware de entrypoint, é comum definir instruções como structs que implementam a trait `TryFrom<InstructionContext>`:
+
+```rust
+use pinocchio::{
+    account_info::AccountInfo,
+    entrypoint::InstructionContext,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
+
+pub struct Initialize<'a> {
+    pub authority: &'a AccountInfo<'a>,
+    pub pda_account: &'a AccountInfo<'a>,
+    pub system_program: &'a AccountInfo<'a>,
+}
+
+impl<'a> TryFrom<InstructionContext<'a>> for Initialize<'a> {
+    type Error = ProgramError;
+
+    fn try_from(context: InstructionContext<'a>) -> Result<Self, Self::Error> {
+        let accounts = context.accounts();
+
+        // Validar accounts
+        let authority = accounts.get(0).ok_or(ProgramError::NotEnoughAccountKeys)?;
+        let pda_account = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+        let system_program = accounts.get(2).ok_or(ProgramError::NotEnoughAccountKeys)?;
+
+        // Verificações de segurança
+        require!(authority.is_signer(), ProgramError::MissingRequiredSignature);
+        require!(system_program.is_owned_by(&pinocchio_system::ID), ProgramError::InvalidProgramId);
+
+        Ok(Self {
+            authority,
+            pda_account,
+            system_program,
+        })
+    }
+}
+
+impl<'a> Initialize<'a> {
+    pub fn execute(&self) -> ProgramResult {
+        // Lógica da instrução
+
+        Ok(())
+    }
+}
+```
+
+Isso cria um padrão limpo e previsível para definir instruções que é fácil de ler, testar e manter.

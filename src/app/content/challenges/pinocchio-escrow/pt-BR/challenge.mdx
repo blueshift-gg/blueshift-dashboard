@@ -1,0 +1,204 @@
+import ArticleSection from "../../../../components/ArticleSection/ArticleSection";
+
+# O Escrow
+
+![Desafio Pinocchio Escrow](/graphics/challenge-banners/pinocchio-escrow.png)
+
+Um escrow é uma poderosa ferramenta financeira que permite trocas seguras de tokens entre duas partes.
+
+Pense nisso como um cofre digital onde um usuário pode travar o Token A, aguardando que outro usuário deposite o Token B antes que a troca seja concluída.
+
+Isso cria um ambiente trustless onde nenhuma das partes precisa se preocupar com a outra desistindo do negócio.
+
+Neste desafio, vamos implementar este conceito através de três instruções simples mas poderosas:
+- **Make**: O maker (primeiro usuário) define os termos da troca e deposita a quantidade acordada de Token A em um cofre seguro. Isso é como colocar seu item no cofre e definir os termos da troca.
+- **Take**: O taker (segundo usuário) aceita a oferta transferindo a quantidade prometida de Token B para o maker e, em troca, recebe o Token A travado. Este é o momento em que ambas as partes completam o seu lado do negócio.
+- **Refund**: Se o maker mudar de ideia ou nenhum taker adequado for encontrado, ele pode cancelar a oferta e recuperar seu Token A. Isso é como pegar seu item de volta do cofre se o negócio não der certo.
+
+**Nota**: Se você não está familiarizado com o Pinocchio, deve começar lendo a [Introdução ao Pinocchio](/pt-BR/courses/introduction-to-pinocchio) para se familiarizar com os conceitos principais que vamos usar neste programa.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Vamos começar criando um novo ambiente Rust:
+
+```bash
+# criar workspace
+cargo new blueshift_escrow --lib --edition 2021
+cd blueshift_escrow
+```
+
+Adicione pinocchio, pinocchio-system, pinocchio-token e pinocchio-associated-token:
+
+```bash
+cargo add pinocchio pinocchio-system pinocchio-token pinocchio-associated-token-account
+```
+
+Declare os tipos de crate no `Cargo.toml` para gerar artefatos de deploy em `target/deploy`:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+Agora você está pronto para escrever seu programa de escrow.
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Desta vez vamos dividir o programa em pequenos módulos focados em vez de colocar tudo no `lib.rs`. A árvore de pastas ficará mais ou menos assim:
+
+```
+src
+├── instructions
+│       ├── make.rs
+│       ├── helpers.rs
+│       ├── mod.rs
+│       ├── refund.rs
+│       └── take.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+O entrypoint, que vive no `lib.rs`, é muito parecido com o que fizemos nas últimas lições, então vamos passar por ele rapidamente:
+
+```rust
+use pinocchio::{account_info::AccountInfo, entrypoint, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+entrypoint!(process_instruction);
+
+pub mod instructions;
+pub use instructions::*;
+
+pub mod state;
+pub use state::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Make::DISCRIMINATOR, data)) => Make::try_from((data, accounts))?.process(),
+        Some((Take::DISCRIMINATOR, _)) => Take::try_from(accounts)?.process(),
+        Some((Refund::DISCRIMINATOR, _)) => Refund::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData)
+    }
+}
+```
+
+<ArticleSection name="State" id="state" level="h2" />
+
+Vamos agora para o `state.rs` onde ficam todos os dados do nosso `Escrow`. Vamos dividir isso em duas partes: a definição da struct e sua implementação.
+
+Primeiro, vamos olhar a definição da struct:
+
+```rust
+use pinocchio::{program_error::ProgramError, pubkey::Pubkey};
+use core::mem::size_of;
+
+#[repr(C)]
+pub struct Escrow {
+    pub seed: u64,        // Seed aleatória para derivação do PDA
+    pub maker: Pubkey,    // Criador do escrow
+    pub mint_a: Pubkey,   // Token sendo depositado
+    pub mint_b: Pubkey,   // Token sendo solicitado
+    pub receive: u64,     // Quantidade de token B desejada
+    pub bump: [u8;1]      // Seed de bump do PDA
+}
+```
+
+O atributo `#[repr(C)]` garante que nossa struct tenha um layout de memória previsível, o que é crucial para dados on-chain. Cada campo serve a um propósito específico:
+- **seed**: Um número aleatório que permite que um maker crie múltiplos escrows com o mesmo par de tokens
+- **maker**: O endereço da wallet que criou o escrow e receberá os tokens
+- **mint_a**: O endereço da SPL token mint para o token sendo depositado
+- **mint_b**: O endereço da SPL token mint para o token sendo solicitado
+- **receive**: A quantidade exata de token B que o maker deseja receber
+- **bump**: Um único byte usado na derivação do PDA para garantir que o endereço não esteja na curva Ed25519
+
+Agora, vamos olhar a implementação com todos os seus métodos helper:
+
+```rust
+impl Escrow {
+    pub const LEN: usize = size_of::<u64>() 
+    + size_of::<Pubkey>() 
+    + size_of::<Pubkey>() 
+    + size_of::<Pubkey>() 
+    + size_of::<u64>()
+    + size_of::<[u8;1]>();
+
+    #[inline(always)]
+    pub fn load_mut(bytes: &mut [u8]) -> Result<&mut Self, ProgramError> {
+        if bytes.len() != Escrow::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &mut *core::mem::transmute::<*mut u8, *mut Self>(bytes.as_mut_ptr()) })
+    }
+
+    #[inline(always)]
+    pub fn load(bytes: &[u8]) -> Result<&Self, ProgramError> {
+        if bytes.len() != Escrow::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &*core::mem::transmute::<*const u8, *const Self>(bytes.as_ptr()) })
+    }
+
+    #[inline(always)]
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
+    #[inline(always)]
+    pub fn set_maker(&mut self, maker: Pubkey) {
+        self.maker = maker;
+    }
+
+    #[inline(always)]
+    pub fn set_mint_a(&mut self, mint_a: Pubkey) {
+        self.mint_a = mint_a;
+    }
+
+    #[inline(always)]
+    pub fn set_mint_b(&mut self, mint_b: Pubkey) {
+        self.mint_b = mint_b;
+    }
+
+    #[inline(always)]
+    pub fn set_receive(&mut self, receive: u64) {
+        self.receive = receive;
+    }
+
+    #[inline(always)]
+    pub fn set_bump(&mut self, bump: [u8;1]) {
+        self.bump = bump;
+    }
+
+    #[inline(always)]
+    pub fn set_inner(&mut self, seed: u64, maker: Pubkey, mint_a: Pubkey, mint_b: Pubkey, receive: u64, bump: [u8;1]) {
+        self.seed = seed;
+        self.maker = maker;
+        self.mint_a = mint_a;
+        self.mint_b = mint_b;
+        self.receive = receive;
+        self.bump = bump;
+    }
+}
+```
+
+A implementação fornece vários recursos importantes:
+1. **Cálculo Exato de Tamanho**: `LEN` calcula precisamente o tamanho da conta somando o tamanho de cada campo
+2. **Carregamento Seguro**: `load` fornece uma forma segura de carregar e validar dados do escrow
+3. **Otimizações de Desempenho**:
+   - `#[inline(always)]` nos getters para desempenho máximo
+   - Métodos unsafe para quando sabemos que o borrow é seguro
+   - Definição eficiente de campos com `set_inner`
+4. **Segurança de Memória**: Validação adequada do comprimento e propriedade dos dados da conta
+5. **Documentação**: Comentários claros explicando o propósito e considerações de segurança de cada método
+
+Esta implementação garante que o estado do nosso escrow seja seguro e eficiente, com validação adequada e otimizações de desempenho onde apropriado.

@@ -1,0 +1,94 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão CPI Guard
+
+A extensão `CpiGuard` é uma extensão de account de `Token` que proíbe certas ações dentro de invocações entre programas (CPIs), protegendo usuários de programas maliciosos que possam tentar manipular suas accounts de token sem consentimento explícito.
+
+<ArticleSection name="Inicializando a Account de Token" id="initializing-the-token-account" level="h2" />
+
+Para inicializar a extensão `CpiGuard` em uma account de `Token`, vamos precisar da função `enableCpiGuard()`.
+
+Veja como criar um token com a extensão CPI Guard:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeAccountInstruction,
+    createEnableCpiGuardInstruction,
+    getAccountLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const tokenAccount = Keypair.generate();
+
+// Calcular o tamanho necessário para uma account de Token com a extensão CPI Guard
+const accountLen = getAccountLen([ExtensionType.CpiGuard]);
+
+// Calcular lamports mínimos necessários para isenção de renda
+const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
+
+// Criar a account com o tamanho e owner corretos
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: tokenAccount.publicKey,
+    space: accountLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Inicializar a extensão CPI Guard
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount.publicKey,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Inicializar a própria account de Token
+const initializeAccountInstruction = createInitializeAccountInstruction(
+    tokenAccount.publicKey,
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeAccountInstruction,
+    enableCpiGuardInstruction
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+
+console.log(`Accounts de token criadas! Confira sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Desabilitando o CPI Guard" id="disabling-the-cpi-guard" level="h2" />
+
+Quando queremos habilitar alguns dos comportamentos que são bloqueados pelo CPI Guard, podemos facilmente desabilitar a proteção usando a instrução `disableCpiGuard` assim:
+
+```ts
+const disableCpiGuardInstruction = createDisableCpiGuardInstruction(
+    tokenAccount,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```
+
+E quando terminamos e queremos readicionar a camada de segurança, podemos reabilitar usando a instrução `enableCpiGuard` assim:
+
+```ts
+const enableCpiGuardInstruction = createEnableCpiGuardInstruction(
+    tokenAccount,
+    keypair.publicKey,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+```

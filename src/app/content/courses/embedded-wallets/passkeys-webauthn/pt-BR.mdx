@@ -1,0 +1,373 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Passkeys e WebAuthn](/graphics/course-banners/embedded-wallets.png)
+
+# Passkeys e WebAuthn
+
+Passkeys representam uma mudança fundamental na autenticação. A chave privada nunca sai do hardware seguro do seu dispositivo. FaceID, impressão digital ou PIN controlam o acesso. Phishing torna-se matematicamente impossível porque as credenciais estão vinculadas a domínios específicos. E crucialmente para blockchain, passkeys usam secp256r1, a mesma curva que a Solana agora suporta nativamente.
+
+Isso não é uma solução alternativa ou uma camada de adaptação. Assinaturas de passkey podem autorizar transações Solana diretamente.
+
+<ArticleSection name="O Problema com Senhas e Seeds" id="password-problem" level="h2" />
+
+A autenticação tradicional sofre de uma incompatibilidade fundamental: segredos devem ser memoráveis e seguros ao mesmo tempo.
+
+**Senhas** são memoráveis, mas fracas:
+- Usuários as reutilizam entre serviços
+- Phishing as extrai através de engano
+- Vazamentos de banco de dados expõem milhões de uma vez
+- Requisitos de complexidade levam a padrões previsíveis
+
+**Frases seed** são seguras, mas incontroláveis:
+- 12-24 palavras aleatórias excedem a capacidade de memória humana
+- Armazenamento físico cria risco de roubo
+- Armazenamento digital cria risco de vazamento
+- Um erro significa perda permanente e irreversível
+
+Ambas as abordagens pedem que humanos sejam guardiões perfeitos de segredos que devem lembrar regularmente. Humanos não foram feitos para isso.
+
+<ArticleSection name="Arquitetura WebAuthn" id="webauthn-architecture" level="h2" />
+
+WebAuthn (Web Authentication) adota uma abordagem diferente: mover segredos para hardware de segurança dedicado e nunca deixá-los sair.
+
+### O Autenticador
+
+Todo smartphone moderno contém um secure enclave (iOS) ou Trusted Execution Environment (TEE) (Android). Este é um hardware isolado projetado especificamente para manter chaves criptográficas:
+
+- **Isolamento físico**: Processador separado, memória separada
+- **Sem extração**: Chaves não podem ser lidas, apenas usadas para assinatura
+- **Controle biométrico**: Operações requerem verificação de presença do usuário
+- **Resistência a adulteração**: Ataques físicos destroem os dados protegidos
+
+Quando você cria uma passkey, o secure enclave gera um par de chaves. A chave privada nasce dentro do enclave e permanece lá permanentemente. Apenas assinaturas saem.
+
+### O Fluxo do Protocolo
+
+A autenticação WebAuthn envolve três partes:
+
+```
++-------------+        +------------------+        +----------------+
+|  Relying    | --1--> |  Dispositivo     | --2--> |  Autenticador  |
+|  Party      |        |  do Usuário      |        |  (HW Seguro)   |
+|  (Servidor) | <--4-- |  (Browser/App)   | <--3-- |                |
++-------------+        +------------------+        +----------------+
+
+1. Servidor envia challenge (bytes aleatórios)
+2. Dispositivo solicita usuário, repassa challenge ao autenticador
+3. Autenticador verifica usuário (biometria), assina o challenge
+4. Dispositivo retorna assinatura e credential ID ao servidor
+```
+
+**Registro** cria uma nova credencial:
+1. Servidor gera um challenge aleatório
+2. Autenticador cria um par de chaves no secure enclave
+3. Chave pública e credential ID são enviados ao servidor
+4. Servidor armazena estes para futura autenticação
+
+**Autenticação** prova a posse:
+1. Servidor envia um challenge
+2. Autenticador assina o challenge com a chave privada armazenada
+3. Servidor verifica a assinatura contra a chave pública armazenada
+
+A chave privada nunca se move. Apenas assinaturas viajam.
+
+### Vinculação de Origem (Origin Binding)
+
+Cada passkey está criptograficamente vinculada a uma origem específica (domínio). Uma passkey criada para `myapp.com` não pode ser usada em `evil-myapp.com`, mesmo que o usuário seja enganado a visitá-la.
+
+Esta vinculação acontece no nível do hardware:
+- O ID da relying party (domínio) é incluído nos dados que são assinados
+- O autenticador impõe esta verificação antes de assinar
+- Nenhuma quantidade de engenharia social pode fazer uma passkey assinar para a origem errada
+
+Ataques de phishing tornam-se estruturalmente impossíveis. Mesmo que um usuário digite sua biometria em um site falso, a passkey simplesmente não produzirá uma assinatura válida para aquele domínio.
+
+<ArticleSection name="A Curva Secp256r1" id="secp256r1-curve" level="h2" />
+
+O WebAuthn padronizou o secp256r1 (também conhecido como P-256 ou prime256v1) por várias razões:
+
+- **Suporte de hardware**: Secure enclaves universalmente o implementam
+- **Aprovação regulatória**: Padrões de segurança do NIST e governamentais o exigem
+- **Testado em combate**: Décadas de uso em produção em TLS, assinatura de código e HSMs
+- **Desempenho**: Implementações otimizadas existem para cada plataforma
+
+### Propriedades Matemáticas
+
+Secp256r1 é uma curva elíptica sobre um corpo primo:
+
+`y² = x³ + ax + b (mod p)`
+
+Onde:
+- `p = 2^256 - 2^224 + 2^192 + 2^96 - 1` (um primo pseudo-Mersenne permitindo redução rápida)
+- `a = -3` (permite operações de ponto otimizadas)
+- `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
+
+A curva fornece aproximadamente 128 bits de segurança. Encontrar uma chave privada a partir de uma chave pública requer resolver o Problema do Logaritmo Discreto em Curvas Elípticas (ECDLP), que não possui algoritmo eficiente conhecido.
+
+### Formato da Assinatura
+
+Assinaturas ECDSA em secp256r1 produzem dois valores:
+- `r`: derivado de um ponto aleatório na curva
+- `s`: combina o hash da mensagem, a chave privada e o valor aleatório
+
+Estes são tipicamente codificados em DER para transporte, embora a concatenação raw `(r, s)` também seja comum.
+
+A equação de verificação da assinatura confirma que apenas alguém conhecedor da chave privada poderia ter produzido `(r, s)` para uma dada mensagem.
+
+<ArticleSection name="Suporte Nativo da Solana" id="solana-native-support" level="h2" />
+
+Historicamente, a Solana suportava apenas assinaturas Ed25519 (a curva usada por carteiras nativas Solana). Assinaturas de passkey não podiam autorizar transações diretamente.
+
+SIMD-0075 mudou isso ao adicionar uma precompilação de verificação de assinatura secp256r1:
+
+```
+Program: Secp256r1SigVerify1111111111111111111111111
+```
+
+Esta precompilação nativa verifica assinaturas secp256r1 eficientemente on-chain, tornando passkeys cidadãs de primeira classe para autenticação na Solana.
+
+### Como Funciona a Verificação
+
+A precompilação aceita dados de instrução contendo:
+- A assinatura com valores `(r, s)`
+- A chave pública (o ponto em secp256r1)
+- A mensagem que foi assinada
+
+A verificação confirma que a relação matemática se mantém. Se passar, o programa on-chain sabe que o dono daquela chave pública autorizou esta mensagem.
+
+### Eficiência de Custo
+
+A verificação por precompilação é dramaticamente mais barata que a verificação equivalente em um smart contract:
+
+| Método | Unidades de Compute | Custo |
+|--------|---------------------|-------|
+| Verificação por precompilação | ~750 CU | Mínimo |
+| Verificação por smart contract | ~150.000+ CU | Significativo |
+
+Esta eficiência torna carteiras controladas por passkey práticas para aplicações reais.
+
+<ArticleSection name="Carteiras Inteligentes com Passkeys" id="smart-wallets" level="h2" />
+
+O suporte nativo a secp256r1 possibilita um padrão poderoso: Program Derived Addresses (PDAs) controladas por assinaturas de passkey.
+
+### A Arquitetura
+
+Em vez de uma carteira tradicional com par de chaves, a "carteira" torna-se uma PDA derivada da chave pública da passkey:
+
+```
++----------------+     +-------------------+     +-----------------+
+|  Dispositivo   |     |  Programa Solana  |     |  Smart Wallet   |
+|  do Usuário    |     |  (Verificador)    |     |  (PDA)          |
+|  (Passkey)     |     |                   |     |                 |
++----------------+     +-------------------+     +-----------------+
+        |                      |                        |
+        |  1. Assinar challenge |                        |
+        +--------------------->|                        |
+        |                      |  2. Verificar assinatura|
+        |                      |     com precompile      |
+        |                      |     secp256r1           |
+        |                      |                        |
+        |                      |  3. Se válida, executar |
+        |                      |     instrução em        |
+        |                      |     nome da PDA         |
+        |                      +----------------------->|
+```
+
+### Propriedades de Segurança
+
+Esta arquitetura fornece garantias únicas:
+
+**Extração de chave impossível**: A chave privada da passkey não pode sair do secure enclave. Não há frase seed para roubar, nem arquivo criptografado para quebrar.
+
+**Vinculação ao hardware**: A passkey está vinculada ao hardware físico. Clonagem requer acesso físico e superação de medidas de segurança do hardware.
+
+**Lógica programável**: O programa on-chain pode impor políticas:
+- Limites de gastos por transação
+- Restrições baseadas em tempo
+- Requisitos de múltiplas passkeys para transferências grandes
+- Destinos permitidos (whitelist)
+
+### O Fluxo de Assinatura
+
+Quando um usuário deseja executar uma transação:
+
+1. **Geração de challenge**: O app cria um challenge contendo os detalhes da transação
+2. **Verificação do usuário**: O dispositivo solicita biometria (FaceID, impressão digital)
+3. **Assinatura com passkey**: O secure enclave assina o challenge com a chave secp256r1
+4. **Envio da transação**: A assinatura é incluída na transação Solana
+5. **Verificação on-chain**: O programa usa a precompilação secp256r1 para verificar
+6. **Execução**: Se válida, o programa executa instruções em nome da PDA
+
+Todo o fluxo parece "Autorizar com FaceID" para o usuário.
+
+<ArticleSection name="Estruturas de Dados WebAuthn" id="webauthn-data" level="h2" />
+
+Entender o que as passkeys realmente assinam é crucial para construir verificação on-chain.
+
+### Dados do Autenticador
+
+Toda assinatura de passkey inclui dados do autenticador:
+
+```
++------------+------------+-------------+-------------------+
+|   rpIdHash |   flags    |  signCount  |  extensions...    |
+|  (32 bytes)|  (1 byte)  |  (4 bytes)  |  (variável)       |
++------------+------------+-------------+-------------------+
+```
+
+- **rpIdHash**: SHA-256 do ID da relying party (vinculação de origem)
+- **flags**: Flags de bits indicando presença do usuário, verificação do usuário, etc.
+- **signCount**: Contador que incrementa a cada uso (proteção contra replay)
+
+### JSON de Dados do Cliente
+
+O cliente (browser/app) também contribui com dados:
+
+```json
+{
+  "type": "webauthn.get",
+  "challenge": "base64url-encoded-challenge",
+  "origin": "https://myapp.com",
+  "crossOrigin": false
+}
+```
+
+### O Que É Assinado
+
+A passkey assina a concatenação:
+
+```
+signedData = authenticatorData || SHA256(clientDataJSON)
+```
+
+Isso significa que a verificação on-chain deve:
+1. Reconstruir os dados do autenticador
+2. Hash do JSON de dados do cliente
+3. Concatenar e verificar a assinatura
+
+O challenge (seus dados de transação) está embutido no JSON de dados do cliente, vinculando a assinatura da passkey à sua transação específica.
+
+<ArticleSection name="Considerações de Implementação" id="implementation" level="h2" />
+
+Construir com passkeys requer entender várias restrições práticas.
+
+### Suporte de Plataforma
+
+| Plataforma | Suporte a Passkey | Hardware Seguro |
+|------------|-------------------|-----------------|
+| iOS 16+ | Completo | Secure Enclave |
+| Android 9+ | Completo | TEE/StrongBox |
+| macOS 13+ | Completo | Secure Enclave |
+| Windows 11+ | Completo | TPM |
+| Linux | Limitado | Variável |
+
+Dispositivos móveis fornecem a experiência de passkey mais consistente.
+
+### Sincronização e Portabilidade
+
+Passkeys modernas podem sincronizar entre dispositivos através de ecossistemas de plataforma:
+
+- **Apple**: iCloud Keychain sincroniza passkeys entre dispositivos Apple
+- **Google**: Google Password Manager sincroniza entre Android/Chrome
+- **Multi-plataforma**: A FIDO Alliance está padronizando portabilidade entre ecossistemas
+
+Isso significa que perder um dispositivo não significa perder acesso, mas também significa que a segurança da passkey herda as propriedades de segurança da conta na nuvem.
+
+### Attestation
+
+Passkeys podem incluir attestation: prova criptográfica de qual hardware as criou. Isso permite que servidores verifiquem:
+
+- A passkey foi criada em hardware seguro genuíno
+- A marca/modelo específico do autenticador
+- O nível de certificação de segurança
+
+Para aplicações de alta segurança, a verificação de attestation pode rejeitar passkeys de emuladores ou dispositivos comprometidos.
+
+### Experiência do Usuário
+
+A UX de passkey é significativamente mais suave que fluxos de carteira tradicionais:
+
+**Carteira tradicional:**
+1. Baixar app de carteira
+2. Criar conta
+3. Anotar 24 palavras
+4. Confirmar frase seed
+5. Retornar ao app original
+6. Conectar carteira
+7. Aprovar conexão
+
+**Carteira com passkey:**
+1. Tocar em "Criar Conta"
+2. Verificar com FaceID
+3. Pronto
+
+A complexidade está oculta no hardware, não empurrada para os usuários.
+
+<ArticleSection name="Implementações de Provedores" id="providers" level="h2" />
+
+Provedores de carteiras embarcadas usam passkeys de forma diferente:
+
+**LazorKit** é totalmente nativa de passkey. Toda smart wallet é uma PDA controlada por uma passkey secp256r1. Não há MPC, não há divisão de chaves. A passkey É a autenticação.
+
+**Turnkey** usa passkeys como mecanismo de autenticação para acessar chaves armazenadas em seus HSMs. A passkey prova que você está autorizado; o enclave da Turnkey faz a assinatura Solana real.
+
+**Privy** e **Dynamic** suportam passkeys como uma opção de autenticação ao lado de email, telefone e login social. A passkey autentica no sistema MPC deles, que então produz assinaturas Solana.
+
+**Para** usa passkeys para autenticação, com a carteira subjacente protegida por distribuição de chaves MPC.
+
+A distinção é importante:
+- **Nativa de passkey** (LazorKit): A assinatura da passkey É a autorização blockchain
+- **Autenticada por passkey** (outras): A passkey prova identidade para um sistema que então autoriza
+
+Ambas são arquiteturas válidas com diferentes tradeoffs de segurança e UX.
+
+<ArticleSection name="Considerações de Segurança" id="security" level="h2" />
+
+Passkeys melhoram dramaticamente a segurança em relação a senhas e frases seed, mas não estão isentas de considerações.
+
+### O Que Passkeys Protegem Contra
+
+- **Phishing**: A vinculação de origem torna sites falsos matematicamente incapazes de capturar credenciais
+- **Vazamentos de banco de dados**: Servidores armazenam apenas chaves públicas; nada útil para roubar
+- **Keyloggers**: Nenhum segredo é digitado
+- **Ataques de replay**: Contadores de assinatura impedem reutilização de assinaturas antigas
+- **Roubo remoto**: Chaves privadas não podem ser extraídas, mesmo com acesso total ao dispositivo
+
+### O Que Passkeys Não Resolvem
+
+- **Comprometimento físico do dispositivo**: Alguém com seu dispositivo E biometria pode autenticar
+- **Comprometimento da conta na nuvem**: Passkeys sincronizadas herdam a segurança da conta na nuvem
+- **Aplicações maliciosas**: Um app comprometido pode solicitar assinaturas em dados maliciosos
+- **Engano do usuário**: Usuários ainda podem ser enganados a assinar transações prejudiciais
+
+### Planejamento de Recuperação
+
+Credenciais vinculadas ao hardware criam desafios de recuperação:
+
+- E se o usuário perder todos os dispositivos com sua passkey?
+- E se o secure enclave apresentar mau funcionamento?
+- E se a sincronização na nuvem estiver desabilitada ou indisponível?
+
+Programas de smart wallet podem implementar mecanismos de backup:
+- Múltiplas passkeys registradas (segundo dispositivo)
+- Recuperação com bloqueio temporal para um endereço de backup
+- Recuperação social com passkeys de guardiões
+
+A flexibilidade do programa on-chain permite opções de recuperação que frases seed puras não podem oferecer.
+
+<ArticleSection name="Resumo Conceitual" id="summary" level="h2" />
+
+Passkeys movem a segurança de autenticação da disciplina humana para hardware dedicado:
+
+1. **Secure enclaves** mantêm chaves privadas em hardware isolado e resistente a adulteração
+2. **Biometria** controla acesso sem segredos transmissíveis
+3. **Vinculação de origem** torna phishing matematicamente impossível
+4. Assinaturas **secp256r1** agora são nativas da Solana através da precompilação
+
+Para carteiras embarcadas, isso permite:
+- **Carteiras nativas de passkey**: PDAs diretamente controladas por assinaturas de passkey
+- **Carteiras autenticadas por passkey**: Passkeys provando identidade para sistemas MPC ou custodiais
+
+A experiência do usuário torna-se "Autorizar com FaceID" em vez de gerenciar frases seed. O modelo de segurança muda de "não cometa erros" para "proteção imposta pelo hardware".
+
+Ao avaliar provedores de carteiras embarcadas, entenda se as passkeys são o mecanismo de autenticação ou o mecanismo de autorização. Ambos são válidos, mas as propriedades de segurança diferem.

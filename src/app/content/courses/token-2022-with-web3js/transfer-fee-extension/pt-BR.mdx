@@ -1,0 +1,210 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Transfer Fee
+
+A extensão `TransferFee` é uma extensão de `Mint` que permite ao criador definir um "imposto" sobre o token que é cobrado toda vez que alguém realiza uma troca (swap).
+
+Para garantir que o destinatário da taxa não seja bloqueado para escrita toda vez que alguém realiza uma troca, e para garantir que possamos paralelizar transações contendo uma `Mint` com esta extensão, a taxa é reservada na conta Token do destinatário e apenas a `Withdraw Authority` pode sacá-la.
+
+<ArticleSection name="Inicializando a Conta Mint" id="initializing-the-mint-account" level="h2" />
+
+Para inicializar a extensão `TransferFee` em uma conta `Mint` vamos precisar da função `createInitializeTransferFeeConfigInstruction()`.
+
+Aqui está como criar uma mint com a extensão Transfer Fee:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeTransferFeeConfigInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calcular o tamanho necessário para uma conta Mint com extensão Transfer Fee
+const mintLen = getMintLen([ExtensionType.TransferFeeConfig]);
+
+// Calcular lamports mínimos necessários para isenção de aluguel
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Criar a conta com o tamanho e owner corretos
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Inicializar a extensão Transfer Fee
+const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    500,
+    BigInt(1e6),
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Inicializar a própria mint
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combinar todas as instruções na ordem correta
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeTransferFeeConfig,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint criada! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Transferindo Tokens com a Taxa" id="transferring-tokens-with-the-fee" level="h2" />
+
+Para transferir tokens de uma `Mint` que tem a extensão `TransferFee` temos dois caminhos:
+- Podemos usar a instrução normal `transferChecked()` e, fazendo isso, o cálculo da taxa é tratado automaticamente
+- Podemos usar a instrução `transferCheckedWithFee()` e fornecer manualmente a `taxa` que vamos pagar naquela transferência. Isso é muito útil se queremos ter certeza de não sermos "rugados" se a autoridade mudar a taxa e criar uma taxa anormalmente alta; é como definir o slippage para uma transferência.
+
+> Mesmo que a autoridade mude a taxa, a nova taxa se torna ativa 2 epochs após ser definida
+
+Aqui está como criar uma transferência usando a instrução `transferCheckedWithFee()`:
+
+```ts
+createTransferCheckedWithFeeInstruction(
+    sourceTokenAccount,
+    mint.publicKey, 
+    destinationTokenAccount, 
+    keypair.publicKey, 
+    BigInt(100e6), // valor da transferência
+    6, // decimais
+    BigInt(1e6), // taxa paga pela transferência
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(transferInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Tokens transferidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Recolhendo a Taxa" id="harvesting-the-fee" level="h2" />
+
+Como mencionado na introdução, a taxa de transferência fica na conta `Token` que está recebendo tokens para evitar o bloqueio de escrita na conta `Mint` ou na `sourceTokenAccount`. Por esta razão, antes de poder sacar a taxa, precisaremos ser capazes de buscar todas as contas `Token` que têm taxas para reivindicar.
+
+Podemos fazer isso definindo um filtro e obtendo todas as contas que pertencem àquela mint assim:
+
+```ts
+// Recuperar todas as Contas Token para a Conta Mint
+const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+        {
+            memcmp: {
+                offset: 0,
+                bytes: mint.publicKey.toString(), // Endereço da Conta Mint
+            },
+        },
+    ],
+});
+```
+
+E obter uma lista de todas as contas `Token` que têm uma taxa dentro delas fazendo o unpack da conta `Token` e usando a função `getTransferAmount()` assim:
+
+```ts
+// Lista de Contas Token das quais sacar taxas
+const accountsToWithdrawFrom: PublicKey[] = [];
+
+for (const accountInfo of allAccounts) {
+    const account = unpackAccount(
+        accountInfo.pubkey,
+        accountInfo.account,
+        TOKEN_2022_PROGRAM_ID,
+    );
+
+    // Extrair dados de taxa de transferência de cada conta
+    const transferFeeAmount = getTransferFeeAmount(account);
+
+    // Verificar se há taxas disponíveis para saque
+    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+        accountsToWithdrawFrom.push(accountInfo.pubkey);
+    }
+}
+```
+
+Depois disso, podemos usar a instrução `withdrawWithheldTokensFromAccounts` com a `Withdraw Authority` para passar a lista de `accountsToWithdrawFrom` assim:
+
+```ts
+const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
+    mint.publicKey,
+    sourceTokenAccount,
+    keypair.publicKey,
+    [],
+    accountsToWithdrawFrom,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(harvestInstructions);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Tokens retidos recolhidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Atualizando a Taxa" id="updating-the-fee" level="h2" />
+
+Após ter inicializado nossa `Mint` com a extensão `TranferFee`, podemos precisar atualizar essa taxa específica no futuro. E para garantir que o criador não "ruge" seus detentores de tokens com uma "troca ardilosa" definindo a taxa muito alta toda vez que uma transferência é executada, a nova `TranferFee` será ativada após 2 epochs.
+
+Para acomodar isso, é assim que os dados da extensão `TransferFee` se parecem:
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+ 
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+Então, para mudar a taxa, podemos usar a instrução `setTransferFee` assim:
+
+```ts
+const setTransferFeeInstruction = createSetTransferFeeInstruction(
+    mint.publicKey
+    keypaird.publicKey
+    [],
+    BigInt(1000), // nova taxa de transferência
+    BigInt(100e6), // novo valor máximo da taxa
+    TOKEN_2022_PROGRAM_ID,
+)
+
+const transaction = new Transaction().add(setTransferFeeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Tokens retidos recolhidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

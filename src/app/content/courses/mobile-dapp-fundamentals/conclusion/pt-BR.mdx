@@ -1,0 +1,595 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Conclusão
+
+Parabéns! Você completou o curso Mobile Wallet Adapter desde os primeiros princípios até padrões de produção. Esta lição final consolida tudo em uma aplicação completa de envio de tokens e prepara você para os próximos passos no desenvolvimento mobile Solana.
+
+> A melhor forma de internalizar o que você aprendeu é construir algo real.
+
+<ArticleSection name="Projeto Capstone: Token Sender" id="capstone" level="h2" />
+
+Vamos construir um dApp completo que:
+- Conecta a uma carteira usando o AuthorizationProvider
+- Exibe o saldo da conta
+- Envia SOL para qualquer endereço
+- Mostra o status da transação com tratamento de erros adequado
+
+### Estrutura do Projeto
+
+```
+src/
+├── App.tsx
+├── providers/
+│   ├── AuthorizationProvider.tsx
+│   └── ConnectionProvider.tsx
+├── hooks/
+│   ├── useBalance.ts
+│   └── useSendSol.ts
+├── screens/
+│   └── SendScreen.tsx
+├── components/
+│   ├── ConnectButton.tsx
+│   ├── BalanceDisplay.tsx
+│   └── TransactionStatus.tsx
+└── utils/
+    └── mwaErrorHandler.ts
+```
+
+<ArticleSection name="O App Principal" id="app" level="h2" />
+
+O ponto de entrada do app envolve tudo nos providers necessários. Usamos `react-native-safe-area-context` para o tratamento adequado de safe area em diferentes dispositivos.
+
+> **Importante:** Instale o pacote safe area context antes de prosseguir: `npx expo install react-native-safe-area-context`
+
+```typescript
+// App.tsx
+import './src/polyfills'; // Carregar polyfills primeiro
+
+import React from 'react';
+import { StyleSheet, StatusBar } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { ConnectionProvider } from './src/providers/ConnectionProvider';
+import { AuthorizationProvider } from './src/providers/AuthorizationProvider';
+import { SendScreen } from './src/screens/SendScreen';
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <ConnectionProvider>
+        <AuthorizationProvider>
+          <SafeAreaView style={styles.container}>
+            <StatusBar barStyle="light-content" />
+            <SendScreen />
+          </SafeAreaView>
+        </AuthorizationProvider>
+      </ConnectionProvider>
+    </SafeAreaProvider>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0a0a0a',
+  },
+});
+```
+
+<ArticleSection name="Hook de Saldo" id="balance-hook" level="h2" />
+
+Este hook busca o saldo de SOL da carteira conectada e o atualiza periodicamente.
+
+```typescript
+// hooks/useBalance.ts
+import { useState, useEffect, useCallback } from 'react';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { useConnection } from '../providers/ConnectionProvider';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+
+export function useBalance() {
+  const { connection } = useConnection();
+  const { selectedAccount } = useAuthorization();
+  const [balance, setBalance] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchBalance = useCallback(async () => {
+    if (!selectedAccount) {
+      setBalance(null);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const lamports = await connection.getBalance(selectedAccount.publicKey);
+      setBalance(lamports / LAMPORTS_PER_SOL);
+    } catch (error) {
+      console.error('Falha ao buscar saldo:', error);
+      setBalance(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [connection, selectedAccount]);
+
+  useEffect(() => {
+    fetchBalance();
+    
+    // Atualizar saldo a cada 30 segundos
+    const interval = setInterval(fetchBalance, 30000);
+    return () => clearInterval(interval);
+  }, [fetchBalance]);
+
+  return { balance, loading, refresh: fetchBalance };
+}
+```
+
+<ArticleSection name="Hook de Envio de SOL" id="send-hook" level="h2" />
+
+```typescript
+// hooks/useSendSol.ts
+import { useState, useCallback } from 'react';
+import {
+  PublicKey,
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
+} from '@solana/web3.js';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { useConnection } from '../providers/ConnectionProvider';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+import { handleMWAError, MWAErrorResult } from '../utils/mwaErrorHandler';
+
+type SendStatus = 'idle' | 'building' | 'signing' | 'confirming' | 'success' | 'error';
+
+interface SendResult {
+  status: SendStatus;
+  signature: string | null;
+  error: string | null;
+}
+
+export function useSendSol() {
+  const { connection } = useConnection();
+  const { authorizeSession } = useAuthorization();
+  const [result, setResult] = useState<SendResult>({
+    status: 'idle',
+    signature: null,
+    error: null,
+  });
+
+  const send = useCallback(
+    async (recipientAddress: string, amountSol: number): Promise<boolean> => {
+      // Resetar estado
+      setResult({ status: 'building', signature: null, error: null });
+
+      try {
+        // Validar endereço do destinatário
+        let recipientPubkey: PublicKey;
+        try {
+          recipientPubkey = new PublicKey(recipientAddress);
+        } catch {
+          setResult({ status: 'error', signature: null, error: 'Endereço do destinatário inválido' });
+          return false;
+        }
+
+        // Validar quantidade
+        if (amountSol <= 0) {
+          setResult({ status: 'error', signature: null, error: 'A quantidade deve ser maior que 0' });
+          return false;
+        }
+
+        const signature = await transact(async (wallet) => {
+          setResult((prev) => ({ ...prev, status: 'signing' }));
+          
+          const account = await authorizeSession(wallet);
+
+          // Obter blockhash recente
+          const { blockhash, lastValidBlockHeight } = 
+            await connection.getLatestBlockhash('confirmed');
+
+          // Construir transação
+          const transaction = new VersionedTransaction(
+            new TransactionMessage({
+              payerKey: account.publicKey,
+              recentBlockhash: blockhash,
+              instructions: [
+                SystemProgram.transfer({
+                  fromPubkey: account.publicKey,
+                  toPubkey: recipientPubkey,
+                  lamports: Math.floor(amountSol * LAMPORTS_PER_SOL),
+                }),
+              ],
+            }).compileToV0Message()
+          );
+
+          // Assinar e enviar
+          const [sig] = await wallet.signAndSendTransactions({
+            transactions: [transaction],
+          });
+
+          setResult((prev) => ({ ...prev, status: 'confirming', signature: sig }));
+
+          // Aguardar confirmação
+          await connection.confirmTransaction(
+            { signature: sig, blockhash, lastValidBlockHeight },
+            'confirmed'
+          );
+
+          return sig;
+        });
+
+        setResult({ status: 'success', signature, error: null });
+        return true;
+
+      } catch (error) {
+        const mwaError = handleMWAError(error);
+        
+        // Não mostrar erro para cancelamento do usuário
+        if (mwaError.isUserCancellation) {
+          setResult({ status: 'idle', signature: null, error: null });
+          return false;
+        }
+
+        setResult({ status: 'error', signature: null, error: mwaError.userMessage });
+        return false;
+      }
+    },
+    [connection, authorizeSession]
+  );
+
+  const reset = useCallback(() => {
+    setResult({ status: 'idle', signature: null, error: null });
+  }, []);
+
+  return { send, reset, ...result };
+}
+```
+
+<ArticleSection name="Tela de Envio" id="send-screen" level="h2" />
+
+```typescript
+// screens/SendScreen.tsx
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Linking,
+} from 'react-native';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+import { useBalance } from '../hooks/useBalance';
+import { useSendSol } from '../hooks/useSendSol';
+import { ConnectButton } from '../components/ConnectButton';
+
+export function SendScreen() {
+  const { selectedAccount } = useAuthorization();
+  const { balance, loading: balanceLoading, refresh } = useBalance();
+  const { send, status, signature, error, reset } = useSendSol();
+  
+  const [recipient, setRecipient] = useState('');
+  const [amount, setAmount] = useState('');
+
+  const handleSend = async () => {
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum)) return;
+    
+    const success = await send(recipient, amountNum);
+    if (success) {
+      setRecipient('');
+      setAmount('');
+      refresh(); // Atualizar saldo após envio
+    }
+  };
+
+  const openExplorer = () => {
+    if (signature) {
+      Linking.openURL(`https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+    }
+  };
+
+  // Estado não conectado
+  if (!selectedAccount) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.title}>Token Sender</Text>
+        <Text style={styles.subtitle}>Conecte sua carteira para enviar SOL</Text>
+        <ConnectButton />
+      </View>
+    );
+  }
+
+  // Estado conectado
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Token Sender</Text>
+      
+      {/* Informações da Conta */}
+      <View style={styles.card}>
+        <Text style={styles.label}>Conta Conectada</Text>
+        <Text style={styles.address}>
+          {selectedAccount.publicKey.toBase58().slice(0, 20)}...
+        </Text>
+        <Text style={styles.balance}>
+          {balanceLoading ? 'Carregando...' : `${balance?.toFixed(4) ?? '—'} SOL`}
+        </Text>
+      </View>
+
+      {/* Formulário de Envio */}
+      <View style={styles.card}>
+        <Text style={styles.label}>Endereço do Destinatário</Text>
+        <TextInput
+          style={styles.input}
+          value={recipient}
+          onChangeText={setRecipient}
+          placeholder="Digite o endereço Solana"
+          placeholderTextColor="#666"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <Text style={styles.label}>Quantidade (SOL)</Text>
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          placeholder="0.0"
+          placeholderTextColor="#666"
+          keyboardType="decimal-pad"
+        />
+
+        <TouchableOpacity
+          style={[styles.button, status !== 'idle' && status !== 'error' && styles.buttonDisabled]}
+          onPress={handleSend}
+          disabled={status !== 'idle' && status !== 'error'}
+        >
+          <Text style={styles.buttonText}>
+            {status === 'building' && 'Construindo...'}
+            {status === 'signing' && 'Aprove na Carteira...'}
+            {status === 'confirming' && 'Confirmando...'}
+            {(status === 'idle' || status === 'error' || status === 'success') && 'Enviar SOL'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Status */}
+      {status === 'success' && signature && (
+        <View style={styles.successCard}>
+          <Text style={styles.successText}>Transação confirmada!</Text>
+          <TouchableOpacity onPress={openExplorer}>
+            <Text style={styles.link}>Ver no Explorer →</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {status === 'error' && error && (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity onPress={reset}>
+            <Text style={styles.link}>Dispensar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Desconectar */}
+      <ConnectButton />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 16,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#888',
+    marginBottom: 24,
+  },
+  card: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  address: {
+    fontSize: 14,
+    color: '#fff',
+    fontFamily: 'monospace',
+  },
+  balance: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#0f0',
+    marginTop: 8,
+  },
+  input: {
+    backgroundColor: '#2a2a2a',
+    borderRadius: 8,
+    padding: 12,
+    color: '#fff',
+    fontSize: 16,
+    marginBottom: 16,
+  },
+  button: {
+    backgroundColor: '#512da8',
+    borderRadius: 8,
+    padding: 16,
+    alignItems: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  successCard: {
+    backgroundColor: '#1a3a1a',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  successText: {
+    color: '#0f0',
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  errorCard: {
+    backgroundColor: '#3a1a1a',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#f55',
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  link: {
+    color: '#88f',
+    fontSize: 14,
+  },
+});
+```
+
+<ArticleSection name="Componente Connect Button" id="connect-button" level="h2" />
+
+```typescript
+// components/ConnectButton.tsx
+import React from 'react';
+import { TouchableOpacity, Text, StyleSheet, Alert } from 'react-native';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+import { handleMWAError } from '../utils/mwaErrorHandler';
+
+export function ConnectButton() {
+  const { selectedAccount, authorizeSession, deauthorizeSession } = useAuthorization();
+
+  const handleConnect = async () => {
+    try {
+      await transact(async (wallet) => {
+        await authorizeSession(wallet);
+      });
+    } catch (error) {
+      const mwaError = handleMWAError(error);
+      if (!mwaError.isUserCancellation) {
+        Alert.alert('Erro de Conexão', mwaError.userMessage);
+      }
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      await transact(async (wallet) => {
+        await deauthorizeSession(wallet);
+      });
+    } catch (error) {
+      console.log('Erro ao desconectar:', error);
+    }
+  };
+
+  if (selectedAccount) {
+    return (
+      <TouchableOpacity style={styles.disconnectButton} onPress={handleDisconnect}>
+        <Text style={styles.disconnectText}>Desconectar Carteira</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <TouchableOpacity style={styles.connectButton} onPress={handleConnect}>
+      <Text style={styles.connectText}>Conectar Carteira</Text>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  connectButton: {
+    backgroundColor: '#512da8',
+    borderRadius: 8,
+    padding: 16,
+    alignItems: 'center',
+  },
+  connectText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  disconnectButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#666',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  disconnectText: {
+    color: '#888',
+    fontSize: 14,
+  },
+});
+```
+
+<ArticleSection name="O Que Você Aprendeu" id="summary" level="h2" />
+
+Este curso abordou:
+
+1. **Fundamentos do Protocolo**: Como sessões MWA funcionam, o transporte via socket local, troca de chaves ECDH e JSON-RPC criptografado.
+
+2. **Configuração de Ambiente**: Configuração de projeto React Native, polyfills necessários, development builds do Expo.
+
+3. **Conexão de Carteira**: O padrão `transact()`, fluxo de autorização, verificação de identidade, cache de auth token.
+
+4. **Assinatura de Transações**: Construção de transações versionadas, `signAndSendTransactions` vs `signTransactions`, estratégias de batching.
+
+5. **Assinatura de Mensagens**: Attestations off-chain, Sign In With Solana, verificação no backend.
+
+6. **Gerenciamento de Estado**: Padrão AuthorizationProvider, React Context para estado da carteira, suporte a múltiplas contas.
+
+7. **Tratamento de Erros**: Códigos de erro MWA, mensagens amigáveis ao usuário, estratégias de retry, recuperação de sessão.
+
+8. **Testes em Dispositivo**: Configuração Android, workflows de depuração, checklist de testes.
+
+<ArticleSection name="Próximos Passos" id="next-steps" level="h2" />
+
+Agora você está equipado para construir dApps Solana mobile de produção. Aqui está para onde ir a seguir:
+
+**Funcionalidades Avançadas do MWA**:
+- Detecção de capacidades da carteira
+- Identificadores de chain personalizados
+- Gerenciamento de contas de token
+
+**Além do MWA**:
+- Solana Pay para pagamentos e requisições
+- Blinks e Actions para transações compartilháveis
+- Secp256r1 para autenticação com passkeys
+
+**Considerações de Produção**:
+- Requisitos de submissão à App Store
+- Analytics e relatórios de crashes
+- Auditorias de segurança para interações com carteira
+
+O ecossistema mobile Solana está crescendo rapidamente. Com MWA como sua fundação, você pode construir apps que trazem self-custody para bilhões de usuários mobile.
+
+**Parabéns por completar o curso Mobile Wallet Adapter!**

@@ -1,0 +1,103 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso de Instruction introspection - Depure e analise instruções de programas Solana](/graphics/course-banners/instruction-introspection.png)
+
+# Instruction Introspection
+
+Instruction introspection é uma capacidade poderosa no Solana que permite a um programa analisar outras instruções dentro da mesma transação, incluindo aquelas ainda não executadas. Isso permite que você responda dinamicamente ou aumente essas instruções — por exemplo, injetando salvaguardas, validando comportamentos ou integrando instruções de programas externos à sua própria lógica.
+
+Isso é possível graças a uma conta especial do sistema chamada sysvar `Instructions`. Sysvars são contas somente leitura mantidas pelo runtime do Solana que expõem estado interno aos programas (ex.: clock, rent, epoch schedule, etc.). A sysvar Instructions especificamente expõe a lista completa de instruções na transação atual, junto com seus metadados e dados serializados.
+
+Veja como o Solana serializa essas informações em runtime:
+
+```rust
+// Primeiro, codifica o número de instruções:
+//  0..2 - num_instructions
+//
+// Depois, uma tabela de offsets de onde encontrá-las nos dados
+//  3..2 * num_instructions tabela de offsets das instruções
+//
+// Cada instrução é então codificada como:
+//   0..2 - num_accounts
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
+//   3..35 - pubkey - 32 bytes
+//   35..67 - program_id
+//   67..69 - data len - u16
+//   69..data_len - data
+#[cfg(not(target_os = "solana"))]
+fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
+    // 64 bytes é uma estimativa razoável, calcular exatamente é mais lento em benchmarks
+    let mut data = Vec::with_capacity(instructions.len() * (32 * 2));
+    append_u16(&mut data, instructions.len() as u16);
+    for _ in 0..instructions.len() {
+        append_u16(&mut data, 0);
+    }
+
+    for (i, instruction) in instructions.iter().enumerate() {
+        let start_instruction_offset = data.len() as u16;
+        let start = 2 + (2 * i);
+        data[start..start + 2].copy_from_slice(&start_instruction_offset.to_le_bytes());
+        append_u16(&mut data, instruction.accounts.len() as u16);
+        for account_meta in &instruction.accounts {
+            let mut account_meta_flags = InstructionsSysvarAccountMeta::empty();
+            if account_meta.is_signer {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_SIGNER;
+            }
+            if account_meta.is_writable {
+                account_meta_flags |= InstructionsSysvarAccountMeta::IS_WRITABLE;
+            }
+            append_u8(&mut data, account_meta_flags.bits());
+            append_slice(&mut data, account_meta.pubkey.as_ref());
+        }
+
+        append_slice(&mut data, instruction.program_id.as_ref());
+        append_u16(&mut data, instruction.data.len() as u16);
+        append_slice(&mut data, instruction.data);
+    }
+    data
+}
+```
+
+Isso significa que, ao ler a conta sysvar `Instructions` dentro do seu programa, você pode acessar todas as instruções incluídas na transação atual.
+
+Você não precisa analisar os bytes brutos manualmente. O Solana fornece funções auxiliares:
+- `load_current_index_checked`: retorna o índice da instrução atualmente em execução.
+- `load_instruction_at_checked`: permite carregar uma instrução específica pelo seu índice em um formato analisado e desserializado.
+
+<ArticleSection name="Como funciona?" id="how-does-it-work" level="h2" />
+
+Cada instrução do Solana contém:
+- o program ID que ela visa,
+- as contas com as quais interage (incluindo metadados como signer/writable),
+- e o payload de dados (tipicamente um discriminador + argumentos).
+
+E é exatamente isso que a função `load_instruction_at_checked` da sysvar Instructions fornece:
+- program_id: o programa que esta instrução está chamando.
+- accounts: uma lista de contas envolvidas com metadados.
+- data: o payload de entrada bruto (se estamos inspecionando uma instrução anchor, ela frequentemente começa com um discriminador de 8 bytes seguido pelos parâmetros).
+
+Para inspecionar outras instruções de forma segura e eficiente, siga estes passos:
+- Determinar o Índice da Instrução Atual: Use `load_current_index_checked` para encontrar o índice da instrução atualmente em execução.
+> Lembre-se: sua instrução pode não ser a primeira (índice 0) na transação.
+
+- Carregar uma Instrução Alvo para Analisar: Com o índice em mãos, use `load_instruction_at_checked(index)` para carregar outra instrução na mesma transação — seja a anterior, posterior ou em uma posição específica.
+> Isso é útil para validar comportamentos, garantir entradas esperadas ou compor de forma segura entre programas.
+
+- Construir Restrições para Prevenir Comportamento Malicioso: A introspecção de instruções é poderosa, mas introduz novas superfícies de ataque. Certifique-se de: validar que a instrução inspecionada está visando o programa esperado, confirmar que os endereços das contas e dados correspondem aos padrões esperados, e evitar suposições sobre a ordem das instruções a menos que explicitamente impostas.
+
+Tomando essas precauções, você pode aproveitar com segurança a introspecção de instruções para construir programas Solana poderosos, composíveis e seguros.
+
+<ArticleSection name="Restrições Comuns para Introspecção" id="common-constraints-for-introspection" level="h2" />
+
+Ao usar introspecção de instruções, é essencial impor restrições rigorosas para prevenir comportamento malicioso ou inesperado. As salvaguardas mais comuns incluem:
+- Verificação de Instrução: Valide o program ID e o discriminador da instrução para garantir que seja o correto. O discriminador (geralmente os primeiros 1, 4 ou 8 bytes dos dados da instrução) identifica exclusivamente qual função está sendo chamada.
+> Esta etapa garante que você está inspecionando a instrução pretendida e não uma instrução falsificada ou malformada.
+
+- Validação de Variáveis: Após o discriminador, analise e verifique as variáveis críticas usadas pela instrução. Estas podem incluir quantidades, direções (ex.: long/short) ou IDs, e você deve sempre confirmar que esses campos estão alinhados com a lógica esperada da sua integração ou salvaguarda.
+- Verificação de Contas: Valide a estrutura e identidade das contas da instrução. Verifique se as contas esperadas aparecem em posições específicas (ex.: signer, vault, collateral) e garanta que papéis como o status de signer/writable correspondam às suas suposições.
+
+Ao aplicar essas restrições, você garante que seu programa responda apenas a instruções válidas e confiáveis, tornando sua lógica mais robusta, composível e segura.
+
+Junto com a atomicidade das transações, essas verificações permitem que você construa uma lógica robusta e composível que pode interagir com segurança com outros programas e instruções dentro da mesma transação.
+
+> Lembre-se, as transações no Solana são atômicas. Se qualquer instrução falhar, toda a transação será revertida.

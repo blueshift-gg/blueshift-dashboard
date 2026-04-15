@@ -1,0 +1,69 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Non Transferable
+
+A extensão `NonTransferable` é uma extensão de conta `Mint` que impede que tokens sejam transferidos entre contas, tornando-os permanentemente vinculados aos seus detentores atuais.
+
+<ArticleSection name="Inicializando a Conta Mint" id="inicializando-a-conta-mint" level="h2" />
+
+Para inicializar a extensão `MintCloseAuthority` em uma conta `Mint`, vamos precisar da função `initializeNonTransferableMint()`.
+
+Veja como criar uma mint com a extensão Non Transferable:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializeNonTransferableMintInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calcula o tamanho necessário para uma conta Mint com a extensão Non Transferable
+const mintLen = getMintLen([ExtensionType.NonTransferable]);
+
+// Calcula lamports mínimos necessários para isenção de rent
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Cria a conta com o tamanho e owner corretos
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Inicializa a extensão Non Transferable
+const initializeMintNonTransferable = createInitializeNonTransferableMintInstruction(
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Inicializa a própria mint
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combina todas as instruções na ordem correta
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeMintNonTransferable,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint criada! Confira sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);

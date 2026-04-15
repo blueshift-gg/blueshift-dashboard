@@ -1,0 +1,126 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Secp256r1 com Pinocchio
+
+[Dean](https://x.com/deanmlittle) da equipe Blueshift lançou o primeiro crate que permite compatibilidade do Pinocchio para verificar instruções que executam o precompile `Secp256r1`.
+
+Isso é particularmente útil para implementar métodos de autenticação modernos como passkeys em programas Pinocchio.
+
+<ArticleSection name="Introdução" id="introduction" level="h2" />
+
+O SDK fornece abstrações limpas através de estruturas de dados principais:
+
+```rust
+// Chave pública comprimida de 33 bytes (1 byte de paridade + 32 bytes de coordenada x)
+pub type Secp256r1Pubkey = [u8; 33];
+// Assinatura de 64 bytes (valores r,s)
+pub type Secp256r1Signature = [u8; 64];
+
+// Parser principal de instruções
+pub struct Secp256r1Instruction<'a> {
+    header: Secp256r1InstructionHeader,    // Número de assinaturas
+    offsets: &'a [Secp256r1SignatureOffsets], // Ponteiros de localização de dados
+    data: &'a [u8],                        // Dados brutos da instrução
+}
+```
+
+A struct `Secp256r1SignatureOffsets` atua como um mapa de memória, contendo offsets de bytes que apontam para onde cada componente reside dentro do payload da instrução:
+
+```rust
+pub struct Secp256r1SignatureOffsets {
+    pub signature_offset: u16,
+    pub signature_instruction_index: u16,
+    pub public_key_offset: u16,
+    pub public_key_instruction_index: u16,
+    pub message_data_offset: u16,
+    pub message_data_size: u16,
+    pub message_instruction_index: u16,
+}
+```
+
+Nos dados, encontramos os três componentes críticos referenciados pela estrutura de offsets:
+- Publickey: A chave pública `Secp256r1` comprimida de 33 bytes. Quando usada com métodos de autenticação modernos como passkeys, representa a identidade criptográfica do dispositivo/usuário autenticador.
+- Signature: A assinatura `ECDSA` de 64 bytes (valores r,s) gerada pela chave privada. Isso prova que o detentor da chave privada correspondente autorizou a mensagem específica.
+- Message Data: Os bytes arbitrários que foram assinados criptograficamente. Na prática, contém dados específicos da aplicação como detalhes de transação, timestamps ou identificadores de usuário que previnem ataques de replay e garantem que as assinaturas estejam contextualmente vinculadas.
+
+Como você pode ver, a publickey tem 33 bytes porque usa uma representação de ponto comprimida; uma codificação eficiente em espaço de pontos de curva elíptica.
+
+No Secp256r1, uma chave pública é matematicamente um ponto (x,y) onde ambas as coordenadas têm 32 bytes (64 bytes no total).
+
+No entanto, dado qualquer coordenada x, apenas duas coordenadas y possíveis satisfazem a equação da curva.
+
+O formato comprimido armazena a coordenada x de 32 bytes mais um único byte de paridade (0x02 para y par, 0x03 para y ímpar), permitindo reconstrução completa do ponto com 48% menos armazenamento.
+
+<ArticleSection name="Implementação" id="implementation" level="h2" />
+
+Para verificar assinaturas `Secp256r1`, precisamos de dois componentes principais:
+1. O sysvar de instruções: Isso permite introspectar a assinatura `Secp256r1`
+2. O crate `pinocchio-secp256r1-instruction`: Fornece as ferramentas para desserializar a instrução
+
+O sysvar de instruções já está incluído no crate Pinocchio, então nenhuma instalação adicional é necessária.
+
+No entanto, precisamos adicionar o crate `pinocchio-secp256r1-instruction` ao nosso programa Pinocchio:
+
+```
+cargo add pinocchio-secp256r1-instruction
+```
+
+Para implementar a verificação, precisamos:
+1. Incluir o programa Instruction Sysvar (`Sysvar1nstructions1111111111111111111111111`, que chamaremos de `instructions`)
+2. Colocar a instrução `Secp256r1` após nossa instrução atual
+
+Veja como acessar e desserializar as instruções:
+
+```rust
+// Desserializar o sysvar de instruções
+let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+// Obter a instrução que segue a nossa
+let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+```
+
+Em seguida, desserializamos a instrução `Secp256r1`:
+
+```rust
+// Desserializar a instrução Secp256r1
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+```
+
+Depois realizamos algumas verificações de segurança.
+
+É crucial implementar várias verificações de segurança:
+1. **Verificação de Autoridade**: Garante que apenas destinatários autorizados possam receber fundos do PDA que encapsula a chave pública Secp256r1. Isso previne ataques MEV onde alguém poderia interceptar a transação, capturar a assinatura válida e substituir o destinatário pretendido.
+2. **Verificação de Expiração**: Impõe um limite de tempo à validade da assinatura. Como assinaturas validadas permanecem válidas indefinidamente, implementar um timestamp de expiração previne ataques de replay.
+
+Realizamos essas verificações colocando esses dados na mensagem da assinatura.
+
+Veja como implementar essas verificações de segurança:
+
+```rust
+// Verificar se o fee payer está autorizado
+let (receiver, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32).ok_or(ProgramError::InvalidInstructionData)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+
+// Verificar expiração da assinatura
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Finalmente, podemos derivar Program Derived Addresses (PDAs) diretamente de chaves públicas Secp256r1, criando endereços de conta determinísticos que os usuários podem controlar através de métodos de autenticação modernos:
+
+```rust
+// Verificar se a primeira assinatura corresponde ao dono do nosso PDA
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+// Criar signer seeds para CPI
+let seeds = [
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+];
+let signers = [Signer::from(&seeds)];
+```
+
+> Precisamos dividir a pubkey em 2 partes diferentes porque as seeds aceitam no máximo 32 bytes de comprimento.

@@ -1,0 +1,145 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Group e Member
+
+As extensões `Group` e `Member` são extensões de conta `Mint` que introduzem a capacidade de criar grupos, como coleções de NFTs, que estão vinculados a múltiplos ativos.
+
+<ArticleSection name="Inicializando a Conta Mint" id="initializing-the-mint-account" level="h2" />
+
+A extensão `Member` e `Group` é um pouco diferente do que estamos acostumados a fazer porque é composta de 2 extensões diferentes que ambas vão em uma conta `Mint`:
+- A `Extension` que contém toda a informação sobre o grupo ou membro.
+- A `Pointer Extension` que referência a conta `Mint` onde a extensão `Group` ou `Member` reside.
+
+Normalmente, quando usadas, a `Extension` e a `Pointer Extension` residem na mesma conta `Mint`; e vamos fazer o mesmo para este exemplo.
+
+> A extensão `Group` e `Member` não podem estar na mesma conta
+
+Vamos começar com alguns conceitos básicos antes de mergulhar no código:
+
+Enquanto a extensão `GroupPointer` e `MemberPointer` reside no pacote `@solana/spl-token`, para inicializar o `Group` e `Member` precisamos usar o pacote `@solana/spl-token-group`.
+
+Então vamos instalar o pacote necessário:
+
+```
+npm i @solana/spl-token-group
+```
+
+Adicionalmente, a extensão `Group` e `Member` é uma das "únicas" extensões que exige que você inicialize a extensão após ter inicializado a conta `Mint`.
+
+Isso porque a instrução de inicialização de metadata aloca dinamicamente o espaço necessário para o comprimento do conteúdo do grupo e membro.
+
+Ao mesmo tempo, isso significa que vamos precisar inicializar a conta `Mint` com lamports suficientes para ser isenta de aluguel com a extensão `Group` ou `Member` incluída, mas alocando espaço suficiente apenas para a extensão `GroupPointer` ou `MemberPointer`, já que as instruções `token_group_initialize()` e `token_group_member_initialize()` realmente aumentam o espaço corretamente.
+
+No código, inicializar o `Group` fica assim:
+
+```ts
+const mint = Keypair.generate();
+
+// Tamanho da conta Mint com extensões
+const mintLen = getMintLen([ExtensionType.GroupPointer]);
+
+// Lamports mínimos necessários para a conta Mint
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen + TYPE_SIZE + LENGTH_SIZE + TOKEN_GROUP_SIZE);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeGroupPointer = createInitializeGroupPointerInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    mint.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeGroupInstruction = createInitializeGroupInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        mint: mint.publicKey,
+        mintAuthority: keypair.publicKey,
+        updateAuthority: keypair.publicKey,
+        maxSize: BigInt(100),
+    }
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeGroupPointer,
+    initializeMintInstruction,
+    initializeGroupInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint], {commitment: "finalized"});
+
+console.log(`Mint criada! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+E depois disso, podemos usar o grupo que acabamos de criar para adicionar um membro a ele assim:
+
+```ts
+const member = Keypair.generate();
+
+// Tamanho da conta Member com extensões
+const memberLen = getMintLen([ExtensionType.GroupMemberPointer]);
+
+// Lamports mínimos necessários para a conta Member
+const lamports = await connection.getMinimumBalanceForRentExemption(memberLen + TYPE_SIZE + LENGTH_SIZE + TOKEN_GROUP_MEMBER_SIZE);
+
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: member.publicKey,
+    space: memberLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+const initializeGroupMemberPointer = createInitializeGroupMemberPointerInstruction(
+    member.publicKey,
+    keypair.publicKey,
+    member.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeMintInstruction = createInitializeMintInstruction(
+    member.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const initializeGroupMemberInstruction = createInitializeMemberInstruction(
+    {
+        programId: TOKEN_2022_PROGRAM_ID,
+        group: mint.publicKey,
+        member: member.publicKey,
+        memberMint: member.publicKey,
+        memberMintAuthority: keypair.publicKey,
+        groupUpdateAuthority: keypair.publicKey,
+    }
+);
+
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializeGroupMemberPointer,
+    initializeMintInstruction,
+    initializeGroupMemberInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, member], {commitment: "finalized"});
+
+console.log(`Member criado! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```

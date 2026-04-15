@@ -1,0 +1,424 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![MWA Deep Dive](/graphics/course-banners/mwa-deep-dive.png)
+
+# Estabelecimento de Sessão
+
+<ArticleSection name="Visão Geral" id="overview" level="h2" />
+
+Uma vez que o transporte é estabelecido, o dApp e a carteira devem criar um canal seguro. Isso acontece através de um handshake criptográfico usando troca de chaves Elliptic Curve Diffie-Hellman (ECDH). Ao final, ambas as partes compartilham uma chave de criptografia simétrica que nenhum interceptador pode derivar.
+
+<ArticleSection name="As Mensagens do Handshake" id="handshake" level="h2" />
+
+O estabelecimento de sessão usa duas mensagens:
+
+**`HELLO_REQ`**: Enviada pelo dApp para a carteira
+**`HELLO_RSP`**: Enviada pela carteira para o dApp
+
+Estas são as únicas mensagens do protocolo não criptografadas. Tudo após isso é criptografado.
+
+<ArticleSection name="Estrutura do HELLO_REQ" id="hello-req" level="h2" />
+
+O dApp envia `HELLO_REQ` imediatamente após a conexão WebSocket ser estabelecida:
+
+```
++------------------------------------------------------------------+
+|  Qd (chave pública de sessão)   |  Sa (assinatura)                |
+|      (65 bytes)                 |    (64 bytes)                   |
++------------------------------------------------------------------+
+```
+
+Tamanho total: 129 bytes
+
+Componentes:
+
+**Qd (65 bytes)**: A chave pública de *sessão* do dApp (P-256, formato não comprimido). Esta é diferente da chave pública de associação. O dApp gera dois pares de chaves.
+
+**Sa (64 bytes)**: Uma assinatura ECDSA sobre Qd usando a chave privada de *associação*. Isso prova que o dApp controla a chave de associação da URI.
+
+### Por Que Dois Pares de Chaves?
+
+O dApp usa dois pares de chaves P-256 distintos:
+
+| Par de Chaves | Usado Para | Algoritmo |
+|---------------|------------|-----------|
+| Par de chaves de associação | Autenticar o dApp (assinando HELLO_REQ) | ECDSA |
+| Par de chaves de sessão | Troca de chaves (derivando o segredo compartilhado) | ECDH |
+
+Essa separação segue a melhor prática criptográfica: não reutilize chaves para propósitos diferentes.
+
+<ArticleSection name="Geração do HELLO_REQ" id="hello-req-generation" level="h2" />
+
+Vamos rastrear os passos exatos do SDK:
+
+```typescript
+// From createHelloReq.ts (simplified)
+async function createHelloReq(
+  associationPrivateKey: CryptoKey,
+  sessionPublicKey: CryptoKey
+): Promise<Uint8Array> {
+  // Exporta a chave pública de sessão em formato raw (65 bytes)
+  const sessionPublicKeyBuffer = await crypto.subtle.exportKey(
+    'raw',
+    sessionPublicKey
+  );
+  const Qd = new Uint8Array(sessionPublicKeyBuffer);
+
+  // Assina Qd com a chave privada de associação
+  const signature = await crypto.subtle.sign(
+    {
+      name: 'ECDSA',
+      hash: 'SHA-256'
+    },
+    associationPrivateKey,
+    Qd
+  );
+  
+  // Converte a assinatura de DER para formato raw (64 bytes: r || s)
+  const Sa = derToRaw(new Uint8Array(signature));
+
+  // Constrói a mensagem (sem byte de tipo de mensagem - apenas Qd e Sa)
+  const message = new Uint8Array(65 + 64);
+  message.set(Qd, 0);
+  message.set(Sa, 65);
+  
+  return message;
+}
+```
+
+### Nota Sobre o Formato da Assinatura
+
+Assinaturas ECDSA podem estar em formato DER (comprimento variável) ou formato raw (64 bytes fixos para P-256). MWA usa formato raw: o valor `r` de 32 bytes concatenado com o valor `s` de 32 bytes.
+
+O SDK inclui funções de conversão porque a Web Crypto API retorna formato DER:
+
+```typescript
+// Estrutura da assinatura DER:
+// 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
+// Estrutura da assinatura raw:
+// [r (32 bytes)] [s (32 bytes)]
+```
+
+<ArticleSection name="Estrutura do HELLO_RSP" id="hello-rsp" level="h2" />
+
+A carteira responde com `HELLO_RSP`:
+
+```
++------------------------------------------------------------------+
+|  Qw (chave de sessão da carteira)  |  Props da Sessão             |
+|      (65 bytes)                    |  (JSON variável)             |
++------------------------------------------------------------------+
+```
+
+Componentes:
+
+**Qw (65 bytes)**: A chave pública de sessão da carteira (P-256, não comprimida).
+
+**Session Props (variável)**: Um objeto JSON codificado como UTF-8, contendo propriedades da sessão:
+
+```json
+{
+  "protocol_version": "2.0.0"
+}
+```
+
+### Por Que Sem Assinatura da Carteira?
+
+Note que a carteira não assina o `HELLO_RSP`. Isso é intencional:
+
+1. O dApp já confia na carteira (o usuário a instalou)
+2. A carteira prova o conhecimento de sua chave privada durante o ECDH; se tiver a chave errada, a criptografia falha
+3. A verificação de identidade da carteira (para fins de UI) acontece em uma camada superior via Digital Asset Links
+
+<ArticleSection name="Derivação de Chaves" id="key-derivation" level="h2" />
+
+Após trocar as mensagens de hello, ambas as partes podem derivar o segredo compartilhado e as chaves de sessão.
+
+### Segredo Compartilhado ECDH
+
+O dApp computa:
+```
+shared_secret = ECDH(dApp_session_private_key, wallet_session_public_key)
+```
+
+A carteira computa:
+```
+shared_secret = ECDH(wallet_session_private_key, dApp_session_public_key)
+```
+
+Ambas chegam ao mesmo valor de 32 bytes (a coordenada x do ponto resultante do ECDH).
+
+### Derivação de Chaves com HKDF
+
+O segredo compartilhado por si só não é usado diretamente. Em vez disso, MWA usa HKDF (HMAC-based Key Derivation Function) para derivar a chave de sessão AES-128-GCM:
+
+```
+session_key = HKDF-SHA256(
+  IKM: shared_secret,      // 32 bytes do ECDH
+  salt: Qa,                // 65 bytes - a chave pública de associação
+  L: 16                    // Comprimento de saída em bytes (128 bits para AES-128)
+)
+```
+
+Nota: Não há parâmetro `info` nesta aplicação do HKDF. Apenas IKM, salt e o comprimento de saída.
+
+<ArticleSection name="HKDF em Detalhes" id="hkdf-detail" level="h2" />
+
+HKDF tem duas fases:
+
+**Extract**: Combina o material de chave de entrada (IKM) com o salt para produzir uma pseudorandom key (PRK).
+
+```
+PRK = HMAC-SHA256(salt, IKM)
+    = HMAC-SHA256(Qa, shared_secret)
+```
+
+**Expand**: Usa o PRK para gerar a quantidade desejada de material de chave.
+
+```
+T(1) = HMAC-SHA256(PRK, 0x01)
+OKM = primeiros 16 bytes de T(1)
+```
+
+Como precisamos apenas de 16 bytes e SHA-256 produz 32 bytes, um único passo de expansão é suficiente.
+
+O SDK implementa isso:
+
+```typescript
+// From parseHelloRsp.ts (simplified)
+async function deriveSessionKey(
+  ecdhPrivateKey: CryptoKey,
+  walletPublicKey: CryptoKey,
+  associationPublicKey: CryptoKey
+): Promise<Uint8Array> {
+  // Passo 1: ECDH para obter o segredo compartilhado
+  const sharedSecret = await crypto.subtle.deriveBits(
+    {
+      name: 'ECDH',
+      public: walletPublicKey
+    },
+    ecdhPrivateKey,
+    256 // bits
+  );
+
+  // Passo 2: Exporta a chave pública de associação como salt
+  const salt = await crypto.subtle.exportKey('raw', associationPublicKey);
+
+  // Passo 3: HKDF Extract - importa o segredo compartilhado como entrada HKDF
+  const hkdfKey = await crypto.subtle.importKey(
+    'raw',
+    sharedSecret,
+    'HKDF',
+    false,
+    ['deriveBits']
+  );
+
+  // Passo 4: HKDF Expand - deriva a chave de sessão (sem parâmetro info)
+  const sessionKeyBits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(salt),
+      info: new Uint8Array(0) // Vazio - o spec MWA não usa parâmetro info
+    },
+    hkdfKey,
+    128 // Tamanho da chave AES-128 em bits
+  );
+
+  return new Uint8Array(sessionKeyBits);
+}
+```
+
+<ArticleSection name="Por Que Este Design?" id="design-rationale" level="h2" />
+
+Várias decisões criptográficas merecem explicação:
+
+### Por Que P-256 (secp256r1)?
+
+Não secp256k1 (curva Bitcoin/Ethereum). Motivos:
+1. **Suporte de hardware**: P-256 é suportado pelo módulo de segurança de hardware do Android e pelo iOS Secure Enclave
+2. **Web Crypto API**: Suporte nativo para P-256, sem necessidade de bibliotecas externas
+3. **Padronização NIST**: Amplamente auditada e confiável
+
+### Por Que Não Usar TLS?
+
+TLS funcionaria para criptografia, mas não resolve:
+1. **Autenticação em nível de app**: TLS autentica servidores, não apps mobile
+2. **Certificados de localhost**: Nenhuma autoridade certificadora emite certificados para 127.0.0.1
+3. **Restrições de plataforma**: Apps nativos não têm a mesma integração TLS que navegadores
+
+### Por Que ECDH + HKDF em Vez de Uso Direto da Chave?
+
+1. **Separação de chaves**: HKDF garante que a chave de sessão é criptograficamente independente da saída bruta do ECDH
+2. **Vinculação ao salt**: Usar a chave pública de associação como salt vincula a sessão a esta associação específica
+3. **Flexibilidade**: HKDF pode derivar múltiplas chaves se necessário (ex.: chaves separadas para criptografia e MAC)
+
+<ArticleSection name="Máquina de Estados Após o Hello" id="state-after-hello" level="h2" />
+
+Após uma troca de hello bem-sucedida, o estado da sessão inclui:
+
+```typescript
+{
+  __type: 'hello_rsp_received',
+  ws: WebSocket,                    // Conexão ativa
+  associationPublicKey: CryptoKey,  // Para verificação
+  ecdhPrivateKey: CryptoKey,        // Chave privada de sessão do dApp
+  sessionKey: Uint8Array,           // Chave AES-128 derivada (16 bytes)
+  sequenceNumber: 1                 // Começa em 1, não em 0
+}
+```
+
+A partir deste ponto, todas as mensagens são criptografadas com AES-GCM usando `sessionKey`.
+
+<ArticleSection name="Tempo do Handshake" id="timing" level="h2" />
+
+O handshake é rápido, tipicamente abaixo de 50ms em dispositivos modernos. Detalhamento do tempo:
+
+| Operação | Tempo Típico |
+|----------|--------------|
+| Gerar par de chaves de sessão | 2-5ms |
+| Assinar Qd com chave de associação | 1-2ms |
+| Enviar HELLO_REQ | &lt;1ms (local) |
+| Carteira gerar par de chaves | 2-5ms |
+| Carteira enviar HELLO_RSP | &lt;1ms (local) |
+| Derivação ECDH | 2-5ms |
+| Derivação HKDF | &lt;1ms |
+
+Total: ~10-20ms em hardware moderno.
+
+Para conexões remotas via reflector, adicione a latência de rede (tipicamente 50-200ms de ida e volta).
+
+<ArticleSection name="Falhas no Estabelecimento de Sessão" id="failures" level="h2" />
+
+O que pode dar errado?
+
+### Falha na Verificação da Assinatura
+
+A carteira não conseguiu verificar Sa sobre Qd usando a chave pública de associação da URI.
+
+Causas:
+- A URI foi alterada
+- Bug de implementação do dApp (assinando dados errados)
+- Incompatibilidade de formato de chave
+
+### Formato de Chave Pública Inválido
+
+Qd ou Qw não é um ponto P-256 válido.
+
+Causas:
+- Mensagem malformada
+- Curva errada (ex.: chave secp256k1 enviada como P-256)
+- Transmissão corrompida (raro com WebSocket)
+
+### Timeout de Sessão
+
+A carteira não respondeu ao HELLO_REQ dentro do tempo limite.
+
+Causas:
+- Carteira não foi totalmente iniciada
+- Usuário distraído com o onboarding da carteira
+- Bug da carteira
+
+### Incompatibilidade de Versão do Protocolo
+
+O `protocol_version` da carteira nas props de sessão indica incompatibilidade.
+
+Causas:
+- Versão muito antiga da carteira
+- Versão muito nova com mudanças incompatíveis
+
+<ArticleSection name="Exemplo Completo de Handshake" id="example" level="h2" />
+
+Vamos rastrear byte a byte (com valores realistas, mas não reais):
+
+**1. dApp gera o par de chaves de associação**
+```
+Association public key (Qa): 04 a1b2c3... (65 bytes)
+Association private key (da): armazenada de forma segura
+```
+
+**2. dApp gera o par de chaves de sessão**
+```
+Session public key (Qd): 04 d4e5f6... (65 bytes)
+Session private key (dd): armazenada de forma segura
+```
+
+**3. dApp assina Qd**
+```
+Sa = ECDSA-Sign(da, Qd) = 7a8b9c... (64 bytes)
+```
+
+**4. dApp envia HELLO_REQ**
+```
+00 04d4e5f6...(65 bytes)... 7a8b9c...(64 bytes)...
+│   └─── Qd ───────────────┘ └─── Sa ──────────┘
+└─ tipo de mensagem (HELLO_REQ)
+```
+
+**5. Carteira recebe HELLO_REQ**
+```
+- Extrai Qd (bytes 1-65)
+- Extrai Sa (bytes 66-129)
+- Importa Qa da URI
+- Verifica: ECDSA-Verify(Qa, Qd, Sa) == true
+```
+
+**6. Carteira gera o par de chaves de sessão**
+```
+Session public key (Qw): 04 1a2b3c... (65 bytes)
+Session private key (dw): armazenada de forma segura
+```
+
+**7. Carteira envia HELLO_RSP**
+```
+01 041a2b3c...(65 bytes)... {"protocol_version":"2.0.0"}
+│   └─── Qw ───────────────┘ └─── session props (JSON) ──┘
+└─ tipo de mensagem (HELLO_RSP)
+```
+
+**8. Ambos derivam o segredo compartilhado**
+```
+dApp:     shared = ECDH(dd, Qw) = 5f6a7b... (32 bytes)
+Carteira: shared = ECDH(dw, Qd) = 5f6a7b... (32 bytes)
+```
+
+**9. Ambos derivam a chave de sessão**
+```
+session_key = HKDF(shared, Qa, "session_key") = 9d8e7f... (16 bytes)
+```
+
+**10. Sessão estabelecida**
+
+Ambos agora possuem `session_key` e podem criptografar/descriptografar mensagens.
+
+<ArticleSection name="Verificando a Implementação" id="verifying" level="h2" />
+
+Se você está implementando MWA ou depurando problemas, verifique cada passo:
+
+1. **Geração de pares de chaves**: Registre as chaves públicas em hex. Elas devem ter 65 bytes, começando com `04`.
+
+2. **Assinatura**: Verifique manualmente usando um verificador P-256 online. A mensagem é Qd, a chave é Qa.
+
+3. **ECDH**: Ambos os lados devem derivar o mesmo segredo compartilhado. Se não, verifique os formatos das chaves.
+
+4. **HKDF**: Use um vetor de teste. A biblioteca `cryptography` do Python tem suporte a HKDF para comparação.
+
+<ArticleSection name="Análise de Segurança" id="security" level="h2" />
+
+O estabelecimento de sessão fornece:
+
+**Sigilo Encaminhado (Forward Secrecy)**: Cada sessão usa chaves ECDH novas. Comprometer uma sessão não compromete outras.
+
+**Autenticação**: O dApp prova que controla a chave de associação assinando o HELLO_REQ.
+
+**Vinculação de Chaves**: HKDF com a chave de associação como salt garante que a chave derivada está vinculada a esta associação.
+
+**Sem Replay**: As chaves de sessão são efêmeras. Um atacante não pode repetir um HELLO_REQ antigo para estabelecer uma sessão; precisaria da chave privada de associação atual.
+
+Limitações:
+
+**Sem Autenticação da Carteira**: A carteira não prova criptograficamente sua identidade. O dApp confia que o endpoint que responde é uma carteira legítima.
+
+**Riscos de Canal Lateral**: Em dispositivos comprometidos, chaves privadas podem ser extraídas da memória.
+
+Na próxima lição, examinaremos como as mensagens são criptografadas após o estabelecimento da sessão: o protocolo AES-GCM e o tratamento de números de sequência.

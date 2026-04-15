@@ -1,0 +1,359 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Configuração de Ambiente](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Configuração de Ambiente
+
+Nos próximos vinte minutos, você terá um projeto React Native pronto para se conectar a qualquer carteira Solana mobile. Sem necessidade de navegador dApp, sem necessidade de extensão de carteira. Apenas comunicação nativa de app para app.
+
+Fazer o desenvolvimento Solana funcionar no React Native requer uma configuração cuidadosa. As bibliotecas JavaScript da Solana assumem um ambiente Node.js com APIs de criptografia que não existem no React Native. Precisamos fornecer polyfills, que são shims que implementam essas APIs ausentes.
+
+> O erro mais comum no desenvolvimento Solana mobile é `crypto.getRandomValues is not a function`. Esta lição garante que você nunca o veja.
+
+<ArticleSection name="Inicialização do Projeto" id="project-initialization" level="h2" />
+
+O caminho mais rápido para um projeto funcional é o scaffold Solana Mobile. Ele cuida de toda a configuração que faríamos manualmente.
+
+```bash
+npm create solana-dapp@latest
+```
+
+Quando solicitado, selecione **Solana Mobile** como framework. Isso gera um projeto com:
+
+- React Native (via Expo)
+- Bibliotecas Mobile Wallet Adapter pré-configuradas
+- Polyfills já configurados
+- Telas de exemplo para autorização e assinatura
+
+Após a geração:
+
+```bash
+cd your-app-name
+npm install
+```
+
+### Começando do Zero
+
+Se você preferir construir do zero ou precisa adicionar MWA a um projeto existente, aqui está a abordagem manual.
+
+Crie um novo projeto Expo:
+
+```bash
+npx create-expo-app SolanaMobileApp --template blank-typescript
+cd SolanaMobileApp
+```
+
+Instale as dependências necessárias:
+
+```bash
+npm install @solana-mobile/mobile-wallet-adapter-protocol-web3js \
+            @solana-mobile/mobile-wallet-adapter-protocol \
+            @solana/web3.js \
+            react-native-get-random-values \
+            @craftzdog/react-native-buffer \
+            react-native-quick-base64 \
+            @react-native-async-storage/async-storage
+```
+
+Então instale o safe area context para o tratamento adequado de layout:
+
+```bash
+npx expo install react-native-safe-area-context
+```
+
+**Nota:** Usamos `@craftzdog/react-native-buffer` em vez do pacote buffer do Node.js. Este pacote é otimizado para React Native e funciona corretamente com o Expo.
+
+<ArticleSection name="Configuração de Polyfills" id="polyfill-configuration" level="h2" />
+
+O runtime JavaScript do React Native não possui várias APIs que o `@solana/web3.js` espera:
+
+- `crypto.getRandomValues()`: para gerar keypairs
+- `Buffer`: para manipulação de arrays de bytes
+
+Estes devem ser preenchidos com polyfills **antes** que qualquer código Solana seja executado. A ordem importa criticamente aqui.
+
+> **Nota:** `TextEncoder/TextDecoder` agora estão incluídos nativamente no Hermes (o engine JS do React Native), então você não precisa mais aplicar polyfill neles.
+
+### O Arquivo de Polyfill
+
+Crie um arquivo que será executado primeiro na sua aplicação:
+
+```typescript
+// src/polyfills.ts
+import 'react-native-get-random-values';
+import { Buffer } from '@craftzdog/react-native-buffer';
+
+// Tornar Buffer globalmente disponível
+// Type assertion necessária: @craftzdog/react-native-buffer é API-compatible
+// mas tem uma assinatura TypeScript diferente do BufferConstructor do Node
+if (typeof global.Buffer === 'undefined') {
+  global.Buffer = Buffer as unknown as typeof global.Buffer;
+}
+```
+
+### Carregando Polyfills Primeiro
+
+A ordem de imports no seu ponto de entrada determina a ordem de execução. Polyfills devem vir antes de quaisquer outros imports:
+
+```typescript
+// index.ts ou App.tsx (seu ponto de entrada)
+import './src/polyfills'; // DEVE ser o primeiro
+import { registerRootComponent } from 'expo';
+import App from './App';
+
+registerRootComponent(App);
+```
+
+Se você estiver usando a estrutura padrão do Expo com `App.tsx` como ponto de entrada:
+
+```typescript
+// App.tsx
+import './src/polyfills'; // Primeira linha
+import { StatusBar } from 'expo-status-bar';
+import { StyleSheet, View } from 'react-native';
+// ... resto dos imports
+```
+
+<ArticleSection name="Verificando Sua Configuração" id="verifying-setup" level="h2" />
+
+Antes de prosseguir, verifique se seus polyfills funcionam corretamente. Adicione um teste que execute na inicialização do app:
+
+```typescript
+// src/utils/verifySetup.ts
+import { Keypair } from '@solana/web3.js';
+
+export function verifyPolyfills(): boolean {
+  try {
+    // Teste 1: crypto.getRandomValues deve funcionar
+    const randomBytes = new Uint8Array(32);
+    crypto.getRandomValues(randomBytes);
+    
+    // Teste 2: Geração de Keypair deve funcionar
+    const keypair = Keypair.generate();
+    console.log('✓ Keypair de teste gerado:', keypair.publicKey.toBase58());
+    
+    // Teste 3: Buffer deve funcionar
+    const buffer = Buffer.from('test', 'utf-8');
+    console.log('✓ Buffer funcionando:', buffer.toString('hex'));
+    
+    // Teste 4: TextEncoder deve funcionar
+    const encoded = new TextEncoder().encode('test');
+    console.log('✓ TextEncoder funcionando:', encoded.length, 'bytes');
+    
+    return true;
+  } catch (error) {
+    console.error('Falha na verificação de polyfill:', error);
+    return false;
+  }
+}
+```
+
+Chame isso no seu app:
+
+```typescript
+// App.tsx
+import './src/polyfills';
+import { useEffect } from 'react';
+import { verifyPolyfills } from './src/utils/verifySetup';
+
+export default function App() {
+  useEffect(() => {
+    const ready = verifyPolyfills();
+    if (!ready) {
+      console.error('Polyfills não foram carregados corretamente!');
+    }
+  }, []);
+  
+  // ... resto do seu app
+}
+```
+
+Execute o app e verifique seu console. Você deve ver todos os quatro testes passarem. Se algum falhar, seus polyfills não estão carregando na ordem correta.
+
+<ArticleSection name="Build de Desenvolvimento Expo" id="expo-development-build" level="h2" />
+
+Aqui está algo que engana muitos desenvolvedores: **Expo Go não pode executar apps MWA**.
+
+O Expo Go é o app que você baixa da loja de aplicativos que executa projetos Expo instantaneamente. É ótimo para desenvolvimento rápido, mas empacota seu próprio runtime JavaScript sem os módulos nativos que o MWA precisa.
+
+Para o Mobile Wallet Adapter, você precisa de um **Development Build**: uma versão personalizada do Expo que inclui o código nativo que seu app requer.
+
+### Criando um Development Build
+
+Primeiro, instale o expo-dev-client:
+
+```shellscript
+npx expo install expo-dev-client
+```
+
+Então faça o build para Android localmente:
+
+```shellscript
+npx expo run:android
+```
+
+Isso compila código nativo Android e instala um client Expo personalizado no seu dispositivo ou emulador. Leva mais tempo que o Expo Go, mas só precisa ser executado uma vez (a menos que você altere dependências nativas).
+
+### Conectando Seu Dispositivo
+
+Para testar em um dispositivo físico:
+
+1. Habilite Opções de Desenvolvedor no seu telefone Android (toque em Build Number 7 vezes em Configurações > Sobre)
+2. Habilite Depuração USB nas Opções de Desenvolvedor
+3. Conecte via USB
+4. Execute `adb devices` para verificar a conexão
+5. Execute `npx expo run:android`
+
+Para testar em um emulador com Mock MWA:
+1. Instale o Mock MWA de [https://github.com/solana-mobile/mock-mwa-wallet](https://github.com/solana-mobile/mock-mwa-wallet)
+2. Siga as instruções do Mock MWA para configurar o emulador para testes MWA.
+3. Execute `npx expo run:android` para instalar o development build no emulador.
+
+<ArticleSection name="Estrutura do Projeto" id="project-structure" level="h2" />
+
+Organize seu projeto para uma separação limpa entre código específico da Solana e UI:
+
+```
+src/
+├── polyfills.ts              # Shims de criptografia (carrega primeiro)
+├── App.tsx                   # Componente raiz
+├── providers/
+│   ├── AuthorizationProvider.tsx   # Gerenciamento de estado MWA
+│   └── ConnectionProvider.tsx      # Conexão RPC
+├── hooks/
+│   ├── useAuthorization.ts         # Hook de contexto de autenticação
+│   └── useTransactions.ts          # Helpers de transação
+├── screens/
+│   ├── HomeScreen.tsx
+│   └── SendScreen.tsx
+├── utils/
+│   ├── verifySetup.ts              # Verificação de polyfill
+│   └── constants.ts                # Identidade do app, URLs de RPC
+└── components/
+    ├── ConnectButton.tsx
+    └── TransactionStatus.tsx
+```
+
+Esta estrutura separa responsabilidades:
+- **Providers** gerenciam estado da carteira e conexões RPC
+- **Hooks** expõem esse estado aos componentes
+- **Screens** compõem a UI
+- **Utils** contêm funções puras e constantes
+
+<ArticleSection name="Constantes do App" id="app-constants" level="h2" />
+
+Defina a identidade do seu app e configuração de rede em um único lugar:
+
+```typescript
+// src/utils/constants.ts
+
+export const APP_IDENTITY = {
+  name: 'My Solana dApp',
+  uri: 'https://mydapp.com',
+  icon: 'favicon.ico', // Relativo à uri
+};
+
+export const RPC_ENDPOINT = 'https://api.devnet.solana.com';
+
+export const CLUSTER = 'solana:devnet' as const;
+
+// Endpoints alternativos para produção
+export const MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+export const MAINNET_CLUSTER = 'solana:mainnet' as const;
+```
+
+O objeto `APP_IDENTITY` aparece nos prompts de autorização da carteira. Use um domínio real que você controle. Carteiras podem verificar a propriedade.
+
+<ArticleSection name="Problemas Comuns de Configuração" id="common-issues" level="h2" />
+
+### `crypto.getRandomValues is not a function`
+
+O polyfill não está carregando antes do código Solana. Verifique:
+1. `import './src/polyfills'` é literalmente o primeiro import no seu arquivo de entrada
+2. O arquivo de polyfill importa corretamente `react-native-get-random-values`
+3. Você reconstruiu o development client após adicionar o pacote
+
+### `Buffer is not defined`
+
+Causa similar: o polyfill Buffer não está disponível globalmente. Certifique-se de que:
+1. Seu arquivo de polyfill define `global.Buffer = Buffer`
+2. O polyfill é executado antes de qualquer código que usa Buffer
+
+### Build falha com erros de módulo nativo
+
+Você provavelmente está executando no Expo Go em vez de um development build. MWA requer código nativo que o Expo Go não inclui.
+
+```bash
+# Pare o Expo Go e construa um dev client
+npx expo run:android
+```
+
+### Localização do SDK não encontrada
+
+Ao executar `npx expo run:android` pela primeira vez, você pode ver:
+
+```
+SDK location not found. Define a valid SDK location with an 
+ANDROID_HOME environment variable or by setting the sdk.dir 
+path in your project's local properties file
+```
+
+O Expo prebuild gera a pasta `android/` mas não cria automaticamente `local.properties`. Crie-o manualmente:
+
+```bash
+# android/local.properties
+sdk.dir=/Users/YOUR_USERNAME/Library/Android/sdk
+```
+
+Ou configure `ANDROID_HOME` no seu perfil de shell (`~/.zshrc` ou `~/.bashrc`):
+
+```bash
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export PATH=$PATH:$ANDROID_HOME/emulator
+export PATH=$PATH:$ANDROID_HOME/platform-tools
+```
+
+Este arquivo é gitignored por padrão, então cada desenvolvedor configura seu próprio caminho de SDK.
+
+### Metro bundler cacheando código antigo
+
+Às vezes o Metro armazena em cache builds anteriores com falha:
+
+```bash
+npx expo start --clear
+```
+
+Ou limpe o cache inteiramente:
+
+```bash
+rm -rf node_modules/.cache
+npx expo start --clear
+```
+
+### Conexão recusada no localhost
+
+A carteira não conseguiu iniciar seu servidor WebSocket, ou seu app tentou conectar antes que ele estivesse pronto. Isso frequentemente acontece em emuladores onde o timing é diferente de dispositivos reais.
+
+Teste em um dispositivo real primeiro. Se o problema persistir, verifique se nenhum outro app está usando a porta aleatoriamente selecionada.
+
+<ArticleSection name="Testando Sem um Dispositivo Físico" id="testing-without-device" level="h2" />
+
+Você pode desenvolver UI e funcionalidades MWA em um emulador usando o [Mock MWA](https://github.com/solana-mobile/mock-mwa-wallet), uma ferramenta dedicada para simular interações MWA. No entanto, para testes completos do protocolo Mobile Wallet Adapter, um dispositivo Android real ainda é recomendado. Use:
+
+1. **Um dispositivo Android real** com Phantom/Solflare instalado
+2. **Uma carteira que suporta conexões com emulador** (verifique a documentação da carteira)
+
+Para o protocolo MWA especificamente, testes em dispositivo real são fortemente recomendados. Emuladores têm diferenças de timing que podem causar falhas de conexão espúrias.
+
+**Nota:** MWA não funciona no iOS. O protocolo usa Android Intents e WebSockets localhost, que o iOS não suporta da mesma forma. A especificação MWA lista iOS como "planejado para uma versão futura". Se você precisa de suporte iOS, pule para o Curso 3 (Embedded Wallets) para soluções multiplataforma.
+
+<ArticleSection name="Próximos Passos" id="next-steps" level="h2" />
+
+Seu ambiente está pronto. Você tem:
+
+- Um projeto React Native com polyfills adequados
+- Capacidade de development build para suporte a módulos nativos
+- Estrutura de projeto organizada
+- Testes de verificação para detectar erros de configuração
+
+Na próxima lição, usaremos `transact()` para realmente conectar a uma carteira e recuperar a chave pública do usuário.

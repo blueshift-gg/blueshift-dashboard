@@ -1,0 +1,412 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Verificação de Identidade
+
+Quando uma carteira mostra "Meu dApp quer se conectar", como ela sabe que a requisição realmente veio de "Meu dApp"? A especificação MWA define mecanismos de verificação de identidade que permitem às carteiras autenticar dApps, protegendo os usuários contra phishing e falsificação de identidade.
+
+<ArticleSection name="O Problema da Identidade" id="problem" level="h2" />
+
+Sem verificação, qualquer app poderia se passar por qualquer outro:
+
+```json
+{
+  "method": "authorize",
+  "params": {
+    "identity": {
+      "name": "Phantom Wallet",
+      "uri": "https://phantom.app"
+    }
+  }
+}
+```
+
+O usuário vê "Phantom Wallet" e aprova, mas a requisição veio de um app malicioso.
+
+A verificação de identidade resolve isso vinculando criptograficamente a identidade declarada do dApp a algo verificável.
+
+<ArticleSection name="Mecanismos de Verificação" id="mechanisms" level="h2" />
+
+O MWA suporta diferentes mecanismos de verificação dependendo da plataforma e do tipo de dApp:
+
+| Tipo de dApp | Plataforma | Método de Verificação |
+|-----------|----------|---------------------|
+| App nativo Android | Android | Digital Asset Links |
+| App nativo iOS | iOS | App Attest (futuro) |
+| Web dApp | Qualquer | Verificação de domínio via reflector |
+| PWA | Android | Trusted Web Activity links |
+
+<ArticleSection name="Digital Asset Links" id="dal" level="h2" />
+
+Para apps nativos Android, Digital Asset Links (DAL) é o método de verificação principal.
+
+### Como Funciona
+
+1. O dApp inclui um `uri` em sua identidade: `https://myapp.com`
+2. A carteira busca `https://myapp.com/.well-known/assetlinks.json`
+3. Este arquivo declara quais apps Android estão associados ao domínio
+4. A carteira verifica se a assinatura do app que fez a requisição corresponde
+
+### Formato do assetlinks.json
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.example.myapp",
+    "sha256_cert_fingerprints": [
+      "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5"
+    ]
+  }
+}]
+```
+
+### Fluxo de Verificação
+
+```
++---------+      +---------+      +------------------+
+|  dApp   |      | Carteira|      | servidor myapp.com|
++----+----+      +----+----+      +--------+---------+
+     |                |                    |
+     | authorize      |                    |
+     | uri: myapp.com |                    |
+     |--------------->|                    |
+     |                |                    |
+     |                | GET /.well-known/  |
+     |                | assetlinks.json    |
+     |                |------------------->|
+     |                |                    |
+     |                |<-------------------|
+     |                | [{ package, sig }] |
+     |                |                    |
+     |                | Verificar: requisição de|
+     |                | com.example.myapp  |
+     |                | com assinatura correspondente? |
+     |                |                    |
+     |<---------------|                    |
+     | Verificado!    |                    |
+```
+
+### Cálculo da Impressão Digital
+
+A impressão digital SHA-256 é derivada do certificado de assinatura do app:
+
+```shellscript
+# Obter a impressão digital do seu keystore
+keytool -list -v -keystore my-release-key.keystore -alias my-key-alias
+# A saída inclui: SHA256: 14:6D:E9:83:C5:73:...
+```
+
+Para apps assinados pelo Google Play:
+1. Acesse Google Play Console → Seu App → Release → Setup → App Signing
+2. Copie a impressão digital SHA-256 de "App signing key certificate"
+
+<ArticleSection name="Atestação Android" id="attestation" level="h2" />
+
+Além do DAL, o Android fornece atestação com suporte de hardware através da Key Attestation API e SafetyNet/Play Integrity.
+
+### Key Attestation
+
+O dApp pode gerar uma chave em hardware (TEE/Strongbox) com uma cadeia de certificados de atestação. A carteira pode verificar:
+
+1. A chave foi gerada em um dispositivo Android genuíno
+2. O nome do pacote e a assinatura do app
+3. O estado de segurança do dispositivo
+
+### Fluxo de Atestação do MWA
+
+A especificação define o código de erro `-100` (`ERROR_ATTEST_ORIGIN_ANDROID`) para falhas de atestação:
+
+```json
+{
+  "error": {
+    "code": -100,
+    "message": "Origin attestation failed",
+    "data": {
+      "attestation_type": "android",
+      "reason": "signature_mismatch"
+    }
+  }
+}
+```
+
+Carteiras podem exigir atestação para:
+- Transações de alto valor
+- Operações sensíveis
+- Apps sem DAL configurado
+
+<ArticleSection name="Verificação de Web dApp" id="web-verification" level="h2" />
+
+Web dApps que se conectam via reflector usam verificação baseada em domínio.
+
+### Como Funciona
+
+1. O dApp roda em `https://mywebapp.com`
+2. Ele se conecta a um reflector que verifica a origem
+3. O reflector atesta à carteira que a conexão veio do domínio declarado
+4. A carteira pode buscar o favicon e metadados do site
+
+### Conceito de Reflector Confiável
+
+O reflector serve como uma autoridade de identidade para origens web:
+
+```
++---------------+     +------------+     +----------+
+| Web dApp      |---->| Reflector  |<----| Carteira |
+| mywebapp.com  |     |            |     |          |
++---------------+     | Verifica   |     | Confia   |
+                      | origem     |     | no reflector|
+                      +------------+     +----------+
+```
+
+A carteira deve confiar no reflector. Um reflector malicioso poderia mentir sobre as origens.
+
+### CORS e Headers de Origem
+
+Quando uma página web se conecta ao reflector, o navegador inclui os headers `Origin` e `Referer`. O reflector pode verificar se eles correspondem à identidade declarada.
+
+<ArticleSection name="UI de Verificação nas Carteiras" id="wallet-ui" level="h2" />
+
+Carteiras exibem o status de verificação para os usuários:
+
+### dApp Verificado
+
+```
++------------------------------------+
+|  [check] Verificado: Magic Eden    |
+|  magiceden.io                      |
+|                                    |
+|  A identidade deste app foi        |
+|  verificada criptograficamente.    |
+|                                    |
+|  [Contas a autorizar]              |
+|                                    |
+|  [Aprovar]         [Recusar]       |
++------------------------------------+
+```
+
+### dApp Não Verificado
+
+```
++------------------------------------+
+|  [!] Não verificado: Some dApp     |
+|  declara: example.com              |
+|                                    |
+|  A identidade deste app não pôde   |
+|  ser verificada. Prossiga com cuidado.|
+|                                    |
+|  [Contas a autorizar]              |
+|                                    |
+|  [Aprovar Mesmo Assim] [Recusar]   |
++------------------------------------+
+```
+
+Algumas carteiras podem recusar conexões não verificadas inteiramente.
+
+<ArticleSection name="Configurando DAL para Seu dApp" id="setup-dal" level="h2" />
+
+Guia passo a passo:
+
+### 1. Criar o assetlinks.json
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.yourcompany.yourapp",
+    "sha256_cert_fingerprints": [
+      "SUA_IMPRESSAO_DIGITAL_SHA256"
+    ]
+  }
+}]
+```
+
+### 2. Hospedar o Arquivo
+
+Coloque em `https://yourdomain.com/.well-known/assetlinks.json`
+
+Requisitos:
+- HTTPS (não HTTP)
+- Content-Type: `application/json`
+- Sem redirecionamentos (200 OK diretamente)
+- Acessível sem autenticação
+
+### 3. Configurar Seu dApp
+
+Passe o URI correspondente na autorização:
+
+```typescript
+await wallet.authorize({
+  identity: {
+    uri: 'https://yourdomain.com',
+    name: 'Nome do Seu App',
+    icon: 'icon.png'
+  }
+});
+```
+
+### 4. Testar a Verificação
+
+Use o testador de Digital Asset Links:
+```
+https://developers.google.com/digital-asset-links/tools/generator
+```
+
+Ou verifique manualmente:
+```shellscript
+curl -I https://yourdomain.com/.well-known/assetlinks.json
+# Deve retornar 200 OK com application/json
+```
+
+<ArticleSection name="Múltiplas Impressões Digitais" id="multiple-fingerprints" level="h2" />
+
+Você pode precisar de múltiplas impressões digitais para:
+- Builds de debug vs release
+- Chaves de assinatura diferentes
+- Assinatura do Google Play vs assinatura local
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.yourcompany.yourapp",
+    "sha256_cert_fingerprints": [
+      "IMPRESSAO_DIGITAL_DEBUG",
+      "IMPRESSAO_DIGITAL_RELEASE",
+      "IMPRESSAO_DIGITAL_GOOGLE_PLAY"
+    ]
+  }
+}]
+```
+
+<ArticleSection name="Campos do Objeto de Identidade" id="identity-fields" level="h2" />
+
+O parâmetro `identity` em `authorize`:
+
+| Campo | Tipo | Obrigatório | Descrição |
+|-------|------|----------|-------------|
+| `uri` | string | Sim | URI base para verificação |
+| `icon` | string | Não | Caminho relativo para o ícone |
+| `name` | string | Não | Nome de exibição |
+
+### Resolução de Ícone
+
+O caminho do ícone é relativo ao URI:
+- URI: `https://myapp.com`
+- Ícone: `assets/icon.png`
+- URL completa: `https://myapp.com/assets/icon.png`
+
+A carteira busca e exibe este ícone na UI de autorização.
+
+### Exibição do Nome
+
+Se `name` for omitido, a carteira pode:
+- Usar o domínio do `uri`
+- Mostrar "dApp Desconhecido"
+- Buscar metadados do URI
+
+<ArticleSection name="Considerações de Segurança" id="security" level="h2" />
+
+### Modelo de Confiança
+
+A verificação de identidade assume que:
+1. O dono do domínio controla o arquivo assetlinks.json
+2. A assinatura do app corresponde à impressão digital declarada
+3. O DNS não está comprometido (certificados HTTPS ajudam)
+4. O dispositivo não está rooted/comprometido
+
+### Limitações
+
+O DAL não prova:
+- Que o app faz o que declara
+- Que o domínio é legítimo (domínios de phishing também podem ter DAL)
+- Que o app não é malicioso apesar de estar "verificado"
+
+Os usuários ainda devem exercer bom senso.
+
+### Momento da Verificação vs Momento do Uso
+
+A carteira verifica a identidade quando `authorize` é chamado. Mas:
+- O dApp poderia mudar seu comportamento depois
+- O assetlinks.json poderia ser modificado
+
+Para cenários de alta segurança, carteiras podem re-verificar periodicamente.
+
+<ArticleSection name="Debugando a Verificação" id="debugging" level="h2" />
+
+### Problemas Comuns
+
+**"Verificação falhou: assetlinks.json não encontrado"**
+- Verifique se o arquivo está em `/.well-known/assetlinks.json`
+- Certifique-se de que HTTPS está funcionando
+- Sem redirecionamentos
+
+**"Verificação falhou: nome do pacote não corresponde"**
+- O `package_name` no assetlinks.json deve corresponder exatamente ao pacote do seu app
+- Verifique se há erros de digitação
+
+**"Verificação falhou: impressão digital não corresponde"**
+- Certifique-se de que está usando a chave de assinatura correta
+- Para apps da Play Store, use a impressão digital do Play Signing
+- Regenere a impressão digital se as chaves mudaram
+
+**"Verificação falhou: erro de rede"**
+- A carteira não conseguiu acessar seu servidor
+- Verifique a disponibilidade do servidor
+- Algumas carteiras armazenam resultados em cache; tente limpar o cache
+
+### Testando Sem Servidor de Produção
+
+Para desenvolvimento:
+1. Use um servidor local com ngrok ou similar
+2. Configure o assetlinks.json na URL do túnel
+3. Use essa URL na identidade do seu dApp
+
+<ArticleSection name="Métodos de Verificação Futuros" id="future" level="h2" />
+
+A especificação permite métodos futuros:
+
+### iOS App Attest
+
+As APIs DeviceCheck e App Attest da Apple poderiam fornecer garantias similares para apps iOS.
+
+### Identidade Descentralizada
+
+Versões futuras podem suportar:
+- Verificação de domínios ENS ou SNS
+- Registros de identidade on-chain
+- Serviços de atestação descentralizados
+
+### Integração com Passkeys
+
+WebAuthn/Passkeys poderiam vincular a autorização da carteira a biometria do dispositivo e chaves de hardware.
+
+<ArticleSection name="Melhores Práticas" id="best-practices" level="h2" />
+
+### Para Desenvolvedores de dApps
+
+1. **Sempre configure o DAL**: Mesmo para apps simples. Isso constrói confiança com o usuário.
+
+2. **Use seu domínio principal**: Não use subdomínios obscuros para `identity.uri`.
+
+3. **Mantenha o assetlinks.json atualizado**: Ao rotacionar chaves, atualize o arquivo antes de implantar novos builds.
+
+4. **Inclua nomes significativos**: Ajude os usuários a identificar seu app na UI da carteira.
+
+5. **Forneça ícones claros**: PNG 512x512 com fundo transparente funciona bem.
+
+### Para Desenvolvedores de Carteiras
+
+1. **Sempre verifique quando possível**: Exija verificação por padrão para apps em produção.
+
+2. **Indique claramente o status de verificação**: Os usuários devem saber se um app está verificado.
+
+3. **Armazene em cache com sabedoria**: Equilibre segurança (verificações frequentes) com desempenho (cache).
+
+4. **Falhe aberto para debug**: Permita conexões não verificadas em modo de desenvolvimento.
+
+5. **Registre falhas de verificação**: Ajude desenvolvedores a diagnosticar problemas.
+
+Na próxima lição, examinaremos o protocolo reflector em detalhes e exploraremos técnicas de debugging para sessões MWA.

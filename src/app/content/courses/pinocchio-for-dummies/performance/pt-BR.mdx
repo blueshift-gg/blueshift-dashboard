@@ -1,0 +1,243 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Desempenho
+
+Embora muitos desenvolvedores recorram ao Pinocchio pelo seu controle refinado sobre campos de conta, sua verdadeira força reside em permitir o máximo desempenho.
+
+Nesta seção, vamos explorar estratégias práticas para alcançar eficiência ideal em seus programas Solana.
+
+<ArticleSection name="Verificações Desnecessárias" id="superfluous-checks" level="h2" />
+
+Desenvolvedores frequentemente adicionam restrições extras de conta por segurança, mas essas podem introduzir overhead desnecessário. É importante distinguir entre verificações essenciais e redundantes.
+
+Por exemplo, ao simplesmente ler de uma `Token Account` ou `Mint`, a deserialização e validação são necessárias. Mas se essas mesmas contas forem usadas posteriormente em uma CPI (Cross-Program Invocation), qualquer incompatibilidade ou erro fará a instrução falhar naquele ponto. Assim, verificações preventivas podem ser redundantes.
+
+Da mesma forma, verificar o "owner" de uma Token Account é frequentemente desnecessário; especialmente se a conta é controlada por um PDA (Program Derived Address). Se o owner estiver incorreto, a CPI falhará devido a seeds inválidas. Nos casos em que a transferência não é executada por um PDA, você deve focar em validar o destinatário, particularmente ao depositar em uma conta controlada por PDA, já que o interesse do remetente está alinhado com o do programa.
+
+Vamos considerar o exemplo de um `Escrow`:
+
+...
+
+### Associated Token Program
+
+`Associated Token Accounts` (ATAs) são convenientes, mas têm um custo de desempenho. Evite impor seu uso a menos que seja absolutamente necessário, e nunca exija sua criação dentro da lógica da sua instrução. Para a maioria dos cenários, o padrão `init-if-needed` adiciona complexidade evitável e uso de recursos (como em instruções de Amm que são compostas por roteadores como a Jupiter).
+
+Se seu programa depende de ATAs, garanta que elas sejam criadas externamente. Dentro do seu programa, verifique sua corretude derivando o endereço esperado diretamente assim:
+
+```rust
+let (associated_token_account, _) = find_program_address(
+    &[
+        self.accounts.owner.key(),
+        self.accounts.token_program.key(),
+        self.accounts.mint.key(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+```
+
+Ao minimizar verificações desnecessárias e requisitos de contas, você reduz custos de compute e simplifica a execução do seu programa; desbloqueando todo o potencial de desempenho do desenvolvimento nativo na Solana.
+
+> Adicionar verificações para que a instrução falhe cedo tem suas vantagens, já que as compute units consumidas serão definitivamente menores. Então considere se a instrução será usada principalmente com flags como `{ skipPreflight: true }`.
+
+<ArticleSection name="Flag de Desempenho" id="perf-flag" level="h2" />
+
+As feature flags do Rust fornecem uma maneira poderosa de compilar código condicionalmente, permitindo que você alterne funcionalidades para diferentes perfis de build; como desenvolvimento, testes ou desempenho máximo em produção.
+
+Isso é especialmente útil em programas Solana, onde cada compute unit conta.
+
+### Configurando Feature Flags
+
+Feature flags são definidas no seu arquivo `Cargo.toml` na seção `[features]`. Por exemplo, você pode querer uma flag `perf` que habilite otimizações de desempenho desabilitando logging e verificações extras:
+
+```
+[features]
+default = ["perf"]
+perf = []
+```
+
+Aqui, a feature perf está habilitada por padrão, mas você pode sobrescrevê-la ao compilar ou testar.
+
+### Usando Feature Flags no Código
+
+Você pode usar os atributos de compilação condicional do Rust para incluir ou excluir código com base na feature ativa. Por exemplo:
+
+```rust
+pub fn process(ctx: Context<'info>) -> ProgramResult {
+    #[cfg(not(feature = "perf"))]
+    sol_log("Create Class");
+    Self::try_from(ctx)?.execute()
+}
+```
+
+A maioria dos programas retorna o nome da instrução como log para facilitar a depuração e garantir que a instrução correta foi chamada.
+
+No entanto, isso é custoso e não é realmente necessário, exceto para tornar o explorer mais legível e melhorar a depuração.
+
+```rust
+#[cfg(not(feature = "perf"))]
+if name.len() > MAX_NAME_LEN {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+
+Outro exemplo são as verificações desnecessárias discutidas anteriormente.
+
+Se sabemos que nossa instrução é segura sem essas verificações, não devemos torná-las o padrão, mas sim escondê-las atrás de uma flag.
+
+> Neste exemplo, criamos uma flag `perf` para indicar que, se quisermos que o programa seja o mais performático possível, devemos usar a flag perf ao compilá-lo.
+
+### Compilando com Diferentes Flags
+
+Para compilar seu programa com ou sem a feature `perf`, use:
+
+- Com otimizações de desempenho (padrão):
+
+```
+cargo build-bpf
+```
+
+- Com verificações extras e logging:
+
+```
+cargo build-bpf --no-default-features
+```
+
+Essa abordagem permite manter uma única base de código que pode ser ajustada para segurança no desenvolvimento ou velocidade em produção simplesmente alternando uma feature flag.
+
+<ArticleSection name="Operações Bit a Bit" id="bitwise-operations" level="h2" />
+
+Quando discutimos operações eficientes, booleanos estão entre os mais desperdiçadores. Considere: eles ocupam 1 byte para representar apenas dois valores possíveis: 0 ou 1.
+
+Se você tem múltiplos booleanos no seu código, pode armazená-los de forma muito mais eficiente usando manipulação de bits. Com operações bit a bit, você pode armazenar até 8 valores booleanos diferentes em um único byte.
+
+### Definição de Flags
+
+Defina flags como posições de bits usando operações de deslocamento à esquerda:
+
+```rust
+const FLAG_ACTIVE: u8 = 1 << 0;     // 0000_0001
+const FLAG_VERIFIED: u8 = 1 << 1;   // 0000_0010
+const FLAG_PREMIUM: u8 = 1 << 2;    // 0000_0100
+const FLAG_LOCKED: u8 = 1 << 3;     // 0000_1000
+```
+
+Para definir uma flag, podemos simplesmente fazer:
+
+```rust
+let mut flags = 0u8;           // flags = 0000_0000
+
+flags |= FLAG_ACTIVE;          // flags = 0000_0001
+flags |= FLAG_VERIFIED;        // flags = 0000_0011
+flags |= FLAG_PREMIUM | FLAG_LOCKED;  // flags = 0000_1111
+```
+
+O `|` (operador OR) é perfeito para "ligar" bits específicos sem afetar os outros, já que quando você faz OR com 0, o bit original é preservado, e quando faz OR com 1, o resultado é sempre 1 (a flag é definida)
+
+Se queremos verificar se uma flag está ativa, podemos fazer algo assim:
+
+```rust
+let flags = 0b0000_0101u8;  // Tem as flags ACTIVE e PREMIUM definidas
+
+// Verifica se uma única flag está definida
+if flags & FLAG_ACTIVE != 0 {
+    println!("Account is active");
+}
+
+// Verifica se múltiplas flags estão definidas
+if (flags & (FLAG_ACTIVE | FLAG_PREMIUM)) == (FLAG_ACTIVE | FLAG_PREMIUM) {
+    println!("Account is both active and premium");
+}
+
+// Verifica se qualquer uma das múltiplas flags está definida
+if flags & (FLAG_VERIFIED | FLAG_PREMIUM) != 0 {
+    println!("Account is either verified or premium (or both)");
+}
+```
+
+O `&` (operador AND) é perfeito para "mascarar" bits específicos para verificar seus valores, já que quando você faz AND com 0, o resultado é sempre 0, e quando faz AND com 1, o bit original é preservado
+
+Para limpar ou alternar flags, podemos fazer algo assim:
+
+```rust
+let mut flags = 0b0000_1111u8;      // Todas as flags definidas
+
+// Limpa uma única flag
+flags &= !FLAG_ACTIVE;              // flags = 0000_1110
+
+// Limpa múltiplas flags de uma vez
+flags &= !(FLAG_VERIFIED | FLAG_PREMIUM);   // flags = 0000_1000
+
+// Alterna uma única flag
+flags ^= FLAG_ACTIVE;               // flags = 0000_1001 (agora tem VERIFIED)
+flags ^= FLAG_LOCKED;               // flags = 0000_0001 (LOCKED agora limpa)
+
+// Alterna múltiplas flags de uma vez
+flags ^= FLAG_PREMIUM | FLAG_LOCKED;        // flags = 0000_1011
+```
+
+<ArticleSection name="Memória na Solana" id="memory-on-solana" level="h2" />
+
+A Solana Virtual Machine (SVM) usa uma arquitetura de memória de três camadas que separa estritamente memória de stack (variáveis locais), memória de heap (estruturas dinâmicas) e espaço de contas (armazenamento persistente).
+
+Entender essa arquitetura é crucial para escrever programas Solana de alto desempenho.
+
+Os programas operam dentro de espaços de endereços virtuais fixos com mapeamento de memória previsível:
+- **Código do Programa**: `0x100000000` - Onde o bytecode compilado do seu programa reside
+- **Dados da Stack**: `0x200000000` - Variáveis locais e frames de chamada de função
+- **Dados do Heap**: `0x300000000` - Alocações dinâmicas (custoso!)
+
+Esse layout determinístico permite otimizações poderosas, mas também cria restrições rígidas de desempenho.
+
+> A Solana impõe limitações estritas de memória: 4KB de stack frames por chamada de função e 32KB de espaço total de heap por execução de programa.
+
+### A Vantagem da Zero-Allocation
+
+O principal avanço de desempenho do Pinocchio vem do uso de referências em vez de alocações de heap para tudo.
+
+Essa abordagem aproveita um insight fundamental: **a SVM já carrega todas as entradas do seu programa na memória**, então copiar esses dados para novas alocações de heap é puro desperdício.
+
+Alocação de heap não é inerentemente ruim, mas na Solana é custosa e complexa porque cada alocação consome compute units preciosas: cada alocação fragmenta o espaço limitado do heap e operações de limpeza consomem compute units adicionais.
+
+### Técnicas de Zero-Allocation
+
+1. Estruturas de Dados Baseadas em Referências - Transforme dados owned em referências emprestadas:
+    ```rust
+    // ALOCAÇÃO NO HEAP:
+    struct AccountInfo {
+        key: Pubkey,        // Dados owned - copiados para o heap
+        data: Vec<u8>,      // Vector - definitivamente alocado no heap
+    }
+
+    // ZERO ALLOCATION:
+    struct AccountInfo<'a> {
+        key: &'a Pubkey,    // Referência - sem alocação
+        data: &'a [u8],     // Referência de slice - sem alocação
+    }
+    ```
+
+2. Acesso a Dados Zero-Copy - Acesse dados in-place sem deserialização:
+    ```rust
+    // Em vez de deserializar, acesse os dados in-place:
+    pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
+        // Faz parse das contas diretamente do slice de bytes - SEM ALOCAÇÃO NO HEAP
+        let source_account = &accounts[0..36];  // Apenas slices de referência
+        let dest_account = &accounts[36..72];
+
+        // Acessa campos através de aritmética de ponteiros - SEM ALOCAÇÃO
+        let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
+    }
+    ```
+
+3. Restrições No-Std - Previne uso acidental de heap em tempo de compilação:
+    ```rust
+    // Impõe no-std para prevenir uso acidental do heap:
+    #![no_std]
+    ```
+
+### Alocador de Memória do Pinocchio
+
+Se você quer ter certeza de que não está alocando nenhum heap, o Pinocchio fornece uma macro especializada para garantir que isso nunca aconteça: `no_allocator!()`
+
+> Se não definido, o Pinocchio usará o `default_allocator!()` para programas que requerem operações tradicionais de heap.
+
+Além disso, você sempre pode escrever um alocador de heap melhor que saiba como fazer limpeza após si mesmo. Se você tem interesse nessa abordagem, [aqui está um exemplo](https://github.com/solana-labs/solana-program-library/blob/master/examples/rust/custom-heap/src/entrypoint.rs).

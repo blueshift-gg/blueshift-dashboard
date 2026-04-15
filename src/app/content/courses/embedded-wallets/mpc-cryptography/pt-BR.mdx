@@ -1,0 +1,264 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![MPC Cryptography](/graphics/course-banners/embedded-wallets.png)
+
+# Computação Multi-Parte (Multi-Party Computation)
+
+Toda carteira tradicional tem uma falha fatal: a chave privada existe em um único lugar. Seja uma seed phrase no papel, um arquivo criptografado no seu celular ou uma carteira de hardware na sua gaveta, comprometa esse único local e tudo estará perdido.
+
+A Computação Multi-Parte (MPC) elimina essa fraqueza arquitetural. A chave privada é dividida em partes distribuídas entre múltiplas partes. Nenhuma parte individual jamais detém a chave completa. Para assinar uma transação, as partes colaboram por meio de protocolos criptográficos que produzem assinaturas válidas sem nunca reconstruir a chave original.
+
+Isso não é segurança por obscuridade. É uma reestruturação fundamental de onde os segredos residem.
+
+<ArticleSection name="O Problema do Ponto Único de Falha" id="single-point-of-failure" level="h2" />
+
+O armazenamento tradicional de chaves cria um modelo de segurança binário: ou o invasor tem sua chave, ou não tem. Não há meio-termo.
+
+Considere a superfície de ataque de uma carteira móvel convencional:
+
+- **Comprometimento do dispositivo**: Malware, roubo físico ou extração forense
+- **Comprometimento do backup**: Violação de armazenamento em nuvem, roubo físico da seed phrase
+- **Erro do usuário**: Phishing, sequestro de área de transferência, aplicativos falsos
+- **Comprometimento custodial**: Se um terceiro detém sua chave, você herda todos os seus riscos de segurança
+
+Cada um desses representa perda total e irreversível de fundos. Todo o modelo de segurança depende de prevenir simultaneamente todos os possíveis vetores de ataque.
+
+O MPC muda a equação. Mesmo que um invasor comprometa uma parte, ele não ganha nada utilizável. O requisito de limite (tipicamente 2-de-2 ou 2-de-3) significa que múltiplos sistemas independentes precisam falhar para que os fundos estejam em risco.
+
+<ArticleSection name="Fundamentos de Compartilhamento de Segredos" id="secret-sharing" level="h2" />
+
+Antes de entender assinaturas MPC, precisamos entender como segredos podem ser divididos.
+
+### Compartilhamento de Segredos de Shamir (Shamir's Secret Sharing)
+
+Em 1979, Adi Shamir publicou um esquema que permite dividir qualquer segredo em `n` partes onde qualquer `t` partes (o limite) podem reconstruí-lo, mas `t-1` partes não revelam nada.
+
+A intuição matemática é elegante: um polinômio de grau `t-1` é unicamente determinado por `t` pontos. Para dividir um segredo:
+
+1. Escolha um polinômio aleatório de grau `t-1` onde o segredo é o termo constante
+2. Avalie o polinômio em `n` pontos diferentes
+3. Cada ponto se torna uma parte
+
+Por exemplo, para criar um esquema 2-de-3 para o segredo `S`:
+- Escolha o coeficiente aleatório `a`
+- Defina o polinômio: `f(x) = S + ax`
+- Parte 1: `f(1) = S + a`
+- Parte 2: `f(2) = S + 2a`
+- Parte 3: `f(3) = S + 3a`
+
+Quaisquer duas partes podem reconstruir a linha e encontrar `S = f(0)`. Uma parte sozinha não revela nada porque infinitas linhas passam por um único ponto.
+
+### Do Compartilhamento à Computação
+
+O esquema de Shamir divide segredos, mas a reconstrução exige reunir as partes, recriando o ponto único de falha no momento da assinatura.
+
+Os protocolos MPC vão além: eles computam sobre segredos compartilhados sem nunca combiná-los. As partes interagem por meio de protocolos cuidadosamente projetados que produzem resultados (como assinaturas) sem expor o segredo subjacente.
+
+<ArticleSection name="Assinaturas de Limite (Threshold Signatures)" id="threshold-signatures" level="h2" />
+
+Um esquema de assinatura de limite estende o compartilhamento de segredos para a própria operação de assinatura. Em vez de reconstruir a chave privada para assinar, cada detentor de parte computa uma assinatura parcial. Essas assinaturas parciais se combinam em uma assinatura válida que é indistinguível de uma produzida por um único assinante.
+
+### O Modelo 2-de-2
+
+A maioria dos provedores de carteiras embarcadas usa assinaturas de limite 2-de-2:
+
+```
++------------------+        +------------------+
+|   Dispositivo do  |        |  HSMs do Provedor|
+|     Usuário       |        |                  |
+|   Parte A         |        |   Parte B        |
+|   (criptografada) |        |   (isolada)      |
++------------------+        +------------------+
+         |                           |
+         |    Protocolo de Assinatura MPC
+         +------------+--------------+
+                      |
+              +----------------+
+              | Assinatura Válida|
+              +----------------+
+```
+
+Nenhuma das partes pode assinar sozinha. A parte do dispositivo do usuário requer desbloqueio biométrico. A parte do provedor fica em Hardware Security Modules (HSMs) que aplicam políticas de autenticação.
+
+Um invasor precisa comprometer simultaneamente:
+- O dispositivo do usuário E ultrapassar a biometria
+- A infraestrutura do provedor E ultrapassar as proteções do HSM
+
+Isso é dramaticamente mais difícil do que comprometer um único local.
+
+### Por Que Não Simplesmente Multi-Sig?
+
+A Solana suporta contas multi-assinatura nativas, então por que usar MPC?
+
+**Limitações do multi-sig:**
+- Assinaturas são públicas: todos podem ver a estrutura de assinatura on-chain
+- Taxas mais altas: múltiplas assinaturas significam transações maiores
+- Endereços diferentes: contas multi-sig têm endereços diferentes de contas de assinatura única
+- Complexidade de protocolo: aplicações precisam entender e suportar a estrutura multi-sig
+
+**Vantagens do MPC:**
+- Saída de assinatura única: tamanho e taxas de transação padrão
+- Privacidade: a estrutura de limite é invisível on-chain
+- Compatibilidade de endereços: carteiras MPC parecem idênticas a carteiras regulares
+- Transparência de protocolo: aplicações não precisam de suporte especial para MPC
+
+Da perspectiva da blockchain, uma assinatura MPC é indistinguível de uma assinatura regular. A complexidade é inteiramente off-chain.
+
+<ArticleSection name="EdDSA e FROST" id="eddsa-frost" level="h2" />
+
+A Solana usa assinaturas Ed25519 (EdDSA sobre Curve25519). Criar assinaturas de limite para EdDSA requer protocolos especializados porque o algoritmo de assinatura não se divide tão naturalmente quanto o ECDSA.
+
+### O Protocolo FROST
+
+FROST (Flexible Round-Optimized Schnorr Threshold) é um esquema de assinatura de limite projetado para assinaturas do tipo Schnorr, incluindo EdDSA.
+
+**Geração de chaves** distribui a chave privada em partes:
+1. Cada parte gera polinômios aleatórios
+2. As partes trocam compromissos e verificam a consistência
+3. Cada parte computa sua parte a partir dos polinômios combinados
+4. A chave pública é derivada dos compromissos combinados
+
+**Assinatura** requer duas rodadas de comunicação:
+1. **Rodada de comprometimento**: Cada participante gera nonces aleatórios e compartilha compromissos
+2. **Rodada de assinatura**: Os participantes computam assinaturas parciais usando suas partes e o comprometimento agregado. As assinaturas parciais se combinam na assinatura final.
+
+A garantia de segurança: nenhuma coalizão menor que o limite pode forjar assinaturas ou descobrir a chave privada, mesmo que se comportem de forma maliciosa.
+
+### Saída Ed25519 Nativa
+
+O FROST produz assinaturas que são matematicamente idênticas a assinaturas Ed25519 padrão. Quando sua transação na Solana inclui uma assinatura gerada por MPC:
+
+- Validadores a verificam com verificação Ed25519 padrão
+- Exploradores a exibem como uma assinatura normal
+- Smart contracts não podem distingui-la de assinaturas de carteiras de hardware
+
+Essa compatibilidade é crucial. O MPC é puramente uma melhoria de segurança off-chain que não requer mudanças no protocolo da blockchain.
+
+<ArticleSection name="Geração de Chaves Sem Confiança" id="distributed-key-generation" level="h2" />
+
+Uma questão crítica: quem cria a chave inicial que é dividida?
+
+Se uma parte gera a chave e distribui as partes, essa parte conhece a chave completa durante a geração. Isso prejudica todo o modelo de segurança.
+
+### Geração Distribuída de Chaves (DKG)
+
+Os protocolos DKG criam chaves colaborativamente para que nenhuma parte individual jamais conheça a chave completa:
+
+1. Cada parte gera dados aleatórios e se compromete com eles
+2. As partes trocam contribuições criptografadas
+3. A combinação matemática produz partes onde a chave subjacente nunca foi computada inteiramente
+
+A chave literalmente nunca existe em um único lugar, nem mesmo durante a criação.
+
+### Suposições de Confiança
+
+Diferentes provedores fazem diferentes suposições de confiança:
+
+**DKG completo**: O dispositivo do usuário e o provedor geram a chave conjuntamente. Nenhum deles poderia ter visto a chave completa.
+
+**Geração pelo provedor com divisão imediata**: O provedor gera em um HSM e divide imediatamente. O HSM é confiável para não vazar.
+
+**Geração pelo usuário com backup**: O usuário gera localmente, divide e envia uma parte ao provedor. O usuário teve brevemente a chave completa.
+
+Essas representam diferentes pontos no espectro segurança/conveniência. O DKG completo é o mais seguro, mas requer fluxos de configuração mais complexos.
+
+<ArticleSection name="Recuperação Sem Reconstrução" id="recovery" level="h2" />
+
+O que acontece quando um usuário perde seu dispositivo?
+
+Carteiras tradicionais têm uma resposta brutal: restaure a partir da seed phrase ou perca tudo. O MPC permite opções de recuperação mais sofisticadas.
+
+### Recuperação Assistida pelo Provedor
+
+A parte do provedor nunca é perdida. A recuperação exige comprovar identidade para gerar uma nova parte de dispositivo:
+
+1. O usuário se autentica por canais verificados (e-mail, telefone, verificação de identidade)
+2. O HSM do provedor mantém a parte do provedor inalterada
+3. Uma nova parte de dispositivo é gerada e pareada com a parte do provedor existente
+4. A parte de dispositivo antiga é invalidada
+
+A chave em si não muda. Apenas a distribuição das partes é atualizada.
+
+### Recuperação Social
+
+Alguns protocolos suportam esquemas `t-de-n` onde múltiplas partes detém partes de backup:
+
+- Amigos de confiança detêm partes de recuperação criptografadas
+- A recuperação exige que `t` deles participem
+- Nenhum deles pode acessar os fundos sozinho
+
+Isso elimina o provedor como ponto central de confiança mantendo a capacidade de recuperação.
+
+### Rotação de Chaves
+
+O MPC permite segurança proativa através da renovação de partes:
+
+1. As partes executam um protocolo que gera novas partes para a mesma chave
+2. As partes antigas tornam-se inválidas
+3. Um invasor que roubou uma parte antes da rotação não ganha nada
+
+Rotações regulares limitam a janela de vulnerabilidade. Mesmo que partes sejam comprometidas, a rotação pode invalidá-las antes da exploração.
+
+<ArticleSection name="Considerações de Segurança" id="security-considerations" level="h2" />
+
+O MPC não elimina todos os riscos. Ele muda o modelo de ameaças.
+
+### O Que o MPC Protege Contra
+
+- **Comprometimento de ponto único**: Um invasor precisa violar múltiplos sistemas independentes
+- **Ameaças internas**: Funcionários do provedor não podem acessar fundos dos usuários mesmo com acesso ao banco de dados
+- **Extração de chaves**: A chave completa nunca existe para ser extraída
+- **Roubo de backup**: Roubar uma parte não revela nada
+
+### O Que o MPC Não Resolve
+
+- **Solicitações de assinatura comprometidas**: Se seu dispositivo estiver comprometido, invasores podem solicitar assinaturas em transações maliciosas
+- **Engenharia social**: Usuários ainda podem ser enganados a aprovar transações prejudiciais
+- **Conluio do provedor**: Em esquemas 2-de-2, um provedor malicioso em conluio com um invasor é equivalente ao roubo de chaves
+- **Bugs de protocolo**: Falhas de implementação em protocolos MPC podem comprometer a segurança
+
+### O Espectro de Confiança
+
+O MPC desloca a confiança, não a elimina:
+
+|| Modelo | Confiança do Usuário | Confiança no Provedor ||
+||-------|-----------|----------------||
+|| Auto-custódia | Controle total, responsabilidade total | Nenhuma |
+|| MPC 2-de-2 | Controla uma parte | Controla uma parte, não pode roubar sozinho |
+|| MPC 2-de-3 | Controla uma parte | Controla partes, precisa de duas para assinar |
+|| Custódia total | Nenhuma | Completa |
+
+Para a maioria dos usuários, o modelo de confiança do MPC é mais realista do que esperar um gerenciamento perfeito de seed phrases.
+
+<ArticleSection name="Implementações de Provedores" id="provider-implementations" level="h2" />
+
+Diferentes provedores de carteiras embarcadas implementam MPC com arquiteturas variadas:
+
+**Privy** usa assinaturas de limite 2-de-2 com partes divididas entre o dispositivo do usuário e a infraestrutura HSM da Privy. A geração de chaves acontece em enclaves seguros com divisão imediata.
+
+**Dynamic** implementa EdDSA FROST para assinaturas nativas da Solana. Seu modelo 2-de-2 inclui capacidade de exportação de carteira, permitindo que os usuários extraiam a chave completa se optarem pela auto-custódia.
+
+**Para** (anteriormente Capsule) distribui partes pela sua rede MPC com suporte para múltiplos métodos de autenticação. Sua arquitetura suporta EVM, Solana e Cosmos a partir da mesma distribuição de partes.
+
+**Turnkey** fornece a infraestrutura HSM e os protocolos de assinatura, mas deixa a autenticação inteiramente a cargo dos desenvolvedores. Você traz sua própria verificação de identidade; o Turnkey fornece operações seguras de chaves.
+
+Cada um faz diferentes compensações entre garantias de segurança, opções de recuperação e flexibilidade para desenvolvedores.
+
+<ArticleSection name="Resumo Conceitual" id="conceptual-summary" level="h2" />
+
+O MPC transforma a segurança de chaves de um problema de ponto único de falha em um problema de confiança distribuída:
+
+1. **Compartilhamento de segredos** divide chaves para que nenhum local individual detenha o segredo completo
+2. **Assinaturas de limite** computam assinaturas sem reconstruir a chave
+3. **Geração distribuída de chaves** garante que a chave nunca exista inteira, nem mesmo durante a criação
+4. **Protocolos de recuperação** permitem restauração de acesso sem comprometer a segurança
+
+As assinaturas produzidas são Ed25519 padrão. A blockchain não vê nada incomum. Toda a melhoria de segurança acontece off-chain, invisível para validadores e aplicações.
+
+Ao avaliar provedores de carteiras embarcadas, as questões críticas são:
+- Qual esquema de limite eles usam?
+- Como a geração de chaves é realizada?
+- Quais opções de recuperação existem?
+- O que acontece se o provedor desaparecer?
+
+Entender a arquitetura MPC ajuda você a avaliar essas compensações em vez de aceitar afirmações de marketing pelo valor nominal.

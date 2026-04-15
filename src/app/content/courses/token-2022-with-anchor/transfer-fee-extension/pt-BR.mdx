@@ -1,0 +1,358 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Transfer Fee
+
+A extensão `TransferFee` é uma extensão de `Mint` que permite ao criador definir um "imposto" sobre o token que é cobrado toda vez que alguém realiza uma troca (swap).
+
+Para garantir que o destinatário da taxa não seja bloqueado para escrita toda vez que alguém realiza uma troca, e para garantir que possamos paralelizar transações contendo uma `Mint` com esta extensão, a taxa é reservada na Token Account do destinatário e somente a `Withdraw Authority` pode sacá-la.
+
+<ArticleSection name="Inicializando a Mint Account" id="initializing-the-mint-account" level="h2" />
+
+Como o `Anchor` não possui macros para a extensão `transfer_fee`, vamos criar uma conta `Mint` usando CPIs diretamente.
+
+Veja como criar uma mint com a extensão Transfer Fee:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{
+            extension::{
+                transfer_fee::TransferFeeConfig, BaseStateWithExtensions, ExtensionType,
+                StateWithExtensions,
+            },
+            pod::PodMint,
+            state::Mint as MintState,
+        },
+        InitializeMint2,
+    },
+    token_interface::{
+        spl_pod::optional_keys::OptionalNonZeroPubkey, transfer_fee_initialize, Token2022,
+        TransferFeeInitialize,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_transfer_fee_config(
+    ctx: Context<Initialize>,
+    transfer_fee_basis_points: u16,
+    maximum_fee: u64,
+) -> Result<()> {
+    // Calcular o espaço necessário para os dados da mint e da extensão
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TransferFeeConfig])?;
+
+    // Calcular lamports mínimos necessários para o tamanho da conta mint com extensões
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invocar o System Program para criar uma nova conta com espaço para dados da mint e extensão
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Espaço
+        &ctx.accounts.token_program.key(), // Owner Program
+    )?;
+
+    // Inicializar os dados da extensão transfer fee
+    // Esta instrução deve vir antes da instrução para inicializar os dados da mint
+    transfer_fee_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferFeeInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(&ctx.accounts.payer.key()), // transfer fee config authority (atualizar taxa)
+        Some(&ctx.accounts.payer.key()), // withdraw authority (sacar taxas)
+        transfer_fee_basis_points,       // transfer fee basis points (% de taxa por transferência)
+        maximum_fee,                     // taxa máxima (unidades máximas de token por transferência)
+    )?;
+
+    // Inicializar os dados padrão da conta mint
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimais
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Transferindo Tokens com a Taxa" id="transferring-tokens-with-the-fee" level="h2" />
+
+Para transferir tokens de uma `Mint` que possui a extensão `TransferFee`, temos duas opções:
+- Podemos usar a instrução `transfer_checked()` normal e, ao fazer isso, o cálculo da taxa é tratado automaticamente
+- Podemos usar a instrução `transfer_checked_with_fee()` e fornecer manualmente a `fee` que vamos pagar nessa transferência. Isso é muito útil se quisermos ter certeza de não sermos "rugados" caso a authority altere a taxa e crie uma taxa anormalmente alta; é como definir o slippage para uma transferência.
+
+> Mesmo que a authority altere a taxa, a nova taxa torna-se ativa 2 epochs após ser definida
+
+Veja como criar uma transferência usando a instrução `transfer_checked_with_fee()`:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token_2022::spl_token_2022::{
+        extension::{
+            transfer_fee::TransferFeeConfig, BaseStateWithExtensions, StateWithExtensions,
+        },
+        state::Mint as MintState,
+    },
+    token_interface::{
+        transfer_checked_with_fee, Mint, Token2022, TokenAccount, TransferCheckedWithFee,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    #[account(mut)]
+    pub sender: Signer<'info>,
+    pub recipient: SystemAccount<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = mint_account,
+        associated_token::authority = sender,
+        associated_token::token_program = token_program
+    )]
+    pub sender_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = sender,
+        associated_token::mint = mint_account,
+        associated_token::authority = recipient,
+        associated_token::token_program = token_program
+    )]
+    pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+// as taxas de transferência são deduzidas automaticamente do valor da transferência
+// o destinatário recebe (valor da transferência - taxas)
+// as taxas de transferência são armazenadas diretamente na token account do destinatário e devem ser "coletadas"
+pub fn transfer_checked_with_fee(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+    // ler os dados da extensão da conta mint
+    let mint = &ctx.accounts.mint_account.to_account_info();
+    let mint_data = mint.data.borrow();
+    let mint_with_extension = StateWithExtensions::<MintState>::unpack(&mint_data)?;
+    let extension_data = mint_with_extension.get_extension::<TransferFeeConfig>()?;
+
+    // calcular a taxa esperada
+    let epoch = Clock::get()?.epoch;
+    let fee = extension_data.calculate_epoch_fee(epoch, amount).unwrap();
+
+    // decimais da conta mint
+    let decimals = ctx.accounts.mint_account.decimals;
+
+    transfer_checked_with_fee(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferCheckedWithFee {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                source: ctx.accounts.sender_token_account.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                destination: ctx.accounts.recipient_token_account.to_account_info(),
+                authority: ctx.accounts.sender.to_account_info(),
+            },
+        ),
+        amount,   // valor da transferência
+        decimals, // decimais
+        fee,      // taxa
+    )?;
+
+    Ok(())
+}
+```
+
+Para então sacar as taxas, podemos reunir todas as `Token Account` que possuem taxas "presas" dentro delas e passá-las como remaining accounts. No lado do TypeScript, ficaria algo assim:
+
+```ts
+// Recuperar todas as Token Accounts para a Mint Account
+const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+        {
+            memcmp: {
+                offset: 0,
+                bytes: mint.publicKey.toString(), // Endereço da Mint Account
+            },
+        },
+    ],
+});
+
+// Lista de Token Accounts das quais sacar as taxas
+const accountsToWithdrawFrom: PublicKey[] = [];
+ 
+for (const accountInfo of allAccounts) {
+    const account = unpackAccount(
+        accountInfo.pubkey,
+        accountInfo.account,
+        TOKEN_2022_PROGRAM_ID,
+    );
+ 
+    // Extrair dados de transfer fee de cada conta
+    const transferFeeAmount = getTransferFeeAmount(account);
+ 
+    // Verificar se há taxas disponíveis para saque
+    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+        accountsToWithdrawFrom.push(accountInfo.pubkey);
+    }
+}
+
+// ...dados e contas da instrução
+remainingAccounts: accountsToWithdrawFrom.map(pubkey => ({
+    pubkey,
+    isWritable: true,
+    isSigner: false
+})),
+```
+
+Após configurarmos todas as contas que precisamos, para sacar os tokens para a `authority_token_account`, precisamos "coletar" todas as taxas das token accounts usando a instrução `harvest_withheld_tokens_to_mint()` e, em seguida, reivindicá-las para uma `token_account` escolhida pela `authority` usando a instrução `withdraw_withheld_tokens_from_mint()`.
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{
+    harvest_withheld_tokens_to_mint, HarvestWithheldTokensToMint, withdraw_withheld_tokens_from_mint, WithdrawWithheldTokensFromMint, Mint, Token2022, TokenAccount,
+};
+
+#[derive(Accounts)]
+pub struct HarvestAndWithdrawFees<'info> {
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+pub fn harvest_and_withdraw_fees<'info>(ctx: Context<'_, '_, 'info, 'info, HarvestAndWithdrawFees<'info>>) -> Result<()> {
+    // Usando remaining accounts para permitir a passagem de um número desconhecido de token accounts para coletar
+    // Verificar se as remaining accounts são token accounts da mint para coletar
+    let sources = ctx
+        .remaining_accounts
+        .iter()
+        .filter_map(|account| {
+            InterfaceAccount::<TokenAccount>::try_from(account)
+                .ok()
+                .filter(|token_account| token_account.mint == ctx.accounts.mint_account.key())
+                .map(|_| account.to_account_info())
+        })
+        .collect::<Vec<_>>();
+
+    // as taxas de transferência são armazenadas diretamente na token account do destinatário e devem ser "coletadas"
+    // "coletar" transfere as taxas acumuladas nas token accounts para a mint account
+    harvest_withheld_tokens_to_mint(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            HarvestWithheldTokensToMint {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        sources, // token accounts para coletar
+    )?;
+
+    // as taxas de transferência "coletadas" para a mint account podem então ser sacadas pela withdraw authority
+    // isso transfere as taxas na mint account para a token account especificada
+    withdraw_withheld_tokens_from_mint(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        WithdrawWithheldTokensFromMint {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            destination: ctx.accounts.token_account.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        },
+    ))?;
+    
+    Ok(())
+}
+```
+
+<ArticleSection name="Atualizando a Taxa" id="updating-the-fee" level="h2" />
+
+Após termos inicializado nossa `Mint` com a extensão `TransferFee`, podemos precisar atualizar essa taxa específica no futuro. E para garantir que o criador não "ruge" seus detentores de tokens com uma "troca enganosa" definindo a taxa muito alta toda vez que uma transferência é executada, o novo `TransferFee` será ativado após 2 epochs.
+
+Para acomodar isso, é assim que os dados da extensão `TransferFee` se parecem:
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_config_authority: Pubkey,
+    pub withdraw_withheld_authority: Pubkey,
+    pub withheld_amount: u64,
+    pub older_transfer_fee: TransferFee,
+    pub newer_transfer_fee: TransferFee,
+}
+ 
+pub struct TransferFee {
+    pub epoch: u64,
+    pub maximum_fee: u64,
+    pub transfer_fee_basis_point: u16,
+}
+```
+
+Então, para alterar a taxa, podemos usar a instrução `transfer_fee_set()` assim:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{transfer_fee_set, Mint, Token2022, TransferFeeSetTransferFee};
+
+#[derive(Accounts)]
+pub struct UpdateFee<'info> {
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+// Observe que há um atraso de 2 epochs para que as novas atualizações de taxa entrem em vigor
+// Este é um recurso de segurança integrado na extensão
+// https://github.com/solana-labs/solana-program-library/blob/master/token/program-2022/src/extension/transfer_fee/processor.rs#L92-L109
+pub fn update_fee(
+    ctx: Context<UpdateFee>,
+    transfer_fee_basis_points: u16,
+    maximum_fee: u64,
+) -> Result<()> {
+    transfer_fee_set(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferFeeSetTransferFee {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            },
+        ),
+        transfer_fee_basis_points, // transfer fee basis points (% de taxa por transferência)
+        maximum_fee,               // taxa máxima (unidades máximas de token por transferência)
+    )?;
+
+    Ok(())
+}
+```

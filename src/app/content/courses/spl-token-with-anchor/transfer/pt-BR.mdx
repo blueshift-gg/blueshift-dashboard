@@ -1,0 +1,55 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instrução de Transferência
+
+Transfere tokens de uma conta de token para outra. A conta de token de origem deve pertencer ao signatário da transação e ter saldo suficiente.
+
+Antes de podermos transferir qualquer token, precisaremos já ter:
+- Inicializado uma conta `Mint`.
+- Uma conta `Token` ou conta `Associated Token` de origem que já tenha pelo menos a quantidade que desejamos transferir.
+- Uma conta `Token` ou conta `Associated Token` de destino para receber os tokens.
+
+<ArticleSection name="Instrução com Anchor" id="anchor" level="h2" />
+
+Com o Anchor, podemos usar os métodos `transfer` e `transfer_checked` do programa Token para transferir tokens.
+
+```rust
+use anchor_spl::token::{self, Transfer, TransferChecked};
+
+// Transferência sem verificação de decimais
+token::transfer(ctx.accounts.transfer_ctx(), amount)?;
+
+// Transferência com verificação de decimais
+token::transfer_checked(ctx.accounts.transfer_checked_ctx(), amount, decimals)?;
+```
+
+A instrução `transfer_checked` é recomendada pois verifica se os decimais correspondem aos decimais do mint.
+
+<ArticleSection name="Contexto da Instrução" id="instruction-context" level="h2" />
+
+Aqui está como definir as estruturas de contexto para as instruções de transferência:
+
+```rust
+#[derive(Accounts)]
+pub struct TransferTokens<'info> {
+    pub owner: Signer<'info>,
+    #[account(mut)]
+    pub from: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub to: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> TransferTokens<'info> {
+    pub fn transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_program = self.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: self.from.to_account_info(),
+            to: self.to.to_account_info(),
+            authority: self.owner.to_account_info(),
+        };
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+}
+```

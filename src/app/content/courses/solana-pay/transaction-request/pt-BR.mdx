@@ -1,0 +1,185 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Transaction Request
+
+Transaction requests desbloqueiam todo o poder do Solana Pay ao permitir transações dinâmicas compostas no servidor que podem lidar com qualquer tipo de operação na Solana.
+
+Diferente das transfer requests que contêm toda a informação de pagamento na URL, as transaction requests usam endpoints interativos para construir transações personalizadas baseadas em dados em tempo real e lógica de negócio.
+
+Essa abordagem transforma o Solana Pay de um simples sistema de pagamento em uma plataforma de comércio completa, capaz de lidar com cenários de negócio complexos, preços dinâmicos e fluxos de transação sofisticados.
+
+<ArticleSection name="Como Transaction Requests Funcionam" id="how-it-works" level="h2" />
+
+Transaction requests seguem um formato de URL simples que aponta para o endpoint do seu servidor:
+
+```
+solana:<link>
+```
+
+O valor de `link` deve ser uma URL para o seu endpoint de API que lida com requisições `GET` e `POST`. Quando um usuário escaneia um QR code de transaction request, sua carteira inicia um processo de quatro etapas:
+1. **Requisição GET Inicial**: Recupera informações de exibição como o nome e logo do seu negócio
+2. **Confirmação do Usuário**: A carteira mostra as informações do negócio ao usuário
+3. **Requisição POST**: Envia a chave pública do usuário para o seu endpoint
+4. **Resposta da Transação**: Seu servidor constrói uma transação personalizada e a retorna como uma string codificada em base64
+
+A carteira então apresenta essa transação ao usuário para aprovação e assinatura.
+
+> Você pode incluir parâmetros na URL para acessá-los a partir do seu endpoint assim:
+
+```
+solana:https://myapi.com/pay?amount=100&product=premium&reference=abc123
+```
+
+<ArticleSection name="Construindo o Endpoint de API" id="api-endpoint" level="h2" />
+
+Criar um endpoint de transaction request exige lidar com requisições GET e POST na mesma URL. Aqui está a estrutura usando o Next.js App Router:
+
+```ts
+import { NextRequest, NextResponse } from 'next/server';
+
+// Headers CORS para compatibilidade com carteiras
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: corsHeaders });
+}
+
+export async function GET() {
+  // Detalhes de implementação abaixo...
+}
+
+export async function POST(request: NextRequest) {
+  // Detalhes de implementação abaixo...
+}
+```
+
+> Como as carteiras fazem requisições cross-origin para o seu endpoint, headers CORS são obrigatórios. Sem eles, as requisições da carteira falharão.
+
+### Handler da Requisição GET
+
+A requisição GET fornece informações de exibição que ajudam os usuários a entender com o que estão interagindo:
+
+```ts
+export async function GET() {
+  return NextResponse.json({
+    label: "Coffee Shop Demo",
+    icon: "https://solana.com/src/img/branding/solanaLogoMark.svg",
+  }, { headers: corsHeaders });
+}
+```
+
+**Formato da Resposta:**
+
+```json
+{
+  "label": "Coffee Shop Demo",
+  "icon": "https://solana.com/src/img/branding/solanaLogoMark.svg"
+}
+```
+
+Essa informação ajuda o usuário a entender com o que está prestes a interagir antes de prosseguir para a composição real da transação.
+
+### Handler da Requisição POST
+
+A requisição POST é onde as transaction requests realmente brilham. Seu endpoint recebe a chave pública do usuário e constrói uma transação completamente personalizada:
+
+```ts
+export async function POST(request: NextRequest) {
+  // Extrair a chave pública do usuário do corpo da requisição
+  const body = await request.json();
+  const { account } = body;
+
+  // Conectar à rede Solana
+  const connection = new Connection(clusterApiUrl("devnet"));
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+
+  // Criar transação com o usuário como pagador de taxas
+  const transaction = new Transaction({
+    feePayer: new PublicKey(account),
+    blockhash: blockhash,
+    lastValidBlockHeight: lastValidBlockHeight,
+  });
+
+  // ========================================
+  // ADICIONE SUAS INSTRUÇÕES PERSONALIZADAS AQUI
+  // ========================================
+  
+  // Aqui é onde você constrói a lógica da sua transação.
+  // Você pode adicionar qualquer combinação de instruções:
+  
+  // Exemplo 1: Transferência simples de SOL
+  // const transferInstruction = SystemProgram.transfer({
+  //   fromPubkey: new PublicKey(account),
+  //   toPubkey: new PublicKey("YOUR_MERCHANT_WALLET"),
+  //   lamports: LAMPORTS_PER_SOL * 0.01, // 0.01 SOL
+  // });
+  // transaction.add(transferInstruction);
+
+  // Serializar a transação para a carteira
+  const serializedTransaction = transaction.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+
+  return NextResponse.json({
+    transaction: serializedTransaction.toString('base64'),
+    message: "Transação criada com sucesso", // Personalize esta mensagem
+  }, { headers: corsHeaders });
+}
+```
+
+> Sua aplicação não envia a transação para a rede, então você não terá acesso à assinatura da transação para fins de rastreamento. Use parâmetros de referência como explicado na [Lição de Introdução](/en/courses/solana-pay/introduction#reference)
+
+<ArticleSection name="Capacidades Avançadas" id="advanced-capabilities" level="h2" />
+
+### Transações com Restrição de Acesso
+
+Transaction requests permitem controle de acesso sofisticado ao verificar condições antes de construir as transações. Como você controla o endpoint, pode verificar posse de NFT, participação em whitelist ou qualquer outro critério:
+
+```ts
+// Verificar posse de NFT antes de construir a transação
+const nfts = await metaplex.nfts().findAllByOwner({ owner: account }).run(); 
+
+const hasRequiredNFT = nfts.some(nft => 
+  nft.collection?.address.toString() === requiredCollection
+);
+
+if (!hasRequiredNFT) {
+  return response.status(403).json({ 
+    error: "Acesso negado: NFT necessário não encontrado" 
+  });
+}
+
+// Construir transação apenas para usuários verificados
+```
+
+### Assinatura Parcial para Segurança Aprimorada
+
+Para transações que exigem aprovação de um keypair admin ou autenticação multi-parte, o Solana Pay suporta assinatura parcial. Seu servidor pode adicionar sua assinatura antes de enviar ao usuário:
+
+```ts
+const transaction = new Transaction({
+  feePayer: account,
+  blockhash,
+  lastValidBlockHeight,
+});
+
+// Adicionar suas instruções que exigem assinatura admin
+transaction.add(customInstruction);
+
+// Assinar parcialmente com seu keypair admin
+transaction.partialSign(adminKeypair);
+
+// Enviar ao usuário para assinatura final
+const serializedTransaction = transaction.serialize({
+  requireAllSignatures: false,
+});
+```
+
+<ArticleSection name="Exemplo" id="example" level="h2" />
+
+Como exemplo completo, você pode usar o [Solana NFT Minter Example](https://github.com/solana-developers/solana-pay-nft-minter/tree/main) da Solana Foundation

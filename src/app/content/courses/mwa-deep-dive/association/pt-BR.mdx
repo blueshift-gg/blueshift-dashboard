@@ -1,0 +1,320 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Associação
+
+Antes que uma sessão possa existir, a carteira precisa saber onde conectar e como verificar a identidade do dApp. Esta é a fase de *associação*: o dApp comunica parâmetros de conexão à carteira através de uma URI.
+
+<ArticleSection name="Estrutura da URI de Associação" id="uri-structure" level="h2" />
+
+Toda conexão MWA começa com uma URI que segue um formato específico:
+
+```
+solana-wallet:/v1/associate/<cenario>?<parametros>
+```
+
+Os componentes:
+
+| Parte | Propósito |
+|-------|-----------|
+| `solana-wallet:` | Esquema URI registrado por carteiras compatíveis com MWA |
+| `/v1` | Caminho da versão do protocolo |
+| `/associate` | Tipo de operação |
+| `/<cenario>` | Cenário de conexão: `local` ou `remote` |
+| `?<parametros>` | Parâmetros de consulta para este cenário |
+
+<ArticleSection name="Cenários de Associação" id="scenarios" level="h2" />
+
+### Associação Local
+
+Tanto o dApp quanto a carteira no mesmo dispositivo:
+
+```
+solana-wallet:/v1/associate/local?association=<TOKEN>&port=<PORTA>
+```
+
+Parâmetros:
+- `association`: Chave pública P-256 codificada em base64url (a *chave pública de associação*)
+- `port`: O número da porta TCP (49152-65535) onde o dApp espera o servidor WebSocket da carteira
+
+Exemplo:
+```
+solana-wallet:/v1/associate/local?association=BK7dJkEiT_a5GchXtVGAk_GFtA3h7z9oQlBr0h3NWTg&port=49200
+```
+
+### Associação Remota
+
+dApp em um dispositivo, carteira em outro (conectados via refletor):
+
+```
+solana-wallet:/v1/associate/remote?association=<TOKEN>&id=<ID>&reflector=<HOST>
+```
+
+Parâmetros:
+- `association`: Mesmo que o local. A chave pública de associação
+- `id`: O ID do refletor codificado em base64url (obtido da mensagem `REFLECTOR_ID`)
+- `reflector`: O hostname e porta opcional do servidor refletor
+
+Exemplo:
+```
+solana-wallet:/v1/associate/remote?association=BK7dJkEiT_a5GchXtVGAk_GFtA3h7z9oQlBr0h3NWTg&id=abc123&reflector=reflect.example.com
+```
+
+<ArticleSection name="Negociação de Versão" id="version-negotiation" level="h2" />
+
+A URI pode incluir dicas de versão:
+
+```
+solana-wallet:/v1/associate/local?association=...&port=...&v=2.0.0
+```
+
+O parâmetro `v` é opcional. Ele diz à carteira a versão máxima do protocolo que o dApp suporta. A carteira responde no `HELLO_RSP` com a versão real do protocolo que usará.
+
+Regras de negociação de versão:
+1. Se `v` estiver ausente, assumir compatibilidade com versão 1.0.0
+2. A carteira escolhe a versão mais alta que ambos suportam
+3. A versão negociada aparece nas propriedades da sessão
+
+<ArticleSection name="A Chave Pública de Associação" id="association-key" level="h2" />
+
+A chave pública de associação é crítica para a segurança do MWA. Vamos rastrear sua geração e uso:
+
+### Geração
+
+O dApp gera um keypair P-256 (secp256r1) efêmero:
+
+```typescript
+// Do SDK MWA
+const associationKeypair = await crypto.subtle.generateKey(
+  {
+    name: 'ECDSA',
+    namedCurve: 'P-256'
+  },
+  true,  // extraível
+  ['sign', 'verify']
+);
+```
+
+A chave pública é exportada e codificada em base64url:
+
+```typescript
+const publicKeyBuffer = await crypto.subtle.exportKey(
+  'raw',
+  associationKeypair.publicKey
+);
+// Codificar como base64url (RFC 4648) sem padding
+const associationToken = base64urlEncode(new Uint8Array(publicKeyBuffer));
+```
+
+### Detalhes do Formato
+
+A chave pública P-256 exportada no formato "raw" tem 65 bytes:
+- 1 byte: `0x04` (indicador de ponto descomprimido)
+- 32 bytes: Coordenada X
+- 32 bytes: Coordenada Y
+
+Após codificação base64url, isso se torna aproximadamente 87 caracteres.
+
+### Uso no Estabelecimento de Sessão
+
+Durante o estabelecimento de sessão, o dApp prova que controla a chave privada de associação assinando a mensagem HELLO_REQ. A carteira verifica esta assinatura usando a chave pública de associação da URI.
+
+Adicionalmente, a chave pública de associação é usada como salt na derivação de chaves (HKDF), vinculando a chave da sessão a esta associação específica.
+
+<ArticleSection name="Manipulação da URI no Android" id="android-handling" level="h2" />
+
+No Android, o esquema `solana-wallet:` é registrado por carteiras compatíveis em seu manifesto:
+
+```text
+<intent-filter>
+  <action android:name="android.intent.action.VIEW" />
+  <category android:name="android.intent.category.DEFAULT" />
+  <category android:name="android.intent.category.BROWSABLE" />
+  <data android:scheme="solana-wallet" />
+</intent-filter>
+```
+
+Quando o dApp abre a URI:
+
+```typescript
+// Em um app React Native
+Linking.openURL(associationUri);
+```
+
+O sistema de Intent do Android:
+1. Inicia a carteira diretamente (se apenas uma carteira está instalada)
+2. Mostra um diálogo de seleção (se múltiplas carteiras estão instaladas)
+3. Falha se nenhuma carteira compatível existe
+
+A função `transact()` do SDK cuida disso automaticamente:
+
+```typescript
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol';
+
+const result = await transact(async (wallet) => {
+  // Associação acontece automaticamente antes deste callback executar
+  // O objeto `wallet` representa uma sessão estabelecida
+});
+```
+
+<ArticleSection name="Manipulação de Múltiplas Carteiras" id="multiple-wallets" level="h2" />
+
+Quando múltiplas carteiras compatíveis com MWA estão instaladas, o Android mostra um diálogo de desambiguação. O usuário seleciona qual carteira usar.
+
+Para melhor UX, dApps podem:
+
+1. **Lembrar a preferência do usuário**: Armazenar a carteira escolhida e usá-la para conexões futuras
+2. **Usar URIs específicas da carteira**: Algumas carteiras registram esquemas adicionais (ex., `phantom-wallet:`) para invocação direta
+3. **Permitir configuração pelo usuário**: Fornecer configurações onde usuários escolhem sua carteira padrão
+
+O SDK não lembra automaticamente a escolha da carteira. Isso fica a cargo da implementação do dApp.
+
+<ArticleSection name="URIs Específicas de Endpoint" id="endpoint-uris" level="h2" />
+
+A especificação define formatos de URI adicionais para cenários específicos de carteira:
+
+### Para Cenários Remotos
+
+Carteiras podem anunciar sua capacidade de conexão remota:
+
+```
+<esquema-carteira>:/v1/<endpoint>
+```
+
+Onde:
+- `<esquema-carteira>` é o esquema específico da carteira
+- `<endpoint>` é o caminho do refletor ou info de conexão direta
+
+### Exemplo de URI Específica de Carteira
+
+```
+phantom-wallet:/v1/connect?reflector=reflect.phantom.app
+```
+
+Isso permite que dApps iniciem conexões remotas com carteiras específicas sem usar o esquema genérico `solana-wallet:`.
+
+<ArticleSection name="Linha do Tempo do Fluxo de Associação" id="timeline" level="h2" />
+
+Vamos rastrear uma associação local completa:
+
+```
+Hora  │  dApp                          │  Carteira
+──────┼────────────────────────────────┼──────────────────────────────
+t₀    │  Gerar keypair de associação   │
+t₁    │  Gerar keypair de sessão       │
+t₂    │  Construir URI de associação   │
+t₃    │  Abrir URI via Intent          │  ─────────────────────►
+t₄    │                                │  Iniciar (Intent recebido)
+t₅    │                                │  Analisar parâmetros da URI
+t₆    │                                │  Iniciar servidor WebSocket na porta
+t₇    │  Conectar a ws://127.0.0.1:porta│  ◄─────────────────────
+t₈    │  Handshake WebSocket completo  │
+t₉    │  (Transporte estabelecido)     │
+t₁₀   │  Enviar HELLO_REQ              │  ─────────────────────►
+      │                                │  (Estabelecimento de sessão começa)
+```
+
+A fase de associação (t₀-t₇) estabelece os parâmetros de conexão. O estabelecimento de sessão (t₁₀+) usa criptografia para proteger o canal.
+
+<ArticleSection name="Propriedades de Segurança" id="security" level="h2" />
+
+A associação fornece várias propriedades de segurança:
+
+### Frescor
+
+Cada associação usa um novo keypair. Mesmo que um atacante capture uma URI de associação antiga, não pode usá-la; o dApp que a gerou não está mais escutando, e a chave privada foi descartada.
+
+### Vinculação de Autenticação
+
+A chave pública de associação vincula a sessão à associação original. Durante o estabelecimento de sessão, o dApp assina com a chave privada de associação. Um man-in-the-middle não pode se passar pelo dApp sem essa chave.
+
+### Sem Replay
+
+O token de associação é uma chave pública, não uma assinatura. Não "reproduz" nada; é um identificador fresco para esta tentativa de sessão específica.
+
+### Limitações
+
+A associação *não* verifica:
+- Que o dApp é quem diz ser (isso é verificação de identidade, coberta depois)
+- Que a carteira é legítima (o usuário deve confiar em sua carteira instalada)
+
+A associação estabelece *qual* sessão está acontecendo, não *quem* está participando.
+
+<ArticleSection name="Erros Comuns de Associação" id="errors" level="h2" />
+
+**"Nenhum app encontrado para lidar com o intent"**: Nenhuma carteira compatível com MWA instalada. Solicite ao usuário que instale uma.
+
+**"Conexão recusada após Intent"**: A carteira iniciou mas não iniciou seu servidor WebSocket:
+- Carteira não suporta a versão do protocolo solicitada
+- Carteira crashou durante inicialização
+- Conflito de porta (raro no Android)
+
+**"Token de associação inválido"**: A URI contém uma chave pública malformada:
+- Codificação base64url incorreta
+- Comprimento de chave errado
+- Não é um ponto P-256 válido
+
+**"Timeout aguardando conexão"**: A carteira iniciou mas demorou muito:
+- Usuário trocou para fora do app da carteira
+- Carteira está mostrando fluxo de onboarding
+- Recursos do sistema limitados
+
+<ArticleSection name="Implementação no SDK" id="sdk-implementation" level="h2" />
+
+Olhando o código fonte do SDK, a associação é tratada nos estágios iniciais de `transact()`:
+
+```typescript
+// Simplificado de transact.ts
+export async function transact<T>(
+  callback: (wallet: WalletAPI) => T | Promise<T>,
+  config?: TransactConfig
+): Promise<T> {
+  // Gerar keypairs
+  const associationKeypair = await generateAssociationKeypair();
+  const sessionKeypair = await generateSessionKeypair();
+  
+  // Construir URI
+  const port = selectPort();
+  const associationUri = buildAssociationUri({
+    associationPublicKey: associationKeypair.publicKey,
+    port,
+    scenario: 'local'
+  });
+  
+  // Abrir carteira via Intent
+  await openWalletApp(associationUri);
+  
+  // Aguardar carteira conectar
+  const websocket = await waitForWalletConnection(port);
+  
+  // Prosseguir para estabelecimento de sessão...
+}
+```
+
+A implementação real lida com mais casos extremos (timeouts, erros, limpeza), mas isso mostra o fluxo principal.
+
+<ArticleSection name="Além do Android: Outras Plataformas" id="other-platforms" level="h2" />
+
+Embora Android seja a plataforma principal, o mecanismo de associação é projetado para ser portável:
+
+### iOS
+
+Apps iOS podem registrar esquemas de URL customizados similarmente. O desafio é que o iOS tem políticas mais rigorosas de comunicação inter-app. MWA no iOS provavelmente usaria Universal Links ou handlers de esquema customizado.
+
+### Web (via Remoto)
+
+dApps web usam associação remota:
+1. dApp conecta ao refletor, obtém ID
+2. ID exibida como QR code
+3. Usuário escaneia com app de carteira no celular
+4. Carteira conecta ao mesmo refletor
+5. Sessão prossegue pelo refletor
+
+Este padrão permite que qualquer navegador web conecte a uma carteira mobile.
+
+### Desktop
+
+Apps desktop poderiam usar rede local (para um app de carteira na mesma máquina) ou associação remota (para uma carteira no celular).
+
+O formato da URI de associação permanece consistente. Apenas o mecanismo de entrega da URI à carteira muda.
+
+Na próxima lição, mergulhamos no estabelecimento de sessão: onde o handshake criptográfico acontece e o canal seguro é criado.

@@ -1,0 +1,390 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# O Protocolo de Mensagens Criptografadas
+
+Após o estabelecimento da sessão, cada mensagem entre o dApp e a carteira é criptografada. Esta lição examina o esquema de criptografia: AES-128-GCM com números de sequência para proteção contra replay.
+
+<ArticleSection name="Por que AES-GCM?" id="why-aes-gcm" level="h2" />
+
+O MWA usa AES-128-GCM (Galois/Counter Mode) porque fornece:
+
+**Confidencialidade**: Apenas o detentor da chave de sessão pode ler o conteúdo das mensagens.
+
+**Integridade**: Qualquer modificação no ciphertext é detectada. Mensagens adulteradas falham na autenticação.
+
+**Autenticação**: A tag de autenticação prova que a mensagem veio de alguém que conhece a chave.
+
+GCM é um modo *authenticated encryption with associated data* (AEAD). É eficiente, amplamente suportado em hardware e disponível na Web Crypto API.
+
+<ArticleSection name="Estrutura da Mensagem Criptografada" id="message-structure" level="h2" />
+
+Toda mensagem criptografada segue este formato:
+
+```
++------------------------------------------------------------+
+|  Número de Sequência  |  IV  |  Ciphertext  |  Auth Tag        |
+|    (4 bytes)      | (12) |   (variável) |   (16 bytes)     |
++------------------------------------------------------------+
+```
+
+**Número de Sequência (4 bytes)**: Inteiro unsigned big-endian. Começa em 1 (não 0), incrementa com cada mensagem enviada.
+
+**IV (Vetor de Inicialização, 12 bytes)**: Bytes aleatórios gerados para esta mensagem. Nunca reutilize um IV com a mesma chave.
+
+**Ciphertext (variável)**: O payload criptografado. Mesmo comprimento do plaintext.
+
+**Auth Tag (16 bytes)**: A tag de autenticação GCM. Verifica integridade e autenticidade.
+
+<ArticleSection name="Additional Authenticated Data (AAD)" id="aad" level="h2" />
+
+O MWA usa o número de sequência como Additional Authenticated Data (AAD) na criptografia AES-GCM. Isso significa:
+
+1. O número de sequência **não é criptografado** (é enviado em plaintext no início da mensagem)
+2. O número de sequência **é autenticado** via a tag GCM
+3. Qualquer adulteração no número de sequência faz a descriptografia falhar
+
+Este design impede que um atacante modifique o número de sequência para causar ataques de replay ou reordenação; a verificação da tag de autenticação falhará.
+
+<ArticleSection name="Processo de Criptografia" id="encryption" level="h2" />
+
+Para criptografar uma mensagem:
+
+```typescript
+// De encryptedMessage.ts (simplificado)
+async function encryptMessage(
+  sessionKey: CryptoKey,
+  sequenceNumber: number,
+  plaintext: Uint8Array
+): Promise<Uint8Array> {
+  // Gerar IV aleatório
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  // Preparar número de sequência como bytes big-endian (usado como AAD)
+  const seqBytes = new Uint8Array(4);
+  new DataView(seqBytes.buffer).setUint32(0, sequenceNumber, false);
+
+  // Criptografar com AES-GCM, usando número de sequência como AAD
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+      additionalData: seqBytes,  // AAD: autentica o número de sequência
+      tagLength: 128  // 16 bytes
+    },
+    sessionKey,
+    plaintext
+  );
+
+  // Web Crypto retorna ciphertext || tag
+  const ciphertextAndTag = new Uint8Array(encrypted);
+
+  // Construir o formato de transmissão: seq || iv || ciphertext || tag
+  const message = new Uint8Array(4 + 12 + ciphertextAndTag.length);
+  message.set(seqBytes, 0);
+  message.set(iv, 4);
+  message.set(ciphertextAndTag, 16);
+
+  return message;
+}
+```
+
+<ArticleSection name="Processo de Descriptografia" id="decryption" level="h2" />
+
+Para descriptografar:
+
+```typescript
+async function decryptMessage(
+  sessionKey: CryptoKey,
+  expectedSequenceNumber: number,
+  message: Uint8Array
+): Promise<Uint8Array> {
+  // Analisar o formato de transmissão
+  const seqBytes = message.slice(0, 4);
+  const iv = message.slice(4, 16);
+  const ciphertextAndTag = message.slice(16);
+
+  // Verificar número de sequência
+  const receivedSeq = new DataView(seqBytes.buffer).getUint32(0, false);
+  if (receivedSeq !== expectedSequenceNumber) {
+    throw new Error(`Incompatibilidade no número de sequência: esperado ${expectedSequenceNumber}, recebido ${receivedSeq}`);
+  }
+
+  // Descriptografar com AES-GCM, usando número de sequência como AAD
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+      additionalData: seqBytes,  // AAD deve corresponder ao usado na criptografia
+      tagLength: 128
+    },
+    sessionKey,
+    ciphertextAndTag
+  );
+
+  return new Uint8Array(decrypted);
+}
+```
+
+<ArticleSection name="Mecânica dos Números de Sequência" id="sequence-numbers" level="h2" />
+
+Cada endpoint mantém dois contadores:
+
+- **Contador de envio**: Incrementado após cada mensagem enviada
+- **Contador de recebimento**: O número de sequência esperado da próxima mensagem recebida
+
+Ambos começam em **1** após o estabelecimento da sessão (não 0).
+
+```
+      dApp                              Carteira
+  +-----------+                    +--------------+
+  | sendSeq=1 |---- seq 1 -------->| recvSeq: 1->2|
+  | recvSeq=1 |                    | sendSeq=1    |
+  |           |                    |              |
+  | sendSeq=2 |<--- seq 1 ---------| sendSeq: 1->2|
+  | recvSeq=2 |                    | recvSeq=2    |
+  |           |                    |              |
+  | sendSeq=3 |---- seq 2 -------->| recvSeq: 2->3|
+  +-----------+                    +--------------+
+```
+
+### Por que Números de Sequência?
+
+**Prevenção contra ataques de replay**: Um atacante que captura uma resposta de transação assinada não pode reproduzi-la; o número de sequência não corresponderá.
+
+**Detecção de desordem**: Se mensagens chegarem fora de ordem (não deveria acontecer com TCP, mas defesa em profundidade), elas são rejeitadas.
+
+**Detecção de duplicatas**: Uma mensagem duplicada tem um número de sequência obsoleto.
+
+### Overflow do Número de Sequência
+
+A especificação não aborda explicitamente o overflow. Com 32 bits, você tem 4 bilhões de mensagens por sessão. Dado que sessões MWA são efêmeras (tipicamente durando segundos), overflow não é uma preocupação prática.
+
+Se uma sessão de alguma forma se aproximasse do overflow, a implementação deveria fechar e reestabelecer.
+
+<ArticleSection name="Internos do AES-GCM" id="aes-gcm-internals" level="h2" />
+
+Entender o GCM ajuda a depurar problemas:
+
+### Modo Counter
+
+O GCM é construído sobre o modo CTR (Counter):
+1. Começa com IV e um contador (inicialmente 1)
+2. Criptografa blocos de contador com AES: `E(K, IV || counter)`
+3. Faz XOR do contador criptografado com blocos de plaintext
+
+Isso produz o ciphertext. O contador incrementa para cada bloco.
+
+### Autenticação GHASH
+
+O GCM adiciona autenticação via GHASH:
+1. Faz hash do ciphertext com uma multiplicação polinomial especial
+2. O resultado, combinado com o contador criptografado, produz a tag
+
+```
+Tag = GHASH(H, AAD || Ciphertext || lengths) ⊕ E(K, IV || 0)
+```
+
+Onde H = E(K, 0) é a chave de hash.
+
+### Por que IV de 12 Bytes?
+
+Com um IV de 12 bytes, o GCM é mais eficiente. O IV é diretamente usado como valor inicial do contador. IVs mais longos requerem processamento adicional.
+
+<ArticleSection name="Conteúdo do Plaintext" id="plaintext" level="h2" />
+
+Após a descriptografia, o plaintext é uma mensagem JSON-RPC:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "authorize",
+  "params": {
+    "identity": { /* ... */ },
+    "cluster": "mainnet-beta"
+  }
+}
+```
+
+Ou uma resposta:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "accounts": [ /* ... */ ],
+    "auth_token": "***"
+  }
+}
+```
+
+A camada de criptografia não interpreta esses dados; apenas criptografa/descriptografa bytes.
+
+<ArticleSection name="Limites de Tamanho de Mensagem" id="size-limits" level="h2" />
+
+A especificação define limites:
+
+- **Reflector**: 4096 bytes de tamanho máximo de mensagem
+- **Local**: Definido pela implementação, tipicamente muito maior
+
+Para fins práticos:
+- Payloads de transação podem ser grandes (múltiplas transações, cada uma até 1232 bytes)
+- Codificação Base64 infla o tamanho em ~33%
+- Mantenha abaixo de 3KB para compatibilidade com o reflector
+
+O SDK gerencia o chunking para `sign_and_send_transactions` com muitas transações.
+
+<ArticleSection name="Tratamento de Erros" id="error-handling" level="h2" />
+
+Falhas de criptografia/descriptografia devem ser tratadas com cuidado:
+
+### Falha na Descriptografia
+
+A Web Crypto API lança um erro se:
+- A tag de autenticação não corresponde (mensagem adulterada ou incompatibilidade de chave)
+- O IV ou ciphertext está malformado
+
+Resposta: Feche a sessão. Não tente recuperar. Uma falha de descriptografia indica um problema sério (incompatibilidade de chave, corrupção ou ataque).
+
+### Incompatibilidade de Sequência
+
+O número de sequência recebido não corresponde ao esperado.
+
+Resposta: Feche a sessão. Mensagens fora de ordem ou reproduzidas indicam violação de protocolo.
+
+### JSON Malformado
+
+Após descriptografia bem-sucedida, o plaintext não é JSON-RPC válido.
+
+Resposta: Retorne uma resposta de erro JSON-RPC. Este é um erro de nível de protocolo, não um erro de criptografia.
+
+<ArticleSection name="Propriedades de Segurança" id="security" level="h2" />
+
+O protocolo de mensagens criptografadas fornece:
+
+**Confidencialidade**: Sem a chave de sessão, um atacante vê apenas ciphertext.
+
+**Integridade**: Qualquer modificação (no IV, ciphertext ou tag) faz a descriptografia falhar.
+
+**Proteção contra Replay**: Números de sequência previnem replay de mensagens dentro de uma sessão.
+
+**Sigilo Encaminhado** (do estabelecimento de sessão): Comprometer uma sessão não ajuda com outras.
+
+<ArticleSection name="O Que Não Fornece" id="limitations" level="h2" />
+
+**Não-repúdio**: GCM é simétrico; ambas as partes podem criar mensagens válidas. Você não pode provar que uma mensagem veio de uma parte específica.
+
+**Proteção contra Análise de Tráfego**: Timing e tamanhos das mensagens são visíveis para observadores (no transporte local) ou para o reflector (no transporte remoto).
+
+**Proteção de Metadados**: O número de sequência é plaintext. Um observador sabe quantas mensagens foram trocadas.
+
+<ArticleSection name="Implementação no SDK" id="sdk-implementation" level="h2" />
+
+O código real do SDK em `encryptedMessage.ts`:
+
+```typescript
+// Estrutura real do SDK (extrato)
+const INITIALIZATION_VECTOR_SIZE_BYTES = 12;
+const SEQUENCE_NUMBER_SIZE_BYTES = 4;
+const AUTH_TAG_SIZE_BYTES=***
+
+export async function encryptJsonRpcMessage(
+  jsonRpcMessage: object,
+  sharedSecret: CryptoKey,
+  sequenceNumber: number
+): Promise<Uint8Array> {
+  const plaintext = new TextEncoder().encode(JSON.stringify(jsonRpcMessage));
+  const iv = crypto.getRandomValues(new Uint8Array(INITIALIZATION_VECTOR_SIZE_BYTES));
+  
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+      tagLength: AUTH_TAG_SIZE_BYTES * 8,
+    },
+    sharedSecret,
+    plaintext,
+  );
+
+  // Construir a mensagem criptografada completa
+  const seqNumBuffer = new ArrayBuffer(SEQUENCE_NUMBER_SIZE_BYTES);
+  new DataView(seqNumBuffer).setUint32(0, sequenceNumber);
+  
+  return new Uint8Array([
+    ...new Uint8Array(seqNumBuffer),
+    ...iv,
+    ...new Uint8Array(ciphertext),
+  ]);
+}
+```
+
+Note como o SDK:
+1. Codifica em JSON a mensagem RPC
+2. Gera um IV novo para cada mensagem
+3. Usa `AES-GCM` com tag de 128 bits
+4. Prepends o número de sequência
+
+<ArticleSection name="Depurando Problemas de Criptografia" id="debugging" level="h2" />
+
+### "Decryption failed" / "Operation error"
+
+O problema mais comum. Verifique:
+
+1. **Mesma chave de sessão em ambos os lados**: Registre a chave derivada (cuidadosamente, apenas em desenvolvimento)
+2. **Números de sequência correspondem**: Registre contadores de envio/recebimento
+3. **Mensagem não truncada**: Verifique se a mensagem completa foi recebida
+4. **IV presente**: Os primeiros 16 bytes após o número de sequência são o IV
+
+### Depurando com Ferramentas
+
+Você pode descriptografar manualmente uma mensagem capturada:
+
+```typescript
+// Dado: sessionKey, encryptedMessage (Uint8Array)
+const seq = encryptedMessage.slice(0, 4);
+const iv = encryptedMessage.slice(4, 16);
+const ciphertext = encryptedMessage.slice(16);
+
+console.log('Sequência:', new DataView(seq.buffer).getUint32(0, false));
+console.log('IV:', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''));
+console.log('Comprimento do ciphertext:', ciphertext.length);
+```
+
+### Erros Comuns
+
+1. **Reutilizar IV**: Cada mensagem deve ter um IV único. Usar o mesmo IV duas vezes com a mesma chave é catastrófico; permite fazer XOR dos ciphertexts para recuperar plaintexts.
+
+2. **Número de sequência errado**: Incrementar antes vs depois de enviar pode causar incompatibilidade.
+
+3. **Endianness**: O número de sequência é big-endian. Usar little-endian quebra a compatibilidade.
+
+4. **Comprimento da tag**: GCM suporta diferentes comprimentos de tag. MWA usa 128 bits (16 bytes).
+
+<ArticleSection name="Considerações de Desempenho" id="performance" level="h2" />
+
+AES-GCM é rápido:
+
+| Operação | Tempo (dispositivo mobile típico) |
+|-----------|------------------------------|
+| Criptografar 1KB | < 0.1ms |
+| Descriptografar 1KB | < 0.1ms |
+| Geração de IV | < 0.01ms |
+
+A sobrecarga é insignificante comparada à latência de rede ou processamento de transações.
+
+Para payloads muito grandes (muitas transações), o SDK os processa eficientemente. O gargalo é geralmente a latência de rede da Solana, não a criptografia.
+
+<ArticleSection name="Referência da Especificação" id="spec-reference" level="h2" />
+
+Da especificação MWA, mensagens criptografadas:
+
+> "Todas as mensagens JSON-RPC trocadas após a sessão ser estabelecida são criptografadas usando AES-128-GCM. O segredo compartilhado derivado do ECDH é usado como chave de criptografia."
+
+Pontos chave da especificação:
+- IV de 12 bytes (gerado aleatoriamente)
+- Número de sequência de 4 bytes (big-endian)
+- Tag de autenticação de 128 bits (16 bytes)
+- Chave de sessão da derivação HKDF
+
+Na próxima lição, examinaremos os métodos JSON-RPC disponíveis uma vez que a sessão criptografada é estabelecida: as operações reais que seu dApp pode solicitar da carteira.

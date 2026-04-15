@@ -1,0 +1,135 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Type Cosplay
+
+Ataques de type cosplay exploram programas que falham em verificar os tipos de conta, permitindo que atacantes substituam contas com estruturas de dados idênticas, mas propósitos diferentes. Como a Solana armazena todos os dados de contas como bytes brutos, um programa que não verifica tipos de conta pode ser enganado a tratar uma `VaultConfig` como `AdminSettings` com resultados potencialmente catastróficos.
+
+A vulnerabilidade decorre de ambiguidade estrutural. Quando múltiplos tipos de conta compartilham o mesmo layout de dados (como ambos terem um campo `owner: Pubkey`), verificações de ownership e validação de dados por si só não são suficientes para distingui-los. Um atacante que controla um tipo de conta pode se passar pelo dono de um tipo de conta completamente diferente, contornando a lógica de autorização projetada para propósitos específicos de conta.
+
+Sem discriminadores (identificadores únicos que distinguem tipos de conta), seu programa torna-se vulnerável a ataques sofisticados de personificação onde atores maliciosos podem explorar a lacuna entre similaridade estrutural e intenção lógica.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere esta instrução vulnerável que realiza operações de administrador baseadas no ownership da conta:
+
+```rust
+#[program]
+pub mod insecure_check{
+    use super::*;
+    //..
+
+    pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+        let program_account_one = ctx.accounts.program_account_one.to_account_info();
+        if program_account_one.owner != ctx.program_id {
+            return Err(ProgramError::IllegalOwner.into());
+        }
+        if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        //..fazer algo
+    
+        Ok(())
+
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub program_account_one: UncheckedAccount<'info>,
+    #[account(mut)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub program_account_two: UncheckedAccount<'info>,
+
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace)]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+Este código parece seguro: verifica o ownership do programa e valida a autoridade de administrador. Mas há uma falha fatal: nunca verifica que `program_account_one` é realmente uma `ProgramAccountOne` e não algum outro tipo de conta com a mesma estrutura de dados.
+
+Um atacante pode explorar isso:
+- Criando ou controlando uma conta `ProgramAccountTwo`
+- Configurando a si mesmo como owner nos dados dessa conta
+- Passando sua `ProgramAccountTwo` como parâmetro `program_account_one`
+- Como ambos os tipos de conta têm estruturas `owner: Pubkey` idênticas, a desserialização é bem-sucedida
+- O atacante torna-se o "admin" para operações destinadas apenas a donos de `ProgramAccountOne`
+
+A Solana usa discriminadores para resolver este problema:
+- Discriminador de 8 bytes do Anchor (padrão): Derivado do nome da conta, automaticamente adicionado a contas marcadas com #[account]. (a partir do anchor `0.31.0` é possível implementar discriminadores "customizados")
+- Discriminação por comprimento: Usada pelo Token Program para distinguir entre contas Token e Mint (embora o Token2022 agora use discriminadores explícitos)
+
+A correção mais simples é usar a validação de tipo integrada do Anchor:
+
+```rust
+#[derive(Accounts)]
+pub struct Instruction<'info> {
+    pub admin: Signer<'info>,
+   #[account(mut)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub program_account_one: Account<'info, ProgramAccountOne>,
+    #[account(mut)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub program_account_two: Account<'info, ProgramAccountTwo>,
+
+}
+
+#[account]
+pub struct ProgramAccountOne {
+    owner: Pubkey,
+}
+
+#[account]
+pub struct ProgramAccountTwo {
+    owner: Pubkey,
+}
+```
+
+Ou para validação customizada, você pode adicionar verificações explícitas de discriminador:
+
+```rust
+pub fn instruction(ctx: Context<Instruction>) -> Result<()> {
+    let program_account_one = ctx.accounts.program_account_one.to_account_info();
+    if program_account_one.owner != ctx.program_id {
+        return Err(ProgramError::IllegalOwner.into());
+    }
+    if ctx.accounts.program_account_one.owner != ctx.accounts.admin.key() {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+    let data = program_account_one.data.borrow();
+    // Assumir que ProgramAccountOne tem um discriminador de 8 bytes
+    let discriminator = &data[..8];
+    if discriminator != ProgramAccountOne::DISCRIMINATOR {
+        return Err(ProgramError::InvalidAccountData.into());
+    }
+
+    //..fazer algo
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+No Pinocchio, implemente a verificação de discriminador manualmente:
+
+```rust
+let account_data = self.accounts.program_account.try_borrow_data()?;
+
+if account_data[0] != DISCRIMINATOR {
+    return Err(ProgramError::AccountAlreadyInitialized.into());
+}
+```

@@ -1,0 +1,306 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# O Vault
+
+![Desafio Pinocchio Vault](/graphics/challenge-banners/pinocchio-vault.png)
+
+Um vault permite que os usuários armazenem seus ativos de forma segura. Um vault é um bloco fundamental na DeFi que, em sua essência, permite que os usuários armazenem seus ativos (lamports neste caso) de forma segura e que apenas esse mesmo usuário possa sacar depois.
+
+Neste desafio, construiremos um vault simples de lamports que demonstra como trabalhar com contas básicas, Program Derived Addresses (PDAs) e Cross-Program Invocation (CPI). Se você não está familiarizado com o Pinocchio, deve começar lendo a [Introdução ao Pinocchio](/pt-BR/courses/introduction-to-pinocchio) para se familiarizar com os conceitos principais que vamos usar neste programa.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Antes de começar, certifique-se de que Rust e Pinocchio estejam instalados. Então, no seu terminal execute:
+
+```bash
+# criar workspace
+cargo new blueshift_vault --lib --edition 2021
+cd blueshift_vault
+```
+
+Adicione Pinocchio:
+
+```bash
+cargo add pinocchio pinocchio-system
+```
+
+Declare os tipos de crate no `Cargo.toml` para gerar artefatos de deploy em `target/deploy`:
+
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Vamos começar com a estrutura básica do programa. Vamos implementar tudo no `lib.rs` já que este é um programa direto. Aqui está o template inicial com os componentes principais que precisaremos:
+
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+
+<ArticleSection name="Depósito" id="deposit" level="h2" />
+
+A instrução de depósito executa os seguintes passos:
+1. Verifica se o vault está vazio (tem zero lamports) para prevenir depósitos duplicados
+2. Garante que o valor do depósito exceda o mínimo isento de aluguel para uma conta básica
+3. Transfere lamports do dono para o vault usando uma CPI para o System Program
+
+Primeiro, vamos definir a struct de contas para depósito:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Verificações de Contas
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, _) = find_program_address(&[b"vault", owner.key()], &crate::ID);
+        if vault.key().ne(&vault_key) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Retornar as contas
+        Ok(Self { owner, vault })
+    }
+}
+```
+
+Vamos detalhar cada verificação de conta:
+1. `owner`: Deve ser um signer já que precisa autorizar a transação
+2. `vault`: 
+   - Deve ser de propriedade do System Program
+   - Deve ter zero lamports (garante depósito "fresco")
+   - Deve ser derivado das seeds corretas
+   - Deve corresponder ao endereço PDA esperado
+
+Agora vamos implementar a struct de dados da instrução:
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<u64>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let amount = u64::from_le_bytes(data.try_into().unwrap());
+
+        // Verificações de Instrução
+        if amount.eq(&0) {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        Ok(Self { amount })
+    }
+}
+```
+
+Aqui apenas verificamos que o valor é diferente de zero.
+
+Finalmente, vamos implementar a instrução de depósito:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        Transfer {
+            from: self.accounts.owner,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()?;
+
+        Ok(())
+    }
+}
+```
+
+<ArticleSection name="Saque" id="withdraw" level="h2" />
+
+A instrução de saque executa os seguintes passos:
+1. Verifica se o vault contém lamports (não está vazio)
+2. Usa o PDA do vault para assinar a transferência em seu próprio nome
+3. Transfere todos os lamports do vault de volta para o dono
+
+Primeiro, vamos definir a struct de contas para saque:
+
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub owner: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub bumps: [u8; 1],
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [owner, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Verificações Básicas de Contas
+        if !owner.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let (vault_key, bump) = find_program_address(&[b"vault", owner.key()], &crate::ID);
+        if &vault_key != vault.key() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Ok(Self { owner, vault, bumps: [bump] })
+    }
+}
+```
+
+Vamos detalhar cada verificação de conta:
+1. `owner`: Deve ser um signer já que precisa autorizar a transação
+2. `vault`: 
+   - Deve ser de propriedade do System Program
+   - Deve ser derivado das seeds corretas
+   - Deve corresponder ao endereço PDA esperado
+3. `bumps`: Armazenamos a seed de bump para uso na assinatura PDA
+
+Agora vamos implementar a instrução de saque:
+
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+
+        Ok(Self { accounts })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Criar seeds do assinante PDA
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(self.accounts.owner.key().as_ref()),
+            Seed::from(&self.accounts.bumps),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        // Transferir todos os lamports do vault para o dono
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.owner,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)?;
+
+        Ok(())
+    }
+}
+```
+
+A segurança deste saque é garantida por dois fatores:
+1. O PDA do vault é derivado usando a chave pública do dono, garantindo que apenas o depositante original pode sacar
+2. A capacidade do PDA de assinar a transferência é verificada através das seeds que fornecemos ao `invoke_signed`
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+
+Agora você pode testar seu programa contra nossos testes unitários e reivindicar seus NFTs!
+
+Comece compilando seu programa usando o seguinte comando no seu terminal:
+
+```bash
+cargo build-sbf
+```
+
+Isso gerou um arquivo `.so` diretamente na sua pasta `target/deploy`.
+
+Agora clique no botão `take challenge` e solte o arquivo lá!

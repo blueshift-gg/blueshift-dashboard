@@ -1,0 +1,494 @@
+---
+title: "Interação com Programas"
+description: "Construa transações que chamam qualquer programa Solana. Entenda codificação de instruções, PDAs e integração com programas customizados."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="Além das Operações Padrão" id="beyond-standard-operations" level="h2" />
+
+Transferências de tokens e operações com NFTs usam programas conhecidos com instruções padronizadas. Mas o poder da Solana vem de programas customizados: protocolos DeFi, sistemas de jogos, redes sociais, todos rodando on-chain.
+
+Todo programa Solana segue o mesmo padrão:
+1. Recebe uma instrução com contas e dados
+2. Valida as contas
+3. Processa os dados
+4. Modifica o estado da conta
+
+Seu aplicativo móvel constrói essas instruções, agrupa-as em transações e as envia. O programa executa atomicamente on-chain.
+
+<ArticleSection name="Anatomia de uma Instrução" id="instruction-anatomy" level="h2" />
+
+Uma instrução tem três partes:
+
+```typescript
+import { TransactionInstruction, PublicKey } from "@solana/web3.js";
+
+const instruction = new TransactionInstruction({
+  // 1. Qual programa chamar
+  programId: new PublicKey("YourProgramAddress111111111111111111111111"),
+  
+  // 2. Quais contas o programa precisa
+  keys: [
+    { pubkey: userWallet, isSigner: true, isWritable: true },
+    { pubkey: dataAccount, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ],
+  
+  // 3. O que fazer (dados binários específicos do programa)
+  data: Buffer.from([/* dados da instrução */])
+});
+```
+
+### Chaves de Conta (Account Keys)
+
+Cada conta em `keys` tem dois flags:
+
+- **`isSigner`**: Esta conta deve assinar a transação?
+- **`isWritable`**: Os dados desta conta serão alterados?
+
+Erre nessas flags e a transação falha. O programa as valida.
+
+### Dados da Instrução
+
+O campo `data` é específico do programa. Ele tipicamente contém:
+- Um discriminador (qual função chamar)
+- Argumentos serializados
+
+Programas Anchor usam um discriminador de 8 bytes. Programas nativos variam.
+
+<ArticleSection name="Program Derived Addresses" id="program-derived-addresses" level="h2" />
+
+PDAs são endereços derivados de seeds; nenhuma chave privada existe. Programas as usam para armazenamento de dados e autoridade.
+
+```typescript
+import { PublicKey } from "@solana/web3.js";
+
+// Deriva um PDA
+const [pda, bump] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("user-profile"),    // Uma seed de string fixa
+    userWallet.toBuffer(),           // A chave pública do usuário
+  ],
+  programId
+);
+
+// O bump garante que o endereço está fora da curva (não é um keypair válido)
+console.log("PDA:", pda.toBase58());
+console.log("Bump:", bump);
+```
+
+### Padrões Comuns de PDA
+
+```typescript
+// Dados específicos do usuário
+const [userProfile] = PublicKey.findProgramAddressSync(
+  [Buffer.from("profile"), userWallet.toBuffer()],
+  programId
+);
+
+// Configuração global
+const [globalConfig] = PublicKey.findProgramAddressSync(
+  [Buffer.from("config")],
+  programId
+);
+
+// Item em uma coleção
+const [item] = PublicKey.findProgramAddressSync(
+  [Buffer.from("item"), Buffer.from(itemId)],
+  programId
+);
+```
+
+<ArticleSection name="Trabalhando com Programas Anchor" id="working-with-anchor-programs" level="h2" />
+
+A maioria dos programas Solana usa [Anchor](https://www.anchor-lang.com/). O IDL (Interface Definition Language) descreve as instruções disponíveis.
+
+### Gerando Código Cliente
+
+A partir de um IDL, você pode gerar tipos TypeScript:
+
+```shellscript
+# Se você tem o IDL
+anchor idl init --filepath idl.json program_address
+```
+
+Ou buscá-lo diretamente:
+
+```typescript
+import { Program, AnchorProvider, Idl } from "@coral-xyz/anchor";
+
+// Busca o IDL da chain
+const idl = await Program.fetchIdl(programId, provider);
+
+// Cria instância do programa
+const program = new Program(idl as Idl, programId, provider);
+
+// Agora você tem métodos tipados
+const tx = await program.methods
+  .initialize(arg1, arg2)
+  .accounts({
+    user: userWallet,
+    dataAccount: dataAccount,
+    systemProgram: SystemProgram.programId,
+  })
+  .rpc();
+```
+
+### Padrão Friendly para Mobile
+
+No mobile com MWA, você tipicamente não pode usar o `.rpc()` do Anchor diretamente. Construa a instrução em vez disso:
+
+```typescript
+// Constrói a instrução sem enviar
+const ix = await program.methods
+  .yourMethod(arg1, arg2)
+  .accounts({
+    user: userWallet,
+    // ... outras contas
+  })
+  .instruction();
+
+// Agora use a instrução em uma transação
+const tx = new VersionedTransaction(
+  new TransactionMessage({
+    payerKey: userWallet,
+    recentBlockhash: blockhash,
+    instructions: [ix],
+  }).compileToV0Message()
+);
+
+// Assina com MWA
+const signedTx = await transact(async (wallet) => {
+  const [signed] = await wallet.signTransactions({
+    transactions: [tx]
+  });
+  return signed;
+});
+
+// Envia
+await connection.sendTransaction(signedTx);
+```
+
+<ArticleSection name="Codificação de Instruções" id="instruction-encoding" level="h2" />
+
+Quando você não tem o Anchor, você codifica instruções manualmente.
+
+### Serialização Borsh
+
+A maioria dos programas usa Borsh. Veja como codificar:
+
+```typescript
+import * as borsh from "borsh";
+
+// Define o schema
+class MyInstruction {
+  instruction: number;
+  amount: bigint;
+  
+  constructor(fields: { instruction: number; amount: bigint }) {
+    this.instruction = fields.instruction;
+    this.amount = fields.amount;
+  }
+}
+
+const schema = new Map([
+  [MyInstruction, { 
+    kind: "struct", 
+    fields: [
+      ["instruction", "u8"],
+      ["amount", "u64"]
+    ] 
+  }]
+]);
+
+// Codifica
+const instruction = new MyInstruction({
+  instruction: 0, // Primeira instrução no programa
+  amount: BigInt(1_000_000_000) // 1 SOL em lamports
+});
+
+const data = borsh.serialize(schema, instruction);
+```
+
+### Discriminadores Anchor
+
+Instruções Anchor começam com um discriminador de 8 bytes derivado do nome da instrução:
+
+```typescript
+import { sha256 } from "@noble/hashes/sha256";
+
+function getAnchorDiscriminator(instructionName: string): Buffer {
+  const hash = sha256(`global:${instructionName}`);
+  return Buffer.from(hash.slice(0, 8));
+}
+
+// Uso
+const discriminator = getAnchorDiscriminator("initialize");
+const fullData = Buffer.concat([
+  discriminator,
+  borsh.serialize(argsSchema, args)
+]);
+```
+
+<ArticleSection name="Transações com Múltiplas Instruções" id="multi-instruction-transactions" level="h2" />
+
+Operações reais frequentemente precisam de múltiplas instruções:
+
+```typescript
+async function createAndInitialize(
+  connection: Connection,
+  userWallet: PublicKey
+): Promise<string> {
+  const newAccount = Keypair.generate();
+  
+  const instructions = [
+    // 1. Cria a conta
+    SystemProgram.createAccount({
+      fromPubkey: userWallet,
+      newAccountPubkey: newAccount.publicKey,
+      lamports: await connection.getMinimumBalanceForRentExemption(dataSize),
+      space: dataSize,
+      programId: myProgramId,
+    }),
+    
+    // 2. Inicializa com nosso programa
+    new TransactionInstruction({
+      programId: myProgramId,
+      keys: [
+        { pubkey: newAccount.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userWallet, isSigner: true, isWritable: false },
+      ],
+      data: initializeInstructionData,
+    }),
+  ];
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  
+  const message = new TransactionMessage({
+    payerKey: userWallet,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const tx = new VersionedTransaction(message);
+  
+  // A nova conta também deve assinar
+  tx.sign([newAccount]);
+
+  // Usuário assina com MWA
+  const signedTx = await transact(async (wallet) => {
+    const [signed] = await wallet.signTransactions({
+      transactions: [tx]
+    });
+    return signed;
+  });
+
+  return await connection.sendTransaction(signedTx);
+}
+```
+
+<ArticleSection name="Address Lookup Tables" id="address-lookup-tables" level="h2" />
+
+Transações complexas podem exceder os limites de tamanho. Address Lookup Tables (ALTs) comprimem endereços de contas:
+
+```typescript
+import { AddressLookupTableAccount } from "@solana/web3.js";
+
+// Busca a lookup table
+const lookupTableAddress = new PublicKey("YourLookupTable...");
+const lookupTableAccount = await connection
+  .getAddressLookupTable(lookupTableAddress)
+  .then(res => res.value);
+
+if (!lookupTableAccount) {
+  throw new Error("Lookup table não encontrada");
+}
+
+// Use na sua transação
+const message = new TransactionMessage({
+  payerKey: userWallet,
+  recentBlockhash: blockhash,
+  instructions,
+}).compileToV0Message([lookupTableAccount]); // Passe as ALTs aqui
+
+const tx = new VersionedTransaction(message);
+```
+
+ALTs são especialmente úteis para:
+- Protocolos DeFi com muitas contas de token
+- Operações com NFTs entre coleções
+- Qualquer transação que envolva muitas contas
+
+<ArticleSection name="Simulando Antes de Enviar" id="simulating-before-sending" level="h2" />
+
+Sempre simule transações complexas:
+
+```typescript
+async function simulateAndSend(
+  connection: Connection,
+  transaction: VersionedTransaction
+): Promise<{ signature: string; logs: string[] }> {
+  // Simula primeiro
+  const simulation = await connection.simulateTransaction(transaction, {
+    sigVerify: false,
+    commitment: "confirmed",
+  });
+
+  if (simulation.value.err) {
+    console.error("Logs da simulação:", simulation.value.logs);
+    throw new Error(`Simulação falhou: ${JSON.stringify(simulation.value.err)}`);
+  }
+
+  console.log("Simulação bem-sucedida. Logs:", simulation.value.logs);
+
+  // Se a simulação passou, envia
+  const signature = await connection.sendTransaction(transaction);
+  
+  return {
+    signature,
+    logs: simulation.value.logs || [],
+  };
+}
+```
+
+### Interpretando Logs de Simulação
+
+```typescript
+function parseSimulationLogs(logs: string[]): {
+  programCalls: string[];
+  errors: string[];
+  computeUnits: number | null;
+} {
+  const programCalls: string[] = [];
+  const errors: string[] = [];
+  let computeUnits: number | null = null;
+
+  for (const log of logs) {
+    if (log.includes("invoke")) {
+      programCalls.push(log);
+    }
+    if (log.toLowerCase().includes("error")) {
+      errors.push(log);
+    }
+    const cuMatch = log.match(/consumed (\d+) of \d+ compute units/);
+    if (cuMatch) {
+      computeUnits = parseInt(cuMatch[1]);
+    }
+  }
+
+  return { programCalls, errors, computeUnits };
+}
+```
+
+<ArticleSection name="Padrões Comuns de Programas" id="common-program-patterns" level="h2" />
+
+### Inicializar Conta de Usuário
+
+```typescript
+async function initializeUserAccount(
+  program: Program,
+  userWallet: PublicKey
+): Promise<string> {
+  const [userAccount] = PublicKey.findProgramAddressSync(
+    [Buffer.from("user"), userWallet.toBuffer()],
+    program.programId
+  );
+
+  const ix = await program.methods
+    .initializeUser()
+    .accounts({
+      user: userWallet,
+      userAccount,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  // ... constrói a transação e assina com MWA
+}
+```
+
+### Depositar no Vault
+
+```typescript
+async function depositToVault(
+  program: Program,
+  userWallet: PublicKey,
+  amount: number
+): Promise<string> {
+  const [vault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")],
+    program.programId
+  );
+
+  const userTokenAccount = await getAssociatedTokenAddress(
+    tokenMint,
+    userWallet
+  );
+
+  const vaultTokenAccount = await getAssociatedTokenAddress(
+    tokenMint,
+    vault,
+    true // allowOwnerOffCurve - vault é um PDA
+  );
+
+  const ix = await program.methods
+    .deposit(new BN(amount))
+    .accounts({
+      user: userWallet,
+      userTokenAccount,
+      vault,
+      vaultTokenAccount,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+
+  // ... constrói a transação e assina com MWA
+}
+```
+
+<ArticleSection name="Tratamento de Erros" id="error-handling" level="h2" />
+
+Erros de programa vêm em diferentes formas:
+
+```typescript
+try {
+  await connection.sendTransaction(signedTx);
+} catch (error) {
+  // Erro de nível de transação
+  if (error.message.includes("Transaction simulation failed")) {
+    // Analisa os logs para o erro real
+    const logs = error.logs || [];
+    const programError = logs.find(log => 
+      log.includes("Error") || log.includes("error")
+    );
+    console.log("Erro do programa:", programError);
+  }
+  
+  // Códigos de erro Anchor
+  if (error.error?.errorCode) {
+    console.log("Erro Anchor:", error.error.errorCode.name);
+    console.log("Mensagem:", error.error.errorMessage);
+  }
+  
+  // Erro de programa customizado
+  if (error.message.includes("custom program error")) {
+    const codeMatch = error.message.match(/custom program error: 0x([0-9a-f]+)/i);
+    if (codeMatch) {
+      const errorCode = parseInt(codeMatch[1], 16);
+      console.log("Código de erro customizado:", errorCode);
+    }
+  }
+}
+```
+
+<ArticleSection name="Pontos-Chave" id="key-takeaways" level="h2" />
+
+- **Instruções = programa + contas + dados**: Acerte todos os três
+- **PDAs não têm chaves privadas**: Programas as derivam de seeds
+- **Use o método `.instruction()` do Anchor** para obter instruções para assinatura MWA
+- **Codifique dados corretamente**: Serialização Borsh com discriminadores adequados
+- **Simule primeiro**: Capture erros antes de gastar taxas
+- **ALTs comprimem transações grandes**: Use-as quando atingir os limites de tamanho
+
+Com esses padrões, você pode interagir com qualquer programa Solana a partir do mobile. A chave é entender as contas esperadas pelo programa e o formato de dados, geralmente documentados no IDL ou no código-fonte do programa.

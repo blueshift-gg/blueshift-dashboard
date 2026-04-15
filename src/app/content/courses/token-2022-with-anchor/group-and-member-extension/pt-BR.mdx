@@ -1,0 +1,210 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Group e Member
+
+As extensões `Group` e `Member` são extensões de conta `Mint` que introduzem a capacidade de criar grupos, como coleções de NFTs, que estão vinculados a múltiplos ativos.
+
+<ArticleSection
+  name="Inicializando a Conta Mint"
+  id="inicializando-a-conta-mint"
+  level="h2"
+/>
+
+As extensões `Member` e `Group` são um pouco diferentes do que estamos acostumados, porque são compostas por 2 extensões diferentes que ambas vão em uma conta `Mint`:
+
+- A `Extension` que contém todas as informações sobre o grupo ou membro.
+- A `Pointer Extension` que referencia a conta `Mint` onde a extensão `Group` ou `Member` está.
+
+Normalmente, quando usadas, a `Extension` e a `Pointer Extension` ficam na mesma conta `Mint`; e vamos fazer o mesmo neste exemplo.
+
+> As extensões `Group` e `Member` não podem estar na mesma conta
+
+Vamos começar com alguns conceitos básicos antes de mergulhar no código:
+
+Enquanto a extensão `GroupPointer` e `MemberPointer` vive no crate `anchor-spl`, para inicializar o `Group` e `Member` precisamos usar o crate `spl_token_group_interface`.
+
+Então vamos instalar o pacote necessário:
+
+```
+cargo add spl_token_metadata_interface
+```
+
+Além disso, a extensão `Group` e `Member` é uma das "únicas" extensões que exige que você inicialize a extensão após ter inicializado a conta `Mint`.
+
+Isso porque a instrução de inicialização de metadata aloca dinamicamente o espaço necessário para o comprimento do conteúdo do grupo e membro.
+
+Ao mesmo tempo, isso significa que vamos precisar inicializar a conta `Mint` com lamports suficientes para ser rent exempt com a extensão `Group` ou `Member` incluída, mas alocando espaço suficiente apenas para a extensão `GroupPointer` ou `MemberPointer`, já que as instruções `initializeGroup()` e `initializeMember()` aumentam o espaço corretamente.
+
+No código, inicializar o `Group` fica assim:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_2022::spl_token_2022::extension::group_pointer::GroupPointer;
+use anchor_spl::token_interface::token_group_initialize, Mint, Token2022, TokenGroupInitialize;
+use anchor_spl::token_2022::spl_token_2022::extension::{BaseStateWithExtensions, ExtensionType};
+
+
+pub fn initialize_group(ctx: Context<InitializeGroup>) -> Result<()> {
+    // Adiciona 4 bytes extras para o tamanho do MetadataExtension (2 bytes para o discriminator, 2 bytes para o comprimento)
+    let token_group_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TokenGroup])?;
+    let data_len = 4 + token_group_size?;
+
+    // Calcula lamports necessários para a metadata adicional
+    let lamports =
+        data_len as u64 * DEFAULT_LAMPORTS_PER_BYTE_YEAR * DEFAULT_EXEMPTION_THRESHOLD as u64;
+
+    // Transfere lamports adicionais para a conta mint
+    transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,
+    )?;
+
+    // Inicializa a extensão do token group
+    token_group_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TokenGroupInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                group: ctx.accounts.mint_account.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+                mint_authority: ctx.accounts.payer.to_account_info(),
+            },
+        )
+        Some(ctx.accounts.payer.key()), // update_authority
+        10,                             // max_size
+    )?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct InitializeGroup<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        mint::decimals = 2,
+        mint::authority = payer,
+        mint::freeze_authority = mint_account,
+        extensions::group_pointer::authority = payer,
+        extensions::group_pointer::group_address = mint_account,
+    )]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+E após isso, podemos usar o grupo que acabamos de criar para adicionar um membro a ele assim:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_2022::spl_token_2022::extension::group_pointer::GroupPointer;
+use anchor_spl::token_interface::{
+    self, token_member_initialize, TokenAccount, TokenMemberInitialize,
+};
+
+pub fn initialize_member(ctx: Context<InitializeMember>) -> Result<()> {
+    // Adiciona 4 bytes extras para o tamanho do MetadataExtension (2 bytes para o discriminator, 2 bytes para o comprimento)
+    let token_group_len =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::TokenGroupMember])?;
+    let data_len = 4 + token_group_len?;
+
+    // Calcula lamports necessários para a metadata adicional
+    let lamports =
+        data_len as u64 * DEFAULT_LAMPORTS_PER_BYTE_YEAR * DEFAULT_EXEMPTION_THRESHOLD as u64;
+
+    // Transfere lamports adicionais para a conta mint
+    transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,
+    )?;
+
+    // Inicializa a extensão do token group
+    token_member_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TokenMemberInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                group: ctx.accounts.group.to_account_info(),
+                group_update_authority: ctx.accounts.payer.to_account_info(),
+                member: ctx.accounts.mint_account.to_account_info(),
+                member_mint: ctx.accounts.mint_account.to_account_info(),
+                member_mint_authority: ctx.accounts.payer.to_account_info(),
+            },
+        )
+    )?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct InitializeMember<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(mut)]
+    pub group: InterfaceAccount<'info, Mint>,
+    #[account(
+        init,
+        payer = payer,
+        mint::decimals = 2,
+        mint::authority = mint_account,
+        mint::freeze_authority = mint_account,
+        extensions::group_member_pointer::authority = payer,
+        extensions::group_member_pointer::member_address = mint_account,
+    )]
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+<ArticleSection
+  name="Atualizando o maxSize para Grupos"
+  id="atualizando-o-max-size-para-grupos"
+  level="h2"
+/>
+
+Como você pode ver, quando criamos o grupo, alocamos um campo `maxSize` que limitará a quantidade máxima de `Member` que podemos ter naquele grupo específico.
+
+Se mudarmos de ideia e ainda tivermos a `updateAuthority` do grupo, podemos usar a instrução `updateGroupMaxSize()` para reduzir ou aumentar esse número, assim:
+
+```ts
+const updateGroupMaxSizeInstructions = createUpdateGroupMaxSizeInstruction({
+  programId: TOKEN_2022_PROGRAM_ID,
+  group: mint.publicKey,
+  updateAuthority: keypair.publicKey,
+  maxSize: BigInt(100),
+});
+```
+
+<ArticleSection
+  name="Atualizando a updateAuthority para Grupos"
+  id="atualizando-a-update-authority-para-grupos"
+  level="h2"
+/>
+
+Se quisermos alterar a `UpdateAuthority` ou torná-la imutável para que ninguém possa adicionar mais `Member` a ela, podemos usar a instrução `updateGroupAuthority()`, assim:
+
+```ts
+const updateGroupAuthorityInstructions = createUpdateGroupAuthorityInstruction({
+  programId: TOKEN_2022_PROGRAM_ID,
+  group: mint.publicKey,
+  currentAuthority: keypair.publicKey,
+  newAuthority: null,
+});
+```

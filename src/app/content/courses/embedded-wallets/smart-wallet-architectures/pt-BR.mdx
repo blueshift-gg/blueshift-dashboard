@@ -1,0 +1,430 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Arquiteturas de Smart Wallets](/graphics/course-banners/embedded-wallets.png)
+
+# Arquiteturas de Smart Wallets
+
+As carteiras tradicionais são pares de chaves. A chave pública é o seu endereço, a chave privada é a sua autoridade. Perca a chave privada, perca tudo. Compartilhe a chave privada, compartilhe tudo. O modelo de segurança é binário e implacável.
+
+As smart wallets invertem essa relação. A carteira se torna uma conta controlada por um programa com lógica de autorização configurável. Quem pode gastar, quanto, sob quais condições: tudo definido em código, tudo executável on-chain.
+
+<ArticleSection name="De Keypairs para Programs" id="keypairs-to-programs" level="h2" />
+
+Uma conta nativa da Solana é controlada por quem detém sua chave privada. Não há nuances:
+
+```
++------------------+
+|  Conta Nativa    |
+|                  |
+|  Owner: System   |
+|  Signer: Ed25519 |
++------------------+
+        |
+    [chave privada]
+        |
+   Controle total
+```
+
+Uma smart wallet substitui o controle direto de chaves por lógica de programa:
+
+```
++------------------+     +------------------+
+|  Smart Wallet    |     |   Wallet Program |
+|  (PDA)           |<----|                  |
+|                  |     |   Autorização    |
+|  Owner: Program  |     |   Lógica         |
++------------------+     +------------------+
+        |                        |
+        |              +---------+---------+
+        |              |         |         |
+        |          [passkey] [guardian] [timelock]
+        |              |         |         |
+        +---------- Múltiplos caminhos de autorização
+```
+
+O programa decide o que constitui uma autorização válida. Isso pode ser um único passkey, múltiplas assinaturas, condições baseadas em tempo ou qualquer combinação.
+
+<ArticleSection name="Program Derived Addresses" id="pdas" level="h2" />
+
+PDAs são a base das smart wallets na Solana. São endereços para os quais nenhuma chave privada pode assinar, o que significa que só podem ser controlados através da lógica do programa.
+
+### Como PDAs Funcionam
+
+PDAs são derivados combinando seeds com um program ID através de hashing, encontrando um ponto que não está na curva Ed25519:
+
+```
+PDA = findProgramDerivedAddress([seed1, seed2, ...], programId)
+```
+
+A propriedade fundamental: não existe chave privada para este endereço. A única forma de assinar por um PDA é através do programa que o derivou, usando `invoke_signed`.
+
+### Derivação de Smart Wallet
+
+Para smart wallets controladas por passkey, o PDA é tipicamente derivado da chave pública do passkey:
+
+```
+smartWalletPDA = findProgramDerivedAddress(
+  ["smart_wallet", passkeyPublicKey],
+  walletProgramId
+)
+```
+
+Isso cria um endereço de carteira único para cada passkey. O programa on-chain pode autorizar ações neste PDA sempre que verificar uma assinatura de passkey válida.
+
+### O Fluxo de Autorização
+
+Quando um usuário deseja transferir fundos de sua smart wallet:
+
+1. O usuário assina uma mensagem contendo os detalhes da transferência com seu passkey
+2. A transação é enviada contendo a assinatura do passkey
+3. O programa da carteira verifica a assinatura do passkey (via precompile secp256r1)
+4. Se válida, o programa invoca a transferência usando `invoke_signed` com as seeds do PDA
+5. A transferência é executada como se o próprio PDA tivesse assinado
+
+Da perspectiva da conta receptora ou qualquer outro programa, parece uma transferência normal do endereço da smart wallet.
+
+<ArticleSection name="Modelos de Autorização" id="authorization-models" level="h2" />
+
+Smart wallets permitem esquemas de autorização impossíveis com pares de chaves simples.
+
+### Passkey Único
+
+O modelo mais simples: um passkey controla a carteira.
+
+```
+Autorização: Verificar assinatura secp256r1 do passkey registrado
+```
+
+Isso é o que o LazorKit implementa. O passkey no secure enclave do seu dispositivo é a única autoridade.
+
+### Multi-Passkey
+
+Registre múltiplos passkeys (ex: celular e laptop) com qualquer um podendo autorizar:
+
+```
+Autorização: Verificar assinatura secp256r1 de QUALQUER passkey registrado
+```
+
+Isso fornece redundância sem reduzir a segurança. Perder um dispositivo não bloqueia você.
+
+### Passkey com Threshold
+
+Exigir múltiplos passkeys para autorizar operações de alto valor:
+
+```
+Autorização:
+  - Até $100: Qualquer passkey registrado individual
+  - Acima de $100: 2 de 3 passkeys registrados
+```
+
+Isso espelha o multi-sig, mas com passkeys baseados em hardware em vez de chaves de software.
+
+### Recuperação por Guardian
+
+Designar endereços de recuperação que podem restaurar o acesso sob condições específicas:
+
+```
+Autorização:
+  - Normal: Assinatura do passkey
+  - Recuperação: Assinatura do guardian + timelock de 7 dias
+```
+
+Se você perder todos os passkeys, os guardians podem iniciar a recuperação. O timelock dá tempo para cancelar se a solicitação de recuperação for maliciosa.
+
+### Chaves de Sessão
+
+Gerar chaves temporárias com permissões limitadas:
+
+```
+Autorização:
+  - Acesso total: Assinatura do passkey
+  - Chave de sessão: Limitada a programas específicos, expira após 24h
+```
+
+Isso permite melhor UX nos dApps sem comprometer a segurança. Jogos podem executar transações rápidas com chaves de sessão enquanto operações de alto valor ainda exigem autorização por passkey.
+
+<ArticleSection name="Padrões de Account Abstraction" id="account-abstraction" level="h2" />
+
+Smart wallets permitem account abstraction: separar quem paga pelas transações de quem as autoriza.
+
+### Patrocínio de Gas
+
+Transações tradicionais da Solana exigem que o signatário pague as taxas. Smart wallets quebram essa restrição:
+
+```
++-------------+     +---------------+     +--------------+
+|   Usuário   |     |   Paymaster   |     |  Smart       |
+|   (passkey) |     |   (paga gas)  |     |  Wallet      |
++-------------+     +---------------+     +--------------+
+      |                    |                     |
+      | 1. Assinar ação    |                     |
+      +------------------->|                     |
+      |                    | 2. Encapsular + pagar taxas
+      |                    +-------------------->|
+      |                    |                     |
+      |                    |    3. Executar      |
+      |                    |<--------------------+
+```
+
+O usuário assina a ação com seu passkey. Um paymaster encapsula isso em uma transação, paga as taxas e a envia. A smart wallet verifica a assinatura do passkey e executa.
+
+Os usuários podem interagir com a Solana sem possuir SOL.
+
+### Tokens Alternativos para Taxas
+
+Paymasters podem aceitar pagamento de taxas em tokens além do SOL:
+
+1. O usuário assina a ação + concorda em pagar 0,01 USDC pelas taxas
+2. O paymaster verifica se o pagamento em USDC está incluído
+3. O paymaster paga as taxas em SOL, recebe USDC da smart wallet
+4. A ação é executada
+
+Isso elimina o atrito "preciso de SOL para fazer qualquer coisa" que bloqueia novos usuários.
+
+### Operações em Lote
+
+Smart wallets podem agrupar múltiplas operações em transações atômicas:
+
+```
+Transação:
+  1. Verificar assinatura do passkey uma vez
+  2. Executar: Trocar USDC por SOL
+  3. Executar: Fazer stake de SOL
+  4. Executar: Atualizar metadados do perfil
+```
+
+Uma verificação de passkey autoriza múltiplas instruções. Isso reduz o atrito do usuário e permite fluxos complexos que de outra forma exigiriam múltiplos pedidos de aprovação.
+
+<ArticleSection name="Arquitetura de Segurança" id="security-architecture" level="h2" />
+
+Smart wallets mudam a segurança de "proteja a chave" para "projete as regras."
+
+### Defesa em Profundidade
+
+Múltiplas camadas podem proteger contra diferentes ameaças:
+
+**Camada 1 - Hardware**
+A chave privada do passkey no secure enclave, inacessível mesmo para software comprometido.
+
+**Camada 2 - Vinculação de Origem**
+O passkey só assina para origens legítimas, bloqueando phishing.
+
+**Camada 3 - Verificação On-chain**
+O programa verifica a assinatura do passkey; assinaturas inválidas são rejeitadas.
+
+**Camada 4 - Aplicação de Políticas**
+O programa aplica limites de gasto, listas de permissão, timelocks.
+
+Um invasor precisa burlar todas as camadas. Comprometer o app não é suficiente se o passkey não assinar para a origem errada. Forjar assinaturas não é possível sem o secure enclave.
+
+### Considerações sobre Atualização
+
+Programas de smart wallet podem ser atualizáveis ou imutáveis:
+
+**Atualizável:**
+- Bugs podem ser corrigidos
+- Funcionalidades podem ser adicionadas
+- Mas: a autoridade de atualização é um ponto de confiança/falha
+
+**Imutável:**
+- O comportamento é permanente e auditável
+- Sem possibilidade de correções futuras
+- Máxima descentralização de confiança
+
+Algumas carteiras usam atualização com timelock: mudanças exigem um período de espera, dando aos usuários tempo para sair se discordarem.
+
+### Ataques de Estado
+
+Smart wallets devem se proteger contra manipulação de estado:
+
+**Ataques de replay**: Cada autorização deve incluir um nonce ou blockhash recente para prevenir reutilização.
+
+**Dessincronização de estado**: Se o estado off-chain (passkeys registrados) diverge do estado on-chain, os usuários podem ser bloqueados ou partes não autorizadas podem acessar.
+
+**Front-running de atualizações**: Atualizações maliciosas podem sofrer front-run por usuários retirando fundos.
+
+Smart wallets bem projetadas incluem proteções para cada vetor.
+
+<ArticleSection name="Abordagem da Crossmint" id="crossmint" level="h2" />
+
+A Crossmint implementa smart wallets com uma arquitetura modular de signatários. A carteira em si é um smart contract que pode ser controlado por vários "signatários":
+
+### Tipos de Signatário
+
+**Passkey Signer**: O passkey do dispositivo do usuário autoriza transações diretamente.
+
+**Email/Telefone Signer**: Autenticação por email ou SMS OTP, com chaves gerenciadas na infraestrutura da Crossmint.
+
+**Social Signer**: Autenticação OAuth (Google, Apple) cria acesso à carteira.
+
+**External Wallet Signer**: Carteiras cripto existentes (Phantom, MetaMask) podem controlar a smart wallet.
+
+**API Key Signer**: Automação no lado do servidor para fluxos custodiais ou semi-custodiais.
+
+### Composição
+
+Múltiplos signatários podem ser anexados à mesma carteira:
+
+```
+Smart Wallet
+├── Primário: Passkey (celular do usuário)
+├── Backup: Email (opção de recuperação)
+└── Automatizado: API Key (para assinaturas)
+```
+
+Os usuários começam com um signatário e adicionam mais conforme necessário. Essa flexibilidade permite que as aplicações evoluam seu modelo de segurança sem que os usuários criem novas carteiras.
+
+### Identidade Cross-Chain
+
+As smart wallets da Crossmint mantêm identidade consistente entre chains. A mesma autenticação cria carteiras na Solana, Ethereum, Polygon e outras, todas vinculadas à mesma identidade do usuário.
+
+<ArticleSection name="Arquitetura da LazorKit" id="lazorkit" level="h2" />
+
+A LazorKit adota uma abordagem nativa da Solana com passkeys como único mecanismo de autorização.
+
+### O Programa Smart Wallet
+
+O programa on-chain da LazorKit mantém o estado da carteira:
+
+```
+SmartWalletAccount {
+  passkey_pubkey: [u8; 33],    // chave pública secp256r1
+  wallet_bump: u8,             // PDA bump seed
+  created_at: i64,             // Timestamp
+  // ... estado adicional
+}
+```
+
+O PDA é derivado da chave pública do passkey, criando um endereço determinístico para cada passkey.
+
+### Fluxo de Transação
+
+1. **O cliente constrói a transação**: Instruções para o que a carteira deve fazer
+2. **Criação do challenge**: Os dados da transação são transformados em hash para criar um challenge
+3. **Assinatura com passkey**: O dispositivo do usuário assina o challenge com secp256r1
+4. **Instrução de verificação**: A transação inclui verificação via precompile secp256r1
+5. **Execução**: Se a verificação passar, o programa executa as instruções via CPI
+
+A assinatura do passkey no passo 3 acontece no secure enclave. A verificação no passo 4 usa o precompile nativo da Solana para eficiência.
+
+### Integração com Paymaster
+
+A LazorKit inclui suporte a paymaster para abstração de gas:
+
+```
+PaymasterConfig {
+  paymasterUrl: string,  // Serviço que patrocina transações
+  apiKey?: string,       // Autenticação para o paymaster
+}
+```
+
+O paymaster encapsula operações assinadas pelo usuário em transações com taxas pagas. Os usuários interagem com aplicações Solana sem precisar de SOL.
+
+<ArticleSection name="Análise de Trade-offs" id="tradeoffs" level="h2" />
+
+Diferentes arquiteturas de smart wallets fazem diferentes trade-offs:
+
+### Apenas Passkey (LazorKit)
+
+**Vantagens:**
+- Modelo de confiança mais simples: só importa a segurança do hardware
+- Sem dependências de servidor para assinatura
+- Auto-custódia real
+
+**Desvantagens:**
+- Recuperação exige passkeys de backup planejados
+- Sem alternativa se todos os dispositivos forem perdidos
+- Exige dispositivos compatíveis com passkey
+
+### MPC + Smart Wallet (Privy, Dynamic)
+
+**Vantagens:**
+- Múltiplos métodos de autenticação (email, social, passkey)
+- Recuperação assistida pelo provedor
+- Funciona em dispositivos sem suporte a passkey
+
+**Desvantagens:**
+- O provedor é uma dependência de confiança
+- Modelo de segurança mais complexo
+- Infraestrutura do provedor necessária para assinatura
+
+### Signatários Modulares (Crossmint)
+
+**Vantagens:**
+- Máxima flexibilidade em métodos de autenticação
+- Atualizações graduais de segurança possíveis
+- Bom para bases de usuários diversas
+
+**Desvantagens:**
+- Complexidade no gerenciamento de signatários
+- Múltiplas superfícies de ataque potenciais
+- Exige compreensão dos níveis de confiança dos signatários
+
+### A Escolha Certa Depende De
+
+**Base de usuários:**
+- Crypto-nativos? Apenas passkey pode ser aceitável.
+- Público geral? Necessário fallback com email/social.
+
+**Requisitos de recuperação:**
+- Alto valor? Necessita opções de recuperação robustas.
+- Descartável? Mais simples é melhor.
+
+**Ambiente regulatório:**
+- Necessidade de conformidade? Pode exigir opções de custódia.
+- Máxima descentralização? Passkey puro.
+
+<ArticleSection name="Considerações de Implementação" id="implementation" level="h2" />
+
+Construir sobre infraestrutura de smart wallet exige compreender os limites.
+
+### O Que Você Controla
+
+- Fluxos de autenticação do usuário
+- UI/UX para aprovação de transações
+- Lógica de negócio usando a carteira
+- Integração com seu backend
+
+### O Que o Protocolo Controla
+
+- Verificação de assinaturas
+- Derivação e autorização de PDA
+- Gerenciamento de estado on-chain
+- Mecanismos de atualização (se houver)
+
+### O Que o Hardware Controla
+
+- Geração e armazenamento de chaves privadas
+- Verificação biométrica
+- Aplicação de origem
+- Resistência a adulteração
+
+Compreender esses limites ajuda você a projetar aplicações seguras. Você não pode fortalecer a segurança do hardware a partir do seu app, mas pode construir UX que a aproveita adequadamente.
+
+### Considerações de Teste
+
+Testes de smart wallet exigem dispositivos reais:
+
+- Emuladores não têm secure enclaves
+- Operações de passkey falham ou se comportam de forma diferente em simulação
+- Particularidades específicas de dispositivo (iOS vs Android) importam
+
+Planeje testes em dispositivos físicos no seu fluxo de desenvolvimento.
+
+<ArticleSection name="Resumo Conceitual" id="summary" level="h2" />
+
+Smart wallets transformam contas Solana de controladas por chaves para controladas por programas:
+
+1. **PDAs** criam endereços controláveis apenas através da lógica do programa
+2. **Regras de autorização** podem exigir passkeys, múltiplas assinaturas, timelocks ou qualquer combinação
+3. **Abstração de gas** permite que usuários interajam sem deter SOL
+4. **Signatários modulares** permitem estratégias de autenticação flexíveis
+
+O modelo de segurança muda de "não perca sua chave" para "projete regras de autorização seguras." Passkeys baseados em hardware fornecem autenticação forte. Programas on-chain aplicam políticas. Múltiplos caminhos de autorização permitem recuperação.
+
+Ao escolher um provedor de smart wallet:
+- **LazorKit**: Passkey puro, máxima simplicidade, nativo da Solana
+- **Crossmint**: Signatários modulares, cross-chain, modelos de custódia flexíveis
+- **Provedores MPC**: Assinaturas com threshold e infraestrutura de provedor
+
+A escolha certa depende dos seus usuários, seus requisitos de segurança e quanto da infraestrutura você quer gerenciar versus delegar.
