@@ -1,0 +1,121 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instruções em Lote (Batch)
+
+Cross-Program Invocations (CPIs) incorrem em um custo base de 1.000 unidades de compute por chamada. Para programas que recebem CPIs frequentes dentro da mesma instrução, essa sobrecarga torna-se um gargalo de desempenho significativo.
+
+Para resolver essa ineficiência, [Dean](https://x.com/deanmlittle) criou a instrução "batch" neste [PR](https://github.com/febo/p-token/pull/7) para p-token, permitindo múltiplas operações em uma única chamada CPI.
+
+<ArticleSection name="A Instrução Batch" id="the-batch-instruction" level="h2" />
+
+Uma instrução batch permite que múltiplas operações sejam processadas em uma única CPI em vez de requerer chamadas separadas para cada operação. Isso reduz dramaticamente o consumo de unidades de compute para programas que lidam com múltiplas operações relacionadas.
+
+### Estrutura
+
+A instrução batch usa uma estrutura de header aprimorada contendo:
+- **Contagem de contas**: Número de contas necessárias para a instrução interna
+- **Comprimento dos dados**: Tamanho dos dados da instrução
+
+Este header permite o processamento eficiente de múltiplas instruções "internas" dentro de um único batch. O sistema percorre e processa cada instrução interna sequencialmente.
+
+> Usamos `u8::MAX` (255) como discriminador para instruções batch.
+
+<ArticleSection name="Design do Entrypoint" id="entrypoint-design" level="h2" />
+
+O entrypoint primeiro verifica o discriminador da instrução para determinar se deve processar um batch ou uma instrução regular. Isso evita aninhar instruções batch dentro de outras instruções batch, o que seria problemático.
+
+Assim:
+
+```rust
+#[inline(always)]
+pub fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let [discriminator, remaining @ ..] = instruction_data else {
+        return Err(TokenError::InvalidInstruction.into());
+    };
+
+    let result = if *discriminator == 255 {
+        // 255 - Batch
+        #[cfg(feature = "logging")]
+        pinocchio::msg!("Instrução: Batch");
+
+        process_batch(accounts, remaining)
+    } else {
+        inner_process_instruction(accounts, instruction_data)
+    };
+
+    result.inspect_err(log_error)
+}
+```
+
+### Process Batch
+
+A função `process_batch` cuida da lógica central de processamento em lote:
+
+```rust
+/// Tamanho do header da instrução batch.
+///
+/// O header de cada instrução consiste em dois valores `u8`:
+///  * número de contas
+///  * comprimento dos dados da instrução
+const IX_HEADER_SIZE: usize = 2;
+
+pub fn process_batch(mut accounts: &[AccountInfo], mut instruction_data: &[u8]) -> ProgramResult {
+    loop {
+        // Valida os dados da instrução e offset de contas.
+
+        if instruction_data.len() < IX_HEADER_SIZE {
+            // Os dados da instrução devem ter pelo menos dois bytes.
+            return Err(TokenError::InvalidInstruction.into());
+        }
+
+        // SAFETY: Os dados da instrução têm garantia de pelo menos dois bytes
+        // (header) + um byte (discriminador) e os valores estão dentro dos limites
+        // de um `usize`.
+        let expected_accounts = unsafe { *instruction_data.get_unchecked(0) as usize };
+        let data_offset = IX_HEADER_SIZE + unsafe { *instruction_data.get_unchecked(1) as usize };
+
+        if instruction_data.len() < data_offset || data_offset == IX_HEADER_SIZE {
+            return Err(TokenError::InvalidInstruction.into());
+        }
+
+        if accounts.len() < expected_accounts {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        }
+
+        // Processar a instrução.
+
+        // SAFETY: Os comprimentos dos dados da instrução e contas já foram validados então
+        // todos os slices têm garantia de serem válidos.
+        let (ix_accounts, ix_data) = unsafe {
+            (
+                accounts.get_unchecked(..expected_accounts),
+                instruction_data.get_unchecked(IX_HEADER_SIZE..data_offset),
+            )
+        };
+
+        inner_process_instruction(ix_accounts, ix_data)?;
+
+        if data_offset == instruction_data.len() {
+            // O batch está completo.
+            break;
+        }
+
+        accounts = &accounts[expected_accounts..];
+        instruction_data = &instruction_data[data_offset..];
+    }
+
+    Ok(())
+}
+```
+
+Aqui está o que acontece nesta função:
+- **Validação do Header**: A função começa validando que os dados da instrução contêm pelo menos o tamanho de header necessário (2 bytes).
+- **Extração de Contas e Dados**: Extrai a contagem esperada de contas e calcula o offset dos dados, validando esses valores para prevenir comportamento indefinido.
+- **Processamento da Instrução**: Cada instrução interna é processada usando a função padrão `inner_process_instruction` com suas contas e dados específicos.
+- **Controle do Loop**: A função continua processando até que todas as instruções em lote estejam completas, avançando os ponteiros de contas e dados da instrução para cada iteração.
+
+> Algumas instruções podem requerer verificações explícitas de ownership quando executadas em um batch, já que o runtime apenas impõe ownership no final do processamento do batch. Instruções que não modificam contas ou já realizam verificações explícitas de ownership não precisam de validação adicional.

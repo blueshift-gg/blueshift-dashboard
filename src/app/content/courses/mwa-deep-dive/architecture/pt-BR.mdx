@@ -1,0 +1,160 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![MWA Deep Dive](/graphics/course-banners/mwa-deep-dive.png)
+
+# A Arquitetura do MWA
+
+Carteiras de extensão de navegador funcionam porque seu dApp e carteira compartilham o mesmo contexto de execução: o navegador. A extensão do Phantom pode se injetar em cada página, interceptar requisições de carteira e responder diretamente. Simples, elegante, frágil.
+
+O mobile quebra esse modelo completamente. Seu app React Native executa em seu próprio sandbox. O app da carteira executa em outro. Sem memória compartilhada. Sem scripts injetados. Sem objeto window comum. O sistema operacional impõe isolamento estrito entre aplicativos.
+
+O Mobile Wallet Adapter é o protocolo que preenche essa lacuna.
+
+> O MWA define como dois aplicativos completamente isolados, seu dApp e uma carteira, podem estabelecer um canal seguro, negociar autorização e trocar transações assinadas.
+
+<ArticleSection name="Arquitetura de Três Camadas" id="tres-camadas" level="h2" />
+
+O protocolo MWA opera em três camadas distintas:
+
+**Camada de Transporte**: Como os bytes se movem entre apps. No Android, isso significa WebSockets via localhost. O dApp abre um cliente WebSocket; a carteira executa um servidor WebSocket. Para conexões remotas (dApp no laptop, carteira no celular), um servidor refletor atua como intermediário.
+
+**Camada de Sessão**: Como os apps estabelecem confiança. Antes de qualquer operação de carteira acontecer, o dApp e a carteira realizam um handshake criptográfico. Eles trocam chaves públicas, verificam identidades e derivam uma chave de criptografia compartilhada. Cada mensagem subsequente é criptografada.
+
+**Camada RPC**: Quais operações a carteira expõe. Uma vez que uma sessão segura existe, o dApp envia requisições JSON-RPC (`authorize`, `sign_and_send_transactions`, `sign_messages`) e recebe respostas. Esta é a camada com a qual a maioria dos desenvolvedores interage.
+
+```
++-----------------------------------------------------+
+|                   Camada RPC                         |
+|  authorize, sign_and_send_transactions, etc.        |
++-----------------------------------------------------+
+|                 Camada de Sessão                     |
+|  Troca de chaves ECDH, criptografia AES-GCM         |
++-----------------------------------------------------+
+|                Camada de Transporte                  |
+|  WebSocket (local ou via refletor)                  |
++-----------------------------------------------------+
+```
+
+<ArticleSection name="Endpoints e Papéis" id="endpoints" level="h2" />
+
+A especificação define dois papéis:
+
+**Endpoint dApp**: Seu aplicativo. Ele inicia conexões, envia requisições e processa respostas. Na camada de Transporte, atua como cliente WebSocket (para conexões locais) ou se conecta a um refletor. O endpoint dApp é sempre o *iniciador*.
+
+**Endpoint Carteira**: O app da carteira (Phantom, Solflare, etc.). Ele aceita conexões, apresenta a interface de autorização aos usuários, assina transações e retorna resultados. Na camada de Transporte, atua como servidor WebSocket (localmente) ou se conecta ao mesmo refletor. O endpoint da carteira é sempre o *respondedor*.
+
+```
++-----------------+                      +-----------------+
+|  Endpoint dApp  |                      | Endpoint Carteira |
+|   (seu app)     |<-------------------->|   (Phantom)     |
+|                 |    Protocolo MWA     |                 |
+|   - iniciador   |                      |   - respondedor  |
+|   - WS client   |                      |   - WS server   |
++-----------------+                      +-----------------+
+```
+
+<ArticleSection name="O Token de Associação" id="token-de-associacao" level="h2" />
+
+Toda sessão MWA começa com um *token de associação*. Este é uma chave pública de curva elíptica P-256 codificada em base64url gerada pelo dApp.
+
+```
+solana-wallet:/v1/associate/local?association=<TOKEN>&port=<PORT>
+```
+
+O token de associação serve a dois propósitos:
+
+1. **Autenticação**: O dApp prova que gerou o token assinando mensagens com a chave privada correspondente durante o estabelecimento da sessão.
+
+2. **Salt para Acordo de Chaves**: A chave pública do token é usada como salt na função HKDF que deriva a chave de criptografia da sessão.
+
+Por que gerar um novo par de chaves para cada conexão? Porque as sessões MWA são efêmeras. Quando seu app chama `transact()`, ele cria um novo par de chaves de associação, abre uma sessão de carteira, realiza operações e fecha a sessão. O par de chaves é descartado. A próxima chamada `transact()` gera um novo.
+
+Isso significa:
+- Sessões não persistem entre reinicializações do app
+- Cada `transact()` é independente
+- Não há credenciais de longa duração para serem roubadas
+
+<ArticleSection name="Por Que a Criptografia Importa" id="por-que-criptografia" level="h2" />
+
+Você pode se perguntar: se ambos os apps executam no mesmo dispositivo, comunicando-se via localhost, por que criptografar?
+
+Três motivos:
+
+**Privacidade contra outros apps**: Em um dispositivo com root ou com malware, outros processos poderiam potencialmente capturar o tráfego localhost. A criptografia garante que os detalhes das transações permaneçam confidenciais.
+
+**Proteção de integridade**: A criptografia (especificamente criptografia autenticada com AES-GCM) garante que as mensagens não possam ser adulteradas em trânsito. Uma transação modificada falharia na autenticação.
+
+**Uniformidade do protocolo**: O mesmo esquema de criptografia funciona para conexões locais e remotas. Conexões remotas passam por um servidor refletor, um terceiro que explicitamente *não* deve ver texto puro. Ao criptografar sempre, o protocolo não precisa de casos especiais.
+
+<ArticleSection name="O Papel do Refletor" id="papel-do-refletor" level="h2" />
+
+Para conexões remotas, onde o dApp executa em um laptop e a carteira em um celular, comunicação direta não é possível. O MWA usa um servidor *refletor* como intermediário.
+
+O refletor é intencionalmente simples e não confiável:
+
+1. O dApp se conecta a `wss://<reflector>/reflect` e recebe um ID único
+2. Este ID é codificado em um QR code que a carteira escaneia
+3. A carteira se conecta a `wss://<reflector>/reflect?id=<ID>`
+4. O refletor começa a encaminhar mensagens entre eles
+5. Todas as mensagens encaminhadas são criptografadas; o refletor vê apenas ciphertext
+
+```
++----------+      +------------+      +----------+
+|   dApp   |----->|  Refletor  |<-----| Carteira |
+| (laptop) |      |  (server)  |      | (celular)|
++----------+      +------------+      +----------+
+                        |
+                  Não consegue ler
+                  o conteúdo das mensagens
+```
+
+O refletor impõe timeouts (30 segundos para conexões semi-abertas, 90 segundos para sessões estabelecidas) e limita o tamanho das mensagens a 4KB. É um canal burro por design.
+
+<ArticleSection name="Ciclo de Vida da Sessão" id="ciclo-de-vida" level="h2" />
+
+Entender o ciclo de vida da sessão ajuda a depurar problemas:
+
+### 1. Associação
+O dApp gera um par de chaves de associação e constrói uma URI `solana-wallet:`. No Android, abrir esta URI inicia o app da carteira via um Intent.
+
+### 2. Estabelecimento de Transporte
+A carteira inicia um servidor WebSocket na porta especificada. O dApp se conecta e inicia o handshake.
+
+### 3. Estabelecimento de Sessão
+Os apps trocam mensagens `HELLO_REQ` e `HELLO_RSP` contendo chaves públicas ECDH. Eles derivam uma chave AES compartilhada. A sessão agora está criptografada.
+
+### 4. Autorização
+O dApp envia uma requisição JSON-RPC `authorize`. A carteira exibe uma interface solicitando aprovação do usuário. Se aprovado, a carteira retorna contas e um `auth_token`.
+
+### 5. Operações Privilegiadas
+Com autorização, o dApp pode solicitar assinatura (`sign_and_send_transactions`, `sign_messages`).
+
+### 6. Encerramento da Sessão
+Quando o callback `transact()` do dApp é concluído, o WebSocket fecha. Todas as chaves de sessão são descartadas.
+
+<ArticleSection name="O Que Torna o MWA Diferente" id="diferente" level="h2" />
+
+Comparando o MWA com outros protocolos de conexão de carteira:
+
+| Aspecto | Extensões de Navegador | WalletConnect | MWA |
+|---------|----------------------|---------------|-----|
+| Contexto de Execução | Compartilhado (injetado) | Separado | Separado |
+| Transporte | Memória direta | Relay remoto | WS local ou relay |
+| Duração da Sessão | Longa duração | Longa duração | Efêmera |
+| Criptografia | Opcional | Sim | Sim |
+| Verificação de Identidade | Baseada em domínio | Nenhum padrão | Digital Asset Links |
+
+O modelo de sessão efêmera é a característica mais distintiva do MWA. Outros protocolos mantêm conexões persistentes. O MWA reconecta para cada lote de operações. Isso simplifica o gerenciamento de estado, mas significa que a autorização deve ser eficiente (daí o `auth_token` para reautorização silenciosa).
+
+<ArticleSection name="Por Que Este Curso Existe" id="por-que-curso" level="h2" />
+
+A maioria dos desenvolvedores de dApps precisa apenas do Curso 1: padrões práticos de integração. Mas alguns cenários exigem compreensão mais profunda:
+
+- **Depuração**: Quando sessões falham misteriosamente, conhecer o handshake ajuda a isolar o problema
+- **Desenvolvimento de Carteira**: Construir uma carteira requer implementar o lado do servidor
+- **Auditorias de Segurança**: Revisar implementações MWA requer conhecimento do protocolo
+- **Transportes Personalizados**: Adicionar Bluetooth ou outros transportes significa entender as camadas de abstração
+
+Este curso guia você pela especificação camada por camada. Ao final, você será capaz de ler a [especificação oficial](https://solana-mobile.github.io/mobile-wallet-adapter/spec/spec.html) fluentemente e rastrear problemas desde sintomas visíveis ao usuário até causas no nível do protocolo.
+
+Começamos na próxima lição com a camada de transporte: como os bytes realmente se movem entre os aplicativos.

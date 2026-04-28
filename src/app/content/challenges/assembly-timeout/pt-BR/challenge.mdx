@@ -1,0 +1,99 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Assembly Timeout
+
+![Desafio Assembly Timeout](/graphics/challenge-banners/assembly-timeout.png)
+
+Nesta unidade, usaremos sBPF Assembly para criar uma instrução de validação baseada em tempo que impõe prazos de altura de slot.
+
+Ao incluir esta instrução na sua transação, você cria um mecanismo de segurança que impede a execução após um tempo especificado na blockchain, protegendo contra execução atrasada de transações ou replay de instruções obsoletas.
+
+Várias propriedades tornam verificações de timeout ideais para assembly:
+- Caso de uso único e restrito
+- Uso eficiente de variáveis de sistema
+- Nenhuma validação complexa de conta necessária
+- Só melhora a segurança da transação
+
+Se você não está familiarizado com programação em assembly, siga o [curso de Introdução ao Assembly](/pt-BR/courses/introduction-to-assembly)
+
+<ArticleSection name="Design do Programa" id="program-design" level="h2" />
+
+Nosso programa implementa uma operação temporal crucial: validar que a altura de slot atual da blockchain não excedeu um prazo predeterminado. Este padrão é essencial para operações DeFi sensíveis ao tempo — desde prevenir tentativas de arbitragem obsoletas até impor prazos de leilão.
+
+O programa espera:
+- Uma altura máxima de slot de 8 bytes nos dados da instrução.
+- Acesso ao Clock sysvar da Solana através de `sol_get_clock_sysvar`.
+- Retorna sucesso se o slot atual ≤ slot máximo, erro caso contrário.
+
+<ArticleSection name="Offsets de Memória" id="memory-offsets" level="h2" />
+
+Programas sBPF recebem dados de contas como regiões contíguas de memória. Essas constantes definem offsets de bytes dentro dessa memória.
+
+Como nosso programa aceita zero contas, podemos calcular onde o `MAX_SLOT_HEIGHT` (passado como dados de instrução) estará localizado. Também armazenaremos os dados do `Clock` sysvar na pilha, por isso o `CURRENT_SLOT_HEIGHT` será negativo.
+
+Essas constantes definem nosso layout de memória:
+
+```sbpf
+.equ NUM_ACCOUNTS, 0x0000
+.equ MAX_SLOT_HEIGHT, 0x0010
+.equ CURRENT_SLOT_HEIGHT, -0x0028
+```
+
+- `NUM_ACCOUNTS` (0x0000): Aponta para a contagem de contas no cabeçalho dos dados de instrução para validação
+- `MAX_SLOT_HEIGHT` (0x0010): Localiza a altura de slot limite de 8 bytes dentro do payload dos dados de instrução
+- `CURRENT_SLOT_HEIGHT` (-0x0028): Offset na pilha onde o campo de slot do Clock sysvar será armazenado. Como slot é o primeiro campo na estrutura Clock, este offset aponta diretamente para ele
+
+Diferente de linguagens de alto nível que abstraem o layout de memória, assembly exige saber exatamente onde cada dado reside.
+
+<ArticleSection name="Entrypoint e Validação Inicial" id="entrypoint-and-validations" level="h2" />
+
+```sbpf
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]       // Vetar se quaisquer contas forem incluídas
+  ldxdw r2, [r1+MAX_SLOT_HEIGHT]    // Armazenar altura de slot alvo
+```
+
+Todo programa sBPF começa no símbolo global `.entrypoint`. O runtime da Solana fornece dados de contas e instruções através do registrador `r1`.
+
+A instrução `ldxdw` carrega (`ldx`) um valor de 8 bytes (double word, `dx`) da memória para um registrador. Veja o que acontece:
+- `ldxdw r0, [r1+NUM_ACCOUNTS]`: carrega a contagem de contas em `r0`. Como `r0` é o registrador que a VM lê na saída, qualquer valor não zero falha automaticamente o programa (exatamente o que queremos se contas forem passadas).
+- `ldxdw r2, [r1+MAX_SLOT_HEIGHT]`: aponta para a altura de slot máxima permitida que passamos nos dados de instrução. Este valor de 64 bits vai para `r2`.
+
+Ambas as operações são zero-copy: estamos lendo diretamente dos dados da conta sem overhead de deserialização.
+
+<ArticleSection name="O Clock Sysvar" id="the-clock-sysvar" level="h2" />
+
+```sbpf
+mov64 r1, r10
+add64 r1, CURRENT_SLOT_HEIGHT
+call sol_get_clock_sysvar
+ldxdw r1, [r1+0x0000]
+```
+
+A syscall `sol_get_clock_sysvar` escreve dados atuais do `Clock` no endereço de memória especificado em `r1`.
+
+Como a estrutura Clock tem 40 bytes (grande demais para registradores que comportam apenas 8 bytes cada), usamos a pilha para armazenamento rápido, sem alocação e com limpeza automática.
+
+Como `r10` é somente leitura, para operar na pilha precisamos copiar seu endereço de memória para um registrador: `mov64 r1, r10`
+
+Então adicionamos `CURRENT_SLOT_HEIGHT` (-0x0028) a `r1`. Como esta constante é negativa, é na verdade uma subtração: `r1 = r10 - 40 bytes`, alocando 40 bytes na pilha.
+
+Após chamar a função `sol_get_clock_sysvar`, `r1` contém o endereço de memória onde os dados do Clock foram escritos, não o valor do slot em si. Por isso, procedemos para carregar o valor real do slot usando `ldxdw r1, [r1+0x0000]`.
+
+<ArticleSection name="Lógica de Comparação Temporal" id="temporal-comparison-logic" level="h2" />
+
+```sbpf
+jle r1, r2, end    // Se slot atual <= slot máximo, sucesso
+lddw r0, 1         // Caso contrário, definir código de erro
+```
+
+A lógica central de timeout usa um único desvio condicional:
+- Validação temporal: `jle` (jump if less or equal) compara o slot atual (`r1`) com nosso prazo (`r2`). Se estivermos dentro da janela de tempo, pula para `exit`
+- Tratamento de timeout: Se o prazo já passou, a execução continua para carregar (`lddw`) o código de erro 1 no registrador de retorno `r0`
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+
+Este programa compacto realiza validação temporal com consumo mínimo de unidades de compute.
+
+A compensação é entender interfaces de syscall, gerenciamento de pilha e o layout binário do `Clock` sysvar. Mas para validações temporais críticas de desempenho, assembly oferece eficiência incomparável.

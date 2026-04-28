@@ -1,0 +1,558 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Referência de Métodos JSON-RPC
+
+Uma vez estabelecida uma sessão segura, o dApp se comunica com a carteira usando JSON-RPC 2.0 sobre o canal criptografado. Esta lição documenta cada método, seus parâmetros e formatos de resposta.
+
+<ArticleSection name="Categorias de Métodos" id="categories" level="h2" />
+
+O MWA define duas categorias de métodos:
+
+**Métodos Não Privilegiados**: Podem ser chamados a qualquer momento após o estabelecimento de sessão.
+- `authorize`
+- `deauthorize`
+- `get_capabilities`
+
+**Métodos Privilegiados**: Requerem chamada `authorize` prévia com sucesso.
+- `sign_and_send_transactions`
+- `sign_messages`
+- `clone_authorization`
+
+<ArticleSection name="authorize" id="authorize" level="h2" />
+
+Solicita autorização do usuário para o dApp.
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "authorize",
+  "params": {
+    "identity": {
+      "uri": "https://myapp.com",
+      "icon": "favicon.ico",
+      "name": "Meu dApp"
+    },
+    "cluster": "mainnet-beta",
+    "auth_token": "previo...cao",
+    "features": ["sign_and_send_transactions:2", "sign_messages"],
+    "addresses": ["base64_encoded_addresses"]
+  }
+}
+```
+
+### Parâmetros
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `identity` | object | Sim | Informações sobre o dApp para exibição |
+| `identity.uri` | string | Sim | URI para verificação de identidade |
+| `identity.icon` | string | Não | Caminho relativo do ícone a partir de identity.uri |
+| `identity.name` | string | Não | Nome de exibição do dApp |
+| `cluster` | string | Não | Cluster Solana: `mainnet-beta`, `testnet`, `devnet`, ou URL customizada |
+| `auth_token` | string | Não | Auth token anterior para reautorização silenciosa |
+| `features` | string[] | Não | Lista de features/versões que o dApp requer |
+| `addresses` | string[] | Não | Endereços de conta específicos para autorizar |
+
+### Resposta (Sucesso)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "accounts": [
+      {
+        "address": "base64_encoded_pubkey",
+        "display_address": "7xKXt...",
+        "display_address_format": "base58",
+        "label": "Carteira Principal",
+        "icon": "data:image/png;base64,...",
+        "chains": ["solana:mainnet"],
+        "features": ["solana:signAndSendTransaction"]
+      }
+    ],
+    "auth_token": "novo_ou...token",
+    "wallet_uri_base": "https://phantom.app/ul/v1/",
+    "sign_in_result": { /* se sign-in foi solicitado */ }
+  }
+}
+```
+
+### Campos da Resposta
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `accounts` | array | Contas autorizadas |
+| `accounts[].address` | string | Chave pública codificada em base64 |
+| `accounts[].display_address` | string | Endereço legível |
+| `accounts[].display_address_format` | string | Formato: `base58` |
+| `accounts[].label` | string | Nome opcional da conta |
+| `accounts[].icon` | string | Ícone opcional da conta (data URI) |
+| `accounts[].chains` | string[] | Identificadores de chain (formato CAIP-2) |
+| `accounts[].features` | string[] | Features suportadas pela conta |
+| `auth_token` | string | Token para reautorização futura |
+| `wallet_uri_base` | string | URI base para deep links específicos da carteira |
+
+### Fluxo de Reautorização
+
+Se `auth_token` for fornecido e ainda válido, a carteira pode pular interação do usuário:
+
+```
+dApp                                     Carteira
+  │                                        │
+  │ authorize(auth_token="abc123")         │
+  │──────────────────────────────────────►│
+  │                                        │ Token válido?
+  │                                        │ Sim → sucesso silencioso
+  │◄──────────────────────────────────────│
+  │ result: { accounts, auth_token }       │
+```
+
+Se o token for inválido ou expirado:
+```
+  │ authorize(auth_token="expirado")       │
+  │──────────────────────────────────────►│
+  │                                        │ Token inválido
+  │                                        │ Mostrar UI de autorização
+  │                                        │ Usuário aprova
+  │◄──────────────────────────────────────│
+  │ result: { accounts, new_auth_token }   │
+```
+
+<ArticleSection name="deauthorize" id="deauthorize" level="h2" />
+
+Invalida uma autorização prévia.
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "2",
+  "method": "deauthorize",
+  "params": {
+    "auth_token": "token_...data"
+  }
+}
+```
+
+### Parâmetros
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `auth_token` | string | Sim | O auth token para invalidar |
+
+### Resposta (Sucesso)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "2",
+  "result": {}
+}
+```
+
+### Casos de Uso
+
+1. **Logout do usuário**: Quando o usuário explicitamente desconecta sua carteira
+2. **Segurança**: Após detectar atividade suspeita
+3. **Rotação de token**: Antes de solicitar autorização fresca
+
+<ArticleSection name="get_capabilities" id="get-capabilities" level="h2" />
+
+Consulta as features suportadas pela carteira.
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3",
+  "method": "get_capabilities"
+}
+```
+
+Sem parâmetros necessários.
+
+### Resposta
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3",
+  "result": {
+    "supports_clone_authorization": true,
+    "supports_sign_and_send_transactions": true,
+    "max_transactions_per_request": 10,
+    "max_messages_per_request": 10,
+    "supported_transaction_versions": ["legacy", 0]
+  }
+}
+```
+
+### Campos da Resposta
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `supports_clone_authorization` | boolean | Se `clone_authorization` está disponível |
+| `supports_sign_and_send_transactions` | boolean | Se a carteira pode assinar e transmitir |
+| `max_transactions_per_request` | number | Máximo de transações em uma solicitação |
+| `max_messages_per_request` | number | Máximo de mensagens em uma solicitação |
+| `supported_transaction_versions` | array | `"legacy"`, `0` (versionada), etc. |
+
+### Por Que Verificar Capacidades?
+
+Carteiras diferentes têm limites e features diferentes. Verifique capacidades antes de:
+- Enviar lotes grandes de transações
+- Usar transações versionadas
+- Assumir suporte a `clone_authorization`
+
+<ArticleSection name="sign_and_send_transactions" id="sign-and-send" level="h2" />
+
+Assina transações e as transmite para a rede.
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "method": "sign_and_send_transactions",
+  "params": {
+    "payloads": [
+      "base64_encoded_transaction_1",
+      "base64_encoded_transaction_2"
+    ],
+    "options": {
+      "min_context_slot": 150000000,
+      "commitment": "confirmed",
+      "skip_preflight": false,
+      "max_retries": 3
+    }
+  }
+}
+```
+
+### Parâmetros
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `payloads` | string[] | Sim | Transações serializadas codificadas em base64 |
+| `options` | object | Não | Opções de envio da transação |
+| `options.min_context_slot` | number | Não | Slot mínimo para contexto |
+| `options.commitment` | string | Não | `processed`, `confirmed`, `finalized` |
+| `options.skip_preflight` | boolean | Não | Pular simulação preflight |
+| `options.max_retries` | number | Não | Número de tentativas de envio |
+
+### Formato do Payload de Transação
+
+Cada payload é uma transação Solana, serializada de acordo com sua versão:
+
+- **Transações legacy**: Serialização padrão
+- **Transações versionadas (v0)**: Incluem prefixo de versão e tabelas de lookup de endereço
+
+A transação deve:
+1. Ter `recentBlockhash` definido (ou `null` para a carteira preencher)
+2. Deixar a assinatura do fee payer vazia (a carteira preenche)
+3. Incluir todas as outras assinaturas necessárias
+
+### Resposta (Sucesso)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "result": {
+    "signatures": [
+      "base64_encoded_signature_1",
+      "base64_encoded_signature_2"
+    ]
+  }
+}
+```
+
+### Resposta (Falha Parcial)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4",
+  "error": {
+    "code": -3,
+    "message": "Algumas transações não foram assinadas",
+    "data": {
+      "valid": [0],
+      "invalid": [1]
+    }
+  }
+}
+```
+
+Códigos de erro para este método:
+- `-1`: Autorização falhou
+- `-2`: Payloads inválidos (transações malformadas)
+- `-3`: Nem todas transações assinadas (usuário recusou algumas)
+- `-4`: Não enviado (transmissão falhou)
+- `-6`: Payloads demais (excede `max_transactions_per_request`)
+
+<ArticleSection name="sign_messages" id="sign-messages" level="h2" />
+
+Assina mensagens arbitrárias (não transações).
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5",
+  "method": "sign_messages",
+  "params": {
+    "payloads": [
+      "base64_encoded_message"
+    ],
+    "addresses": [
+      "base64_encoded_pubkey"
+    ]
+  }
+}
+```
+
+### Parâmetros
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `payloads` | string[] | Sim | Mensagens codificadas em base64 para assinar |
+| `addresses` | string[] | Não | Contas específicas para assinar (devem estar autorizadas) |
+
+### Resposta (Sucesso)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5",
+  "result": {
+    "signed_payloads": [
+      "base64_encoded_signed_message"
+    ]
+  }
+}
+```
+
+### Formato de Assinatura de Mensagem
+
+Mensagens são assinadas como estão (bytes brutos). Para mensagens legíveis, codifique como UTF-8 primeiro.
+
+Padrões comuns:
+- **Autenticação**: Assinar um nonce para provar propriedade da carteira
+- **Dados off-chain**: Assinar dados estruturados para protocolos como Sign-In With Solana
+
+<ArticleSection name="clone_authorization" id="clone-authorization" level="h2" />
+
+Cria uma nova autorização a partir de uma existente.
+
+### Solicitação
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "6",
+  "method": "clone_authorization",
+  "params": {}
+}
+```
+
+Sem parâmetros (usa a autorização da sessão atual).
+
+### Resposta (Sucesso)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "6",
+  "result": {
+    "auth_token": "***"
+  }
+}
+```
+
+### Casos de Uso
+
+1. **Apps multi-sessão**: Clonar autorização para usar em serviços em segundo plano
+2. **Refresh de token**: Obter um novo token enquanto a sessão atual ainda é válida
+
+Este método pode não ser suportado por todas as carteiras (verifique `get_capabilities`).
+
+<ArticleSection name="Formato de Resposta de Erro" id="errors" level="h2" />
+
+Todos os métodos retornam erros no formato JSON-RPC:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "error": {
+    "code": -1,
+    "message": "Mensagem de erro legível",
+    "data": { /* dados adicionais opcionais */ }
+  }
+}
+```
+
+### Códigos de Erro Padrão
+
+| Código | Nome | Descrição |
+|--------|------|-----------|
+| `-32700` | Erro de parse | JSON inválido |
+| `-32600` | Solicitação inválida | JSON-RPC não válido |
+| `-32601` | Método não encontrado | Nome de método desconhecido |
+| `-32602` | Parâmetros inválidos | Parâmetros de método inválidos |
+| `-32603` | Erro interno | Erro interno da carteira |
+
+### Códigos de Erro Específicos do MWA
+
+| Código | Nome | Descrição |
+|--------|------|-----------|
+| `-1` | `ERROR_AUTHORIZATION_FAILED` | Usuário recusou ou autorização inválida |
+| `-2` | `ERROR_INVALID_PAYLOADS` | Payloads de transação/mensagem malformados |
+| `-3` | `ERROR_NOT_SIGNED` | Usuário recusou assinar (alguns ou todos) |
+| `-4` | `ERROR_NOT_SUBMITTED` | Falha no envio da transação |
+| `-5` | `ERROR_NOT_CLONED` | Falha na clonagem de autorização |
+| `-6` | `ERROR_TOO_MANY_PAYLOADS` | Excede limite da carteira |
+| `-7` | `ERROR_CHAIN_NOT_SUPPORTED` | Chain solicitada não suportada pela carteira |
+| `-100` | `ERROR_ATTEST_ORIGIN_ANDROID` | Attestation Android necessário mas falhou |
+
+<ArticleSection name="Strings de Feature" id="features" level="h2" />
+
+Strings de feature usam um formato namespacificado para identificar capacidades e versões:
+
+| Feature | Descrição |
+|---------|-----------|
+| `solana:signTransactions` | Assinar transações sem enviar |
+| `solana:signAndSendTransaction` | Assinar e transmitir uma única transação |
+| `solana:signAndSendTransaction:2` | Versão 2 com suporte a opções adicionais |
+| `solana:signMessages` | Suporte a assinatura de mensagens |
+| `solana:cloneAuthorization` | Suporte a clonagem de autorização |
+
+Ao chamar `authorize`, especifique as features necessárias:
+
+```json
+{
+  "method": "authorize",
+  "params": {
+    "features": ["solana:signAndSendTransaction:2", "solana:signMessages"]
+  }
+}
+```
+
+A carteira retornará erro se não puder suportar as features solicitadas.
+
+<ArticleSection name="Identificadores de Chain" id="chains" level="h2" />
+
+Respostas de contas incluem identificadores de chain no formato CAIP-2:
+
+| Chain | Identificador CAIP-2 |
+|-------|---------------------|
+| Mainnet Beta | `solana:mainnet` |
+| Devnet | `solana:devnet` |
+| Testnet | `solana:testnet` |
+| Localnet | `solana:localnet` |
+
+<ArticleSection name="Fluxo de Solicitação/Resposta" id="flow" level="h2" />
+
+Uma sessão completa com múltiplas operações:
+
+```
+dApp                                        Carteira
+  │                                           │
+  │ ──── HELLO_REQ ─────────────────────────► │
+  │ ◄─── HELLO_RSP ───────────────────────── │
+  │                                           │
+  │ ──── authorize ──────────────────────────► │
+  │                                           │ [Usuário aprova]
+  │ ◄─── result: accounts, auth_token ─────── │
+  │                                           │
+  │ ──── sign_and_send_transactions ─────────► │
+  │                                           │ [Usuário revisa]
+  │ ◄─── result: signatures ───────────────── │
+  │                                           │
+  │ ──── deauthorize ────────────────────────► │
+  │ ◄─── result: {} ──────────────────────── │
+  │                                           │
+  │ ──── [WebSocket close] ──────────────────► │
+```
+
+<ArticleSection name="Melhores Práticas" id="best-practices" level="h2" />
+
+### 1. Sempre Verifique Autorização
+
+Antes de métodos privilegiados:
+
+```typescript
+if (!authToken) {
+  const authResult = await wallet.authorize(identity);
+  authToken = authResult.auth_token;
+}
+```
+
+### 2. Lidar com Assinatura Parcial
+
+Verifique o código de erro `-3` que indica assinatura parcial:
+
+```typescript
+try {
+  const result = await wallet.signAndSendTransactions(payloads);
+} catch (error) {
+  if (error.code === -3 && error.data) {
+    console.log('Assinadas:', error.data.valid);
+    console.log('Recusadas:', error.data.invalid);
+  }
+}
+```
+
+### 3. Respeitar Limites da Carteira
+
+Consulte capacidades e agrupe adequadamente:
+
+```typescript
+const caps = await wallet.getCapabilities();
+const batchSize = caps.max_transactions_per_request || 1;
+
+for (let i = 0; i < transactions.length; i += batchSize) {
+  const batch = transactions.slice(i, i + batchSize);
+  await wallet.signAndSendTransactions(batch);
+}
+```
+
+### 4. Usar Reautorização
+
+Armazene e reutilize `auth_token`:
+
+```typescript
+// Ao iniciar o app
+const savedToken = await AsyncStorage.getItem('auth_token');
+
+// Em transact()
+const result = await wallet.authorize({
+  identity,
+  auth_token: savedToken
+});
+
+// Salvar para próxima vez
+await AsyncStorage.setItem('auth_token', result.auth_token);
+```
+
+### 5. Validar Respostas
+
+Verifique a estrutura da resposta antes de acessar campos:
+
+```typescript
+if (result.accounts && result.accounts.length > 0) {
+  const address = result.accounts[0].address;
+  // Usar address...
+}
+```
+
+Na próxima lição, examinamos verificação de identidade: como carteiras confirmam que o dApp é quem diz ser.

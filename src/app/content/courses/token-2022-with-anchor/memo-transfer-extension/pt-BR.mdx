@@ -1,0 +1,165 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Memo Transfer
+
+A extensão `MemoTranfer` é uma extensão de conta `Token` que exige que todas as transferências recebidas por uma conta de token incluam um memo, facilitando o rastreamento aprimorado de transações e identificação de usuários.
+
+<ArticleSection name="Inicializando a Conta Token" id="initializing-the-token-account" level="h2" />
+
+Como o `Anchor` não tem macros para a extensão `memo_transfer`, vamos criar uma conta `Token` usando CPIs brutos (raw).
+
+Aqui está como criar um token com a extensão Memo Transfer:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_account3,
+        spl_token_2022::{extension::ExtensionType, pod::PodAccount},
+        InitializeAccount3,
+    },
+    token_interface::{memo_transfer_initialize, MemoTransfer, Mint, Token2022},
+};
+
+// Atualmente não há uma constraint do Anchor para inicializar automaticamente a extensão MemoTransfer
+// Podemos criar e inicializar manualmente a conta de token via CPIs no handler da instrução
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    // Calcular o espaço necessário para dados do token e da extensão
+    let token_account_size =
+        ExtensionType::try_calculate_account_len::<PodAccount>(&[ExtensionType::MemoTransfer])?;
+
+    // Calcular lamports mínimos necessários para o tamanho da conta de token com extensões
+    let lamports = (Rent::get()?).minimum_balance(token_account_size);
+
+    // Invocar o System Program para criar nova conta com espaço para dados da conta de token e extensão
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.token_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        token_account_size as u64,         // Espaço
+        &ctx.accounts.token_program.key(), // Programa Owner
+    )?;
+
+    // Inicializar os dados padrão da conta de token
+    initialize_account3(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InitializeAccount3 {
+            account: ctx.accounts.token_account.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            authority: ctx.accounts.payer.to_account_info(),
+        },
+    ))?;
+
+    // Inicializar a extensão memo transfer
+    // Esta instrução deve vir após a inicialização da conta de token
+    memo_transfer_initialize(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        MemoTransfer {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            account: ctx.accounts.token_account.to_account_info(),
+            owner: ctx.accounts.payer.to_account_info(),
+        },
+    ))?;
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(mut)]
+    pub token_account: Signer<'info>,
+    pub mint_account: InterfaceAccount<'info, Mint>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+<ArticleSection name="Transferindo Token com um Memo" id="transferring-token-with-a-memo" level="h2" />
+
+Para usar o programa Memo na Solana temos dois caminhos viáveis.
+
+Construindo nossa própria instrução memo "raw" assim:
+
+```ts
+const message = "Hello, Solana";
+
+new TransactionInstruction({
+    keys: [{ pubkey: keypair.publicKey, isSigner: true, isWritable: true }],
+    data: Buffer.from(message, "utf-8"), // Mensagem do memo. Neste caso é "Hello, Solana"
+    programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Programa Memo que valida chaves e mensagem do memo
+}),
+```
+
+Ou podemos usar o SDK do programa Memo após baixar o pacote assim:
+
+```
+npm i @solana/spl-memo
+```
+
+> Após criar o memo, a próxima instrução será uma simples instrução de transferência.
+
+No nosso exemplo vamos usar a segunda opção e ficará assim:
+
+```ts
+const memoInstruction = createMemoInstruction(
+    "Hello, world!",
+    [keypair.publicKey],
+);
+
+//...instrução anchor com a instrução de transferência
+
+const transferTransaction = new Transaction().add(
+    memoInstruction,
+    transferInstruction,
+);
+
+const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [keypair]);
+
+console.log(`Tokens transferidos com memo! Veja sua TX aqui: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`);
+```
+
+<ArticleSection name="Desabilitando e Habilitando o Memo" id="disabling-and-enabling-the-memo" level="h2" />
+
+Se não quisermos exigir que a transferência venha com um memo, podemos fazer isso usando a função `memo_transfer_disable` e ficaria assim:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{memo_transfer_disable, MemoTransfer, Token, Mint, Token2022};
+
+#[derive(Accounts)]
+pub struct DisableMemo<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(
+        mut,
+        token::authority = owner,
+    )]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
+}
+
+pub fn disable_memo(
+    ctx: Context<DisableMemo>,
+) -> Result<()> {
+    memo_transfer_disable(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        MemoTransfer {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            account: ctx.accounts.token_account.to_account_info(),
+            owner: ctx.accounts.owner.to_account_info(),
+        },
+    ))?;
+    
+    Ok(())
+}
+```

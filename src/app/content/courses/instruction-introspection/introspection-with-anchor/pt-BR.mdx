@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Introspecção de Instruções com Anchor
+
+O Anchor não possui um helper integrado para a sysvar `Instruction`, mas todos os tipos e funções do crate `solana_program` são inerentemente suportados no Anchor.
+
+Para usar Introspecção de Instruções no Anchor, você precisará adicionar o crate `solana_program` ao seu projeto:
+
+```sh
+cargo add solana-program
+```
+
+Após adicionar o crate, você pode acessar as funções necessárias importando-as:
+
+```rust
+use solana_program::sysvar::instructions::{
+    self,
+    load_current_index_checked, 
+    load_instruction_at_checked
+}; 
+```
+
+<ArticleSection name="Como usar Introspecção" id="how-to-use-introspection" level="h2" />
+
+Como mencionado na introdução, a Introspecção de Instruções funciona desserializando os dados da account da sysvar `Instruction` para fornecer detalhes sobre as instruções em uma transação.
+
+Embora a função `load_instruction_at_checked` verifique se a account sendo deserializada é a correta, é uma boa prática adicionar uma verificação adicional à sua struct de account:
+
+```rust
+#[account(address = instructions::ID)]
+/// CHECK: Account InstructionsSysvar
+instructions: UncheckedAccount<'info>,
+```
+
+Agora você pode começar a trabalhar com Introspecção de Instruções.
+
+Primeiro, verifique o índice da instrução atual usando a função `load_current_index_checked`:
+
+```rust
+// Verificar o índice da instrução em execução no momento. Esta pode estar em uma posição diferente de [0]).
+let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
+```
+
+Em seguida, você pode verificar uma instrução em um índice relativo usando `load_instruction_at_checked`. Aqui, verificaremos a instrução imediatamente seguinte à atual:
+
+```rust
+// Carregar a próxima instrução para verificar sua entrada.
+let ix = load_instruction_at_checked(index as usize + 1, &ctx.accounts.instructions.to_account_info())?;
+```
+
+Antes de prosseguir para o próximo passo, é importante considerar qual informação é essencial para prevenir um ataque malicioso.
+
+Geralmente começamos verificando se o programa sendo chamado é o esperado. Neste exemplo, estamos introspectando outra instrução do mesmo programa:
+
+```rust
+require_keys_eq!(ix.program_id, ID, EscrowError::InvalidProgram);
+```
+
+Em seguida, verifique se a instrução é a que você espera. Para isso, compare o discriminador da instrução com o esperado. Neste caso, como é outra instrução Anchor, você pode fazer assim:
+
+```rust
+require!(ix.data[0..8].eq(instruction::TakeEnd::DISCRIMINATOR.as_slice()), EscrowError::InvalidIx);
+```
+
+> O Anchor facilita isso fornecendo a trait `Discriminator` `anchor_lang::Discriminator` diretamente na instrução.
+
+Você pode então realizar verificações mais específicas do programa com base na lógica da instrução sendo verificada.
+
+Neste exemplo, verificamos que os dados da instrução (um valor) estão corretos. Os dados da instrução são sempre deserializados após o discriminador, então você pode fazer assim:
+
+```rust
+require!(ix.data[8..16].eq(&escrow.take_amount.to_le_bytes()), EscrowError::InvalidAmount);
+```
+
+Finalmente, verifique as accounts presentes na instrução introspectada. Esta etapa exige que você conheça a estrutura exata da struct `Account`, já que estará requisitando os dados ou a chave pública de uma account em um índice específico:
+
+```rust
+let maker_ata = get_associated_token_address(&ctx.accounts.maker.key(), &escrow.mint_b);
+require_keys_eq!(ix.accounts.get(3).unwrap().pubkey, maker_ata, EscrowError::InvalidMakerATA);
+```

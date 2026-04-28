@@ -1,0 +1,520 @@
+---
+title: "Blinks e Actions"
+description: "Construa experiências mobile usando Solana Actions: APIs HTTP que retornam transações prontas para assinar. Sem necessidade de SDKs."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="O Problema dos SDKs" id="the-sdk-problem" level="h2" />
+
+Cada protocolo tem seu próprio SDK. Jupiter tem um. Kamino tem um. Tensor tem um. Cada um com seus próprios padrões, versões e dependências. No mobile, isso cria problemas:
+
+- O tamanho do bundle explode
+- Conflitos de versão entre SDKs
+- Cada SDK pode ter problemas de compatibilidade com React Native
+- Atualizações exigem rebuild do app
+
+E se os protocolos simplesmente te dessem transações?
+
+É exatamente isso que as Solana Actions fazem. Uma Action é um endpoint HTTP que aceita um endereço de carteira e retorna uma transação pronta para assinar. Sem instalação de SDK. Sem gerenciamento de dependências. Apenas HTTP.
+
+> "Blinks não apenas eliminam a necessidade de SDKs na maioria dos casos, mas também garantem que a implementação do seu serviço siga seus princípios de design e melhores práticas."
+
+<ArticleSection name="Como as Actions Funcionam" id="how-actions-work" level="h2" />
+
+O fluxo é simples:
+
+```
+1. GET  → Metadata (título, descrição, botões)
+2. POST → Transaction (codificada em base64, pronta para assinar)
+3. Sign → Usuário aprova na carteira
+4. Send → Transação vai para a blockchain
+```
+
+### Requisição GET: O Que Eu Posso Fazer?
+
+```typescript
+const response = await fetch(
+  "https://jupiter.dial.to/api/v0/swap/SOL-USDC"
+);
+
+const action = await response.json();
+// {
+//   title: "Swap SOL to USDC",
+//   description: "Swap SOL for USDC using Jupiter",
+//   icon: "https://...",
+//   label: "Swap",
+//   links: {
+//     actions: [
+//       { label: "Swap 0.1 SOL", href: "/api/v0/swap/SOL-USDC?amount=0.1" },
+//       { label: "Swap 0.5 SOL", href: "/api/v0/swap/SOL-USDC?amount=0.5" },
+//       { label: "Swap 1 SOL", href: "/api/v0/swap/SOL-USDC?amount=1" },
+//       { 
+//         label: "Swap",
+//         href: "/api/v0/swap/SOL-USDC?amount={amount}",
+//         parameters: [
+//           { name: "amount", label: "SOL amount", type: "number" }
+//         ]
+//       }
+//     ]
+//   }
+// }
+```
+
+### Requisição POST: Me Dê uma Transação
+
+```typescript
+const txResponse = await fetch(
+  "https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account: userWalletAddress // A chave pública do usuário
+    })
+  }
+);
+
+const { transaction } = await txResponse.json();
+// { 
+//   transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAkP..." 
+// }
+```
+
+Esse campo `transaction` é uma transação serializada codificada em base64, pronta para assinatura.
+
+<ArticleSection name="Executando Actions no Mobile" id="executing-actions-on-mobile" level="h2" />
+
+Aqui está um fluxo completo:
+
+```typescript
+import { VersionedTransaction, TransactionMessage } from "@solana/web3.js";
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+
+async function executeAction(
+  actionUrl: string,
+  userAddress: string,
+  connection: Connection
+): Promise<string> {
+  // 1. POST para obter a transação (segundo a spec de Solana Actions, apenas account é obrigatório)
+  const response = await fetch(actionUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account: userAddress
+    })
+  });
+
+  const { transaction: txBase64 } = await response.json();
+
+  // 2. Desserializa a transação
+  const txBuffer = Buffer.from(txBase64, "base64");
+  const transaction = VersionedTransaction.deserialize(txBuffer);
+
+  // 3. Verifica se o blockhash precisa ser atualizado (opcional mas recomendado)
+  // Nota: VersionedTransaction.message é read-only, então precisamos reconstruir
+  // se o blockhash estiver desatualizado. Actions bem implementadas retornam
+  // transações com blockhashes frescos, então este passo é frequentemente desnecessário.
+  const { blockhash, lastValidBlockHeight } = 
+    await connection.getLatestBlockhash();
+
+  // 4. Assina com MWA
+  const signedTx = await transact(async (wallet) => {
+    await wallet.authorize({
+      cluster: "mainnet-beta",
+      identity: { name: "My Blink App" }
+    });
+
+    const [signed] = await wallet.signTransactions({
+      transactions: [transaction]
+    });
+
+    return signed;
+  });
+
+  // 5. Envia e confirma
+  const signature = await connection.sendTransaction(signedTx);
+  
+  await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight
+  });
+
+  return signature;
+}
+```
+
+<ArticleSection name="Endpoints de Actions Populares" id="popular-action-endpoints" level="h2" />
+
+Aqui estão endpoints reais que você pode usar hoje:
+
+### Transferências de Token (SPL)
+
+```shellscript
+# Transferir qualquer token SPL
+POST https://solana.dial.to/api/actions/transfer
+?toWallet=D1ALECTfeCZt9bAbPWtJk7ntv24vDYGPmyS7swp7DY5h
+&token=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  # USDC mint
+&amount=25
+```
+
+### Swaps na Jupiter
+
+```shellscript
+# Trocar SOL por USDC
+POST https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1
+
+# Trocar com slippage
+POST https://jupiter.dial.to/api/v0/swap/SOL-USDC?amount=1&slippageBps=50
+```
+
+### Depósitos no Kamino
+
+```shellscript
+# Depositar no vault de empréstimo USDC
+POST https://kamino.dial.to/api/v0/lend/{reserve}/deposit?amount=100
+```
+
+### Depósitos no Lulo
+
+```shellscript
+# Depositar e ganhar rendimento
+POST https://blink.lulo.fi/actions?amount=100&symbol=USDC
+```
+
+### Lançamento de Token no Meteora
+
+```shellscript
+# Lançar um token em bonding curve
+POST https://meteora.dial.to/api/actions/bonding-curve/launch-token
+?name=MyToken
+&symbol=MTK
+&description=My%20awesome%20token
+```
+
+<ArticleSection name="Construindo uma UI de Blink" id="building-a-blink-ui" level="h2" />
+
+Busque os metadados da action e renderize a UI apropriada:
+
+```typescript
+interface ActionMetadata {
+  title: string;
+  description: string;
+  icon: string;
+  label: string;
+  links?: {
+    actions: LinkedAction[];
+  };
+}
+
+interface LinkedAction {
+  label: string;
+  href: string;
+  parameters?: ActionParameter[];
+}
+
+interface ActionParameter {
+  name: string;
+  label: string;
+  type?: "text" | "number" | "email" | "url";
+  required?: boolean;
+}
+
+function BlinkCard({ actionUrl }: { actionUrl: string }) {
+  const [metadata, setMetadata] = useState<ActionMetadata | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [executing, setExecuting] = useState(false);
+  const [params, setParams] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    async function fetchMetadata() {
+      const response = await fetch(actionUrl);
+      const data = await response.json();
+      setMetadata(data);
+      setLoading(false);
+    }
+    fetchMetadata();
+  }, [actionUrl]);
+
+  const handleAction = async (action: LinkedAction) => {
+    setExecuting(true);
+    try {
+      // Substitui placeholders de parâmetros
+      let href = action.href;
+      for (const [key, value] of Object.entries(params)) {
+        href = href.replace(`{${key}}`, encodeURIComponent(value));
+      }
+
+      // Cria URL absoluta se relativa
+      const fullUrl = href.startsWith("http") 
+        ? href 
+        : new URL(href, actionUrl).toString();
+
+      const signature = await executeAction(fullUrl, walletAddress, connection);
+      showSuccess(`Transaction confirmed: ${signature}`);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  if (loading) return <ActivityIndicator />;
+  if (!metadata) return <Text>Falha ao carregar action</Text>;
+
+  return (
+    <View style={styles.card}>
+      <Image source={{ uri: metadata.icon }} style={styles.icon} />
+      <Text style={styles.title}>{metadata.title}</Text>
+      <Text style={styles.description}>{metadata.description}</Text>
+
+      {metadata.links?.actions.map((action, index) => (
+        <View key={index} style={styles.actionContainer}>
+          {/* Renderiza inputs de parâmetros se necessário */}
+          {action.parameters?.map((param) => (
+            <TextInput
+              key={param.name}
+              placeholder={param.label}
+              keyboardType={param.type === "number" ? "numeric" : "default"}
+              value={params[param.name] || ""}
+              onChangeText={(text) => 
+                setParams({ ...params, [param.name]: text })
+              }
+              style={styles.input}
+            />
+          ))}
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleAction(action)}
+            disabled={executing}
+          >
+            <Text style={styles.actionLabel}>{action.label}</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+```
+
+<ArticleSection name="Encadeamento de Actions" id="action-chaining" level="h2" />
+
+Algumas actions retornam links `next` para fluxos de múltiplos passos:
+
+```typescript
+const response = await fetch(actionUrl, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ account: walletAddress })
+});
+
+const data = await response.json();
+
+// Execute a transação...
+await signAndSend(data.transaction);
+
+// Verifique se há próxima action
+if (data.links?.next) {
+  if (data.links.next.type === "inline") {
+    // Os metadados da próxima action já estão incluídos
+    showNextAction(data.links.next.action);
+  } else if (data.links.next.type === "post") {
+    // Busque a próxima action da URL de callback
+    const nextResponse = await fetch(data.links.next.href, {
+      method: "POST",
+      body: JSON.stringify({
+        account: walletAddress,
+        signature: txSignature // Inclua a assinatura anterior
+      })
+    });
+    const nextAction = await nextResponse.json();
+    showNextAction(nextAction);
+  }
+}
+```
+
+<ArticleSection name="Usando o SDK de Blinks da Dialect" id="dialects-blinks-sdk" level="h2" />
+
+Para React Native, a Dialect fornece um SDK pronto:
+
+```shellscript
+yarn add @dialectlabs/blinks-react-native
+```
+
+```typescript
+import { Blink, useAction } from "@dialectlabs/blinks-react-native";
+
+function BlinkScreen({ url }: { url: string }) {
+  const { action, isLoading } = useAction({ url });
+
+  if (isLoading) return <ActivityIndicator />;
+  if (!action) return <Text>Action não encontrada</Text>;
+
+  return (
+    <Blink
+      action={action}
+      websiteText={new URL(url).hostname}
+      adapter={myBlinkAdapter} // Sua integração com a carteira
+    />
+  );
+}
+```
+
+O SDK cuida de:
+- Busca e parsing de actions
+- Renderização de UI (botões, inputs)
+- Validação de parâmetros
+- Tratamento de respostas
+
+Você só precisa fornecer um `BlinkAdapter` que se conecta à sua carteira.
+
+<ArticleSection name="A Filosofia da L0STE" id="lostes-philosophy" level="h2" />
+
+Considere o que a L0STE compartilhou:
+
+> "A maioria da UX é somente leitura, então uma vez que você sabe qual é a carteira do usuário (e pode deixá-los assinar uma mensagem), você não precisa de nenhum componente de carteira dentro do app. Apenas armazene o endereço da carteira. Depois, se o usuário precisa de uma action, apenas envie-o ao Phantom ou Solflare."
+
+Para alguns apps, você não precisa de carteiras embutidas:
+
+```typescript
+// Armazene o endereço da carteira após o sign-in inicial
+async function signInWithMessage(walletAddress: string) {
+  const message = `Sign in to MyApp: ${Date.now()}`;
+  
+  // Abre o app da carteira para assinar
+  const signature = await requestSignatureFromWallet(message);
+  
+  // Verifica e armazena
+  const isValid = verifySignature(message, signature, walletAddress);
+  if (isValid) {
+    await AsyncStorage.setItem("userWallet", walletAddress);
+  }
+}
+
+// Para actions, abra a carteira diretamente
+async function performAction(actionUrl: string) {
+  // Deep link para a carteira com a URL da Action
+  const walletUrl = `solana-wallet://blink?url=${encodeURIComponent(actionUrl)}`;
+  await Linking.openURL(walletUrl);
+}
+```
+
+Esse padrão:
+- Zero SDK de carteira no seu app
+- A carteira do usuário cuida de toda a assinatura
+- Seu app é apenas uma camada de UI
+
+<ArticleSection name="Considerações de Segurança" id="security-considerations" level="h2" />
+
+Actions retornam transações que você não construiu. Tenha cuidado:
+
+### Verifique a Fonte
+
+```typescript
+// Aceite apenas actions de domínios confiáveis
+const TRUSTED_DOMAINS = [
+  "dial.to",
+  "jupiter.dial.to",
+  "kamino.dial.to",
+  "tensor.dial.to",
+];
+
+function isTrustedAction(url: string): boolean {
+  const hostname = new URL(url).hostname;
+  return TRUSTED_DOMAINS.some(domain => 
+    hostname === domain || hostname.endsWith(`.${domain}`)
+  );
+}
+```
+
+### Registro da Dialect
+
+Actions passam pelo registro da Dialect para verificação:
+
+```typescript
+// Verifique se uma action é verificada
+const registryResponse = await fetch(
+  `https://api.dial.to/v1/blink?apiUrl=${encodeURIComponent(actionUrl)}`
+);
+
+const registryData = await registryResponse.json();
+// registryData.isRegistered = true/false
+// registryData.status = "trusted" | "unknown" | "malicious"
+```
+
+### Simulação de Transações
+
+Antes de assinar, simule para ver o que vai acontecer:
+
+```typescript
+async function simulateAction(
+  connection: Connection,
+  transaction: VersionedTransaction
+) {
+  const simulation = await connection.simulateTransaction(transaction);
+  
+  if (simulation.value.err) {
+    throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+  }
+  
+  // Registre quais contas serão modificadas
+  console.log("Accounts modified:", simulation.value.accounts);
+  console.log("Logs:", simulation.value.logs);
+}
+```
+
+<ArticleSection name="Construindo Suas Próprias Actions" id="building-your-own-actions" level="h2" />
+
+Se você está construindo seu próprio endpoint de Action (não apenas consumindo), há requisitos críticos:
+
+### Headers CORS
+
+Actions devem incluir headers CORS para compatibilidade com carteiras:
+
+```typescript
+// Exemplo com Express.js
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  next();
+});
+```
+
+### Arquivo actions.json
+
+Para que suas Actions sejam expandidas como Blinks em redes sociais (Twitter, etc.), você deve hospedar um arquivo `actions.json` em `/.well-known/actions.json`:
+
+```json
+{
+  "rules": [
+    {
+      "pathPattern": "/api/actions/**",
+      "apiPath": "/api/actions/**"
+    },
+    {
+      "pathPattern": "/my-action",
+      "apiPath": "/api/actions/my-action"
+    }
+  ]
+}
+```
+
+Isso diz às carteiras e renderizadores de Blink quais URLs no seu domínio são endpoints de Action válidos.
+
+<ArticleSection name="Principais Takeaways" id="key-takeaways" level="h2" />
+
+- **Actions são APIs HTTP** que retornam transações; sem necessidade de SDKs
+- **GET para metadados**, POST para transações
+- **Sempre atualize o blockhash** antes de assinar; respostas de API podem estar desatualizadas
+- **Verifique o registro** para actions confiáveis
+- **Encadeamento de actions** permite fluxos de múltiplos passos
+- **Considere a abordagem minimal**: armazene o endereço, deixe os apps de carteira cuidarem da assinatura
+
+Na próxima lição, vamos abordar interação com programas: construindo transações personalizadas que chamam qualquer programa on-chain.

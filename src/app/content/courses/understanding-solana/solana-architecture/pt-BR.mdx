@@ -1,0 +1,185 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Arquitetura da Solana
+
+Para [executar transações em paralelo](/courses/understanding-solana/why-solana-built#ordering-to-parallelism), a Solana precisa saber quais transações podem rodar simultaneamente. Isso exige uma escolha de design fundamental: tudo é uma conta.
+
+Programas não armazenam dados. A separação de código e dados permite o paralelismo. Transações [declaram contas antecipadamente](/courses/understanding-solana/why-solana-built#parallelization-requirements), então o runtime sabe quais podem rodar em paralelo. É assim que a Solana alcança alta vazão.
+
+<ArticleSection name="Tudo É uma Conta" id="everything-is-account" level="h2" />
+
+Tudo é uma conta.
+
+A Ethereum trata contratos e contas como conceitos distintos. Contratos contêm código e estado. Contas mantêm saldos.
+
+A Solana unifica isso. Tudo vive em contas:
+- Sua carteira é uma conta
+- Um programa (smart contract) é uma conta
+- Os dados de um programa são armazenados em contas separadas
+- Saldos de tokens são contas
+- Metadados de NFTs são contas
+- Tudo
+
+Uma conta é um contêiner com:
+- **Data:** Bytes arbitrários (até 10 megabytes)
+- **Lamports:** Saldo na menor unidade da Solana (1 SOL = 1.000.000.000 lamports)
+- **Owner:** O programa que controla esta conta
+- **Flag Executable:** Se esta conta contém código de programa
+
+Há um primitivo — contas — em vez de múltiplos conceitos interagindo.
+
+<ArticleSection name="Propriedade de Contas" id="account-ownership" level="h2" />
+
+Toda conta é de propriedade de um programa. Apenas o programa proprietário pode modificar os dados da conta ou retirar seus lamports.
+
+**System Program:** O proprietário padrão para carteiras de usuários. Quando você cria uma nova carteira, o System Program é dono da sua conta. Este programa cuida de operações básicas: transferir SOL, alocar espaço, atribuir propriedade a outros programas.
+
+**Token Program:** É dono de todas as token accounts. Quando você tem USDC, você possui uma conta que armazena seu saldo. O Token Program é dono dessa conta e aplica regras de transferência.
+
+**Seu programa personalizado:** Quando você constrói um programa Solana, ele pode ser dono de contas que armazenam os dados da sua aplicação. Apenas seu programa pode modificar essas contas.
+
+Propriedade não é sobre ter uma chave privada. Propriedade significa controle. O programa proprietário decide o que acontece com a conta. Programas podem gerenciar ativos e estado sem exigir chaves privadas — eles têm autoridade nativa sobre suas contas.
+
+<ArticleSection name="Programas Sem Estado (Stateless)" id="stateless-programs" level="h2" />
+
+Programas não armazenam dados porque a separação permite paralelismo. Programas e dados vivem em contas separadas.
+
+Na Ethereum, contratos armazenam dados internamente. Um contrato contador armazena o valor da contagem dentro do próprio contrato junto com a função de incremento. Os dados e o código vivem na mesma conta do contrato.
+
+Na Solana, programas são stateless. Eles contêm apenas código executável, sem dados:
+
+```rust
+pub fn increment(accounts: &[AccountInfo]) -> ProgramResult {
+    let counter_account = &accounts[0];
+    let mut count = u64::from_le_bytes(counter_account.data[0..8]);
+    count += 1;
+    counter_account.data[0..8].copy_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+```
+
+O programa lê dados de uma conta, processa-os e os escreve de volta. Os dados vivem em uma conta separada de propriedade do programa.
+
+Separar código e dados permite paralelismo. Duas transações chamando o mesmo programa com contas de dados diferentes podem executar simultaneamente. O código do programa é apenas leitura. Apenas as contas de dados mudam.
+
+Programas podem ser atualizados sem migrar dados. Mude a conta de código, mas as contas de dados permanecem inalteradas e compatíveis.
+
+Cada conta de dados tem um proprietário explícito. As permissões são diretas — o programa proprietário controla a conta.
+
+Qualquer pessoa pode ler dados de contas diretamente sem chamar código de programa. Isso simplifica indexação e consultas.
+
+<ArticleSection name="Estrutura da Transação" id="transaction-structure" level="h2" />
+
+Toda transação Solana lista explicitamente quais contas vai acessar. Essa declaração antecipada permite o paralelismo.
+
+Uma transação contém:
+- **Instructions:** Operações individuais a realizar
+- **Accounts:** Lista completa de contas que cada instrução vai tocar
+- **Signatures:** Assinaturas criptográficas autorizando a transação
+- **Recent blockhash:** Prova que a transação foi criada recentemente (previne replay de transações antigas)
+
+Para cada conta, a transação declara:
+- **Signer:** Esta conta precisa assinar a transação?
+- **Writable:** Esta instrução vai modificar esta conta?
+
+Exemplo de estrutura de transação:
+
+```rust
+Transaction {
+    signatures: [user_signature],
+    message: {
+        instructions: [
+            {
+                program_id: token_program,
+                accounts: [
+                    { pubkey: source_token_account, signer: false, writable: true },
+                    { pubkey: dest_token_account, signer: false, writable: true },
+                    { pubkey: owner_account, signer: true, writable: false },
+                ],
+                data: [transfer, amount: 1000000]
+            }
+        ]
+    }
+}
+```
+
+Essa transação chama o Token Program para transferir tokens. Ela declara exatamente quais contas serão acessadas e quais serão modificadas. O runtime usa essa informação para agendar a execução paralela.
+
+<ArticleSection name="Por Que Declarações Permitem Paralelismo" id="declarations-enable-parallelism" level="h2" />
+
+Se transações tocam contas diferentes, execute-as juntas. O runtime da Solana constrói um grafo de dependências a partir das declarações das transações.
+
+Considere três transações pendentes:
+- Transação A: `[write: account_1, write: account_2]`
+- Transação B: `[write: account_3, write: account_4]`
+- Transação C: `[write: account_2, write: account_5]`
+
+O runtime analisa:
+- Transações A e B não compartilham contas → executar simultaneamente
+- Transação C conflita com A (ambas tocam account_2) → esperar até A completar
+- Transação C não conflita com B → pode rodar com B
+
+O escalonador executa:
+- CPU Core 1: Transação A, depois Transação C
+- CPU Core 2: Transação B
+
+Esse paralelismo só é possível porque as transações declaram suas contas antecipadamente. Sem declarações, o runtime precisaria executar transações sequencialmente para descobrir conflitos dinamicamente.
+
+Transações devem declarar contas antes da execução. Essa restrição permite a otimização que torna a Solana rápida.
+
+<ArticleSection name="Rent e Economia de Contas" id="rent-account-economics" level="h2" />
+
+Armazenar dados on-chain custa recursos. Validadores devem manter dados de contas em memória ou armazenamento rápido para processar transações rapidamente.
+
+A Solana cobra "rent" pelo armazenamento de contas. O termo é histórico — o rent costumava ser deduzido periodicamente, mas agora funciona mais como um depósito reembolsável.
+
+Toda conta deve manter um saldo mínimo proporcional ao seu tamanho de dados. Contas com esse saldo estão isentas de rent (rent-exempt) e persistem indefinidamente.
+
+A fórmula:
+```
+rent_exempt_minimum = (128 + account_data_size) * rent_per_byte * epochs_per_year
+```
+
+Para uma conta típica armazenando 165 bytes, a isenção de rent exige aproximadamente 0,00114 SOL (cerca de $0,11 a $100 por SOL).
+
+Quando você não precisa mais de uma conta, pode fechá-la e recuperar o saldo rent-exempt. Os dados são apagados e os lamports voltam para você.
+
+Desenvolvedores devem considerar o rent ao criar contas. Usuários pagam depósitos de rent ao fazer mint de NFTs ou criar token accounts. Esses custos são pequenos, mas não zero.
+
+<ArticleSection name="Programas como Contas" id="programs-as-accounts" level="h2" />
+
+Programas são contas executáveis marcadas com uma flag especial. Quando você implanta um programa Solana, o bytecode compilado é carregado em uma conta. A flag executável da conta é definida como true.
+
+Programas são imutáveis por padrão após a implantação. Para permitir atualizações, programas especificam uma autoridade de atualização (upgrade authority) quando implantados. A autoridade de atualização pode implantar novo bytecode na conta do programa.
+
+Desenvolvedores podem remover a autoridade de atualização, tornando o programa permanentemente imutável. O código nunca mudará — útil para programas críticos de segurança.
+
+**Contas de programa armazenam:**
+- Bytecode BPF compilado (o código executável real)
+- Metadados sobre o programa
+- A flag executável do programa (definida como true)
+
+**Contas de programa NÃO armazenam:**
+- Estado ou dados da aplicação
+- Informações do usuário
+- Saldos ou participações
+
+Todos os dados do programa vivem em contas separadas de propriedade do programa.
+
+<ArticleSection name="A Solana Virtual Machine" id="solana-virtual-machine" level="h2" />
+
+A Solana Virtual Machine (SVM) executa programas. Ela difere da Ethereum Virtual Machine de várias formas.
+
+A EVM é baseada em pilha (stack-based) — operações empilham e desempilham valores em uma pilha. A SVM usa registradores, o que reduz a sobrecarga de movimentação de dados durante a computação.
+
+Programas da Solana são compilados para bytecode BPF (Berkeley Packet Filter), que compila ainda mais para código de máquina nativo. Isso elimina a sobrecarga de interpretação e roda mais rápido que bytecode.
+
+A SVM é projetada para paralelismo. Ela analisa dependências de contas e agenda transações em múltiplos núcleos de CPU.
+
+Em vez de estado global, a SVM impõe permissões por conta. Programas só podem acessar contas explicitamente passadas a eles, e só podem modificar contas das quais são proprietários.
+
+A SVM elimina a sobrecarga de interpretação, usa estruturas de dados eficientes e paraleliza a execução. O runtime maximiza a capacidade de processamento de transações.
+
+A arquitetura da Solana — [Proof of History](/courses/understanding-solana/why-solana-built#proof-of-history), programas stateless, modelo de contas — resolve um problema: blockchain em escala sem sacrificar descentralização.
+
+Para usar a Solana — seja construindo ou transacionando — você precisa [entender contas em profundidade](/courses/understanding-solana/accounts-ownership).

@@ -1,0 +1,193 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instruções
+
+Como vimos anteriormente, usar a trait `TryFrom` nos permite separar claramente validação da lógica de negócios, melhorando tanto manutenibilidade quanto segurança.
+
+<ArticleSection name="Estrutura da Instrução" id="instruction-structure" level="h2" />
+
+Quando é hora de processar a lógica, podemos criar uma estrutura como esta:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_datas: DepositInstructionData,
+}
+```
+
+Esta estrutura define quais dados estarão acessíveis durante o processamento da lógica. Desserializamos isso usando a função `try_from` que você pode encontrar no arquivo `lib.rs`:
+
+```rust
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_datas = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_datas,
+        })
+    }
+}
+```
+
+Este wrapper fornece três benefícios principais:
+1. Aceita ambas entradas brutas (bytes e contas)
+2. Delega validação para as implementações `TryFrom` individuais
+3. Retorna uma struct Deposit completamente tipada e validada
+
+Podemos então implementar a lógica de processamento assim:
+
+```rust
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&self) -> ProgramResult {
+        // lógica de depósito
+        Ok(())
+    }
+}
+```
+
+- O `DISCRIMINATOR` é o byte que usamos para pattern matching no entrypoint
+- O método `process()` contém apenas lógica de negócios, pois todas as verificações de validação já estão completas
+
+O resultado? Conseguimos ergonomia no estilo Anchor com todos os benefícios de ser totalmente nativo: explícito, previsível e rápido.
+
+<ArticleSection name="Cross Program Invocation" id="cross-program-invocation" level="h2" />
+
+Como mencionado anteriormente, Pinocchio fornece crates auxiliares como `pinocchio-system` e `pinocchio-token` que simplificam Cross-Program Invocations (CPIs) para programas nativos.
+
+Estas structs e métodos auxiliares substituem a abordagem `CpiContext` do Anchor que usamos anteriormente:
+
+```rust
+Transfer {
+    from: self.accounts.owner,
+    to: self.accounts.vault,
+    lamports: self.instruction_datas.amount,
+}
+.invoke()?;
+```
+
+A struct `Transfer` (de `pinocchio-system`) encapsula todos os campos requeridos pelo System Program, e `.invoke()` executa a CPI. Sem builder de contexto ou boilerplate extra necessário.
+
+Quando o chamador deve ser um Program-Derived Address (PDA), o Pinocchio mantém a mesma API concisa:
+
+```rust
+let seeds = [
+    Seed::from(b"vault"),
+    Seed::from(self.accounts.owner.key().as_ref()),
+    Seed::from(&[bump]),
+];
+let signers = [Signer::from(&seeds)];
+
+Transfer {
+    from: self.accounts.vault,
+    to: self.accounts.owner,
+    lamports: self.accounts.vault.lamports(),
+}
+.invoke_signed(&signers)?;
+```
+
+**Veja como funciona:**
+1. `Seeds` cria um array de objetos Seed que correspondem à derivação do PDA
+2. `Signer` envolve estas seeds em um helper Signer
+3. `invoke_signed` executa a CPI, passando o array de signers para autorizar a transferência
+
+O resultado? Uma interface limpa e de primeira classe para CPIs regulares e assinadas: sem macros necessárias, e sem mágica oculta.
+
+<ArticleSection name="Estrutura de Múltiplas Instruções" id="multiple-instruction-structure" level="h2" />
+
+Frequentemente, você desejará reutilizar a mesma estrutura de contas e lógica de validação em várias instruções; como ao atualizar diferentes campos de configuração.
+
+Em vez de criar um discriminador separado para cada instrução, você pode usar um padrão que distingue instruções pelo tamanho do seu payload de dados.
+
+Veja como funciona:
+
+Usamos um único discriminador de instrução para todas as atualizações de configuração relacionadas. A instrução específica é determinada pelo comprimento dos dados recebidos.
+
+Depois disso, no seu processador, faça match em `self.data.len()`. Cada tipo de instrução tem um tamanho de dados único, então você pode despachar para o handler correto de acordo.
+
+Ficará assim:
+
+```rust
+pub struct UpdateConfig<'a> {
+    pub accounts: UpdateConfigAccounts<'a>,
+    pub data: &'a [u8],
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for UpdateConfig<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = UpdateConfigAccounts::try_from(accounts)?;
+
+        // Retornar a struct inicializada
+        Ok(Self { accounts, data })
+    }
+}
+
+impl<'a> UpdateConfig<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &4;
+
+    pub fn process(&mut self) -> ProgramResult {
+        match self.data.len() {
+            len if len == size_of::<UpdateConfigStatusInstructionData>() => {
+                self.process_update_status()
+            }
+            len if len == size_of::<UpdateConfigFeeInstructionData>() => self.process_update_fee(),
+            len if len == size_of::<UpdateConfigAuthorityInstructionData>() => {
+                self.process_update_authority()
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+
+    //..
+}
+```
+
+Note que adiarmos a desserialização dos dados da instrução até depois de sabermos qual handler chamar. Isso evita parsing desnecessário e mantém a lógica do entrypoint limpa.
+
+Cada handler pode então desserializar seu tipo de dado específico e realizar a atualização:
+
+```rust
+pub fn process_update_authority(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigAuthorityInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_authority_unchecked(instruction_data.authority) }?;
+
+    Ok(())
+}
+
+pub fn process_update_fee(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigFeeInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_fee_unchecked(instruction_data.fee) }?;
+
+    Ok(())
+}
+
+pub fn process_update_status(&mut self) -> ProgramResult {
+    let instruction_data = UpdateConfigStatusInstructionData::try_from(self.data)?;
+
+    let mut data = self.accounts.config.try_borrow_mut_data()?;
+    let config = Config::load_mut_unchecked(&mut data)?;
+
+    unsafe { config.set_state_unchecked(instruction_data.status) }?;
+
+    Ok(())
+}
+```
+
+Esta abordagem permite compartilhar validação de contas e usar um único entrypoint para múltiplas instruções relacionadas, reduzindo boilerplate e tornando sua base de código mais fácil de manter.
+
+Ao usar pattern matching no tamanho dos dados, você pode rotear eficientemente para a lógica correta sem discriminadores extras ou parsing complexo.

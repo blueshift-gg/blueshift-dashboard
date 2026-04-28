@@ -1,0 +1,386 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![MWA Protocol](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Aprofundamento no Protocolo
+
+A especificação do Mobile Wallet Adapter é uma das soluções mais elegantes do ecossistema Solana. Entender como ela funciona por dentro fará de você um desenvolvedor mobile melhor e ajudará a depurar os casos extremos estranhos que você inevitavelmente encontrará.
+
+A maioria dos desenvolvedores nunca lê especificações de protocolo. Eles chamam `transact()`, funciona, e seguem em frente. Mas quando uma conexão falha silenciosamente, quando a autorização expira, quando uma carteira não responde, você precisa entender a mecânica.
+
+> O MWA estabelece canais peer-to-peer criptografados usando WebSockets, troca de chaves ECDH e criptografia AES-GCM. Nenhum texto puro trafega pela rede, mesmo no localhost.
+
+<ArticleSection name="Visão Geral da Arquitetura" id="visao-geral-da-arquitetura" level="h2" />
+
+Quando seu dApp se conecta a uma carteira, dois aplicativos no mesmo dispositivo estabelecem uma conexão WebSocket:
+
+```
++-----------------+                           +-----------------+
+|                 |      solana-wallet://     |                 |
+|   Seu dApp      | -------- URI intent ----> |   App Carteira  |
+|   (Client)      |                           |   (Server)      |
+|                 |      ws://localhost       |                 |
+|                 | <------ WebSocket ------> |   :random_port  |
++-----------------+                           +-----------------+
+```
+
+Seu dApp é sempre o cliente. O app da carteira é sempre o servidor. Essa assimetria é fundamental para o protocolo.
+
+Mas aqui está o que torna o MWA inteligente: o app da carteira não executa um servidor WebSocket o tempo todo. Isso drenaria a bateria e criaria riscos de segurança. Em vez disso, a carteira só inicia seu servidor quando seu app solicita explicitamente uma conexão.
+
+<ArticleSection name="Associação: Encontrando a Carteira" id="associacao" level="h2" />
+
+Quando você chama `transact()`, o SDK executa estas etapas antes de qualquer conexão WebSocket existir:
+
+### Passo 1: Gerar um Par de Chaves de Associação
+
+Seu app gera um par de chaves EC P-256 efêmero (não Ed25519 como as chaves Solana; isso é para troca de chaves ECDH).
+
+```typescript
+// Isso acontece dentro do SDK automaticamente
+const associationKeypair = generateP256Keypair();
+const associationToken = base64url(associationKeypair.publicKey);
+// ex.: "BGUNPbYRiwz6G2K..."
+```
+
+Este `associationToken` é um identificador de uso único para esta sessão específica. Ele é incluído na URI e usado durante o handshake criptográfico.
+
+### Passo 2: Construir a URI de Associação
+
+O SDK constrói uma URI que iniciará o app da carteira:
+
+```
+solana-wallet:/v1/associate/local
+  ?association=<association_token>
+  &port=<random_port>
+  &v=2
+```
+
+Decompondo isso:
+- `solana-wallet:`: O esquema de URI registrado pelas carteiras MWA
+- `/v1/associate/local`: Conexão local (mesmo dispositivo)
+- `association`: A chave pública codificada em base64url do Passo 1
+- `port`: Uma porta aleatória (49152-65535) onde seu app se conectará
+- `v=2`: Versão do protocolo (MWA 2.0)
+
+### Passo 3: Iniciar a Carteira
+
+No Android, abrir esta URI dispara um Intent. Se múltiplas carteiras estão instaladas, o SO solicita que o usuário escolha. A carteira selecionada é iniciada e recebe os parâmetros da URI.
+
+```typescript
+// Visão simplificada do que acontece
+await Linking.openURL(associationUri);
+// O app da carteira vem para o primeiro plano
+```
+
+### Passo 4: A Carteira Inicia o Servidor
+
+O app da carteira:
+1. Analisa o parâmetro `port`
+2. Inicia um servidor WebSocket naquela porta
+3. Começa a escutar por exatamente uma conexão
+4. Expira após 10 segundos se nenhuma conexão chegar
+
+### Passo 5: O dApp se Conecta
+
+Seu app tenta se conectar a `ws://localhost:<port>/solana-wallet`:
+
+```typescript
+// O SDK gerencia isso automaticamente
+const socket = new WebSocket(`ws://localhost:${port}/solana-wallet`);
+```
+
+Se a carteira ainda não estiver pronta, a conexão falha. O SDK tenta novamente por até 30 segundos antes de desistir.
+
+<ArticleSection name="Estabelecimento de Sessão: O Handshake" id="estabelecimento-de-sessao" level="h2" />
+
+Uma vez que o WebSocket se conecta, a verdadeira mágica criptográfica começa. Ambas as partes precisam estabelecer um segredo compartilhado para criptografar toda a comunicação subsequente, sem nunca enviar esse segredo pela rede.
+
+### A Troca de Chaves ECDH
+
+O Elliptic Curve Diffie-Hellman (ECDH) permite que duas partes derivem o mesmo segredo trocando apenas chaves públicas. A matemática garante que, mesmo que alguém intercepte as chaves públicas, não consegue derivar o segredo compartilhado.
+
+```
+dApp                                       Carteira
+  │                                          │
+  │─────── HELLO_REQ ───────────────────────>│
+  │        (Chave pública ECDH do dApp Qd)   │
+  │        (Assinatura com chave de assoc.)  │
+  │                                          │
+  │<─────── HELLO_RSP ───────────────────────│
+  │         (Chave pública ECDH da carteira) │
+  │         (Propriedades da sessão)         │
+  │                                          │
+  │       Ambos computam o segredo K         │
+  │                                          │
+  │<══════ JSON-RPC Criptografado ══════════>│
+  │         (AES-128-GCM com chave K)        │
+```
+
+### HELLO_REQ: O dApp se Apresenta
+
+Seu dApp gera outro par de chaves efêmero (para ECDH, separado do par de chaves de associação) e envia:
+
+```
+Qd || Signature(Qd, association_private_key)
+```
+
+Onde:
+- `Qd`: Chave pública ECDH codificada em X9.62 (65 bytes)
+- `Signature`: Prova ECDSA-SHA256 de que isso vem do mesmo app que criou a URI de associação
+
+A carteira verifica a assinatura usando o token de associação (chave pública) da URI. Isso previne ataques man-in-the-middle: somente o app que gerou a URI original pode completar o handshake.
+
+### HELLO_RSP: A Carteira Responde
+
+A carteira gera seu próprio par de chaves ECDH e envia de volta:
+
+```
+Qw || EncryptedSessionProperties
+```
+
+Agora ambas as partes têm `Qd` e `Qw`. Usando a matemática ECDH:
+
+```typescript
+// O dApp computa:
+const sharedSecret = ecdh(dAppPrivateKey, Qw);
+
+// A carteira computa (chega no mesmo valor):
+const sharedSecret = ecdh(walletPrivateKey, Qd);
+```
+
+O SDK então deriva a chave de criptografia AES-128 usando HKDF:
+
+```typescript
+const encryptionKey = hkdf({
+  ikm: sharedSecret,          // 32 bytes do ECDH
+  salt: associationPublicKey, // 65 bytes (formato X9.62)
+  length: 16,                 // Chave AES de 128 bits
+});
+```
+
+### Por Que Toda Essa Complexidade?
+
+Cada sessão usa chaves efêmeras novas. Mesmo que um atacante:
+- Intercepte a URI de associação
+- Monitore o tráfego WebSocket
+- Grave o handshake inteiro
+
+Ele ainda assim não consegue descriptografar sessões passadas ou futuras. Isso é sigilo direto (forward secrecy) em ação.
+
+<ArticleSection name="Mensagens Criptografadas" id="mensagens-criptografadas" level="h2" />
+
+Após o handshake, todas as mensagens JSON-RPC são criptografadas com AES-128-GCM. Cada mensagem tem esta estrutura:
+
+```
++--------------------------------------------------------------+
+| Sequência (4 bytes) | IV (12 bytes) | Ciphertext | Tag (16 bytes) |
++--------------------------------------------------------------+
+```
+
+- **Sequence Number**: Contador monotonicamente crescente (previne ataques de replay)
+- **IV**: Vetor de inicialização aleatório (diferente para cada mensagem)
+- **Ciphertext**: O payload JSON-RPC criptografado
+- **Tag**: Tag de autenticação (garante que a mensagem não foi adulterada)
+
+O número de sequência é incluído como Additional Authenticated Data (AAD). Se um atacante tentar reproduzir uma mensagem antiga, o número de sequência não corresponderá e a descriptografia falha.
+
+```typescript
+// Dentro do SDK (simplificado)
+function encryptMessage(payload: string): Uint8Array {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sequenceBytes = uint32ToBytes(this.sequenceNumber++);
+  
+  const { ciphertext, tag } = aesGcmEncrypt({
+    key: this.encryptionKey,
+    iv,
+    plaintext: new TextEncoder().encode(payload),
+    aad: sequenceBytes,
+  });
+  
+  return concat(sequenceBytes, iv, ciphertext, tag);
+}
+```
+
+<ArticleSection name="A Interface JSON-RPC" id="interface-json-rpc" level="h2" />
+
+Com a criptografia estabelecida, seu dApp envia requisições JSON-RPC 2.0. A carteira responde com resultados ou erros JSON-RPC.
+
+### Métodos Não Privilegiados
+
+Estes funcionam imediatamente após o estabelecimento da sessão:
+
+| Método | Finalidade |
+|--------|-----------|
+| `authorize` | Solicitar acesso à conta e/ou reautorizar com token em cache |
+| `deauthorize` | Invalidar um token de autenticação |
+| `get_capabilities` | Consultar recursos e limites da carteira |
+
+### Métodos Privilegiados
+
+Estes exigem um `authorize` bem-sucedido primeiro:
+
+| Método | Finalidade |
+|--------|-----------|
+| `sign_and_send_transactions` | Assinar e transmitir transações |
+| `sign_transactions` | Assinar transações (sem enviar) |
+| `sign_messages` | Assinar payloads de bytes arbitrários |
+| `clone_authorization` | Criar um novo token de autenticação a partir de um existente |
+
+Se você chamar um método privilegiado sem autorização, receberá:
+
+```json
+{
+  "error": {
+    "code": -32003,
+    "message": "Not authorized"
+  }
+}
+```
+
+### A Requisição authorize
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "authorize",
+  "params": {
+    "identity": {
+      "name": "My dApp",
+      "uri": "https://mydapp.com",
+      "icon": "favicon.ico"
+    },
+    "chain": "solana:devnet",
+    "auth_token": "cached..._any"
+  }
+}
+```
+
+### A Resposta authorize
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "auth_token": "***",
+    "accounts": [
+      {
+        "address": "base64_encoded_pubkey",
+        "display_address": "base58_encoded_pubkey",
+        "display_address_format": "base58",
+        "label": "Main Wallet",
+        "chains": ["solana:mainnet", "solana:devnet"],
+        "features": ["solana:signAndSendTransaction"]
+      }
+    ],
+    "wallet_uri_base": "https://phantom.app/ul/v1/"
+  }
+}
+```
+
+Note que `address` é codificado em base64, enquanto `display_address` é em base58 (legível para humanos). O SDK gerencia essa conversão para você.
+
+<ArticleSection name="Verificação de Identidade" id="verificacao-de-identidade" level="h2" />
+
+Quando as carteiras exibem "O App X deseja se conectar", como sabem que a requisição realmente veio do App X?
+
+### Apps Nativos Android
+
+No Android, a carteira pode consultar a assinatura do pacote do app chamador usando a `CallingActivity` do Intent. A carteira:
+
+1. Obtém o nome do pacote do app chamador
+2. Recupera o hash do certificado de assinatura do app
+3. Compara com apps legítimos conhecidos (ou exibe o hash para o usuário)
+
+Isso significa que um app malicioso não pode se passar pelo seu dApp. Mesmo que copiem seu `identity.uri`, a assinatura do pacote não corresponderá.
+
+### dApps Web
+
+dApps baseados em navegador têm verificação mais fraca. A carteira recebe um cabeçalho `referrer`, mas isso pode ser falsificado. As carteiras tipicamente exibem a URI declarada e alertam os usuários para verificá-la.
+
+### Conexões Remotas (QR Codes)
+
+Para sessões remotas (desktop para mobile via QR code), a conexão passa por um servidor refletor. O protocolo permanece criptografado de ponta a ponta, mas a verificação de identidade é ainda mais difícil. O usuário deve verificar manualmente se está se conectando ao dApp correto.
+
+<ArticleSection name="Códigos de Erro" id="codigos-de-erro" level="h2" />
+
+O MWA usa códigos de erro JSON-RPC. Conhecê-los ajuda você a escrever um tratamento de erros melhor:
+
+| Código | Nome | Significado |
+|--------|------|-------------|
+| -32700 | Parse Error | JSON inválido |
+| -32600 | Invalid Request | Requisição JSON-RPC inválida |
+| -32601 | Method Not Found | Nome de método desconhecido |
+| -32602 | Invalid Params | Tipos de parâmetros incorretos |
+| -32603 | Internal Error | Falha na simulação da transação |
+| -32000 | Server Error | Erro genérico da carteira |
+| -32001 | Not Authorized | Chame `authorize` primeiro |
+| -32002 | Too Many Requests | Limite de taxa atingido |
+| 4001 | User Rejected | O usuário recusou a requisição |
+
+O erro mais comum que você lidará é `4001`: o usuário pressionou "Cancelar" ou "Rejeitar" na interface da carteira.
+
+<ArticleSection name="Ciclo de Vida da Sessão" id="ciclo-de-vida-da-sessao" level="h2" />
+
+Entender quando as sessões começam e terminam previne bugs sutis:
+
+```typescript
+await transact(async (wallet) => {
+  // ← A SESSÃO COMEÇA aqui
+  //   O app da carteira vem para o primeiro plano
+  //   WebSocket conectado
+  //   Criptografia estabelecida
+  
+  await wallet.authorize(/* ... */);
+  await wallet.signAndSendTransactions(/* ... */);
+  
+  // ← A SESSÃO TERMINA quando o callback retorna
+});
+// A carteira pode ir para o segundo plano
+// WebSocket desconectado
+// Chaves de criptografia descartadas
+```
+
+**Insight crítico**: Se seu callback lançar um erro, a sessão ainda assim fecha. Se você precisar tentar novamente, precisa de uma nova chamada `transact()`, o que significa uma sessão inteiramente nova.
+
+```typescript
+// Errado: tentar reutilizar uma sessão falha
+await transact(async (wallet) => {
+  try {
+    await wallet.signAndSendTransactions(/* ... */);
+  } catch (e) {
+    // A sessão está encerrando, não é possível tentar novamente aqui
+    await wallet.signAndSendTransactions(/* ... */); // Isso não funcionará
+  }
+});
+
+// Certo: nova sessão para tentar novamente
+for (let attempt = 0; attempt < 3; attempt++) {
+  try {
+    await transact(async (wallet) => {
+      await wallet.authorize(/* ... */);
+      await wallet.signAndSendTransactions(/* ... */);
+    });
+    break; // Sucesso
+  } catch (e) {
+    if (e.code === 4001) throw e; // Usuário cancelou, não tentar novamente
+    // Caso contrário, tentar novamente com uma sessão nova
+  }
+}
+```
+
+<ArticleSection name="Referência" id="referencia" level="h2" />
+
+Para a especificação completa do protocolo, consulte a [Especificação MWA 2.0](https://solana-mobile.github.io/mobile-wallet-adapter/spec/spec.html) oficial. A especificação inclui:
+
+- Layouts de bytes exatos para mensagens de handshake
+- Schemas JSON-RPC completos para todos os métodos
+- Requisitos da camada de transporte (subprotocolos WebSocket)
+- Protocolo do refletor para conexões remotas
+- Transporte Bluetooth LE (especificado, mas ainda não implementado)
+
+A especificação foi projetada pela [Solana Mobile](https://solanamobile.com) e é implementada pelas principais carteiras, incluindo Phantom e Solflare.
+
+Agora que você entende o protocolo, vamos configurar um projeto React Native para usá-lo.

@@ -1,0 +1,166 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Interest Bearing
+
+A extensão `InterestBearing` é uma extensão de conta `Mint` que permite aos usuários aplicar uma taxa de juros aos seus tokens e recuperar o total atualizado, incluindo juros, a qualquer momento.
+
+<ArticleSection name="Inicializando a Conta Mint" id="initializing-the-mint-account" level="h2" />
+
+Como o `Anchor` não possui macros para a extensão `interest_bearing`, vamos criar uma conta `Mint` usando CPIs brutos.
+
+Veja como criar uma mint com a extensão Interest Bearing:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint},
+        InitializeMint2,
+    },
+    token_interface::{
+        interest_bearing_mint_initialize, InterestBearingMintInitialize, Mint, Token2022,
+    },
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_interest_bearing_config(
+    ctx: Context<Initialize>,
+    rate: i16
+) -> Result<()> {
+    // Calcula o espaço necessário para a mint e os dados da extensão
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::InterestBearingConfig])?;
+
+    // Calcula os lamports mínimos necessários para o tamanho da conta mint com extensões
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invoca o System Program para criar uma nova conta com espaço para a mint e os dados da extensão
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Espaço
+        &ctx.accounts.token_program.key(), // Programa Owner
+    )?;
+
+    // Inicializa a extensão InterestBearingConfig
+    // Esta instrução deve vir antes da instrução para inicializar os dados da mint
+    interest_bearing_mint_initialize(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InterestBearingMintInitialize {
+                token_program_id: ctx.accounts.token_program.to_account_info(),
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        Some(ctx.accounts.payer.key()),
+        rate,
+    )?;
+
+    // Inicializa os dados padrão da conta mint
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimais
+        &ctx.accounts.payer.key(),       // mint authority
+        Some(&ctx.accounts.payer.key()), // freeze authority
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Calculando os Juros" id="calculating-the-interest" level="h2" />
+
+A extensão `InterestBearing` não gera novos tokens; o valor exibido simplesmente inclui os juros acumulados através da função `amount_to_ui_amount`, tornando a mudança puramente estética.
+
+Então, após fazer o `unpack` da conta `Token` da qual queremos calcular os juros, é fácil obter todas as informações necessárias para realizar o cálculo e obter o montante de juros.
+
+Felizmente para nós, nem precisamos fazer isso, pois podemos usar a função `amountToUiAmount` assim:
+
+```ts
+const tokenInfo = await getAccount(
+    connection,
+    tokenAccount,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+console.log("Token Amount: ", tokenInfo.amount);
+    
+const uiAmount = await amountToUiAmount(
+    connection,
+    keypair,
+    mint.publicKey,
+    tokenInfo.amount,
+    TOKEN_2022_PROGRAM_ID,
+);
+    
+console.log("UI Amount: ", uiAmount);
+```
+
+<ArticleSection name="Atualizando a Extensão Interest Bearing" id="updating-the-interest-bearing-extension" level="h2" />
+
+Com a extensão `InterestBearing`, é possível alterar os juros produzidos pela conta token graças à forma como seus dados são estruturados:
+
+```rust
+pub struct InterestBearing {
+    pub rate_authority: Pubkey,
+    pub initialization_timestamp: i64,
+    pub pre_update_average_rate: u16,
+    pub last_update_timestamp: i64,
+    pub current_rate: u16,
+}
+```
+
+Para isso, podemos usar a instrução `interest_bearing_mint_update_rate()` assim:
+
+```ts
+interest_bearing_mint_update_rate(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        InterestBearingMintUpdateRate {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+            rate_authority: ctx.accounts.authority.to_account_info(),
+        },
+    ),
+    rate,
+)?;
+```
+
+E se quisermos, podemos alterar a autoridade sobre a definição dos juros usando a função `set_authority()` e passando o `AuthorityType` correto assim:
+
+```ts
+set_authority(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        SetAuthority {
+            current_authority: ctx.accounts.authority.to_account_info,
+            account_or_mint: ctx.accounts.mint.to_account_info,
+        }
+    ),
+    spl_token_2022::instruction::AuthorityType::InterestRate,
+    new_authority,
+)?;
+```

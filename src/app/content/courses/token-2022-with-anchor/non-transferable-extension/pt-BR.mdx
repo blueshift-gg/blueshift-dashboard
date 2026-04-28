@@ -1,0 +1,84 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Non Transferable
+
+A extensão `NonTransferable` é uma extensão de conta `Mint` que impede que os tokens sejam transferidos entre contas, tornando-os permanentemente vinculados aos seus detentores atuais.
+
+<ArticleSection name="Inicializando a Conta Mint" id="initializing-the-mint-account" level="h2" />
+
+Como o `Anchor` não possui macros para a extensão `non_transferable`, vamos criar uma conta `Mint` usando as CPIs brutas.
+
+Veja como criar uma mint com a extensão Non Transferable:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{create_account, CreateAccount};
+use anchor_spl::{
+    token_2022::{
+        initialize_mint2,
+        spl_token_2022::{extension::ExtensionType, pod::PodMint},
+        InitializeMint2,
+    },
+    token_interface::{non_transferable_mint_initialize, NonTransferableMintInitialize, Token2022},
+};
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub mint_account: Signer<'info>,
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_non_transferable_mint(
+    ctx: Context<Initialize>,
+) -> Result<()> {
+    // Calcular espaço necessário para dados da mint e extensão
+    let mint_size =
+        ExtensionType::try_calculate_account_len::<PodMint>(&[ExtensionType::NonTransferable])?;
+
+    // Calcular lamports mínimos necessários para o tamanho da conta mint com extensões
+    let lamports = (Rent::get()?).minimum_balance(mint_size);
+
+    // Invocar System Program para criar nova conta com espaço para dados da mint e extensão
+    create_account(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            CreateAccount {
+                from: ctx.accounts.payer.to_account_info(),
+                to: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        lamports,                          // Lamports
+        mint_size as u64,                  // Espaço
+        &ctx.accounts.token_program.key(), // Programa Owner
+    )?;
+
+    // Inicializar a extensão NonTransferable
+    // Esta instrução deve vir antes da instrução para inicializar os dados da mint
+    non_transferable_mint_initialize(CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        NonTransferableMintInitialize {
+            token_program_id: ctx.accounts.token_program.to_account_info(),
+            mint: ctx.accounts.mint_account.to_account_info(),
+        },
+    ))?;
+
+    // Inicializar os dados padrão da conta mint
+    initialize_mint2(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            InitializeMint2 {
+                mint: ctx.accounts.mint_account.to_account_info(),
+            },
+        ),
+        2,                               // decimais
+        &ctx.accounts.payer.key(),       // autoridade de mint
+        Some(&ctx.accounts.payer.key()), // autoridade de freeze
+    )?;
+
+    Ok(())
+}
+```

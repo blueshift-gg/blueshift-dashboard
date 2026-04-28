@@ -1,0 +1,524 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Authorization Provider](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Authorization Provider
+
+Todo dApp React Native profissional precisa de um padrão de gerenciamento de estado para conexões de carteira. Espalhar chamadas `transact()` pelos componentes leva a manipulação duplicada de auth tokens, estados de erro inconsistentes e componentes que não sabem sobre as ações de carteira uns dos outros.
+
+O AuthorizationProvider resolve isso. É um React Context que possui todo o estado da carteira (contas conectadas, auth tokens e funções de autorização) e os disponibiliza para qualquer componente no seu app.
+
+> O padrão AuthorizationProvider separa o gerenciamento de carteira da lógica de negócios. Componentes solicitam assinaturas sem saber como as sessões funcionam.
+
+> **Nota MWA 2.0**: Se você está migrando do MWA 1.0, note que `reauthorize()` está depreciado. Use `authorize()` com um parâmetro `auth_token`; a carteira re-autorizará silenciosamente sem solicitar o usuário se o token ainda for válido.
+
+<ArticleSection name="O Problema" id="the-problem" level="h2" />
+
+Sem estado centralizado, você acaba com código como este espalhado por todo lado:
+
+```typescript
+// Componente A
+const cachedToken = await AsyncStorage.getItem('auth_token');
+await transact(async (wallet) => {
+  await wallet.authorize({ identity, auth_token: cachedToken });
+  // fazer algo
+});
+
+// Componente B (mesmo código, duplicado)
+const cachedToken = await AsyncStorage.getItem('auth_token');
+await transact(async (wallet) => {
+  await wallet.authorize({ identity, auth_token: cachedToken });
+  // fazer outra coisa
+});
+```
+
+Problemas:
+- Cada componente gerencia seu próprio cache de token
+- Sem conhecimento compartilhado de qual conta está "selecionada"
+- Lógica de autorização duplicada
+- Difícil implementar "desconectar" que afete todo o app
+
+<ArticleSection name="Arquitetura do Provider" id="architecture" level="h2" />
+
+O AuthorizationProvider possui três coisas:
+
+1. **Estado de Autorização**: contas, auth token, conta selecionada
+2. **Funções de Sessão**: `authorizeSession`, `deauthorizeSession`
+3. **Seletor de Conta**: para carteiras com múltiplas contas
+
+Componentes usam o hook `useAuthorization` para acessar este estado e estas funções.
+
+```typescript
+// Qualquer componente pode fazer isso:
+function SendButton() {
+  const { selectedAccount, authorizeSession } = useAuthorization();
+  
+  const handleSend = async () => {
+    await transact(async (wallet) => {
+      await authorizeSession(wallet); // Provider cuida dos tokens
+      await wallet.signAndSendTransactions({ /* ... */ });
+    });
+  };
+  
+  if (!selectedAccount) return null;
+  return <Button onPress={handleSend}>Enviar</Button>;
+}
+```
+
+<ArticleSection name="Definições de Tipo" id="types" level="h2" />
+
+Primeiro, defina os formatos dos nossos dados:
+
+```typescript
+// src/providers/types.ts
+import { PublicKey } from '@solana/web3.js';
+import { 
+  AuthorizeAPI, 
+  DeauthorizeAPI,
+  Base64EncodedAddress,
+} from '@solana-mobile/mobile-wallet-adapter-protocol';
+
+export interface Account {
+  address: Base64EncodedAddress; // base64, como retornado pelo MWA
+  label?: string;
+  publicKey: PublicKey; // Convertido para conveniência
+}
+
+export interface Authorization {
+  accounts: Account[];
+  authToken: string;
+  selectedAccount: Account;
+}
+
+export interface AuthorizationContextValue {
+  // Estado
+  accounts: Account[] | null;
+  selectedAccount: Account | null;
+  
+  // Ações
+  authorizeSession: (wallet: AuthorizeAPI) => Promise<Account>;
+  deauthorizeSession: (wallet: DeauthorizeAPI) => Promise<void>;
+  onChangeAccount: (account: Account) => void;
+}
+```
+
+<ArticleSection name="Implementação do Provider" id="implementation" level="h2" />
+
+Aqui está o AuthorizationProvider completo:
+
+```typescript
+// src/providers/AuthorizationProvider.tsx
+import React, { 
+  createContext, 
+  useContext, 
+  useState, 
+  useCallback, 
+  useMemo,
+  ReactNode,
+  useEffect,
+} from 'react';
+import { PublicKey } from '@solana/web3.js';
+import { 
+  AuthorizeAPI, 
+  DeauthorizeAPI,
+  AuthorizationResult,
+  Account as MWAAccount,
+} from '@solana-mobile/mobile-wallet-adapter-protocol';
+import { toByteArray } from 'react-native-quick-base64';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { Account, Authorization, AuthorizationContextValue } from './types';
+
+const APP_IDENTITY = {
+  name: 'Meu dApp Solana',
+  uri: 'https://mydapp.com',
+  icon: 'favicon.ico',
+};
+
+const CLUSTER = 'solana:devnet';
+const AUTH_TOKEN_KEY='***';
+
+// Converter formato de conta MWA para nosso tipo Account
+function convertAccount(mwaAccount: MWAAccount): Account {
+  return {
+    address: mwaAccount.address,
+    label: mwaAccount.label,
+    publicKey: new PublicKey(toByteArray(mwaAccount.address)),
+  };
+}
+
+// Criar o contexto
+const AuthorizationContext = createContext<AuthorizationContextValue>({
+  accounts: null,
+  selectedAccount: null,
+  authorizeSession: async () => {
+    throw new Error('AuthorizationProvider não montado');
+  },
+  deauthorizeSession: async () => {
+    throw new Error('AuthorizationProvider não montado');
+  },
+  onChangeAccount: () => {
+    throw new Error('AuthorizationProvider não montado');
+  },
+});
+
+// O componente provider
+export function AuthorizationProvider({ children }: { children: ReactNode }) {
+  const [authorization, setAuthorization] = useState<Authorization | null>(null);
+
+  // Carregar auth token em cache na montagem
+  useEffect(() => {
+    AsyncStorage.getItem(AUTH_TOKEN_KEY).then((token) => {
+      if (token) {
+        // Temos um token mas sem info de conta ainda
+        // A próxima chamada authorizeSession populará as contas
+        console.log('Auth token em cache encontrado');
+      }
+    });
+  }, []);
+
+  // Lidar com resultado de autorização da carteira
+  const handleAuthorizationResult = useCallback(
+    async (result: AuthorizationResult): Promise<Authorization> => {
+      const accounts = result.accounts.map(convertAccount);
+      
+      // Determinar qual conta selecionar
+      let selectedAccount: Account;
+      
+      if (
+        authorization?.selectedAccount &&
+        accounts.some((a) => a.address === authorization.selectedAccount.address)
+      ) {
+        // Manter a conta previamente selecionada se ainda disponível
+        selectedAccount = authorization.selectedAccount;
+      } else {
+        // Selecionar a primeira conta
+        selectedAccount = accounts[0];
+      }
+      
+      const newAuth: Authorization = {
+        accounts,
+        authToken: result.auth_token,
+        selectedAccount,
+      };
+      
+      // Cachear o token
+      await AsyncStorage.setItem(AUTH_TOKEN_KEY, result.auth_token);
+      
+      setAuthorization(newAuth);
+      return newAuth;
+    },
+    [authorization?.selectedAccount]
+  );
+
+  // Autorizar uma sessão (chamado dentro do callback transact)
+  const authorizeSession = useCallback(
+    async (wallet: AuthorizeAPI): Promise<Account> => {
+      const cachedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      
+      const result = await wallet.authorize({
+        identity: APP_IDENTITY,
+        chain: CLUSTER,
+        auth_token: cachedToken ?? undefined,
+      });
+      
+      const auth = await handleAuthorizationResult(result);
+      return auth.selectedAccount;
+    },
+    [handleAuthorizationResult]
+  );
+
+  // Desautorizar (chamado dentro do callback transact)
+  const deauthorizeSession = useCallback(
+    async (wallet: DeauthorizeAPI): Promise<void> => {
+      const authToken = authorization?.authToken;
+      if (!authToken) return;
+      
+      await wallet.deauthorize({ auth_token: authToken });
+      await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+      setAuthorization(null);
+    },
+    [authorization?.authToken]
+  );
+
+  // Trocar conta selecionada
+  const onChangeAccount = useCallback(
+    (account: Account): void => {
+      if (!authorization) return;
+      
+      const exists = authorization.accounts.some(
+        (a) => a.address === account.address
+      );
+      
+      if (!exists) {
+        throw new Error('Conta não está no conjunto autorizado');
+      }
+      
+      setAuthorization((prev) =>
+        prev ? { ...prev, selectedAccount: account } : null
+      );
+    },
+    [authorization]
+  );
+
+  const value = useMemo(
+    (): AuthorizationContextValue => ({
+      accounts: authorization?.accounts ?? null,
+      selectedAccount: authorization?.selectedAccount ?? null,
+      authorizeSession,
+      deauthorizeSession,
+      onChangeAccount,
+    }),
+    [authorization, authorizeSession, deauthorizeSession, onChangeAccount]
+  );
+
+  return (
+    <AuthorizationContext.Provider value={value}>
+      {children}
+    </AuthorizationContext.Provider>
+  );
+}
+
+// Hook para componentes consumidores
+export function useAuthorization(): AuthorizationContextValue {
+  return useContext(AuthorizationContext);
+}
+```
+
+<ArticleSection name="Usando o Provider" id="usage" level="h2" />
+
+Envolva seu app com o provider:
+
+```typescript
+// App.tsx
+import { AuthorizationProvider } from './providers/AuthorizationProvider';
+import { ConnectionProvider } from './providers/ConnectionProvider';
+import { MainScreen } from './screens/MainScreen';
+
+export default function App() {
+  return (
+    <ConnectionProvider>
+      <AuthorizationProvider>
+        <MainScreen />
+      </AuthorizationProvider>
+    </ConnectionProvider>
+  );
+}
+```
+
+Agora qualquer componente pode usar a autorização:
+
+```typescript
+// screens/MainScreen.tsx
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+
+export function MainScreen() {
+  const { selectedAccount, authorizeSession } = useAuthorization();
+
+  const handleConnect = async () => {
+    await transact(async (wallet) => {
+      const account = await authorizeSession(wallet);
+      console.log('Conectado:', account.publicKey.toBase58());
+    });
+  };
+
+  return (
+    <View>
+      {selectedAccount ? (
+        <Text>Conectado: {selectedAccount.publicKey.toBase58()}</Text>
+      ) : (
+        <Button title="Conectar Carteira" onPress={handleConnect} />
+      )}
+    </View>
+  );
+}
+```
+
+<ArticleSection name="Enviando Transações com o Provider" id="transactions" level="h2" />
+
+Crie um hook customizado para transações que usa o provider:
+
+```typescript
+// hooks/useSendTransaction.ts
+import { useCallback } from 'react';
+import { 
+  Connection, 
+  PublicKey, 
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
+} from '@solana/web3.js';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { useAuthorization } from '../providers/AuthorizationProvider';
+import { useConnection } from '../providers/ConnectionProvider';
+
+export function useSendSol() {
+  const { authorizeSession } = useAuthorization();
+  const { connection } = useConnection();
+
+  return useCallback(
+    async (recipient: PublicKey, amountSol: number): Promise<string> => {
+      return await transact(async (wallet) => {
+        // Usar função de autorização do provider
+        const account = await authorizeSession(wallet);
+        
+        const { blockhash } = await connection.getLatestBlockhash();
+        
+        const transaction = new VersionedTransaction(
+          new TransactionMessage({
+            payerKey: account.publicKey,
+            recentBlockhash: blockhash,
+            instructions: [
+              SystemProgram.transfer({
+                fromPubkey: account.publicKey,
+                toPubkey: recipient,
+                lamports: amountSol * LAMPORTS_PER_SOL,
+              }),
+            ],
+          }).compileToV0Message()
+        );
+        
+        const [signature] = await wallet.signAndSendTransactions({
+          transactions: [transaction],
+        });
+        
+        return signature;
+      });
+    },
+    [authorizeSession, connection]
+  );
+}
+```
+
+Uso em um componente:
+
+```typescript
+function SendScreen() {
+  const sendSol = useSendSol();
+  const [sending, setSending] = useState(false);
+  
+  const handleSend = async () => {
+    setSending(true);
+    try {
+      const sig = await sendSol(recipientPubkey, 0.1);
+      Alert.alert('Sucesso', `Transação: ${sig}`);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setSending(false);
+    }
+  };
+  
+  return <Button title="Enviar 0.1 SOL" onPress={handleSend} disabled={sending} />;
+}
+```
+
+<ArticleSection name="Fluxo de Desconexão" id="disconnect" level="h2" />
+
+Implemente um botão de desconectar:
+
+```typescript
+function DisconnectButton() {
+  const { selectedAccount, deauthorizeSession } = useAuthorization();
+  
+  const handleDisconnect = async () => {
+    await transact(async (wallet) => {
+      await deauthorizeSession(wallet);
+    });
+  };
+  
+  if (!selectedAccount) return null;
+  
+  return <Button title="Desconectar" onPress={handleDisconnect} />;
+}
+```
+
+Após desconectar:
+- `selectedAccount` torna-se `null`
+- `accounts` torna-se `null`
+- Auth token em cache é limpo
+- Qualquer componente usando `useAuthorization` re-renderiza
+
+<ArticleSection name="Suporte a Múltiplas Contas" id="multi-account" level="h2" />
+
+Algumas carteiras autorizam múltiplas contas. O provider lida com isso:
+
+```typescript
+function AccountPicker() {
+  const { accounts, selectedAccount, onChangeAccount } = useAuthorization();
+  
+  if (!accounts || accounts.length <= 1) return null;
+  
+  return (
+    <View>
+      <Text>Selecionar Conta:</Text>
+      {accounts.map((account) => (
+        <TouchableOpacity
+          key={account.address}
+          onPress={() => onChangeAccount(account)}
+          style={[
+            styles.accountItem,
+            account.address === selectedAccount?.address && styles.selected,
+          ]}
+        >
+          <Text>{account.label ?? account.publicKey.toBase58().slice(0, 8)}...</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+```
+
+Quando o usuário seleciona uma conta diferente, `selectedAccount` atualiza e todos os componentes inscritos re-renderizam.
+
+<ArticleSection name="Connection Provider" id="connection-provider" level="h2" />
+
+Para completude, aqui está um ConnectionProvider mínimo:
+
+```typescript
+// src/providers/ConnectionProvider.tsx
+import React, { createContext, useContext, useMemo, ReactNode } from 'react';
+import { Connection } from '@solana/web3.js';
+
+const RPC_ENDPOINT = 'https://api.devnet.solana.com';
+
+interface ConnectionContextValue {
+  connection: Connection;
+}
+
+const ConnectionContext = createContext<ConnectionContextValue>({
+  connection: new Connection(RPC_ENDPOINT),
+});
+
+export function ConnectionProvider({ children }: { children: ReactNode }) {
+  const connection = useMemo(
+    () => new Connection(RPC_ENDPOINT, 'confirmed'),
+    []
+  );
+
+  return (
+    <ConnectionContext.Provider value={{ connection }}>
+      {children}
+    </ConnectionContext.Provider>
+  );
+}
+
+export function useConnection(): ConnectionContextValue {
+  return useContext(ConnectionContext);
+}
+```
+
+<ArticleSection name="Benefícios do Padrão Provider" id="benefits" level="h2" />
+
+Esta arquitetura fornece:
+
+- **Fonte única de verdade**: Um lugar gerencia o estado da carteira
+- **Cache automático de tokens**: Componentes não lidam com AsyncStorage
+- **Atualizações reativas**: React re-renderiza quando o estado de auth muda
+- **Separação de responsabilidades**: Componentes de UI não contêm lógica MWA
+- **Testabilidade**: Faça mock do contexto para testes unitários
+- **Segurança de tipos**: TypeScript garante uso correto
+
+O padrão provider é padrão em apps React Native profissionais. Na próxima lição, construiremos sobre esta fundação com tratamento de erros abrangente.

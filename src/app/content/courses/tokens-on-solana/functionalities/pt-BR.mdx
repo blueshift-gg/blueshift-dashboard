@@ -1,0 +1,262 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Accounts e Propriedade
+
+Seu endereço de carteira armazena SOL. Ele não armazena USDC, BONK ou qualquer outro token SPL. Esses vivem em token accounts separadas pertencentes à sua carteira, mas gerenciadas pelo programa SPL Token.
+
+Essa separação é arquitetural. As accounts da Solana armazenam dados tipados. Sua account de carteira armazena o saldo de SOL e informações básicas da account. Token accounts armazenam dados específicos do token: qual token, quanto, quem é o proprietário.
+
+Uma carteira pode possuir centenas de token accounts — uma por tipo de token. Token accounts definem como a Solana rastreia quem possui o quê.
+
+<ArticleSection name="Estrutura da Token Account" id="token-account-structure" level="h2" />
+
+Veja o que uma token account contém:
+
+```rust
+pub struct Account {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub delegate: COption<Pubkey>,
+    pub state: AccountState,
+    pub is_native: COption<u64>,
+    pub delegated_amount: u64,
+    pub close_authority: COption<Pubkey>,
+}
+```
+
+**`mint`** - Qual token esta account armazena:
+- Endereço da mint de USDC = token account de USDC
+- Endereço da mint de BONK = token account de BONK
+- Uma token account = um tipo de token apenas
+
+**`owner`** - Quem controla esta token account:
+- Tipicamente o endereço da sua carteira
+- Pode ser um endereço derivado de programa (vault, escrow)
+- O proprietário pode transferir tokens para fora
+
+**`amount`** - Saldo atual:
+- Armazenado em unidades base (considerando decimals)
+- 1.000.000 de amount na account de USDC = 1 USDC (6 decimals)
+- Atualizado por operações de mint, transfer e burn
+
+**`delegate`** - Opcional: Alguém que pode gastar tokens em nome do proprietário:
+- Usado por DEXs (você aprova a DEX a fazer swap dos seus tokens)
+- Usado por escrows (o programa controla temporariamente os tokens)
+- A delegação é explícita e limitada
+
+**`state`** - Status da account:
+- `Initialized`: Account normal, pode enviar/receber tokens
+- `Frozen`: A freeze authority congelou esta account, sem transferências para fora
+- `Uninitialized`: A account existe mas ainda não foi configurada
+
+**`delegated_amount`** - Quantos tokens o delegate pode gastar:
+- Se um delegate existe, isso define o limite de gasto dele
+- Não pode exceder o amount da account
+- Revogável pelo proprietário
+
+**`close_authority`** - Opcional: Quem pode fechar esta account:
+- Normalmente o proprietário
+- Pode ser definido para um programa em casos especiais
+- Fechar recupera o SOL de rent
+
+<ArticleSection name="Por Que Token Accounts Separadas" id="why-separate-accounts" level="h2" />
+
+Cada token que você possui requer uma account distinta. Possui 10 tokens diferentes? Você tem 10 token accounts.
+
+**Armazenamento de dados tipados:**
+
+As accounts da Solana têm proprietários (programas) e dados. O programa SPL Token é proprietário das token accounts. Os dados da token account seguem a estrutura fixa acima. Misturar múltiplos tokens em uma account quebraria essa estrutura.
+
+**Isolamento de programas:**
+
+O programa SPL Token valida operações de tokens. Ele verifica o proprietário da token account, confirma se a mint corresponde, verifica saldo suficiente. Múltiplos tokens por account exigiriam rastrear saldos individuais por mint, complicando toda validação.
+
+**Rent e ciclo de vida:**
+
+Cada account requer um depósito SOL rent-exempt (atualmente 0,00203928 SOL por token account). Isso cobre custos de armazenamento. Quando você fecha uma token account com saldo zero, você recupera esse SOL.
+
+**Limite de segurança:**
+
+Accounts separadas significam permissões separadas. Você pode delegar authority sobre seu USDC sem afetar seu BONK. Programas podem validar permissões por token sem verificações entre tokens.
+
+<ArticleSection name="Associated Token Accounts" id="associated-token-accounts" level="h2" />
+
+Sem um padrão, encontrar a token account de alguém exige perguntar a ela. "Qual o endereço da sua token account de USDC?" Cada carteira precisaria comunicar endereços de token accounts separadamente.
+
+As Associated Token Accounts (ATAs) resolvem isso através de derivação determinística de endereço. O endereço da sua USDC ATA é calculável a partir do endereço da sua carteira + endereço da mint de USDC. Todos o conhecem sem precisar perguntar.
+
+**Como as ATAs funcionam:**
+
+O Program Derived Address (PDA) deriva a ATA de:
+- Seu endereço de carteira (owner)
+- Endereço da mint de USDC (qual token)
+- Endereço do Associated Token Program (constante)
+
+```typescript
+const ata = getAssociatedTokenAddressSync(
+    mintAddress,   // USDC mint
+    ownerAddress   // Sua carteira
+);
+```
+
+Mesmas entradas sempre produzem o mesmo endereço. Sua USDC ATA nunca muda. Quer enviar USDC para alguém? Derive a ATA dela da carteira + mint de USDC, envie para lá.
+
+**Restrições das ATAs:**
+
+Uma ATA por proprietário por mint. Você tem exatamente uma USDC ATA. É impossível criar uma segunda USDC ATA para sua carteira — a derivação produz o mesmo endereço.
+
+O proprietário da ATA deve corresponder à derivação. Se a ATA derivada deve pertencer a Alice, apenas Alice pode ser a proprietária. Isso previne ataques de confusão de accounts.
+
+**Token accounts não-ATA:**
+
+Você pode criar token accounts em endereços aleatórios. Casos de uso:
+- Múltiplas token accounts para o mesmo token (saldos separados para propósitos separados)
+- Accounts controladas por programas (escrows, vaults)
+- Accounts temporárias (fechar após o uso)
+
+A maioria das aplicações usa ATAs por simplicidade. Accounts não-ATA são casos de uso avançados.
+
+<ArticleSection name="Ciclo de Vida da Token Account" id="lifecycle" level="h2" />
+
+**Criação:**
+
+Token accounts não existem até serem explicitamente criadas. Primeira vez que recebe USDC? O remetente (ou você) deve criar sua token account de USDC primeiro.
+
+Criar uma token account requer:
+1. Alocar 165 bytes para dados da account
+2. Transferir 0,00203928 SOL (mínimo rent-exempt)
+3. Atribuir ownership ao programa SPL Token
+4. Inicializar com mint e proprietário
+
+Carteiras e aplicações modernas lidam com isso automaticamente. Você não cria token accounts manualmente — a primeira transferência cria se necessário.
+
+**Uso:**
+
+Token accounts inicializadas podem:
+- Receber tokens (operações de mint, transferências de outros)
+- Enviar tokens (se o proprietário assinar)
+- Delegar authority de gasto
+- Ser congeladas (se existir freeze authority)
+
+Saldo zero não fecha a account. Uma token account com 0 tokens ainda existe e ocupa espaço, mantendo 0,00203928 SOL.
+
+**Fechamento:**
+
+Feche token accounts para recuperar o SOL de rent:
+- O saldo deve ser exatamente 0
+- Nenhum delegate pode estar definido
+- O proprietário (ou close authority) deve assinar
+
+Fechar transfere o SOL de rent para um destino especificado (geralmente a carteira do proprietário). A token account deixa de existir. Operações futuras que requerem essa account devem recriá-la.
+
+<ArticleSection name="Rent e Custos de Armazenamento" id="rent-costs" level="h2" />
+
+A Solana cobra rent pelo armazenamento de accounts. Token accounts exigem 0,00203928 SOL para permanecer rent-exempt (evita garbage collection).
+
+**Mínimo rent-exempt:**
+
+Tamanho da token account = 165 bytes. Cálculo rent-exempt:
+- 165 bytes × taxa de rent (atualmente ~6.960 lamports por byte-epoch)
+- Saldo mínimo: 2.039.280 lamports = 0,00203928 SOL
+
+Esse SOL permanece na token account. Não está travado pelo programa SPL Token — é o saldo de lamports da account que impede a cobrança de rent.
+
+**Implicações de custo:**
+
+Ter 10 tokens = 10 token accounts = 0,0203928 SOL em depósitos de rent. Não é caro, mas se acumula para carteiras com centenas de tokens ou programas gerenciando milhares de accounts de usuários.
+
+**Recuperando rent:**
+
+Feche token accounts não utilizadas para recuperar rent. Muitas carteiras mostram opções "Fechar Account" para tokens com saldo zero. Execute a instrução de fechamento, receba seus 0,00203928 SOL de volta.
+
+Alguns tokens impedem o fechamento através de permanent delegates ou flags especiais. Verifique se o fechamento é possível antes de tentar.
+
+<ArticleSection name="Delegação e Aprovação" id="delegation" level="h2" />
+
+A delegação de token account concede authority de gasto temporária a outro endereço sem transferir a propriedade.
+
+**Usos comuns de delegação:**
+
+Swaps em DEX: Você aprova o programa da DEX a gastar X tokens da sua token account. A DEX executa o swap, gasta o valor aprovado, sua propriedade permanece.
+
+Serviços de escrow: Você delega a authority de gasto a um programa de escrow. O programa mantém os direitos de gasto, libera quando as condições são atendidas.
+
+Ordens limite: Delega authority a um programa de ordens. O programa gasta tokens quando as condições de preço são acionadas.
+
+**Campos de delegação:**
+
+```rust
+delegate: Some(dex_program_address)
+delegated_amount: 1000000  // 1 USDC com 6 decimals
+```
+
+O delegate pode gastar até `delegated_amount` da token account. Não pode gastar mais. Não pode mudar o proprietário. Não pode fechar a account.
+
+**Revogação:**
+
+O proprietário pode revogar a delegação a qualquer momento:
+
+```rust
+delegate: None
+delegated_amount: 0
+```
+
+Revogar antes dos tokens serem gastos? O delegate perde toda authority. Padrão comum: aprovar, aguardar a operação, revogar se não executar.
+
+<ArticleSection name="Congelamento e Descongelamento" id="freeze-thaw" level="h2" />
+
+Se a mint possui freeze authority, essa authority pode congelar token accounts individuais.
+
+**Token accounts congeladas:**
+
+```rust
+state: Frozen
+```
+
+Não é possível transferir tokens para fora. Não é possível queimar tokens. Não é possível fechar a account. Ainda pode receber tokens.
+
+Casos de uso:
+- Conformidade (stablecoins congelando endereços sancionados)
+- Prevenção de fraudes (plataformas congelando accounts suspeitas)
+- Mecânicas de jogos (congelando itens do jogo temporariamente)
+
+**Descongelamento (Thaw):**
+
+Apenas a freeze authority pode descongelar:
+
+```rust
+state: Initialized
+```
+
+A account retorna ao normal. Transferências são retomadas. Comum para congelamentos temporários durante investigações.
+
+**Tokens sem freeze authority:**
+
+Muitos tokens definem freeze authority como None. Esses tokens nunca podem congelar nenhuma account. Transferências sempre funcionam (assumindo saldo). Máxima liberdade de transferência, sem controles de conformidade.
+
+<ArticleSection name="Exemplos Práticos" id="practical-examples" level="h2" />
+
+**Verificando suas token accounts:**
+
+Use o Solana Explorer ou carteira. Veja todas as token accounts pertencentes à sua carteira. Cada uma mostra:
+- Mint (qual token)
+- Saldo (quantidade que você possui)
+- Status (inicializada, congelada)
+- Delegate (se authority de gasto foi concedida)
+
+**Encontrando a ATA de alguém:**
+
+Dado o endereço da carteira e o endereço da mint, calcule o endereço da ATA. Envie tokens para lá. Funciona para qualquer token SPL.
+
+**Fechando accounts vazias:**
+
+Saldo zero em um token que você nunca mais vai usar? Feche a account, recupere 0,00203928 SOL. Faça isso para dezenas de token accounts, recupere quantidades significativas de SOL.
+
+**Gerenciamento de delegações:**
+
+Aprovou uma DEX para gastar tokens mas a operação não executou? Revogue a aprovação. Impede o delegate de gastar posteriormente. Boa prática de segurança: revogue aprovações que você não precisa mais.
+
+Token accounts são registros de propriedade. A mint account define o token. As token accounts definem quem o detém. O programa SPL Token aplica as regras. Essa arquitetura cria o sistema de tokens da Solana.
+
+Próximo: Token Extensions e como o Token-2022 expande além das capacidades básicas do SPL Token.

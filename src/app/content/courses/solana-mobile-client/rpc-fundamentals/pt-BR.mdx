@@ -1,0 +1,336 @@
+---
+title: "Fundamentos de RPC para Mobile"
+description: "Aprenda como se conectar à rede Solana a partir de dispositivos móveis, lidar com requisições RPC de forma eficiente e escolher os provedores certos."
+---
+
+import { ArticleSection } from "../../../../../components/ArticleSection/ArticleSection";
+
+<ArticleSection name="O Desafio do RPC Mobile" id="the-mobile-rpc-challenge" level="h2" />
+
+Aplicativos móveis não se conectam à Solana diretamente. Eles se comunicam com nós RPC: intermediários que aceitam suas requisições JSON e as encaminham para validadores. Em navegadores desktop, chamadas RPC parecem instantâneas. No mobile, cada milissegundo importa. Latência de rede, conexões celulares e restrições de bateria mudam como você pensa sobre RPC.
+
+> "A qualidade do RPC realmente importa. Uma boa configuração RPC encaminha transações rapidamente, lida com carga e retentativas, e mantém-se bem conectada à rede."
+
+A rede Solana produz blocos aproximadamente a cada 400 milissegundos. Seu aplicativo móvel precisa buscar blockhashes, enviar transações e confirmar resultados, tudo enquanto o usuário pode estar em uma conexão 4G instável.
+
+<ArticleSection name="Configurando a Conexão" id="setting-up-connection" level="h2" />
+
+A biblioteca `@solana/web3.js` fornece a classe `Connection`: seu gateway para a API JSON-RPC da Solana.
+
+```typescript
+import { Connection, clusterApiUrl } from "@solana/web3.js";
+
+// Para desenvolvimento
+const devnetConnection = new Connection(
+  clusterApiUrl("devnet"),
+  "confirmed"
+);
+
+// Para produção com um provedor RPC dedicado
+const mainnetConnection = new Connection(
+  "https://your-provider.com/rpc",
+  {
+    commitment: "confirmed",
+    confirmTransactionInitialTimeout: 60000, // 60 segundos para mobile
+  }
+);
+```
+
+### Níveis de Commitment
+
+Commitment diz à Solana o quão "final" você precisa que os dados sejam:
+
+- **`processed`**: O nó processou. Rápido, mas pode ser revertido.
+- **`confirmed`**: 66%+ dos validadores confirmaram. O ponto ideal para a maioria dos apps.
+- **`finalized`**: Certeza absoluta. Mais lento, mas a transação nunca será revertida.
+
+Para mobile, `confirmed` geralmente é a escolha certa. Equilibra velocidade com confiabilidade.
+
+### Polyfills Necessários
+
+React Native não inclui certas APIs que o `@solana/web3.js` espera. Adicione estas ao seu `index.js`:
+
+```typescript
+// index.js - DEVE estar no topo
+import "react-native-get-random-values";
+import { Buffer } from "buffer";
+global.Buffer = Buffer;
+```
+
+Instale-os:
+
+```shellscript
+yarn add @solana/web3.js react-native-get-random-values buffer
+```
+
+<ArticleSection name="Métodos RPC Essenciais" id="essential-rpc-methods" level="h2" />
+
+### Lendo Dados de Conta
+
+```typescript
+// Obtém saldo de SOL
+const balance = await connection.getBalance(publicKey);
+const solBalance = balance / LAMPORTS_PER_SOL;
+
+// Obtém informações da conta (para qualquer conta)
+const accountInfo = await connection.getAccountInfo(publicKey);
+if (accountInfo) {
+  console.log("Owner:", accountInfo.owner.toBase58());
+  console.log("Comprimento dos dados:", accountInfo.data.length);
+  console.log("Lamports:", accountInfo.lamports);
+}
+```
+
+### Buscando Saldos de Tokens
+
+```typescript
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+// Obtém todas as contas de token pertencentes a uma carteira
+const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  walletPublicKey,
+  { programId: TOKEN_PROGRAM_ID }
+);
+
+tokenAccounts.value.forEach((account) => {
+  const parsed = account.account.data.parsed.info;
+  console.log("Mint:", parsed.mint);
+  console.log("Saldo:", parsed.tokenAmount.uiAmount);
+});
+```
+
+### Obtendo o Último Blockhash
+
+Toda transação precisa de um blockhash recente; ele atua como timestamp e previne ataques de replay:
+
+```typescript
+const { blockhash, lastValidBlockHeight } = 
+  await connection.getLatestBlockhash("confirmed");
+
+// Este blockhash é válido por ~60-90 segundos
+// Se sua transação demorar mais, você precisará de um novo
+```
+
+<ArticleSection name="Padrões Otimizados para Mobile" id="mobile-optimized-patterns" level="h2" />
+
+### Requisições em Lote
+
+Em vez de fazer cinco chamadas separadas, agrupe-as:
+
+```typescript
+// NÃO faça isso no mobile
+const balance1 = await connection.getBalance(addr1);
+const balance2 = await connection.getBalance(addr2);
+const balance3 = await connection.getBalance(addr3);
+// 3 ida-e-volta = lento em conexão celular
+
+// FAÇA isto em vez disso
+const balances = await connection.getMultipleAccountsInfo([
+  addr1, addr2, addr3
+]);
+// 1 ida-e-volta = muito mais rápido
+```
+
+### Estratégias de Caching
+
+```typescript
+// Cache simples para dados de conta
+const accountCache = new Map<string, {
+  data: AccountInfo<Buffer> | null;
+  timestamp: number;
+}>();
+
+const CACHE_TTL = 5000; // 5 segundos
+
+async function getCachedAccountInfo(
+  connection: Connection,
+  pubkey: PublicKey
+): Promise<AccountInfo<Buffer> | null> {
+  const key = pubkey.toBase58();
+  const cached = accountCache.get(key);
+  
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  
+  const data = await connection.getAccountInfo(pubkey);
+  accountCache.set(key, { data, timestamp: Date.now() });
+  return data;
+}
+```
+
+### Lógica de Retry
+
+Redes móveis são não confiáveis. Construa retentativas:
+
+```typescript
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxAttempts = 3,
+  delayMs = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      console.log(`Tentativa ${attempt} falhou:`, error);
+      
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => 
+          setTimeout(resolve, delayMs * attempt)
+        );
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// Uso
+const balance = await withRetry(() => 
+  connection.getBalance(publicKey)
+);
+```
+
+<ArticleSection name="Escolhendo um Provedor RPC" id="choosing-an-rpc-provider" level="h2" />
+
+Para aplicativos móveis em produção, você precisa de um provedor RPC dedicado. Os endpoints públicos (`api.mainnet-beta.solana.com`) têm limite de taxa e não são confiáveis para uso em produção.
+
+### Opções de Provedores
+
+|| Provedor | Pontos Fortes | Consideração Mobile ||
+||----------|-----------|---------------------||
+|| **Helius** | Rápido, DAS API para NFTs, webhooks | Excelente para apps com muitos NFTs ||
+|| **QuickNode** | Rede edge global, consistente | Boa latência mundial ||
+|| **Triton** | Alto throughput, preços competitivos | Ótimo para apps de alto volume ||
+|| **Alchemy** | Multi-chain, boas ferramentas de debug | Se você precisa de EVM também ||
+
+### Configuração de Ambiente
+
+Nunca hardcoded URLs RPC. Use variáveis de ambiente:
+
+```typescript
+// config/rpc.ts
+import Config from "react-native-config";
+
+export const getRpcEndpoint = () => {
+  const endpoint = Config.SOLANA_RPC_URL;
+  
+  if (!endpoint) {
+    // Fallback apenas para desenvolvimento
+    console.warn("URL de RPC não configurada, usando devnet");
+    return clusterApiUrl("devnet");
+  }
+  
+  return endpoint;
+};
+
+// .env (não commitado no git)
+SOLANA_RPC_URL=https://your-provider.com/your-api-key
+```
+
+<ArticleSection name="Assinaturas WebSocket" id="websocket-subscriptions" level="h2" />
+
+Para atualizações em tempo real, use assinaturas WebSocket:
+
+```typescript
+// Inscreve-se em mudanças de conta
+const subscriptionId = connection.onAccountChange(
+  publicKey,
+  (accountInfo) => {
+    console.log("Conta alterada:", accountInfo.lamports);
+  },
+  "confirmed"
+);
+
+// Inscreve-se em confirmações de transação
+connection.onSignature(
+  transactionSignature,
+  (result) => {
+    if (result.err) {
+      console.error("Transação falhou:", result.err);
+    } else {
+      console.log("Transação confirmada!");
+    }
+  },
+  "confirmed"
+);
+
+// IMPORTANTE: Limpe quando o componente for desmontado
+connection.removeAccountChangeListener(subscriptionId);
+```
+
+### Considerações WebSocket para Mobile
+
+WebSockets no mobile podem ser complicados:
+
+1. **Estado de background**: iOS/Android podem encerrar conexões WebSocket quando o app vai para segundo plano
+2. **Reconexão**: Construa lógica de reconexão automática
+3. **Bateria**: Assinaturas de longa duração drenam a bateria; use com moderação
+
+```typescript
+// React hook para assinatura gerenciada
+function useAccountBalance(publicKey: PublicKey | null) {
+  const [balance, setBalance] = useState<number | null>(null);
+  const connection = useConnection();
+  
+  useEffect(() => {
+    if (!publicKey) return;
+    
+    // Busca inicial
+    connection.getBalance(publicKey).then(setBalance);
+    
+    // Inscreve-se em mudanças
+    const subId = connection.onAccountChange(
+      publicKey,
+      (info) => setBalance(info.lamports),
+      "confirmed"
+    );
+    
+    // Limpeza ao desmontar
+    return () => {
+      connection.removeAccountChangeListener(subId);
+    };
+  }, [publicKey, connection]);
+  
+  return balance;
+}
+```
+
+<ArticleSection name="Tratamento de Erros" id="error-handling" level="h2" />
+
+Chamadas RPC podem falhar de muitas formas. Trate-as de forma elegante:
+
+```typescript
+try {
+  const balance = await connection.getBalance(publicKey);
+} catch (error) {
+  if (error.message.includes("429")) {
+    // Limite de taxa - aguarde e tente novamente
+    console.log("Limite de taxa atingido, aguardando...");
+  } else if (error.message.includes("Network request failed")) {
+    // Problema de rede
+    console.log("Rede indisponível");
+  } else if (error.message.includes("Invalid param")) {
+    // Entrada inválida
+    console.log("Chave pública inválida");
+  } else {
+    // Erro desconhecido
+    console.error("Erro RPC:", error);
+  }
+}
+```
+
+<ArticleSection name="Pontos-Chave" id="key-takeaways" level="h2" />
+
+- **Agrupe requisições** quando possível; cada ida-e-volta custa tempo no mobile
+- **Use commitment `confirmed`** para o equilíbrio velocidade/confiabilidade
+- **Adicione polyfills** antes de importar `@solana/web3.js`
+- **Escolha um provedor RPC dedicado** para produção
+- **Construa lógica de retry** em todas as operações de rede
+- **Limpe assinaturas** para prevenir vazamentos de memória e dreno de bateria
+
+Na próxima lição, usaremos esses fundamentos de RPC para construir transações reais: começando com transferências de tokens.

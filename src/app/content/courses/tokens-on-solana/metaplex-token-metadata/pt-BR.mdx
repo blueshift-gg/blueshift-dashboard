@@ -1,0 +1,291 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Token Extensions e Token-2022
+
+O SPL Token foi lançado em 2020. Em 2024, desenvolvedores precisavam de recursos que ele não podia oferecer: metadata incorporada nas mint accounts, transfer hooks que executam lógica personalizada, tokens com rendimento, transferências confidenciais. A resposta não foi implantar contratos personalizados — foi estender o padrão.
+
+O Token-2022 (também chamado de programa Token Extensions) adiciona 16 extensões opcionais ao SPL Token mantendo compatibilidade retroativa. Programas antigos funcionam com tokens novos. Novos recursos ativam apenas quando necessário. Sem fragmentação do ecossistema.
+
+<ArticleSection name="Por Que as Token Extensions Existem" id="why-extensions" level="h2" />
+
+O SPL Token é minimalista por design. Ele gerencia minting, transferências e burning. Nada mais. Precisa de metadata? Use o programa Metaplex Token Metadata. Precisa de restrições de transferência? Escreva validação personalizada. Precisa de rendimento? Construa por cima.
+
+Isso funcionou por anos. Mas cada recurso adicionado exigia programas externos, criando complexidade:
+
+**Metadata exigia accounts separadas:**
+
+Mint account do SPL Token: 82 bytes. PDA de metadata do Metaplex: 679+ bytes. Duas accounts, dois depósitos de rent, duas interações com programas. Para metadata simples (nome, símbolo, URI), isso parecia pesado.
+
+**Restrições de transferência exigiam programas encapsuladores:**
+
+Quer tokens que só transferem em horários específicos? Encapsule o SPL Token em um programa personalizado. Cada padrão de restrição precisava de nova implantação de programa. Sem padronização.
+
+**Tokens com rendimento precisavam de rebase constante:**
+
+Protocolos de empréstimo queriam tokens cujo saldo aumentasse ao longo do tempo. O SPL Token tem valores fixos. Protocolos rastreavam saldos externamente e recalculavam constantemente. Sem suporte nativo.
+
+As Token Extensions resolvem isso estendendo as estruturas de mint e token account com campos opcionais. Habilitar a extensão de metadata? A mint account armazena nome/símbolo/URI diretamente. Habilitar transfer hooks? O programa executa em cada transferência. Habilitar rendimento? O token calcula o saldo dinamicamente.
+
+<ArticleSection name="Extensões Disponíveis" id="available-extensions" level="h2" />
+
+O Token-2022 oferece 16 extensões. As principais:
+
+**Extensão de Metadata:**
+
+Incorpora nome, símbolo, URI diretamente na mint account:
+
+```rust
+pub struct TokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
+```
+
+Sem necessidade de account externa do Metaplex — a metadata vive na mint, tornando mais barato, mais simples e exigindo apenas uma única consulta de account.
+
+**Transfer Hook:**
+
+Executa lógica de programa personalizada em cada transferência:
+
+```rust
+pub struct TransferHook {
+    pub authority: Pubkey,
+    pub program_id: Pubkey,
+}
+```
+
+O protocolo pode impor restrições de transferência, royalties, registro ou qualquer validação antes que as transferências se completem. Permite tokens conformes, lógica de itens de jogos, transferências condicionais.
+
+**Permanent Delegate:**
+
+A mint authority define um endereço com direitos de gasto permanentes sobre todas as token accounts:
+
+```rust
+pub struct PermanentDelegate {
+    pub delegate: Pubkey,
+}
+```
+
+Usado para tokens regulados onde o emissor precisa poder recuperar fundos (sanções, conformidade). Diferente da delegação temporária — esta é authority irrevogável sobre todas as accounts.
+
+**Transfer Fees:**
+
+Cobra uma taxa em cada transferência, enviada para accounts designadas:
+
+```rust
+pub struct TransferFeeConfig {
+    pub transfer_fee_basis_points: u16,
+    pub maximum_fee: u64,
+}
+```
+
+Permite modelos econômicos onde transferências geram receita. Moedas de jogos, tokens deflacionários, taxas de protocolo incorporadas no próprio token.
+
+**Tokens com Rendimento:**
+
+Valores dos tokens crescem ao longo do tempo com base na taxa de juros:
+
+```rust
+pub struct InterestBearingConfig {
+    pub rate: i16,  // Pontos base por ano
+    pub last_update_timestamp: i64,
+}
+```
+
+Protocolos de empréstimo emitem tokens representando depósitos. O saldo aumenta automaticamente com base na taxa de juros. Sem rebase manual necessário.
+
+**Transferências Confidenciais:**
+
+Criptografa valores das transferências usando provas de conhecimento zero:
+
+```rust
+pub struct ConfidentialTransferMint {
+    pub authority: Pubkey,
+    pub auto_approve_new_accounts: bool,
+}
+```
+
+Transferências executam com valores ocultos. Apenas remetente/destinatário veem os saldos. Authorities de conformidade (com chaves especiais) podem descriptografar se necessário. Privacidade + auditabilidade.
+
+**Tokens Não Transferíveis:**
+
+Tokens que não podem ser transferidos após o minting:
+
+```rust
+pub struct NonTransferable {}
+```
+
+Usados para tokens soulbound, credenciais, conquistas. Uma vez mintados para um endereço, ficam lá para sempre. Sem transferências, sem venda.
+
+**Immutable Owner:**
+
+Token accounts cujo proprietário não pode ser alterado:
+
+```rust
+pub struct ImmutableOwner {}
+```
+
+Impede a reatribuição de propriedade da token account. Recurso de segurança que previne certos padrões de exploração.
+
+**Memo Obrigatório na Transferência:**
+
+Exige memo (mensagem) em cada transferência:
+
+```rust
+pub struct MemoTransfer {
+    pub require_incoming_transfer_memos: bool,
+}
+```
+
+Recurso de conformidade. Exchanges podem exigir o propósito da transação no campo memo. Usado em ambientes regulados.
+
+**Default Account State:**
+
+Define se novas token accounts começam congeladas:
+
+```rust
+pub struct DefaultAccountState {
+    pub state: AccountState,
+}
+```
+
+O emissor do token pode exigir que todas as novas token accounts comecem congeladas. O emissor deve explicitamente descongelá-las. Controle de conformidade.
+
+Outras extensões: **CPI Guard**, **Metadata Pointer**, **Group Pointer**, **Group Member Pointer**, **Close Authority**, **Reallocate**.
+
+<ArticleSection name="Compatibilidade Retroativa" id="backward-compatibility" level="h2" />
+
+Tokens Token-2022 funcionam com programas que esperam SPL Token. A estrutura da account estende o layout do SPL Token sem quebrar campos existentes.
+
+**O que isso significa:**
+
+Programas lendo fornecimento da mint, decimals, authorities? Funcionam com tokens Token-2022. Os campos base estão nos mesmos locais.
+
+Programas transferindo tokens? Funcionam se não dependem de suposições de tamanho de account. A lógica de transferência é idêntica.
+
+Extensões aparecem após os dados base. Programas ignorando extensões veem apenas campos do SPL Token. Programas cientes de extensões podem ler dados adicionais.
+
+**Caminho de migração:**
+
+Sem divisão do ecossistema. O Token-2022 não fragmenta a Solana como o ERC-777 fragmentou a Ethereum. DEXs suportam tanto SPL Token quanto Token-2022. Carteiras exibem ambos. Protocolos de empréstimo aceitam ambos.
+
+Novos projetos podem usar Token-2022 para recursos avançados mantendo compatibilidade com todo o ecossistema.
+
+<ArticleSection name="Quando Usar Token-2022" id="when-to-use" level="h2" />
+
+**Use SPL Token quando:**
+
+Token fungível básico. Sem recursos especiais necessários. Compatibilidade máxima desejada. Mais simples é melhor.
+
+**Use Token-2022 quando:**
+
+Precisa de metadata incorporada (evita custo e complexidade da account Metaplex).
+
+Precisa de restrições de transferência (itens de jogos, tokens conformes, lógica condicional).
+
+Precisa de taxas de transferência (mecânicas deflacionárias, receita de protocolo).
+
+Precisa de saldos com rendimento (empréstimos, recibos de staking).
+
+Precisa de privacidade (valores de transferência confidenciais).
+
+Precisa de tokens soulbound (credenciais, conquistas).
+
+**Trade-offs:**
+
+Mints Token-2022 são maiores (extensões adicionam bytes, aumentam rent). Mais complexas (extensões introduzem configuração). Ligeiramente mais novas (menos testadas em batalha que o SPL Token).
+
+Mas se você precisa de qualquer recurso de extensão, Token-2022 é a forma padrão de obtê-lo. Não construa programas encapsuladores ou rastreadores externos — use extensões.
+
+<ArticleSection name="Exemplos Práticos" id="practical-examples" level="h2" />
+
+**Moeda de jogo com taxas de transferência:**
+
+Crie uma mint Token-2022 com extensão de taxa de transferência. Cada trade/transferência cobra automaticamente 1% de taxa. Taxas acumulam em account designada. Desenvolvedores de jogos ganham receita com a atividade da economia no jogo.
+
+**Stablecoin conforme com transfer hooks:**
+
+Habilite a extensão de transfer hook. O programa hook valida transferências contra regras de conformidade (listas de sanções, requisitos de KYC). Transferências não conformes falham automaticamente. O emissor mantém conformidade regulatória sem congelar accounts inteiras.
+
+**Tokens de recibo de empréstimo com rendimento:**
+
+Emita tokens Token-2022 com extensão de rendimento. Usuários depositam USDC, recebem tokens de recibo. O saldo do token de recibo cresce com base no APY do empréstimo. Sem rebase manual necessário — o cálculo do saldo é dinâmico.
+
+**Credenciais soulbound:**
+
+Faça mint de tokens não transferíveis representando certificações, conquistas, reputação. Uma vez mintados para o usuário, eles não podem vender ou transferir. Cria credenciais verificáveis on-chain.
+
+**Tokens com saldo privado:**
+
+Habilite a extensão de transferência confidencial. Usuários podem transferir tokens com valores criptografados. Terceiros veem que transferências aconteceram, mas não os valores. Privacidade para aplicações financeiras.
+
+<ArticleSection name="Verificando Token Extensions" id="checking-extensions" level="h2" />
+
+**No Solana Explorer:**
+
+Pesquise o endereço da mint. Se for Token-2022, a seção "Extensions" mostra as extensões habilitadas com suas configurações.
+
+**Programaticamente:**
+
+```typescript
+const mint = await getMint(
+    connection,
+    mintAddress,
+    'confirmed',
+    TOKEN_2022_PROGRAM_ID
+);
+
+// Verificar extensão de metadata
+const metadata = getMetadataPointerState(mint);
+
+// Verificar extensão de taxa de transferência
+const transferFeeConfig = getTransferFeeConfig(mint);
+```
+
+Extensões são opcionais. A maioria das mints habilita 0-3 extensões. Uma mint com 10+ extensões é incomum — cada uma adiciona complexidade e custo de rent.
+
+<ArticleSection name="Criando Mints Token-2022" id="creating-token2022" level="h2" />
+
+A criação de mint Token-2022 é similar ao SPL Token, mas especifica extensões:
+
+```typescript
+const mint = await createMint(
+    connection,
+    payer,
+    mintAuthority,
+    freezeAuthority,
+    decimals,
+    keypair,
+    confirmOptions,
+    TOKEN_2022_PROGRAM_ID  // Usar programa Token-2022
+);
+
+// Habilitar extensão de metadata
+await createInitializeMetadataPointerInstruction(
+    mint,
+    mintAuthority,
+    metadataAddress,
+    TOKEN_2022_PROGRAM_ID
+);
+```
+
+Extensões devem ser habilitadas durante a criação da mint (ou pouco depois, antes do primeiro mint). Não é possível adicionar extensões a mints existentes com fornecimento. Projetee com cuidado antecipadamente.
+
+<ArticleSection name="Extensões Futuras" id="future-extensions" level="h2" />
+
+O Token-2022 é extensível. Novas extensões podem ser adicionadas conforme as necessidades surgem. Possíveis extensões futuras:
+
+**Transferências com bloqueio temporal** - Tokens que desbloqueiam após datas específicas.
+
+**Requisitos de múltipla assinatura** - Transferências exigindo aprovações M-de-N.
+
+**Distribuição de dividendos** - Pagamentos proporcionais automáticos a todos os detentores.
+
+**Modificadores de poder de voto** - Peso de governança separado do saldo.
+
+Extensões que não quebram funcionalidade existente podem ser adicionadas sem fork. O design do programa antecipa a evolução.
+
+As Token Extensions representam a abordagem da Solana: não fragmente o ecossistema com novos padrões, estenda o existente. O Token-2022 não é uma substituição — é o SPL Token com superpoderes opcionais.
+
+Próximo: resumindo o que você aprendeu e para onde ir na implementação.

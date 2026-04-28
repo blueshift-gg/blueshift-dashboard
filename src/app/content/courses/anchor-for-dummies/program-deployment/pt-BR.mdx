@@ -1,0 +1,173 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Implantação do Programa
+
+Uma vez que seu program está completo, implante-o na devnet ou mainnet para permitir a interação dos usuários.
+
+<ArticleSection name="Program Deployment" id="program-deployment" level="h2" />
+
+Compile seu program para gerar os arquivos necessários de implantação:
+
+```
+anchor build
+```
+
+Isso cria uma pasta `target/deploy` contendo:
+- `<project-name>.so`: o bytecode do seu program
+- `<project-name>-keypair.json`: um keypair gerado para implantação
+
+> Você pode substituir este keypair por um endereço vanity substituindo o keypair no arquivo `<project-name>-keypair.json`.
+
+Obtenha o endereço do program:
+
+```
+solana address -k target/deploy/<project-name>-keypair.json
+```
+
+Atualize a função `declare_id!()` no `lib.rs` com este endereço e configure seu `Anchor.toml` com o cluster alvo correto e o ID do program:
+
+```
+[provider]
+cluster = "devnet"
+
+[programs.devnet]
+<project-name> = "<PROGRAM_ID>"
+```
+
+Implante seu program:
+
+```
+anchor deploy
+```
+
+Isso implanta usando o endereço, cluster e wallet especificados no `Anchor.toml` como pagador de taxas.
+
+### Falhas na Implantação
+
+Implantações malsucedidas criam accounts de buffer intermediárias que retêm lamports. Você verá instruções de recuperação como:
+
+```
+==================================================================================
+Recover the intermediate account's ephemeral keypair file with
+`solana-keygen recover` and the following 12-word seed phrase:
+==================================================================================
+valley flat great hockey share token excess clever benefit traffic avocado athlete
+==================================================================================
+To resume a deploy, pass the recovered keypair as
+the [BUFFER_SIGNER] to `solana program deploy` or `solana program write-buffer'.
+Or to recover the account's lamports, pass it as the
+[BUFFER_ACCOUNT_ADDRESS] argument to `solana program drain`.
+==================================================================================
+```
+
+Para recuperar seu saldo:
+
+- **Retomar a implantação** recuperando o keypair:
+    ```
+    solana-keygen recover -o <KEYPAIR_PATH>
+    ```
+    Digite a seed phrase de 12 palavras quando solicitado e então implante com o buffer:
+    ```
+    solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json --buffer ./target/deploy/<buffer>-keypair.json
+    ```
+
+- **Fechar** o buffer para recuperar os lamports:
+    ```
+    solana program close <ADDRESS>
+    ```
+
+### Implantação através do Solana CLI
+
+Você pode implantar seus programas diretamente usando o Solana CLI em vez do Anchor:
+
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+Durante congestionamento de rede, use estas flags para melhorar o sucesso da implantação:
+- `--with-compute-unit-price`: Define o preço de compute unit em micro-lamports
+- `--use-rpc`: Envia transações para RPC em vez dos TPUs do validador
+- `--max-sign-attempts`: Máximo de tentativas de retry após expiração do blockhash
+
+<ArticleSection name="Program Upgrade" id="program-upgrade" level="h2" />
+
+Por padrão, `anchor deploy` cria um novo program ID. Para atualizar um program existente preservando seu endereço e accounts associadas:
+
+```
+anchor upgrade target/deploy/<project-name>.so --program-id <PROGRAM_ID>
+```
+
+Se o novo executável for maior que a versão implantada, estenda a account do program primeiro:
+
+```
+solana program extend ./target/deploy/<project-name>.so <ADDITIONAL_BYTES>
+```
+
+### Upgrade através do Solana CLI
+
+O processo permanece o mesmo: estenda se necessário e então implante:
+
+```
+solana program deploy ./target/deploy/<project-name>.so --program-id ./target/deploy/<project-name>-keypair.json
+```
+
+### Tornando Programas Imutáveis
+
+Você pode remover a upgrade authority para tornar seu program imutável:
+
+```
+solana program set-upgrade-authority <PROGRAM_ID> --final
+```
+
+> Esta ação é irreversível. Uma vez definido, o program não pode ser atualizado.
+
+### Migrando Programas
+
+A migração transfere um program de um endereço para outro. O CLI fecha o program antigo e o reimplanta no novo local:
+
+```
+solana program migrate ./target/deploy/<project-name>.json
+```
+
+> A migração quebra todos os PDAs existentes, pois eles são derivados do Programa ID antigo. Os usuários devem atualizar suas aplicações para usar o novo endereço e alterar a autoridade sobre qualquer token account cuja autoridade seja um PDA.
+
+<ArticleSection name="Uploading an IDL" id="uploading-an-idl" level="h2" />
+
+Um arquivo Interface Description Language (IDL) fornece uma descrição JSON padronizada das instructions e accounts do seu program, permitindo uma integração mais fácil no lado do cliente.
+
+Faça upload do IDL onchain para ajudar desenvolvedores a integrar seu program:
+
+```
+anchor idl init --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+### Atualizando o IDL
+
+Após reimplantar seu program, atualize o IDL onchain:
+
+```
+anchor idl upgrade --filepath target/idl/<program_name>.json <PROGRAM_ID>
+```
+
+<ArticleSection name="Verified Builds" id="verified-builds" level="h2" />
+
+Builds verificados garantem que o programa executável implantado na Solana corresponde ao código-fonte no seu repositório. Essa verificação permite que desenvolvedores e usuários confirmem que o program onchain corresponde exatamente ao código público.
+
+O processo de verificação compara o hash do program onchain com o program compilado localmente a partir do código-fonte, detectando quaisquer discrepâncias entre as versões.
+
+Compilar programas com o Solana CLI pode incorporar código específico da máquina nos binários. Compilar o mesmo program em máquinas diferentes pode produzir executáveis diferentes. Para resolver isso, compile dentro de um container Docker com dependências fixadas para resultados reprodutíveis.
+
+O Anchor fornece comandos CLI que gerenciam a compilação e configuração do Docker:
+
+```
+anchor build --verifiable
+```
+
+Verifique um build contra um program implantado na mainnet:
+
+```
+anchor verify -p <lib-name> <program-id>
+```
+
+> O `<lib-name>` corresponde ao nome definido no arquivo `Cargo.toml` do seu program.

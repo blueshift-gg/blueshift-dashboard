@@ -1,0 +1,144 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso Codama SDK - Gerar SDKs TypeScript para programas Solana](/graphics/course-banners/create-your-sdk-with-codama.png)
+
+# Codama 101
+
+Codama é a forma mais rápida de gerar clients com tipagem segura para programas Solana em múltiplas linguagens e frameworks, criar ferramentas de CLI e fornecer informações ricas sobre programas para exploradores.
+
+Tudo começa com o Codama IDL — um formato padronizado que descreve qualquer programa Solana e serve como base para gerar todas as ferramentas relacionadas ao programa.
+
+A partir de um único Codama IDL, você pode gerar:
+- Clients com tipagem segura para JavaScript, Rust, Python e mais
+- Ferramentas de CLI para interagir com seu programa
+- Documentação que permanece sincronizada com seu código
+- Integrações com exploradores que entendem a estrutura do seu programa
+- Utilitários de teste que conhecem a interface do seu programa
+
+Codama elimina o trabalho tedioso de manter clients em múltiplas linguagens e frameworks.
+
+Em vez de escrever e atualizar manualmente o código do client toda vez que seu programa muda, você descreve seu programa uma vez no formato Codama IDL, aplica quaisquer transformações necessárias usando visitors e gera todo o resto automaticamente
+
+<ArticleSection name="Core Concepts" id="core-concept" level="h2" />
+
+A arquitetura do Codama gira em torno de três conceitos fundamentais: Nodes, Visitors e Renderers.
+
+### Nodes
+
+Tudo no Codama é representado como uma árvore de nodes. Um node é um objeto de dados estruturado que descreve um aspecto específico do seu programa Solana.
+
+Seu programa inteiro se torna uma árvore hierárquica começando com um `RootNode` no topo.
+
+Existem diferentes tipos de nodes:
+- **Structure Nodes** (`RootNode`, `ProgramNode`, `AccountNode`, `InstructionNode`, ...): Definem o esqueleto do seu programa
+- **Type Nodes** (`NumberTypeNode`, `StringTypeNode`, `StructTypeNode`, `ArrayTypeNode`): Descrevem estruturas de dados e tipos de campos
+- **Value Nodes** (`NumberValueNode`, `StringValueNode`): Representam valores padrão e constantes
+
+> Cada tipo de node serve a um propósito específico e fornece uma interface consistente para representar seus dados. Visitors específicos de cada linguagem podem então percorrer e transformar esses nodes em representações apropriadas para diferentes linguagens alvo, permitindo que você construa descrições complexas de programas combinando nodes simples.
+
+### Visitors
+
+Visitors são funções que percorrem sua árvore de nodes para analisá-la ou transformá-la.
+
+Eles implementam o padrão visitor "visitando" cada node na sua árvore e realizando operações neles.
+
+Existem 2 tipos de visitors:
+- Analysis Visitors (somente leitura): Percorrem os nodes e retornam informações usando `codama.accept()`
+- Transformation Visitors: Percorrem os nodes e retornam uma árvore modificada usando `codama.update()`
+
+> Visitors separam o que seu programa é (os nodes) do que você quer fazer com ele (as operações). Isso significa que você pode aplicar as mesmas transformações a qualquer Codama IDL, independentemente de como ele foi criado.
+
+### Renderers
+
+Renderers são funções visitor que transformam seu Codama IDL em código de client para linguagens de programação específicas.
+
+Cada renderer percorre os nodes do IDL e gera os arquivos de código, tipos e interfaces apropriados para sua linguagem alvo.
+
+Para usar um renderer, forneça o diretório base onde os arquivos gerados devem ser salvos, junto com configuração opcional para personalizar a saída:
+
+```ts
+import { createFromRoot, programNode, rootNode } from 'codama';
+import { renderJavaScriptVisitor, renderRustVisitor } from '@codama/renderers';
+
+// Crie ou importe seu Codama IDL.
+const codama = createFromRoot(rootNode(programNode({ ... })));
+
+// Gere SDKs a partir do seu IDL.
+codama.accept(renderJavaScriptVisitor('clients/js/src/generated', { ... }));
+codama.accept(renderRustVisitor('clients/rust/src/generated', { ... }));
+```
+
+> No momento, apenas os seguintes renderers estão disponíveis: `renderJavaScriptVisitor` (compatível com `@solana/kit`), `renderJavaScriptUmiVisitor` (compatível com `@metaplex-foundation/umi` e `@solana/web3.js`) e `renderRustVisitor`.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Instale o pacote principal do Codama usando seu gerenciador de pacotes preferido:
+
+```
+pnpm install codama
+```
+
+Isso inclui os pacotes `@codama/visitors` e `@codama/nodes`, fornecendo tudo o que você precisa para criar e manipular IDLs.
+
+> Pacotes individuais como `@codama/visitors` e `@codama/nodes` podem ser instalados separadamente se você preferir controle granular sobre as dependências.
+
+Para gerar código de client, você também precisará do pacote de renderers:
+
+```
+pnpm install codama @codama/renderers
+```
+
+O pacote de renderers é distribuído separadamente porque requer acesso ao sistema de arquivos e só funciona em ambientes Node.js, enquanto a biblioteca principal do Codama funciona em qualquer lugar (Node.js, navegadores, etc.).
+
+<ArticleSection name="Configuração" id="set-up" level="h2" />
+
+Codama fornece uma interface de linha de comando (CLI) que simplifica o trabalho com IDLs e a geração de código de client. A CLI gerencia a configuração e a execução de scripts, facilitando a configuração de workflows automatizados.
+
+Instale o pacote CLI e inicialize seu projeto:
+
+```
+pnpm install @codama/cli
+pnpm codama init
+```
+
+O comando init irá solicitar:
+- O caminho para seu arquivo IDL (suporta tanto Codama IDLs quanto Anchor IDLs)
+- Presets de scripts que você deseja usar (JavaScript, Rust, etc.)
+
+Isso cria um arquivo de configuração que define sua origem IDL e scripts de geração e se parece com isto:
+
+```json
+{
+    "idl": "path/to/your/idl",
+    "before": [
+        "./custom-transforms.js",
+        { "from": "@codama/visitors#removeTypes", "args": [["internal"]] }
+    ],
+    "scripts": {
+        "js": [
+            { "from": "@codama/renderers-js", "args": ["clients/js/src"] }
+        ],
+        "rust": [
+            { "from": "@codama/renderers-rust", "args": ["clients/rust/src"] }
+        ]
+    }
+}
+```
+
+> O `before` contém os `Visitors` que são executados antes de cada script (para transformações, limpeza, etc.) e o `scripts` contém os `Renderers` usados para gerar os clients
+
+Você pode executar seus scripts configurados usando o comando `run`:
+
+```
+pnpm codama run              # Executar apenas os passos de preparação
+pnpm codama run js rust      # Executar geradores de linguagens específicas
+pnpm codama run --all        # Executar todos os scripts configurados
+```
+
+### Sem CLI
+
+Se você não quiser usar a CLI, pode criar um arquivo `codama.ts` no seu repositório, especificar sua lógica Codama IDL (imports, visitors e renderers) e então executar:
+
+```
+pnpx tsx codama.ts
+```

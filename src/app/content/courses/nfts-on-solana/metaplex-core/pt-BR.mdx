@@ -1,0 +1,307 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Core e NFTs Comprimidos
+
+O Token Metadata usa duas contas por NFT: mint SPL Token + PDA de metadados. Funciona, mas é caro. O Metaplex Core simplifica com uma conta contendo tudo. Os NFTs Comprimidos vão além: milhões de NFTs em uma conta usando árvores Merkle.
+
+O Core fornece uma arquitetura mais limpa. NFTs Comprimidos permitem escala massiva. Ambos reduzem custos dramaticamente.
+
+<ArticleSection name="Metaplex Core: NFTs em Conta Única" id="metaplex-core" level="h2" />
+
+NFTs com Token Metadata requerem:
+- Conta mint (82 bytes, 0,00144 SOL de aluguel)
+- PDA de metadados (~700 bytes, 0,012-0,02 SOL de aluguel)
+- Total: ~0,015 SOL por NFT
+
+NFTs com Metaplex Core requerem:
+- Conta Core Asset única (~300-400 bytes, 0,006-0,008 SOL de aluguel)
+- Total: ~0,007 SOL por NFT
+
+50% mais barato, mais simples, sem dependência do SPL Token.
+
+**Como o Core funciona:**
+
+A conta Core Asset contém tudo:
+
+```rust
+pub struct Asset {
+    pub key: Key,
+    pub owner: Pubkey,
+    pub update_authority: Pubkey,
+    pub name: String,
+    pub uri: String,
+    pub seq: u64,  // Número de sequência para atualizações
+}
+```
+
+Sem conta mint separada, contas de token, ou envolvimento do programa SPL Token — programa NFT puro gerenciando tudo.
+
+**Transferências:**
+
+Transferências com Token Metadata envolvem o programa SPL Token (transferir token de uma conta de token para outra).
+
+Transferências com Core acontecem inteiramente dentro do programa Core (alterar campo owner na conta Asset).
+
+Validação mais simples. Menos contas. Menores custos de compute.
+
+**Metadados:**
+
+Mesma abordagem de JSON off-chain. URI aponta para Arweave/IPFS. A conta on-chain armazena dados mínimos (nome, URI, proprietário).
+
+Coleções, royalties, atributos funcionam de forma similar. Programa diferente, mesmos conceitos.
+
+<ArticleSection name="Vantagens do Core" id="core-advantages" level="h2" />
+
+**Custo:**
+
+50% mais barato por NFT. Coleção de 10.000: economia de ~$75 em depósitos de aluguel.
+
+**Simplicidade:**
+
+Uma conta em vez de duas. Menos PDAs para derivar. Construção de transação menos complexa.
+
+**Desempenho:**
+
+Contas menores = menos dados para ler/escrever. Transações mais rápidas. Menor uso de compute.
+
+**Flexibilidade:**
+
+Sistema de plugins para comportamento personalizado. Adicione aplicação de royalties, restrições de transferência, lógica personalizada sem mudanças no protocolo.
+
+<ArticleSection name="Desvantagens do Core" id="core-disadvantages" level="h2" />
+
+**Padrão mais novo:**
+
+Menos testado em produção. Menos anos em produção. Algumas ferramentas/integrações ainda estão se atualizando.
+
+**Compatibilidade:**
+
+Programas que esperam SPL Tokens do Token Metadata não funcionarão com assets do Core. Requer suporte explícito ao Core.
+
+Marketplaces estão adicionando suporte ao Core, mas o Token Metadata é mais universal.
+
+**Migração:**
+
+Coleções existentes com Token Metadata não podem migrar facilmente. Exigiria mintar novas versões em Core.
+
+<ArticleSection name="NFTs Comprimidos: Arquitetura de Árvore Merkle" id="compressed-nfts" level="h2" />
+
+NFTs regulares (Token Metadata ou Core): Uma conta por NFT. 1 milhão de NFTs = 1-2 milhões de contas = $15.000-30.000 em aluguel.
+
+NFTs Comprimidos: Muitos NFTs em uma conta de árvore Merkle. 1 milhão de NFTs em uma árvore = ~$500.
+
+**Como a compressão funciona:**
+
+A árvore Merkle armazena hashes dos dados do NFT, não os dados completos. A conta da árvore contém o hash raiz e as provas.
+
+O NFT "existe" como associação provada na árvore. Sem conta dedicada por NFT.
+
+**Estrutura da árvore:**
+
+```
+Tree Account
+├─ Max depth (determina a capacidade)
+├─ Max buffer size
+├─ Root hash
+└─ Proofs para todos os NFTs
+```
+
+Árvore de profundidade 14 = 16.384 NFTs no máximo. Árvore de profundidade 20 = 1.048.576 NFTs no máximo. Árvore de profundidade 30 = 1.073.741.824 NFTs no máximo (bilhão+).
+
+O aluguel da conta da árvore depende da profundidade, não do número de NFTs efetivamente mintados. Pague uma vez pela capacidade, preencha gradualmente.
+
+<ArticleSection name="Operações com NFTs Comprimidos" id="compressed-operations" level="h2" />
+
+**Criando a árvore:**
+
+```typescript
+const tree = await createTree(umi, {
+    maxDepth: 14,         // Capacidade de 16.384 NFTs
+    maxBufferSize: 64,
+});
+```
+
+Custo: ~$10-500 dependendo da profundidade. Pagamento único pela conta da árvore.
+
+**Mintando NFT comprimido:**
+
+Atualizar a árvore com a prova do NFT. Nenhuma conta nova é criada.
+
+```typescript
+await mintToCollectionV1(umi, {
+    tree: tree.publicKey,
+    leafOwner: owner,
+    metadata: {
+        name: "My NFT #1",
+        uri: "https://arweave.net/...",
+    },
+});
+```
+
+Custo: ~$0,0001 por mint (custo de atualização da prova).
+
+**Transferindo:**
+
+Atualizar a prova da árvore, alterar o proprietário. Requer prova de propriedade atual.
+
+```typescript
+await transfer(umi, {
+    tree: tree.publicKey,
+    leafOwner: currentOwner,
+    newLeafOwner: newOwner,
+    proof: ownershipProof,
+});
+```
+
+A verificação da prova garante que apenas o proprietário real transfere. A atualização da árvore altera o registro de propriedade.
+
+**Lendo NFT comprimido:**
+
+Não é possível ler diretamente da árvore (apenas hashes). Requer indexador.
+
+Indexadores monitoram atualizações da árvore, mantêm banco de dados do estado atual. A API DAS (Digital Asset Standard) fornece consultas.
+
+Carteiras consultam indexadores, não a árvore diretamente. Indexadores retornam dados do NFT, propriedade, metadados.
+
+<ArticleSection name="Trade-offs dos NFTs Comprimidos" id="compressed-tradeoffs" level="h2" />
+
+**Economia massiva de custos:**
+
+1 milhão de NFTs:
+- Token Metadata: $28.800 de aluguel
+- Core: $7.000 de aluguel
+- Comprimido: $500 de árvore + $100 de mint = $600 no total
+
+48x mais barato que Token Metadata, 12x mais barato que Core.
+
+**Requer indexadores:**
+
+Não é possível consultar a árvore diretamente. Deve usar indexador (Helius, Triton, etc.).
+
+Indexadores são serviços centralizados. Se o indexador sair do ar, não é possível ler os dados do NFT.
+
+A Solana Foundation executa um indexador público (DAS API), mas adiciona uma dependência.
+
+**Transferências mais complexas:**
+
+NFTs regulares: Apenas assine a transação de transferência.
+
+NFTs comprimidos: Inclua prova de propriedade. A prova deve ser atual (do estado mais recente da árvore).
+
+**Limitações de transferência concorrente:**
+
+Múltiplas transferências simultâneas para a mesma árvore podem conflitar. Atualizações da árvore são sequenciais.
+
+Aplicações de alto desempenho precisam de coordenação cuidadosa.
+
+<ArticleSection name="Quando Usar Cada Padrão" id="when-to-use-each" level="h2" />
+
+**Use Token Metadata quando:**
+
+Compatibilidade máxima é crítica. Toda ferramenta o suporta.
+
+Projeto existente já o utilizando.
+
+NFTs programáveis necessários (pNFTs requerem Token Metadata).
+
+Não pode depender de indexadores (quer leituras puramente on-chain).
+
+**Use Core quando:**
+
+Iniciando projeto novo, quer melhores práticas.
+
+Menores custos importam (50% mais barato que Token Metadata).
+
+Arquitetura mais simples é preferida.
+
+Disposto a verificar suporte de marketplace/ferramenta.
+
+**Use NFTs Comprimidos quando:**
+
+Escala é prioridade (100K+ NFTs).
+
+Otimização de custo é crítica (100x mais barato que regular).
+
+Pode depender de indexadores (centralização aceitável).
+
+Casos de uso: jogos (milhões de itens), programas de fidelidade (milhões de membros), grandes coleções, ingressos de eventos em escala.
+
+<ArticleSection name="Exemplos do Mundo Real" id="real-examples" level="h2" />
+
+**Mad Lads (NFTs Comprimidos):**
+
+Coleção de 10.000 NFTs usando NFTs comprimidos. Demonstração de escala da equipe Backpack.
+
+Escolheram compressão pela eficiência de custo e vitrine técnica.
+
+**Drip Haus (NFTs Comprimidos):**
+
+NFTs de moda. Milhares de itens de moda digital.
+
+Compressão permite mint em massa acessível para drops de moda.
+
+**Tensor (Marketplace):**
+
+Suporta Token Metadata, Core e NFTs Comprimidos.
+
+Mostra que todos os três padrões são viáveis em produção.
+
+**Star Atlas (Jogos):**
+
+Milhares de itens em jogo como NFTs.
+
+Usa compressão para escala (naves, armas, recursos).
+
+**Maioria das grandes coleções (Token Metadata):**
+
+Okay Bears, DeGods, Famous Fox Federation todas usam Token Metadata.
+
+O padrão permanece o mais adotado para projetos estabelecidos.
+
+<ArticleSection name="Comparação Prática" id="practical-comparison" level="h2" />
+
+**Custos de coleção de 10.000 NFTs:**
+
+| Padrão | Depósitos de Aluguel | Minting | Total | Por NFT |
+|----------|--------------|---------|-------|---------|
+| Token Metadata | $288 | $0 | ~$300 | $0,03 |
+| Core | $70 | $0 | ~$75 | $0,0075 |
+| Comprimido | $50 (árvore) | $1 | ~$55 | $0,0055 |
+
+**Custos de coleção de 1.000.000 de NFTs:**
+
+| Padrão | Depósitos de Aluguel | Minting | Total | Por NFT |
+|----------|--------------|---------|-------|---------|
+| Token Metadata | $28.800 | $0 | ~$29.000 | $0,029 |
+| Core | $7.000 | $0 | ~$7.000 | $0,007 |
+| Comprimido | $500 (árvore) | $100 | ~$600 | $0,0006 |
+
+A diferença de escala é dramática. NFTs comprimidos permitem aplicações impossíveis nos custos de NFTs regulares.
+
+<ArticleSection name="Escolhendo Seu Padrão" id="choosing-standard" level="h2" />
+
+**Framework de decisão:**
+
+1. Quantos NFTs? (menos de 10K: qualquer padrão. Mais de 100K: considere comprimidos)
+2. Precisa de compatibilidade máxima? (Sim: Token Metadata. Não: Core ou Comprimidos)
+3. Pode depender de indexadores? (Não: evite comprimidos. Sim: comprimidos é uma opção)
+4. Sensibilidade a custo? (Alta: Core ou Comprimidos. Média: Token Metadata é bom)
+5. Projeto existente? (Sim: provavelmente mantenha o padrão atual. Não: avalie todas as opções)
+
+**Migração é difícil:**
+
+Uma vez escolhido, trocar é difícil. Token Metadata para Core requer mintar novos NFTs. Não é possível "converter" tokens existentes.
+
+Planeje para sua escala. Começando com 10K mas eventualmente quer 1M? Considere comprimidos desde o início.
+
+**Recomendação para novos projetos:**
+
+Pequenas coleções (menos de 10K), compatibilidade máxima desejada: **Token Metadata**
+
+Pequenas coleções, custo-consciente, stack moderna: **Core**
+
+Grandes coleções (mais de 100K), jogos, programas de fidelidade: **NFTs Comprimidos**
+
+Todos os três estão prontos para produção. Escolha baseado nos seus requisitos, não "o mais novo é o melhor".
+
+Próximo: Recapitulando o que você aprendeu e próximos passos para construir projetos NFT.

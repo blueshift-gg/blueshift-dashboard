@@ -1,0 +1,80 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Accounts Mutáveis Duplicadas
+
+Ataques de accounts mutáveis duplicadas exploram programas que aceitam múltiplas accounts mutáveis do mesmo tipo passando a mesma account duas vezes, fazendo com que o programa sobrescreva suas próprias alterações inadvertidamente. Isso cria uma condição de corrida dentro de uma única instrução onde mutações posteriores podem cancelar silenciosamente as anteriores.
+
+Esta vulnerabilidade afeta principalmente instruções que modificam dados em accounts de propriedade do programa, não operações do sistema como transferências de lamports. O ataque é bem-sucedido porque o runtime da Solana não impede que a mesma account seja passada múltiplas vezes para parâmetros diferentes; é responsabilidade do programa detectar e lidar com duplicatas.
+
+O perigo reside na natureza sequencial da execução de instruções. Quando a mesma account é passada duas vezes, o programa realiza a primeira mutação e, em seguida, imediatamente a sobrescreve com a segunda mutação, deixando a account em um estado inesperado que pode não refletir as intenções do usuário ou a lógica do programa.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere esta instrução vulnerável que atualiza campos de propriedade em duas accounts do programa:
+
+```rust
+#[program]
+pub mod unsafe_update_account{
+    use super::*;
+    
+    //..
+
+    pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+        ctx.accounts.program_account_1.owner = pubkey_a;
+        ctx.accounts.program_account_2.owner = pubkey_b;
+        
+        Ok(())
+    }
+
+    //..
+
+}
+
+#[derive(Accounts)]
+pub struct UpdateAccount<'info> {
+   #[account(mut)]
+    pub program_account_1: Account<'info, ProgramAccount>,
+    #[account(mut)]
+    pub program_account_2: Account<'info, ProgramAccount>,
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+Este código tem uma falha crítica: ele nunca verifica que `program_account_1` e `program_account_2` são accounts diferentes.
+
+Um atacante pode explorar isso passando a mesma account para ambos os parâmetros. Veja o que acontece:
+- O programa define `program_account_1.owner = pubkey_a`
+- Como ambos os parâmetros referenciam a mesma account, o programa imediatamente sobrescreve isso com `program_account_2.owner = pubkey_b`
+
+O resultado final: o owner da account é definido como `pubkey_b`, ignorando completamente `pubkey_a`
+
+Isso pode parecer inofensivo, mas considere as implicações. Um usuário esperando atualizar duas accounts diferentes com atribuições de propriedade específicas descobre que apenas uma account foi modificada, e não da forma pretendida. Em protocolos complexos, isso poderia levar a estado inconsistente, falhas em operações de múltiplas etapas ou até mesmo perdas financeiras.
+
+A solução é direta. Você só precisa verificar que as accounts são únicas antes de prosseguir:
+
+```rust
+pub fn update_account(ctx: Context<UpdateAccount>, pubkey_a: Pubkey, pubkey_b: Pubkey) -> Result<()> {
+    if ctx.accounts.program_account_1.key() == ctx.accounts.program_account_2.key() {
+        return Err(ProgramError::InvalidArgument)
+    }
+
+    ctx.accounts.program_account_1.owner = pubkey_a;
+    ctx.accounts.program_account_2.owner = pubkey_b;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+No Pinocchio, o mesmo padrão de validação se aplica:
+
+```rust
+if pubkey_eq(self.accounts.program_account_1.key(), self.accounts.program_account_2.key()) {
+    return Err(ProgramError::InvalidArgument)
+}
+```

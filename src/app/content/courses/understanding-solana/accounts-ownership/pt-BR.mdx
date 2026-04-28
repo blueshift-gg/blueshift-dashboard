@@ -1,0 +1,231 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Contas e Propriedade
+
+Contas são a estrutura de dados fundamental da Solana. [Na arquitetura da Solana, tudo é uma conta](/courses/understanding-solana/solana-architecture#everything-is-account). Você precisa entender a estrutura de contas, regras de propriedade e o mecanismo de rent para construir programas ou usar aplicações.
+
+Toda conta da Solana tem a mesma estrutura básica, segue as mesmas regras de propriedade e exige o mesmo saldo mínimo (rent) para persistir na blockchain.
+
+<ArticleSection name="Estrutura da Conta" id="account-structure" level="h2" />
+
+Toda conta contém cinco campos:
+
+```rust
+pub struct Account {
+    /// lamports in the account
+    pub lamports: u64,
+    /// data held in this account
+    pub data: Vec<u8>,
+    /// the program that owns this account
+    pub owner: Pubkey,
+    /// this account's data contains a loaded program (and is now read-only)
+    pub executable: bool,
+    /// the epoch at which this account will next owe rent
+    pub rent_epoch: Epoch,
+}
+```
+
+**Lamports:** O saldo da conta em lamports (1 SOL = 1.000.000.000 lamports). Todas as contas precisam de lamports para isenção de rent. Contas podem receber lamports adicionais além do mínimo.
+
+**Data:** Bytes arbitrários armazenando o que o programa proprietário exigir. Isso pode ser perfis de usuário, saldos de tokens, metadados de NFTs, estado de jogos ou qualquer outra informação. O tamanho máximo é 10 megabytes (10.485.760 bytes).
+
+**Owner:** O programa que controla esta conta. Apenas o proprietário pode modificar os dados da conta ou retirar seus lamports. Este campo é uma chave pública de 32 bytes identificando o programa proprietário.
+
+**Executable:** Uma flag booleana indicando se esta conta contém código de programa executável. Contas de programa têm isso definido como true. Contas de dados têm isso definido como false.
+
+**Rent epoch:** Campo histórico de quando o rent era deduzido periodicamente. Não é mais ativamente usado, mas permanece na estrutura da conta.
+
+Toda conta tem um endereço único de 32 bytes, exibido como uma string codificada em base58 como `14grJpemFaf88c8tiVb77W7TYg2W3ir6pfkKz3YjhhZ5`. Este endereço serve como identificador da conta na blockchain.
+
+<ArticleSection name="Tipos de Conta" id="account-types" level="h2" />
+
+Todas as contas compartilham a mesma estrutura, mas servem a propósitos diferentes com base em seu proprietário e flag executável.
+
+**System Accounts:** Pertencem ao System Program. São contas básicas de carteira com as quais os usuários interagem diretamente para enviar e receber SOL. Quando você cria uma carteira, está criando uma System Account. O System Program permite que o titular da conta (quem tiver a chave privada) transfira SOL e realoque a conta para outros programas.
+
+**Token Accounts:** Pertencem ao Token Program. Essas armazenam saldos e metadados de tokens SPL. Cada token que você possui (USDC, BONK, qualquer token SPL) existe em uma token account de propriedade do Token Program. O Token Program aplica regras de transferência e mantém saldos.
+
+**Data Accounts:** Pertencem a programas personalizados. Essas armazenam estado específico da aplicação: perfis de usuário, dados de jogos, metadados de NFTs, posições de empréstimo ou qualquer outra informação que seu programa precise. O programa proprietário define o formato dos dados e as regras de acesso.
+
+**Program Accounts:** Contêm código executável e têm a flag executável definida como true. Essas contas armazenam bytecode compilado do programa. Quando transações chamam um programa, o runtime carrega código dessas contas.
+
+<ArticleSection name="Rent e Isenção de Rent" id="rent-rent-exemption" level="h2" />
+
+As contas exigem um saldo mínimo de lamports para permanecerem ativas. Esse mínimo depende do tamanho da conta. Você o recupera quando fecha a conta.
+
+O mínimo rent-exempt depende do tamanho da conta:
+
+```
+rent_exempt_minimum = base_cost + (account_data_size * cost_per_byte)
+```
+
+Números específicos:
+- Custo base para qualquer conta: aproximadamente 0,00089 SOL
+- Custo por byte: aproximadamente 0,00000348 SOL
+- Uma conta de 165 bytes (tamanho comum): aproximadamente 0,00114 SOL
+
+Esses valores podem mudar através de governança, mas permanecem relativamente estáveis.
+
+Exemplo de cálculo:
+
+```rust
+// Account with 1000 bytes of data
+let rent = Rent::default();
+let account_size = 1000;
+let minimum_balance = rent.minimum_balance(account_size);
+// minimum_balance ≈ 0.00437 SOL
+```
+
+**Saldo rent-exempt:** Uma vez que uma conta tem o saldo mínimo para seu tamanho, ela está "rent-exempt." Nenhum rent adicional será cobrado. A conta persiste indefinidamente enquanto mantiver esse mínimo.
+
+**Fechando contas:** Quando você não precisa mais de uma conta, fechá-la recupera o depósito de rent. Os dados da conta são apagados, seus lamports são transferidos para fora (tipicamente de volta ao criador), e a conta deixa de existir. Isso torna o rent um depósito verdadeiramente reembolsável.
+
+Criar contas custa SOL. Quando você faz mint de um NFT, cria uma token account ou inicializa estado de programa, você paga o mínimo rent-exempt. Esses custos são pequenos, mas se acumulam. Aplicações com milhares de contas precisam orçar os custos totais de rent.
+
+<ArticleSection name="Regras de Propriedade" id="ownership-rules" level="h2" />
+
+Apenas o proprietário pode modificar uma conta. A propriedade determina quais operações são possíveis.
+
+O programa proprietário pode:
+- Modificar os dados da conta
+- Diminuir o saldo de lamports da conta (retirar fundos)
+- Mudar o tamanho da conta (com realocação)
+- Mudar o proprietário da conta (transferir propriedade para outro programa)
+
+Qualquer pessoa pode:
+- Aumentar o saldo de lamports da conta (enviar fundos para ela)
+- Ler os dados da conta (todos os dados de conta são públicos)
+
+O titular da conta (quem tiver a chave privada correspondente ao endereço da conta) pode:
+- Assinar transações que incluam esta conta
+- Se pertencente ao System Program: transferir SOL, fechar a conta ou reatribuir propriedade
+
+Ter a chave privada para o endereço de uma conta é diferente do programa que a possui. Se você criar uma conta pertencente ao System Program, você a controla com sua chave privada. Se você então atribuir propriedade a um programa personalizado, esse programa ganha controle — sua chave privada não pode mais modificá-la diretamente. Você só pode interagir através das instruções do programa proprietário.
+
+**Exemplo:**
+1. Você cria uma token account para USDC
+2. O Token Program é proprietário desta conta
+3. Você tem a chave privada da sua carteira principal
+4. Mas o Token Program controla os dados da token account
+5. Você transfere tokens chamando a instrução de transferência do Token Program
+6. O Token Program verifica que você é dono dos tokens e executa a transferência
+7. Você não pode modificar diretamente os dados da token account — apenas o Token Program pode
+
+<ArticleSection name="Criando Contas" id="creating-accounts" level="h2" />
+
+As contas da Solana devem ser explicitamente criadas e financiadas antes do uso.
+
+**System Program cria contas:**
+
+O System Program fornece a instrução `create_account`:
+
+```rust
+pub fn create_account(
+    from: &Pubkey,          // Who pays for the account
+    to: &Pubkey,            // Address of the new account
+    lamports: u64,          // Rent-exempt minimum + any extra
+    space: u64,             // Size of data in bytes
+    owner: &Pubkey,         // Which program will own it
+) -> Instruction
+```
+
+Essa instrução:
+1. Aloca espaço para a conta
+2. Transfere lamports do pagador para a nova conta
+3. Define o proprietário da conta
+4. Marca a conta como inicializada
+
+Exemplo:
+
+```rust
+// 1. Generate a new keypair for the account address
+let account = Keypair::new();
+
+// 2. Calculate rent-exempt minimum
+let rent = Rent::default();
+let account_size = 165; // bytes
+let lamports = rent.minimum_balance(account_size);
+
+// 3. Create the account
+let instruction = system_instruction::create_account(
+    &payer.pubkey(),
+    &account.pubkey(),
+    lamports,
+    account_size as u64,
+    &my_program_id,
+);
+
+// 4. Send transaction with both payer and new account as signers
+```
+
+<ArticleSection name="Trabalhando com Dados de Conta" id="working-with-account-data" level="h2" />
+
+Programas leem e escrevem dados de contas. Eles serializam e desserializam dados de contas usando este padrão:
+
+```rust
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct UserAccount {
+    pub name: String,
+    pub balance: u64,
+    pub posts: Vec<u32>,
+}
+
+pub fn update_user_data(accounts: &[AccountInfo], new_name: String) -> ProgramResult {
+    let user_account = &accounts[0];
+
+    // Deserialize existing data
+    let mut user_data = UserAccount::try_from_slice(&user_account.data.borrow())?;
+
+    // Modify the data
+    user_data.name = new_name;
+
+    // Serialize back to account
+    user_data.serialize(&mut &mut user_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+```
+
+O programa:
+1. Lê bytes do campo de dados da conta
+2. Desserializa bytes em um tipo estruturado
+3. Modifica os dados em memória
+4. Serializa os dados modificados de volta para bytes
+5. Escreve bytes de volta ao campo de dados da conta
+
+Programas trabalham com dados estruturados em memória, mas os armazenam como bytes brutos on-chain.
+
+<ArticleSection name="Associated Token Accounts" id="associated-token-accounts" level="h2" />
+
+Cada usuário pode ter múltiplas token accounts — uma para USDC, uma para BONK, uma para cada token SPL que possui.
+
+Sem um padrão, encontrar a token account de um usuário para um token mint específico exigiria rastreamento manual. As Associated Token Accounts (ATAs) resolvem isso com derivação determinística de endereços:
+
+```
+associated_token_address = derive_address(
+    seeds: [wallet_address, token_program_id, token_mint_address],
+    program: associated_token_program_id
+)
+```
+
+Dado um endereço de carteira e um endereço de token mint, há exatamente um endereço de associated token account. Carteiras automaticamente encontram sua conta USDC, programas sabem para onde enviar seus tokens, e você não precisa gerenciar endereços manualmente.
+
+Quando alguém envia tokens para você pela primeira vez, a associated token account pode ainda não existir. O remetente (ou uma carteira prestativa) a cria como parte da transação, pagando o mínimo rent-exempt em seu nome.
+
+<ArticleSection name="Visualizando Contas em Explorers" id="viewing-accounts-explorers" level="h2" />
+
+Todos os dados de contas são públicos. Você pode visualizar qualquer conta usando block explorers como Solana Explorer (https://explorer.solana.com) ou Solscan (https://solscan.io). Ambos permitem ver saldos de lamports, proprietários de contas, dados brutos e histórico de transações. O Solscan tem melhor visualização de dados e é mais fácil de usar para usuários não técnicos.
+
+Tente visualizar o token mint do USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+
+Você verá:
+- É de propriedade do Token Program
+- Está marcado como executável (false)
+- Contém dados de mint (oferta, decimais, autoridades)
+- Seu histórico completo de transações
+
+Qualquer pessoa pode verificar qualquer dado a qualquer momento sem exigir permissão.
+
+As contas armazenam dados. [Os programas operam sobre esses dados através de transações](/courses/understanding-solana/programs-transactions), processando instruções que leem e modificam o estado das contas.

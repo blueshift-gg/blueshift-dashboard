@@ -1,0 +1,160 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso Understanding Solana - Aprenda a arquitetura da Solana do Proof of History à execução paralela](/graphics/course-banners/understanding-solana.png)
+
+# Por Que a Solana Foi Construída
+
+[A execução sequencial](/courses/evolution-programmable-blockchains/scalability-challenge#sequential-execution-bottleneck) é o gargalo das blockchains. [A Ethereum processa transações uma de cada vez](/courses/evolution-programmable-blockchains/how-ethereum-works#ethereum-virtual-machine) porque não sabe quais vão conflitar. O insight da Solana: e se você pudesse ordenar tudo primeiro, depois executar transações não-conflitantes em paralelo?
+
+Como a Solana funciona? A Solana usa Proof of History para ordenar tudo primeiro, depois executa em paralelo. Essa escolha arquitetural permite 5.000+ transações por segundo com finalidade sub-segundo enquanto mantém a descentralização. O Proof of History resolve o problema de ordenação que limita outras blockchains.
+
+<ArticleSection name="O Problema da Ordenação" id="ordering-problem" level="h2" />
+
+As blockchains enfrentam um desafio fundamental: concordar sobre a ordem dos eventos entre milhares de nós sem um relógio central.
+
+Em sistemas distribuídos tradicionais, timestamps resolvem a ordenação. Quando a Transação A chega às 10:00:01.523 e a Transação B chega às 10:00:01.891, processe A primeiro. Simples.
+
+Isso não funciona em sistemas descentralizados. Os nós não podem confiar nos relógios uns dos outros. Um atacante poderia manipular seu relógio para fazer sua transação parecer mais antiga. A latência de rede faz com que os nós vejam eventos em ordens diferentes.
+
+Sem timestamps confiáveis, as blockchains devem usar consenso para concordar sobre a ordem. Na Ethereum:
+1. O proponente coleta transações pendentes
+2. O proponente as ordena (geralmente por taxa)
+3. A rede alcança consenso sobre essa ordenação
+4. As transações executam sequencialmente na ordem acordada
+
+Isso funciona, mas o consenso antes da execução cria o gargalo. A rede não pode começar a executar até todos concordarem sobre a ordem.
+
+<ArticleSection name="Proof of History: Um Relógio Criptográfico" id="proof-of-history" level="h2" />
+
+A Solana cria ordem antes do consenso usando Proof of History — um relógio criptográfico para a blockchain. Em vez de esperar pelo consenso para estabelecer a ordem, a Solana usa uma função de atraso verificável (verifiable delay function) para criar timestamps que ninguém pode manipular.
+
+**Como o Proof of History funciona:**
+
+Imagine uma função hash aplicada repetidamente, onde cada saída se torna a entrada para a próxima computação:
+
+```
+hash(data)             → output_1
+hash(output_1 + data)  → output_2
+hash(output_2 + data)  → output_3
+hash(output_3 + data)  → output_4
+```
+
+Cada passo exige tempo real de computação — você não pode pular adiante sem fazer o trabalho. A sequência de hashes cria um registro cronológico verificável.
+
+A Solana usa SHA-256 nesse padrão. O validador líder gera essa sequência continuamente, criando 160.000 hashes por segundo. Cada hash prova que o tempo passou desde o hash anterior.
+
+Quando as transações chegam, elas são hasheadas nessa sequência:
+
+```
+hash(output_42)                → output_43
+hash(output_43 + transaction_A) → output_44
+hash(output_44)                → output_45
+hash(output_45 + transaction_B) → output_46
+```
+
+O hash da Transação A aparece na posição 44. O hash da Transação B aparece na posição 46. A Transação A veio antes da Transação B — comprovável criptograficamente porque você não pode gerar a posição 46 sem primeiro gerar as posições 43, 44 e 45.
+
+**Por isso importa:**
+
+- Ninguém pode manipular a ordem (você não pode pular hashes)
+- Todos podem verificar a ordem (recalcular os hashes)
+- A ordem é estabelecida imediatamente (sem esperar por consenso)
+- O consenso apenas verifica que a ordem é válida (não cria a ordem)
+
+A Solana separa ordenação de consenso. Essa é a principal diferença arquitetural de outras blockchains.
+
+<ArticleSection name="Da Ordenação ao Paralelismo" id="ordering-to-parallelism" level="h2" />
+
+Conhecer a ordem permite o paralelismo. Uma vez que as transações têm uma ordem comprovada criptograficamente, a rede pode executá-las de forma inteligente.
+
+**Execução sequencial (Ethereum):**
+1. Transação A executa → atualiza estado
+2. Transação B executa → atualiza estado
+3. Transação C executa → atualiza estado
+4. Transação D executa → atualiza estado
+
+Apenas uma transação roda por vez. Tempo total = soma de todos os tempos de execução das transações.
+
+**Execução paralela (Solana):**
+
+A Solana analisa as transações ordenadas:
+- Transação A modifica contas \\{1, 2, 3\\}
+- Transação B modifica contas \\{4, 5, 6\\}
+- Transação C modifica contas \\{2, 7, 8\\}
+- Transação D modifica contas \\{9, 10, 11\\}
+
+As Transações A e B não tocam contas em comum — elas podem executar simultaneamente. A Transação C conflita com A (ambas tocam a conta 2), então precisa esperar. A Transação D não conflita com nada e pode executar imediatamente.
+
+O runtime agenda:
+- CPU Core 1: Transação A, depois Transação C
+- CPU Core 2: Transação B
+- CPU Core 3: Transação D
+
+Três transações executam no tempo que levaria para executar uma. Essa é a execução paralela habilitada pela ordenação do Proof of History.
+
+<ArticleSection name="Requisitos de Paralelização de Transações" id="parallelization-requirements" level="h2" />
+
+A execução paralela exige saber quais contas uma transação vai tocar antes da execução. A Solana torna isso explícito.
+
+Toda transação Solana declara antecipadamente:
+- Quais contas vai ler
+- Quais contas vai modificar
+- Quais programas vai chamar
+
+Essa declaração é obrigatória. Uma transação que acessa uma conta não declarada falha. Essa restrição permite o paralelismo.
+
+Considere duas transações:
+- Transação 1: `[read: account_A, write: account_B]`
+- Transação 2: `[read: account_C, write: account_D]`
+
+O runtime vê essas declarações e sabe instantaneamente: não existem conflitos. Execute simultaneamente.
+
+Se a Transação 3 declarar `[read: account_A, write: account_D]`, o runtime sabe que ela conflita com ambas as transações anteriores. Agende separadamente.
+
+Essa declaração antecipada permite que a Solana Virtual Machine construa um grafo de dependências e maximize a execução paralela em todos os núcleos de CPU disponíveis.
+
+<ArticleSection name="Os Resultados de Performance" id="performance-results" level="h2" />
+
+Proof of History mais execução paralela entrega esses números de vazão.
+
+**Solana:** 5.000+ transações por segundo em produção, com capacidade teórica excedendo 65.000 TPS. O tempo de bloco é 400 milissegundos. A finalidade tipicamente ocorre em 1-2 segundos.
+
+**Ethereum:** Aproximadamente 15 transações por segundo. O tempo de bloco é 12 segundos. A finalidade leva cerca de 13 minutos com Proof of Stake.
+
+**Bitcoin:** Aproximadamente 7 transações por segundo. O tempo de bloco é 10 minutos. A finalidade exige 6 confirmações (60 minutos).
+
+A diferença é arquitetural. Ethereum e Bitcoin processam sequencialmente enquanto a Solana processa em paralelo. Ambas rodam em hardware similar — servidores consumidores com CPUs modernas — mas usam modelos de execução diferentes.
+
+A rede mantém mais de 1.000 validadores independentes. Rodar um validador exige hardware específico (12+ núcleos de CPU, 256GB RAM, SSD rápido), que permanece acessível a indivíduos e pequenas organizações.
+
+<ArticleSection name="O Que Isso Permite" id="what-this-enables" level="h2" />
+
+Alta vazão e baixa latência permitem aplicações impossíveis em outras blockchains.
+
+**Aplicações em tempo real:** Livros de ofertas (order books) com milhares de atualizações por segundo. Jogos on-chain com jogabilidade interativa. Lances e leilões ao vivo.
+
+**Microtransações:** Quando os custos de transação são $0,00025, micro-pagamentos se tornam viáveis. Envie pagamentos pequenos por segundo. Pague por chamada de API. Monetize ações que antes não podiam ser monetizadas.
+
+**Composabilidade em escala:** Flash loans, arbitragem e estratégias DeFi complexas funcionam quando você pode executar muitas operações rápida e baratamente dentro de uma única transação.
+
+**DeFi acessível:** Altas taxas da Ethereum excluem usuários pequenos. Quando trocar $100 custa $50 em taxas, DeFi é apenas para ricos. As baixas taxas da Solana abrem o DeFi para usuários menores.
+
+**Infraestrutura de NFTs:** Mintar milhares de NFTs é prático. Marketplaces conseguem lidar com volume de negociação. Royalties podem executar automaticamente sem custos proibitivos.
+
+A Solana transforma a blockchain de uma camada de liquidação (settlement) em um runtime para aplicações interativas. Os programas não apenas armazenam e transferem valor — eles executam lógica complexa em velocidades que se aproximam de bancos de dados tradicionais.
+
+<ArticleSection name="As Concessões Arquiteturais" id="architectural-tradeoffs" level="h2" />
+
+A Solana troca alguma simplicidade por alta performance.
+
+**Requisitos de hardware mais altos:** Validadores precisam de servidores dedicados (12+ núcleos de CPU, 256GB RAM). Isso reduz o número de validadores potenciais em comparação com Bitcoin ou Ethereum, onde laptops consumidores podem validar. 1.000+ validadores ainda proporcionam forte descentralização.
+
+**Declarações explícitas de contas:** Transações devem declarar quais contas vão acessar. Isso exige mais planejamento antecipado dos desenvolvedores, mas permite que o runtime agende a execução paralela.
+
+**Modelo mental diferente:** A execução sequencial da Ethereum é conceitualmente mais simples. O modelo paralelo da Solana exige entender como as transações interagem e conflitam. Isso aumenta a complexidade para o desenvolvedor.
+
+**Demandas de rede:** Alta vazão exige alta banda larga. Validadores precisam de conexões rápidas de internet para acompanhar o fluxo de transações. A distribuição geográfica pode ser desafiadora em regiões com infraestrutura limitada.
+
+Essas concessões são intencionais. A Solana otimiza para performance e custo. Diferentes aplicações têm diferentes requisitos — a Solana visa aplicações onde vazão e latência importam.
+
+O Proof of History permite execução paralela resolvendo o problema de ordenação. Executar em paralelo exige repensar como programas e dados funcionam, o que leva à [arquitetura única da Solana](/courses/understanding-solana/solana-architecture).

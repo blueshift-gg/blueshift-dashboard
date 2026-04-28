@@ -1,0 +1,111 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Desafio Assembly Slippage](/graphics/challenge-banners/assembly-slippage.png)
+
+# Assembly Slippage
+
+Nesta unidade, usaremos sBPF Assembly para criar uma instrução básica de verificação de slippage. Ao incluir tal instrução no último índice do nosso array de instruções, podemos criar uma proteção adicional de último recurso contra bugs em smart contracts ou contratos maliciosos de bit flip.
+
+Existem várias propriedades de uma verificação de slippage que a tornam uma candidata ideal para assembly:
+
+- Caso de uso único e restrito
+- Não há necessidade de realizar verificações de signer/conta
+- Só pode melhorar a segurança
+
+Se você não está familiarizado com como escrever programas em assembly, siga o [curso de Introdução ao Assembly](/pt-BR/courses/introduction-to-assembly)
+
+<ArticleSection name="Design do Programa" id="program-design" level="h2" />
+
+Nosso programa implementa uma operação simples mas crucial: validar que uma conta de token tem saldo suficiente antes de prosseguir com uma transação. Este padrão aparece em todos os lugares na DeFi — de swaps em AMMs a protocolos de empréstimo.
+
+O programa espera:
+- Uma única conta SPL token no array de contas
+- Um valor de 8 bytes nos dados da instrução
+- Retorna sucesso se saldo ≥ valor, erro caso contrário
+
+<ArticleSection name="Offsets de Memória" id="memory-offsets" level="h2" />
+
+Programas sBPF recebem dados de contas como regiões contíguas de memória. Essas constantes definem offsets de bytes. Assumindo que nosso programa receberá apenas uma conta, e ela será uma SPL Token Account, é possível derivar estaticamente esses offsets como:
+
+```sbpf
+.equ TOKEN_ACCOUNT_BALANCE, 0x00a0
+.equ MINIMUM_BALANCE, 0x2918
+```
+
+- `TOKEN_ACCOUNT_BALANCE (0x00a0)`: aponta para o campo de saldo nos dados da conta SPL Token. Contas token seguem um layout padrão onde o saldo (8 bytes, little-endian) está no offset 160.
+
+- `MINIMUM_BALANCE (0x2918)`: localiza onde a Solana coloca o payload dos dados da sua instrução. Este offset é parte da estrutura de informações de conta do runtime.
+
+> Você pode gerar offsets usando nossas ferramentas em [sbpf.xyz](https://sbpf.xyz)
+
+Diferente de linguagens de alto nível que abstraem o layout de memória, assembly exige que você saiba exatamente onde cada dado reside.
+
+<ArticleSection name="Entrypoint e Validação Inicial" id="entrypoint-and-validations" level="h2" />
+
+```sbpf
+.globl entrypoint
+entrypoint:
+    ldxdw r3, [r1+MINIMUM_BALANCE]      // Obter valor dos dados da instrução
+    ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE] // Obter saldo da conta token
+```
+
+Todo programa sBPF começa no símbolo global `.entrypoint`. O runtime da Solana fornece dados de contas e instruções através do registrador `r1`.
+
+A instrução `ldxdw` carrega (`ldx`) um valor de 8 bytes (double word, `dx`) da memória para um registrador. Veja o que acontece:
+- `ldxdw r3, [r1+MINIMUM_BALANCE]`: calcula o endereço de memória contendo nosso valor necessário. O valor é carregado em `r3`.
+- `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`: aponta para o campo de saldo da conta token. Este valor de 64 bits vai para `r4`.
+
+Ambas as operações são zero-copy: estamos lendo diretamente dos dados da conta sem overhead de deserialização.
+
+<ArticleSection name="Lógica Condicional e Desvio" id="conditional-logic-and-branching" level="h2" />
+
+```sbpf
+jge r3, r4, end         // Pular para saída se o saldo for válido
+```
+
+
+A instrução `jge` (jump if greater or equal) compara `r3` (valor necessário) com `r4` (saldo disponível). Se `r3 >= r4`, pulamos para o label `end`; assim como um retorno antecipado.
+
+Se a condição falhar, a execução continua para o caminho de tratamento de erro. Este padrão de branch-on-condition é como o assembly implementa lógica if/else.
+
+<ArticleSection name="Tratamento de Erros e Logging" id="error-handling-and-logging" level="h2" />
+
+```sbpf
+lddw r1, e              // Carregar endereço da mensagem de erro
+lddw r2, 17             // Carregar comprimento da mensagem de erro  
+call sol_log_           // Registrar mensagem de erro
+lddw r0, 1              // Retornar código de erro 1
+```
+
+Quando a validação falha, registramos um erro legível antes de terminar:
+- `lddw` carrega valores imediatos, neste caso o endereço da nossa string de erro, que vive na seção `.rodata`, e seu comprimento (17 bytes para "Slippage exceeded").
+- `call sol_log_` invoca a syscall de logging da Solana. O runtime lê a mensagem da memória e a adiciona aos logs da transação.
+- Em seguida, carregamos `1` em `r0` para sinalizar falha do programa. O runtime abortará a transação e retornará este código de erro.
+
+<ArticleSection name="Término do Programa" id="program-termination" level="h2" />
+
+```sbpf
+end:
+    exit
+```
+
+A instrução `exit` termina a execução do programa e retorna o controle para o runtime da Solana. O valor em `r0` se torna o código de saída do programa (0 para sucesso, não zero para erros).
+
+Diferente de linguagens de alto nível com limpeza automática, programas em assembly devem terminar explicitamente. Cair fora do final do seu código é comportamento indefinido.
+
+## Dados Somente Leitura
+
+```sbpf
+.rodata
+    e: .ascii "Slippage exceeded"
+```
+
+A seção `.rodata` (read-only data) contém nossa string de mensagem de erro.
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+  
+Este programa minúsculo realiza o que poderia custar dezenas de CUs em Rust com apenas `4 CUs` no caso de sucesso, `6 CUs` no caso de falha, ou `106 CUs` no caso de falha que registra uma mensagem de erro.
+
+A compensação é que precisamos entender layouts de memória, convenções de chamada e tratamento de erros no nível mais baixo. Mas para operações críticas de desempenho, os benefícios muitas vezes justificam o esforço.
+
+> Este código não é "seguro" por si só. Não verificamos nada sobre as contas passadas. Mas o objetivo é ser uma instrução complementar, significando que deve ser executada de boa fé.

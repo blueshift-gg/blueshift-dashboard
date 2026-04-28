@@ -1,0 +1,116 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso Secp256r1 - Implementar verificação de assinatura secp256r1 na Solana](/graphics/course-banners/secp256r1-on-solana.png)
+
+# Secp256r1 na Solana
+
+Secp256r1 é uma das curvas elípticas mais amplamente adotadas na criptografia moderna, impulsionando tudo, desde conexões TLS até chaves de segurança de hardware. Esta curva forma a espinha dorsal da segurança digital em inúmeras aplicações.
+
+O feature gate de precompilação secp256r1, proposto por [Orion](https://x.com/BasedOrion_) no [SIMD 75](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0075-precompile-for-secp256r1-sigverify.md), foi ativado na Solana no bloco 800.
+
+<ArticleSection name="O que é Secp256r1" id="what-is-secp256r1" level="h2" />
+
+A curva que conhecemos como secp256r1 foi padronizada pelo Standards for Efficient Cryptography Group (SECG) no início dos anos 2000. A convenção de nomenclatura nos diz tudo o que precisamos saber:
+- `sec`: Standards for Efficient Cryptography
+- `p`: A curva é definida sobre um corpo primo
+- `256`: O módulo primo é aproximadamente 2^256
+- `r`: Curva aleatória (em oposição a curvas de Koblitz)
+- `1`: A primeira curva nesta categoria
+
+Secp256r1 foi posteriormente adotada pelo NIST como P-256 e tornou-se parte do FIPS 186-2. Esta dupla padronização pela SECG e pelo NIST deu à curva ampla legitimidade e levou à sua adoção em inúmeros protocolos e aplicações — tornando-a uma das curvas mais testadas em sistemas de produção em todo o mundo.
+
+<ArticleSection name="Fundamentos Matemáticos" id="mathematical-foundations" level="h2" />
+
+### Corpos Primos e Aritmética Finita
+
+Para entender secp256r1, devemos primeiro compreender o conceito de trabalhar em corpos finitos. Diferente da aritmética comum, onde os números podem crescer infinitamente, a criptografia de curva elíptica opera em um espaço matemático limitado.
+
+A curva opera sobre o corpo primo 𝔽p, onde: `p = 2^256 - 2^224 + 2^192 + 2^96 - 1`.
+
+Este não é apenas qualquer primo de 256 bits qualquer; é o que conhecemos como um primo pseudo-Mersenne. Primos de Mersenne têm a forma `2^n - 1`, o que permite redução modular extremamente rápida usando deslocamentos de bits e subtrações em vez de operações de divisão custosas. Primos pseudo-Mersenne estendem este conceito para números "próximos" de potências de 2, mantendo grande parte da vantagem computacional enquanto adicionam propriedades de segurança adicionais.
+
+Para o primo de secp256r1, podemos reescrevê-lo como: `p = 2^256 - c`, onde `c = 2^224 - 2^192 - 2^96 + 1`
+
+Esta estrutura significa que quando precisamos reduzir um número `mod p` (o que acontece constantemente em operações de curva elíptica), podemos usar algoritmos de redução rápida em vez de divisão geral de propósito lenta.
+
+> Isso torna as operações secp256r1 significativamente mais rápidas do que curvas usando primos arbitrários: uma vantagem crucial para aplicações críticas de desempenho como handshakes TLS e módulos de segurança de hardware.
+
+### A Equação da Curva Elíptica
+
+Secp256r1 segue a forma curta de Weierstrass de uma curva elíptica: `y² = x³ + ax + b (mod p)`
+
+Para secp256r1, os parâmetros são:
+- `a = -3` (ou equivalentemente, p-3)
+- `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
+
+> `a = -3` não é um número arbitrário, mas permite otimizações significativas em operações de adição e duplicação de pontos, reduzindo o número de multiplicações de corpo necessárias.
+
+Todo sistema de criptografia de curva elíptica precisa de um ponto gerador G com ordem conhecida. Para secp256r1:
+
+```
+G = (Gx, Gy) onde:
+Gx = 0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+Gy = 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+```
+
+> Estes valores foram gerados através de um processo "verificavelmente aleatório" para garantir que não existam backdoors ocultos. Se os designers de curvas pudessem simplesmente escolher valores arbitrários, eles poderiam escolher parâmetros contendo relações matemáticas secretas que só eles conhecem, criando backdoors que comprometeriam todos os sistemas usando a curva.
+
+### Ordem da Curva e Nível de Segurança
+
+A **ordem da curva (n)** representa o número total de pontos na curva elíptica, incluindo o ponto no infinito: `n = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551`
+
+A ordem da curva determina o tamanho do espaço de chaves privadas e impacta diretamente a segurança. Apesar de ser chamada de "256 bits", secp256r1 na verdade fornece aproximadamente 128 bits de segurança, não 256 bits. Isso ocorre porque os melhores ataques conhecidos contra problemas de logaritmo discreto em curvas elípticas têm complexidade aproximadamente `√n`, significando que uma curva com ordem `~2^256` fornece `~2^128` de segurança.
+
+O **cofator (h)** é 1, significando que secp256r1 é uma curva de ordem prima. Isso é importante porque:
+- Todo ponto não-identidade tem a mesma ordem n
+- Nenhum ataque de subgrupo pequeno é possível
+- A implementação é simplificada já que não precisamos nos preocupar com pontos de baixa ordem
+
+### O Corpo Escalar
+
+Enquanto a curva em si é definida sobre o corpo de coordenadas 𝔽p, as chaves privadas vivem em um espaço matemático diferente: o corpo escalar 𝔽n, onde n é a ordem da curva.
+
+```
+Chave privada ∈ [1, n-1]
+Chave pública = chave_privada × G (multiplicação escalar)
+```
+
+Esta distinção é crucial porque:
+- Chaves privadas são escalares (inteiros `mod n`)
+- Coordenadas da curva são elementos do corpo (inteiros `mod p`)
+- Estes são módulos diferentes: `n ≠ p`
+
+Ao gerar chaves privadas, amostramos uniformemente de `[1, n-1]`, não de `[1, p-1]`. Isso garante que toda chave privada corresponda a uma operação válida de multiplicação escalar e prevê certos ataques matemáticos.
+
+<ArticleSection name="Por Que Secp256r1 Domina" id="why-secp256r1-dominates" level="h2" />
+
+Apesar da existência de curvas potencialmente superiores como Curve25519, secp256r1 alcançou adoção universal através de uma combinação de padronização precoce, aprovação regulatória e extensa otimização de hardware.
+
+Diferente de curvas mais recentes que podem ser matematicamente superiores, secp256r1 representa o equilíbrio ideal entre força criptográfica, eficiência de implementação e compatibilidade de ecossistema que sistemas do mundo real exigem.
+
+Uma vez que fabricantes de hardware, sistemas operacionais e padrões de segurança convergiram para secp256r1, os custos de mudança tornaram-se proibitivos.
+
+As propriedades matemáticas específicas que exploramos (o primo pseudo-Mersenne, a otimização a = -3 e a geração verificável de parâmetros) permitiram implementações altamente otimizadas em tudo, desde elementos seguros de smartphones até servidores de alto desempenho.
+
+Este efeito de ecossistema de hardware criou um ciclo auto-reforçado de adoção.
+
+<ArticleSection name="Secp256r1 na Solana" id="secp256r1-on-solana" level="h2" />
+
+A Solana oferece suporte nativo para verificação de assinatura secp256r1 através de sua precompilação integrada, introduzida com o [SIMD-0075](https://github.com/solana-foundation/solana-improvement-documents/pull/75) por [Orion](https://x.com/BasedOrion_).
+
+Esta precompilação permite métodos de autenticação modernos como passkeys na Solana, já que secp256r1 é a mesma curva elíptica usada pelo WebAuthn e implementações de passkeys.
+
+As propriedades matemáticas que detalhamos, particularmente a aritmética de corpo otimizada e os parâmetros padronizados, são o que tornam secp256r1 a escolha universal para módulos de segurança de hardware e enclaves seguros que impulsionam esses sistemas de autenticação.
+
+### Conectando Autenticação Web2 e Web3
+
+O onboarding tradicional de carteiras apresenta taxas de desistência de 60-80% porque seed phrases exigem segurança perfeita de humanos imperfeitos. Os usuários precisam memorizar 12-24 palavras aleatórias, armazená-las com segurança para sempre e nunca ser vítima de phishing — um padrão impossível para adoção em massa.
+
+Métodos de autenticação modernos como passkeys eliminam o erro humano ao mover chaves privadas para hardware de segurança dedicado.
+
+No entanto, esses sistemas padronizaram em secp256r1 por causa das vantagens matemáticas e de implementação específicas que exploramos:
+- **Compatibilidade de hardware:** O primo pseudo-Mersenne permite implementação eficiente em ambientes de elementos seguros com recursos limitados
+- **Conformidade regulatória:** A padronização NIST permite o uso em requisitos de segurança governamentais e empresariais
+- **Consistência multiplataforma:** Os parâmetros verificavelmente aleatórios garantem que a mesma curva funciona de forma idêntica em todos os fabricantes de hardware
+
+Com suporte nativo a secp256r1, desenvolvedores Solana agora podem construir aplicações que aproveitam a infraestrutura de segurança de hardware existente, permitindo um onboarding integrado através de métodos de autenticação familiares enquanto mantêm as garantias de segurança que tornam as propriedades matemáticas específicas desta curva tão importantes.

@@ -1,0 +1,205 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Desafio Anchor Vault](/graphics/challenge-banners/anchor-vault.png)
+
+# O Vault
+
+Um vault permite que os usuários armazenem seus ativos de forma segura. Um vault é um bloco fundamental na DeFi que, em sua essência, permite que os usuários armazenem seus ativos (lamports neste caso) de forma segura e que apenas esse mesmo usuário possa sacar depois.
+
+Neste desafio, construiremos um vault simples de lamports que demonstra como trabalhar com contas básicas, Program Derived Addresses (PDAs) e Cross-Program Invocation (CPI). Se você não está familiarizado com o Anchor, deve começar lendo a [Introdução ao Anchor](/pt-BR/courses/introduction-to-anchor) para se familiarizar com os conceitos principais que vamos usar neste programa.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Antes de começar, certifique-se de que Rust e Anchor estejam instalados (veja a [documentação oficial](https://www.anchor-lang.com/docs/installation) se precisar de um lembrete). Então, no seu terminal execute:
+
+```bash
+anchor init blueshift_anchor_vault
+```
+
+Não precisamos de nenhum crate adicional para este desafio, então você pode abrir a pasta recém-gerada e está pronto para começar a programar!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Vamos começar com a estrutura básica do programa. Vamos implementar tudo no `lib.rs` já que este é um programa direto. Aqui está o template inicial com os componentes principais que precisaremos:
+
+```rust
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_vault {
+    use super::*;
+
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        // lógica de depósito
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        // lógica de saque
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", signer.key().as_ref()],
+        bump,
+    )]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[error_code]
+pub enum VaultError {
+    // enum de erros
+}
+```
+
+**Nota**: lembre-se de alterar o program ID para `22222222222222222222222222222222222222222222` já que usamos isso internamente para testar seu programa.
+
+<ArticleSection name="Contas" id="accounts" level="h2" />
+
+Como ambas as instruções usam as mesmas contas, para facilitar e melhorar a legibilidade, podemos criar apenas um contexto chamado `VaultAction` e usá-lo tanto para `deposit` quanto para `withdraw`.
+
+A struct de contas `VaultAction` precisará ter:
+- `signer`: este é o dono do vault, e a única pessoa que pode sacar os lamports após criar o vault.
+- `vault`: um PDA derivado das seguintes seeds: `[b"vault", signer.key().as_ref()]` que guarda os lamports do signer.
+- `system_program`: a conta do system program que precisa ser incluída já que vamos usar a instrução de transferência CPI do system program
+
+Veja como definimos a struct de contas:
+
+```rust
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", signer.key().as_ref()],
+        bump,
+    )]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+Vamos detalhar cada restrição de conta:
+
+1. `signer`: A restrição `mut` é necessária porque modificaremos seus lamports durante as transferências.
+2. `vault`:
+    - `mut` porque modificaremos seus lamports.
+    - `seeds` & `bumps` definem como derivar um PDA válido a partir das seeds.
+3. `system_program`: verifica se a conta está definida como executável e se o endereço é o do System Program.
+
+<ArticleSection name="Erros" id="errors" level="h2" />
+
+Não precisamos de muitos erros para este programa pequeno, então vamos criar apenas 2 enums:
+- `VaultAlreadyExists`: que nos avisa se já existem alguns lamports na conta, pois isso significaria que o vault já existe.
+- `InvalidAmount`: não podemos depositar um valor menor que o aluguel mínimo para uma conta básica, então verificamos se o valor é maior que isso.
+
+Ficará algo assim:
+
+```rust
+#[error_code]
+pub enum VaultError {
+    #[msg("Vault already exists")]
+    VaultAlreadyExists,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+```
+
+<ArticleSection name="Depósito" id="deposit" level="h2" />
+
+A instrução de depósito executa os seguintes passos:
+1. Verifica se o vault está vazio (tem zero lamports) para prevenir depósitos duplicados
+2. Garante que o valor do depósito exceda o mínimo isento de aluguel para uma `SystemAccount`
+3. Transfere lamports do signer para o vault usando uma CPI para o System Program
+
+Vamos implementar essas verificações primeiro:
+
+```rust
+// Verificar se o vault está vazio
+require_eq!(ctx.accounts.vault.lamports(), 0, VaultError::VaultAlreadyExists);
+
+// Garantir que o valor exceda o mínimo isento de aluguel
+require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
+```
+
+As duas macros `require` funcionam como cláusulas de guarda personalizadas:
+- `require_eq!` confirma que o vault está vazio (prevenindo depósitos duplicados).
+- `require_gt!` verifica se o valor ultrapassa o limite isento de aluguel.
+
+Após as verificações passarem, o helper do System Program do Anchor chama a CPI de `Transfer` assim:
+
+```rust
+use anchor_lang::system_program::{transfer, Transfer};
+
+transfer(
+    CpiContext::new(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.signer.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        },
+    ),
+    amount,
+)?;
+```
+
+<ArticleSection name="Saque" id="withdraw" level="h2" />
+
+A instrução de saque executa os seguintes passos:
+1. Verifica se o vault contém lamports (não está vazio)
+2. Usa o PDA do vault para assinar a transferência em seu próprio nome
+3. Transfere todos os lamports do vault de volta para o signer
+
+Primeiro, vamos verificar se o vault tem algum lamport para sacar:
+
+```rust
+// Verificar se o vault tem algum lamport
+require_neq!(ctx.accounts.vault.lamports(), 0, VaultError::InvalidAmount);
+```
+
+Então, precisamos criar as seeds do assinante PDA e realizar a transferência:
+
+```rust
+// Criar seeds do assinante PDA
+let signer_key = ctx.accounts.signer.key();
+let signer_seeds = &[b"vault", signer_key.as_ref(), &[ctx.bumps.vault]];
+
+// Transferir todos os lamports do vault para o signer
+transfer(
+    CpiContext::new_with_signer(
+        ctx.accounts.system_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.signer.to_account_info(),
+        },
+        &[&signer_seeds[..]]
+    ),
+    ctx.accounts.vault.lamports()
+)?;
+```
+
+A segurança deste saque é garantida por dois fatores:
+1. O PDA do vault é derivado usando a chave pública do signer, garantindo que apenas o depositante original pode sacar
+2. A capacidade do PDA de assinar a transferência é verificada através das seeds que fornecemos ao `CpiContext::new_with_signer`
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+
+Agora você pode testar seu programa contra nossos testes unitários e reivindicar seus NFTs!
+
+Comece compilando seu programa usando o seguinte comando no seu terminal:
+
+```bash
+anchor build
+```
+
+Isso gerou um arquivo `.so` diretamente na sua pasta `target/deploy`.
+
+Agora clique no botão `take challenge` e solte o arquivo lá!

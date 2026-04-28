@@ -1,0 +1,431 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# O Secp256r1 Vault
+
+![Desafio Pinocchio Secp256r1 Vault](/graphics/challenge-banners/pinocchio-secp256r1-vault.png)
+
+Um vault é um bloco fundamental na DeFi que fornece uma forma segura para os usuários armazenarem seus ativos.
+
+Neste desafio, construiremos um vault que usa assinaturas Secp256r1 para verificação de transações. Isso é particularmente interessante porque Secp256r1 é a mesma curva elíptica usada por métodos modernos de autenticação como passkeys, que permitem que os usuários assinem transações usando autenticação biométrica (como Face ID ou Touch ID) em vez de assinaturas baseadas em carteiras tradicionais.
+
+A inovação principal aqui é que estamos desacoplando o pagamento das taxas de transação da autenticação real do usuário. Isso significa que enquanto os usuários podem autenticar transações usando suas assinaturas Secp256r1 (que podem ser geradas através de métodos de autenticação modernos), as taxas de transação reais podem ser pagas por um provedor de serviço. Isso cria uma experiência de usuário mais fluida mantendo a segurança.
+
+Neste desafio, atualizaremos o vault simples de lamports que construímos no [Desafio Pinocchio Vault](/pt-BR/challenges/pinocchio-vault) para permitir assinaturas Secp256r1 como método de verificação para transações.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Antes de começar, certifique-se de que Rust e Pinocchio estejam instalados. Então, no seu terminal execute:
+
+```bash
+# criar workspace
+cargo new blueshift_secp256r1_vault --lib --edition 2021
+cd blueshift_secp256r1_vault
+```
+
+Adicione Pinocchio e o crate `Secp256r1` compatível com Pinocchio:
+```bash
+cargo add pinocchio pinocchio-system pinocchio-secp256r1-instruction
+```
+
+Declare os tipos de crate no `Cargo.toml` para gerar artefatos de deploy em `target/deploy`:
+```toml
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Vamos começar com a estrutura básica do programa. Vamos implementar tudo no `lib.rs` já que este é um programa direto. Aqui está o template inicial com os componentes principais que precisaremos:
+
+```rust
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, nostd_panic_handler, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+pub mod instructions;
+pub use instructions::*;
+
+// 22222222222222222222222222222222222222222222
+pub const ID: Pubkey = [
+    0x0f, 0x1e, 0x6b, 0x14, 0x21, 0xc0, 0x4a, 0x07,
+    0x04, 0x31, 0x26, 0x5c, 0x19, 0xc5, 0xbb, 0xee,
+    0x19, 0x92, 0xba, 0xe8, 0xaf, 0xd1, 0xcd, 0x07,
+    0x8e, 0xf8, 0xaf, 0x70, 0x47, 0xdc, 0x11, 0xf7,
+];
+
+fn process_instruction(
+    _program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.split_first() {
+        Some((Deposit::DISCRIMINATOR, data)) => Deposit::try_from((data, accounts))?.process(),
+        Some((Withdraw::DISCRIMINATOR, _)) => Withdraw::try_from(accounts)?.process(),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+```
+
+
+<ArticleSection name="Depósito" id="deposit" level="h2" />
+
+A instrução de depósito executa os seguintes passos:
+1. Verifica se o vault está vazio (tem zero lamports) para prevenir depósitos duplicados
+2. Garante que o valor do depósito exceda o mínimo isento de aluguel para uma conta básica
+3. Transfere lamports do pagador para o vault usando uma CPI para o System Program
+
+A principal diferença entre um vault normal e o vault Secp256r1 é a forma como derivamos o PDA e quem é considerado um "dono".
+
+Como com assinaturas Secp256r1 o dono da carteira real não precisa pagar as taxas de transação, mudamos a conta `owner` para uma convenção de nomenclatura mais genérica como `payer`.
+
+Então a struct de contas para `deposit` ficará assim:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, _] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        // Verificações de Contas
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().ne(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Retornar as contas
+        Ok(Self { payer, vault })
+    }
+}
+```
+
+Vamos detalhar cada verificação de conta:
+1. `payer`: Deve ser um signer já que precisa autorizar a transferência de lamports
+2. `vault`: 
+   - Deve ser de propriedade do System Program
+   - Deve ter zero lamports (garante depósito "fresco")
+
+Para o `vault`, vamos então verificar se:
+- Foi derivado das seeds corretas
+- Corresponde ao endereço PDA esperado
+Como parte da seed está no `instruction_data` ao qual não temos acesso neste momento.
+
+Agora vamos implementar a struct de dados da instrução:
+
+```rust
+#[repr(C, packed)]
+pub struct DepositInstructionData {
+    pub pubkey: Secp256r1Pubkey,
+    pub amount: u64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        if data.len() != size_of::<Self>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let (pubkey_bytes, amount_bytes) = data.split_at(size_of::<Secp256r1Pubkey>());
+
+        Ok(Self {
+            pubkey: pubkey_bytes.try_into().unwrap(),
+            amount: u64::from_le_bytes(amount_bytes.try_into().unwrap()),
+      })
+    }
+}
+```
+
+Desserializamos os dados da instrução em uma struct `DepositInstructionData` que contém:
+- `pubkey`: A chave pública Secp256r1 do usuário fazendo o depósito
+- `amount`: A quantidade de lamports a depositar
+
+Embora o uso de unwrap seja geralmente desencorajado em código de produção, neste caso ele é usado com segurança porque já validamos o comprimento dos dados no método `try_from`. Se o comprimento dos dados não corresponder, retornará um erro antes de chegar a este ponto.
+
+Finalmente, vamos implementar a instrução de depósito:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Verificar endereço do vault
+        let (vault_key, _) = find_program_address(
+            &[
+                b"vault",
+                &self.instruction_data.pubkey[..1],
+                &self.instruction_data.pubkey[1..33]
+            ],
+            &crate::ID
+        );
+        if vault_key.ne(self.accounts.vault.key()) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        Transfer {
+            from: self.accounts.payer,
+            to: self.accounts.vault,
+            lamports: self.instruction_data.amount,
+        }
+        .invoke()
+    }
+}
+```
+
+Como mencionado anteriormente, precisamos verificar se o PDA do vault foi derivado das seeds corretas. Neste vault baseado em Secp256r1, usamos o `Secp256r1Pubkey` como parte das seeds em vez da chave pública tradicional do dono. Esta é uma medida de segurança crucial que garante que apenas o detentor da chave Secp256r1 correspondente pode acessar o vault.
+
+O `Secp256r1Pubkey` tem 33 bytes porque usa representação de ponto comprimido para chaves públicas de curva elíptica. Este formato consiste em:
+- 1 byte para a paridade do ponto (indicando se a coordenada y é par ou ímpar)
+- 32 bytes para a coordenada x
+
+Como a função `find_program_address` da Solana tem um limite de 32 bytes para cada seed, precisamos dividir o `Secp256r1Pubkey` em duas partes:
+1. O byte de paridade (`pubkey[..1]`)
+2. Os bytes da coordenada x (`pubkey[1..33]`)
+
+<ArticleSection name="Saque" id="withdraw" level="h2" />
+
+A instrução de saque executa os seguintes passos:
+1. Verifica se o vault contém lamports (não está vazio)
+2. Usa o PDA do vault para assinar a transferência em seu próprio nome
+3. Transfere todos os lamports do vault de volta para o dono
+
+Primeiro, vamos definir a struct de contas para saque:
+
+```rust
+pub struct WithdrawAccounts<'a> {
+    pub payer: &'a AccountInfo,
+    pub vault: &'a AccountInfo,
+    pub instructions: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
+    type Error = ProgramError;
+
+    fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+        let [payer, vault, instructions, _system_program] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+
+        if !payer.is_signer() {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if !vault.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        if vault.lamports().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        Ok(Self { payer, vault, instructions })
+    }
+}
+```
+
+Agora vamos implementar a struct de dados da instrução:
+
+```rust
+pub struct WithdrawInstructionData {
+    pub bump: [u8;1]
+}
+
+impl<'a> TryFrom<&'a [u8]> for WithdrawInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            bump: [*data.first().ok_or(ProgramError::InvalidInstructionData)?],
+        })
+    }
+}
+```
+
+Como você pode ver, para fins de otimização, passamos o bump como dado de instrução para não ter que derivá-lo no `process()` que já é "pesado" por causa de todas as outras verificações necessárias.
+
+Finalmente, vamos implementar a instrução de `withdraw`:
+
+```rust
+pub struct Withdraw<'a> {
+    pub accounts: WithdrawAccounts<'a>,
+    pub instruction_data: WithdrawInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Withdraw<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = WithdrawAccounts::try_from(accounts)?;
+        let instruction_data = WithdrawInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Withdraw<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+        // Desserializar nossas instruções
+        let instructions: Instructions<Ref<[u8]>> = Instructions::try_from(self.accounts.instructions)?;
+        // Obter instrução diretamente após esta
+        let ix: IntrospectedInstruction = instructions.get_instruction_relative(1)?;
+        // Obter instrução Secp256r1
+        let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+        // Impor que temos apenas uma assinatura
+        if secp256r1_ix.num_signatures() != 1 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        // Impor que o assinante da primeira assinatura é o dono do nosso PDA
+        let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+
+        // Verificar se nosso pagador de taxas está correto
+        let (payer, expiry) = secp256r1_ix
+            .get_message_data(0)?
+            .split_at_checked(32)
+            .ok_or(ProgramError::InvalidInstructionData)?;
+
+        if self.accounts.payer.key().ne(payer) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        // Obter timestamp atual
+        let now = Clock::get()?.unix_timestamp;
+        // Obter timestamp de expiração da assinatura
+        let expiry = i64::from_le_bytes(
+            expiry
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?
+        );
+        if now > expiry {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        
+        // Criar seeds do assinante para nossa CPI
+        let seeds = [
+            Seed::from(b"vault"),
+            Seed::from(signer[..1].as_ref()),
+            Seed::from(signer[1..].as_ref()),
+            Seed::from(&self.instruction_data.bump),
+        ];
+        let signers = [Signer::from(&seeds)];
+
+        Transfer {
+            from: self.accounts.vault,
+            to: self.accounts.payer,
+            lamports: self.accounts.vault.lamports(),
+        }
+        .invoke_signed(&signers)
+    }
+}
+```
+
+O processo de saque envolve várias verificações de segurança para garantir que a transação é legítima. Vamos detalhar como verificamos a assinatura Secp256r1 e protegemos contra ataques potenciais:
+
+1. **Introspecção de Instrução**
+- Usamos o sysvar de instruções para inspecionar a próxima instrução na transação
+- Isso nos permite verificar a assinatura Secp256r1 que comprova a propriedade da chave de assinatura
+- A verificação de assinatura para Secp256r1 sempre acontece em uma instrução separada
+
+2. **Verificação de Assinatura**
+```rust
+let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
+if secp256r1_ix.num_signatures() != 1 {
+    return Err(ProgramError::InvalidInstructionData);
+}
+let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
+```
+- Verificamos que há exatamente uma assinatura
+- Extraímos a chave pública do assinante, que deve corresponder à usada para criar o PDA do vault para fins de verificação
+
+3. **Validação da Mensagem**
+```rust
+let (payer, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32)?;
+if self.accounts.payer.key().ne(payer) {
+    return Err(ProgramError::InvalidAccountOwner);
+}
+```
+- A mensagem assinada contém duas informações críticas:
+    - O endereço do destinatário pretendido (32 bytes)
+    - Um timestamp para quando a assinatura expira (8 bytes)
+- Isso previne ataques de MEV onde alguém poderia interceptar e reutilizar uma assinatura válida passando outro `payer` e reivindicando o valor que está no vault
+
+4. **Verificação de Expiração**
+```rust
+let now = Clock::get()?.unix_timestamp;
+let expiry = i64::from_le_bytes(expiry.try_into()?);
+if now > expiry {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+- Verificamos que a assinatura não expirou
+- Isso adiciona uma camada de segurança baseada em tempo para prevenir reuso de assinatura
+- O tempo de expiração deve ser considerado um "período refratário"; nenhum novo vault pode ser criado até que ele expire ou poderia ser reutilizado sem o conhecimento do dono real.
+
+5. **Assinatura PDA**
+```rust
+let seeds = [
+    Seed::from(b"vault"),
+    Seed::from(signer[..1].as_ref()),
+    Seed::from(signer[1..].as_ref()),
+    Seed::from(&self.instruction_data.bump),
+];
+```
+- Finalmente, usamos a chave pública verificada para criar as seeds do PDA
+- Isso garante que apenas o detentor legítimo da chave Secp256r1 pode assinar a transação de saque
+
+
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+
+Agora você pode testar seu programa contra nossos testes unitários e reivindicar seus NFTs!
+
+Comece compilando seu programa usando o seguinte comando no seu terminal:
+
+```bash
+cargo build-sbf
+```
+
+Isso gerou um arquivo `.so` diretamente na sua pasta `target/deploy`.
+
+Agora clique no botão `take challenge` e solte o arquivo lá!

@@ -1,0 +1,272 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Carteiras Embutidas](/graphics/course-banners/embedded-wallets.png)
+
+# Carteiras Embutidas
+
+Frases semente (seed phrases) foram um mal necessário. Por uma década, pedimos aos usuários que escrevessem 12 ou 24 palavras aleatórias, as guardassem com segurança e nunca as perdessem. O nativo de cripto aceitou isso como o custo da autocustódia. Todos os outros desistiram.
+
+Carteiras embutidas eliminam as frases semente inteiramente. Os usuários autenticam-se com biometria, e-mail ou login social: padrões que já usam para todos os outros apps. A carteira existe dentro do seu app, invisível para o usuário, protegida por técnicas criptográficas que não exigem que eles entendam de criptografia.
+
+> Uma carteira embutida não é um compromisso com a segurança. Sistemas modernos baseados em MPC e passkeys podem ser *mais* seguros do que uma frase semente rabiscada em um papel e guardada em uma gaveta.
+
+<ArticleSection name="O Problema com Carteiras Tradicionais" id="the-problem-with-traditional-wallets" level="h2" />
+
+Pergunte a qualquer pessoa que já integrou usuários não-cripto em um app Web3. A conversa segue um roteiro previsível:
+
+1. "Baixe este app de carteira"
+2. "Anote estas 24 palavras"
+3. "Nunca as perca ou você perde tudo"
+4. "Agora vamos conectá-la ao nosso app"
+
+No passo 2, você já perdeu 80% dos usuários potenciais. No passo 3, eles estão questionando suas escolhas de vida.
+
+As carteiras tradicionais foram projetadas para uma era diferente: quando cripto significava Bitcoin, os usuários eram tecnicamente sofisticados, e "descentralização a qualquer custo" era a única filosofia. O Mobile Wallet Adapter (MWA) melhora a experiência de conexão, mas ainda exige que os usuários gerenciem apps de carteira externos.
+
+Para a maioria das experiências mobile, esse atrito é inaceitável. Os usuários esperam abrir um app e começar a usá-lo em segundos, não configurar dependências externas primeiro.
+
+### A Hierarquia de UX
+
+Considere o que os usuários realmente querem de uma carteira:
+
+1. **Assinar coisas quando necessário**: Executar transações, provar propriedade
+2. **Não pensar nisso**: A carteira deve ser infraestrutura, não interface
+3. **Recuperar acesso se algo quebrar**: Sem perda catastrófica
+
+As carteiras tradicionais invertem esta hierarquia. Elas fazem da carteira a experiência central, exigem atenção constante e punem qualquer erro com perda permanente de fundos.
+
+<ArticleSection name="O Que é uma Carteira Embutida?" id="what-is-an-embedded-wallet" level="h2" />
+
+Uma carteira embutida é um par de chaves criptográficas gerenciado programaticamente por um serviço ou SDK, autenticado através de métodos familiares como e-mail, login social ou biometria. A chave privada é:
+
+- **Dividida entre múltiplas partes** usando MPC (Multi-Party Computation)
+- **Armazenada em módulos de segurança de hardware** (passkeys via secure enclave do dispositivo)
+- **Controlada por lógica de smart contract** (PDAs com autorização flexível)
+
+Da perspectiva do usuário, ele faz login com o FaceID do telefone ou sua conta Google. Nos bastidores, esta autenticação concede acesso para assinar transações com um keypair Solana.
+
+### Principais Vantagens
+
+- **Zero atrito de onboarding**: Os usuários autenticam-se com padrões que já conhecem
+- **Sem responsabilidade de frase semente**: Nada para anotar, nada para perder
+- **UX embutida**: A carteira vive dentro do seu app, não como uma dependência externa
+- **Recuperação programável**: Recuperação social, fatores de backup ou opções de custódia institucional
+
+<ArticleSection name="Quatro Abordagens para Segurança de Chaves" id="four-approaches" level="h2" />
+
+Provedores de carteiras embutidas usam abordagens criptográficas fundamentalmente diferentes. Entender essas arquiteturas importa mais do que entender qualquer SDK específico.
+
+### Multi-Party Computation (MPC)
+
+O MPC elimina o ponto único de falha dividindo a chave privada em partes distribuídas entre múltiplas partes. Nenhuma parte individual jamais possui a chave completa.
+
+```
++------------------+        +------------------+
+|   User Device    |        |  Provider HSMs   |
+|   (Share A)      |        |   (Share B)      |
++------------------+        +------------------+
+         |                           |
+         +---- Threshold Signing ----+
+                      |
+              +----------------+
+              | Valid Signature|
+              +----------------+
+```
+
+Para assinar uma transação, as partes colaboram através de protocolos criptográficos que produzem assinaturas válidas sem nunca reconstruir a chave original. Um atacante precisa comprometer múltiplos sistemas independentes simultaneamente.
+
+Da perspectiva do desenvolvedor, provedores MPC abstraem essa complexidade:
+
+```typescript
+// Privy: as partes MPC coordenam nos bastidores
+const { wallets } = useEmbeddedSolanaWallet();
+const provider = await wallets[0].getProvider();
+await provider.request({ method: 'signAndSendTransaction', params: { transaction } });
+```
+
+**Provedores usando MPC:** Privy, Dynamic, Para, Web3Auth
+
+### Trusted Execution Environment (TEE/HSM)
+
+Provedores TEE armazenam a chave privada completa em hardware especializado: HSMs (Hardware Security Modules) no lado do servidor ou secure enclaves no lado do cliente. A chave existe em um único lugar, mas esse lugar é criptograficamente isolado do resto do sistema.
+
+```
++----------------+     +-------------------+
+|  User Auth     |     |  Provider TEE     |
+|  (OAuth/Email) |---->|  (HSM/SGX)        |
++----------------+     +-------------------+
+                              |
+                       [Isolated Enclave]
+                       Key exists here only
+                              |
+                       +----------------+
+                       | Sign & Return  |
+                       +----------------+
+```
+
+O tradeoff: você confia no isolamento de hardware do provedor em vez de distribuir a confiança entre partes. A vantagem: arquitetura mais simples, assinatura mais rápida e, frequentemente, infraestrutura testada em batalha por players estabelecidos.
+
+**Provedores usando TEE/HSM:** Phantom Connect, Magic Link, Turnkey
+
+### Passkey-Nativo
+
+Passkeys usam o secure enclave do seu dispositivo para armazenar a chave privada. A chave nunca sai do hardware. FaceID ou impressão digital controla o acesso. Programas on-chain verificam assinaturas de passkey diretamente usando a precompilação secp256r1 da Solana.
+
+```
++----------------+     +-------------------+     +-----------------+
+|  User Device   |     |  Solana Program   |     |  Smart Wallet   |
+|  (Passkey)     |---->|  (Verifier)       |---->|  (PDA)          |
++----------------+     +-------------------+     +-----------------+
+      |
+  [Secure Enclave]
+  Key never leaves
+```
+
+A assinatura da passkey É a autorização blockchain. Sem infraestrutura de provedor no caminho de assinatura.
+
+```typescript
+// LazorKit: Passkey aciona biometria do dispositivo, assina on-chain
+const { signAndSendTransaction } = useWallet();
+await signAndSendTransaction(
+  { instructions, transactionOptions: { feeToken: USDC_ADDRESS } },
+  { redirectUrl: 'myapp://callback' }
+);
+```
+
+**Provedores usando passkeys:** LazorKit
+
+### Assinantes Modulares
+
+Alguns provedores oferecem smart wallets que podem ser controladas por múltiplos tipos de assinantes: passkeys, autenticação por e-mail, login social, carteiras externas ou chaves de API.
+
+```
+Smart Wallet (PDA)
+├── Primary: Passkey (user's phone)
+├── Backup: Email (recovery)
+└── Admin: API Key (automation)
+```
+
+Essa flexibilidade permite que aplicações adaptem a autenticação a diferentes segmentos de usuários e casos de uso.
+
+**Provedores usando assinantes modulares:** Crossmint
+
+<ArticleSection name="O Cenário de Provedores" id="the-provider-landscape" level="h2" />
+
+Vários provedores surgiram com diferentes abordagens arquitetônicas. Veja como eles se mapeiam para os modelos criptográficos:
+
+| Provedor | Arquitetura Principal | Métodos de Autenticação | Propriedade da Chave |
+|----------|---------------------|----------------------|--------------|
+| **Privy** | MPC (2-de-2) | E-mail, telefone, social, passkey, MWA | Suporte híbrido a carteiras embutidas + externas |
+| **Dynamic** | MPC com TSS-FROST | E-mail, social, passkey | Assinaturas Ed25519 nativas, exportação de chave disponível |
+| **Turnkey** | Infraestrutura HSM | Traga sua própria autenticação | Máximo controle para o desenvolvedor |
+| **LazorKit** | Smart Wallets com Passkey | Apenas passkey | Sem provedor no caminho de assinatura, paymaster integrado |
+| **Para** | MPC Distribuído | E-mail, telefone, social, passkey | Multi-chain (Solana, EVM, Cosmos) |
+| **Crossmint** | Smart Wallets Modulares | Passkey, e-mail, social, externo, API | Arquitetura de assinantes flexível, cross-chain |
+| **Phantom Connect** | TEE/HSM via OAuth | Google, Apple | Carteira Solana nativa, simulação de transações |
+| **Magic** | TEE (Fortanix SGX) | E-mail, SMS, social | Autenticação passwordless, extensões multi-chain |
+| **Web3Auth** | MPC (Torus Network) | Social, passwordless, custom | Altamente customizável, account abstraction ready |
+
+### Privy
+
+O MPC do Privy divide as chaves entre o dispositivo do usuário e a infraestrutura HSM do Privy. Eles suportam tanto carteiras embutidas quanto conexões de carteiras externas via MWA, tornando-os ideais para apps híbridos que atendem tanto usuários nativos de cripto quanto usuários mainstream.
+
+### Dynamic
+
+A Dynamic implementa EdDSA FROST para assinaturas Solana nativas. Sua arquitetura MPC inclui funcionalidades de Wallet-as-a-Service: os usuários podem fazer backup de partes da carteira no Google Drive ou exportar sua chave privada completa.
+
+### Turnkey
+
+A Turnkey fornece infraestrutura segura de chaves sem impor escolhas de autenticação. Você traz sua própria verificação de identidade. A Turnkey fornece HSMs e protocolos de assinatura. Máxima flexibilidade, mas mais trabalho de integração.
+
+### LazorKit
+
+A LazorKit cria smart wallets (PDAs) controladas por passkeys WebAuthn. A chave privada nunca sai do secure enclave do seu dispositivo. Inclui paymaster integrado para patrocínio de gas.
+
+### Para (anteriormente Capsule)
+
+A Para distribui partes MPC através de sua rede com suporte para EVM, Solana e Cosmos a partir da mesma autenticação. Ideal para aplicações multi-chain.
+
+### Crossmint
+
+A Crossmint implementa smart wallets com assinantes modulares. Múltiplos métodos de autenticação podem controlar a mesma carteira. Suporta atualizações graduais de segurança à medida que os usuários se tornam mais sofisticados.
+
+### Phantom Connect
+
+O Phantom Connect cria carteiras embutidas através de autenticação OAuth (Google ou Apple). As chaves são armazenadas em infraestrutura TEE/HSM. Isso é particularmente atraente para apps Solana porque o Phantom já oferece simulação de transações, proteção contra spam e alertas de segurança que os usuários confiam.
+
+```typescript
+// From @phantom/react-native-sdk
+const { connect } = useConnect();
+await connect({ provider: 'google' }); // ou 'apple'
+```
+
+### Magic Link
+
+A Magic usa Fortanix SGX (Software Guard Extensions) para criar enclaves isolados por hardware onde as chaves são armazenadas e a assinatura acontece. Os usuários autenticam-se via links de e-mail passwordless, códigos SMS ou login social. A chave nunca sai do secure enclave.
+
+```typescript
+// From @magic-ext/solana
+const magic = new Magic('YOUR_API_KEY', {
+  extensions: [new SolanaExtension({ rpcUrl })]
+});
+await magic.solana.signTransaction(transaction);
+```
+
+### Web3Auth (MetaMask Embedded Wallets)
+
+A Web3Auth distribui partes MPC através da rede Torus com extensas opções de customização. Suporta dezenas de provedores de autenticação e inclui integrações de account abstraction. Recentemente adquirida pela MetaMask, tornando-se parte do ecossistema Consensys.
+
+```typescript
+// From @web3auth/react-native-sdk + @web3auth/solana-provider
+const solanaWallet = new SolanaWallet(web3auth.provider);
+await solanaWallet.signAndSendTransaction(transaction);
+```
+
+<ArticleSection name="Quando Considerar Alternativas" id="when-alternatives" level="h2" />
+
+Carteiras embutidas nem sempre são a resposta. Considere o caso de uso:
+
+**Carteiras embutidas se destacam quando:**
+- A assinatura é frequente (jogos, gorjetas sociais, DeFi)
+- Os usuários não são nativos de cripto (apps de consumidor)
+- Você precisa de patrocínio de gas (fluxos de onboarding)
+- A recuperação deve ser transparente (sem backup de frase semente)
+
+**Carteiras externas podem ser melhores quando:**
+- Os usuários são nativos de cripto e preferem carteiras existentes
+- Seu app é predominantemente de leitura com necessidades raras de assinatura
+- Descentralização máxima é necessária
+- Os usuários desconfiam de qualquer envolvimento de terceiros
+
+**Abordagens híbridas funcionam quando:**
+- Você atende ambos os públicos
+- Os usuários podem começar com carteira embutida e migrar para carteiras externas
+- Você deseja opcionalidade
+
+<ArticleSection name="Estrutura do Curso" id="course-structure" level="h2" />
+
+Este curso ensina os fundamentos criptográficos das carteiras embutidas, não tutoriais de SDK. APIs mudam. Conceitos perduram.
+
+| Lição | Tópico |
+|--------|-------|
+| 1 | Introdução (você está aqui) |
+| 2 | Criptografia MPC: Como assinaturas de limiar eliminam pontos únicos de falha |
+| 3 | Passkeys e WebAuthn: Como módulos de segurança de hardware protegem chaves |
+| 4 | Arquiteturas de Smart Wallets: PDAs, account abstraction e segurança programável |
+| 5 | Escolhendo Sua Abordagem: Framework de decisão baseado nos seus requisitos |
+
+Após completar este curso, você entenderá:
+- Por que MPC é mais seguro do que uma única chave
+- Como passkeys fornecem autenticação à prova de phishing
+- O que torna smart wallets "programáveis"
+- Como avaliar provedores com base na arquitetura, não no marketing
+
+### Pré-requisitos
+
+- Ter completado o curso de Mobile Wallet Adapter (ou conhecimento equivalente)
+- Compreensão de contas e transações da Solana
+- Familiaridade básica com criptografia de chave pública
+
+**Nota:** A funcionalidade de passkey requer testes em dispositivos reais. Emuladores não têm acesso aos secure enclaves do dispositivo.
+
+Vamos começar entendendo como o MPC elimina a vulnerabilidade fundamental no armazenamento tradicional de chaves.

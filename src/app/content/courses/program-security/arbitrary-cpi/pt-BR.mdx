@@ -1,0 +1,136 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# CPIs Arbitrárias
+
+Ataques de Cross Program Invocation (CPI) arbitrários ocorrem quando programas chamam cegamente qualquer programa que seja passado como parâmetro, em vez de validar que estão invocando o programa pretendido.
+
+Isso transforma seu programa seguro em um lançador de código malicioso, permitindo que atacantes sequestrem a autoridade do seu programa e executem operações não autorizadas sob a identidade do seu programa.
+
+O perigo reside no modelo de contas flexível do Solana. Como chamadores podem passar qualquer ID de programa na lista de contas da instrução, não validar endereços de programa significa que seu programa se torna um proxy para execução arbitrária de código.
+
+Um atacante pode substituir por um programa malicioso que imita a interface esperada, mas realiza operações completamente diferentes — como reverter transferências, drenar contas ou manipular estado de formas inesperadas.
+
+O que torna isso particularmente insidioso é que o ataque é bem-sucedido mesmo quando todas as outras verificações de segurança passam. Seu programa pode validar corretamente a propriedade da conta, verificar assinaturas e validar estruturas de dados, mas ainda assim acabar chamando código malicioso porque nunca confirmou que estava se comunicando com o programa correto.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere esta instrução vulnerável que realiza uma transferência de tokens:
+
+```rust
+#[program]
+pub mod insecure_cpi{
+    use super::*;
+    //..
+
+    pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+        solana_program::program::invoke(
+            &spl_token::instruction::transfer(
+                ctx.accounts.token_program.key,
+                ctx.accounts.source.key,
+                ctx.accounts.destination.key,
+                ctx.accounts.authority.key,
+                &[],
+                amount,
+            )?,
+            &[
+                ctx.accounts.source.clone(),
+                ctx.accounts.destination.clone(),
+                ctx.accounts.authority.clone(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub token_program: UncheckedAccount<'info>,
+}
+```
+
+Este código parece seguro à primeira vista. O source e destination são validados corretamente como contas de token, e a authority deve assinar a transação. No entanto, o campo `token_program` é um `UncheckedAccount`, o que significa que o Anchor não realiza nenhuma validação sobre ele.
+
+Um atacante pode explorar isso:
+- Criando um programa malicioso com uma instrução de transferência que tem a mesma interface da transferência do SPL Token
+- Em vez de transferir tokens do source para o destination, seu programa malicioso faz o inverso, ou pior
+- Passando seu programa malicioso como o parâmetro `token_program`
+- Seu programa unknowingly chama o código do atacante com autoridade total sobre a transação
+
+O ataque é bem-sucedido porque, enquanto as contas de token são legítimas, o programa que realiza a operação não é. O programa malicioso pode transferir tokens na direção errada, drenar contas para a carteira do atacante ou realizar qualquer operação que as contas passadas permitam.
+
+Felizmente, o `Anchor` torna super fácil realizar essa verificação diretamente na struct de conta, apenas mudando `UncheckedAccount` para `Program` e passando o tipo `Token`, que valida automaticamente o ID do programa:
+
+```rust
+#[derive(Accounts)]
+pub struct SendTokens<'info> {
+    authority: Signer<'info>,
+    source: Account<'info, Token>,
+    destination: Account<'info, Token>,
+    pub token_program: Program<'info, Token>,
+}
+```
+
+Ainda melhor, use os helpers de CPI do Anchor que lidam com a validação do programa automaticamente:
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    transfer(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.from_token_account.to_account_info(),
+                to: ctx.accounts.to_token_account.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            },
+        ),
+        &amount,
+    )?;
+
+    Ok(())
+}
+```
+
+Para validação personalizada, verifique explicitamente o ID do programa antes de fazer o CPI:
+
+```rust
+pub fn send_tokens(ctx: Context<SendTokens>, amount: u64) -> Result<()> {
+    if &spl_token::ID != ctx.accounts.token_program.key {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    solana_program::program::invoke(
+        &spl_token::instruction::transfer(
+            ctx.accounts.token_program.key,
+            ctx.accounts.source.key,
+            ctx.accounts.destination.key,
+            ctx.accounts.authority.key,
+            &[],
+            amount,
+        )?,
+        &[
+            ctx.accounts.source.clone(),
+            ctx.accounts.destination.clone(),
+            ctx.accounts.authority.clone(),
+        ],
+    )?;
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+No Pinocchio, validação manual é necessária, pois não há verificação automática de programa:
+
+```rust
+if self.accounts.token_program.pubkey() != &spl_token::ID {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```

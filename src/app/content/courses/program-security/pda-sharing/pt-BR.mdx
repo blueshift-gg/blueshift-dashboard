@@ -1,0 +1,119 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Compartilhamento de PDA
+
+Ataques de compartilhamento de PDA exploram programas que usam o mesmo Program Derived Address (PDA) entre múltiplos usuários ou domínios, permitindo que atacantes acessem fundos, dados ou permissões que não lhes pertencem. Embora usar um PDA global possa parecer elegante para operações em todo o programa, isso cria uma contaminação cruzada perigosa onde as ações de um usuário podem afetar os ativos de outro.
+
+A vulnerabilidade decorre de especificidade insuficiente nas seeds ao derivar PDAs. Quando múltiplas contas compartilham a mesma autoridade PDA, o programa perde a capacidade de distinguir entre tentativas de acesso legítimas e ilegítimas. Um atacante pode criar suas próprias contas que referenciam o mesmo PDA compartilhado, e então usar a autoridade de assinatura desse PDA para manipular ativos pertencentes a outros usuários.
+
+Isso é particularmente devastador em protocolos DeFi onde PDAs controlam cofres de tokens, saldos de usuários ou permissões de saque. Um PDA compartilhado essencialmente cria uma chave mestra que desbloqueia os ativos de múltiplos usuários, transformando operações individuais em potenciais ataques contra todo o protocolo.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere este sistema vulnerável de saque que usa um PDA baseado em mint para assinatura:
+
+```rust
+#[program]
+pub mod insecure_withdraw{
+    use super::*;
+    //..
+
+    pub fn withdraw(ctx: Context<WithdrawTokens>) -> Result<()> {
+
+        //..
+        // outras condições/ações...
+        //..
+
+        let amount = ctx.accounts.vault.amount;
+        
+        let seeds = &[
+            ctx.accounts.pool.mint.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+
+        transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.withdraw_destination.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+            ),
+            &amount,
+            seeds,
+        )?;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        seeds = [b"pool", pool.mint.as_ref()],
+        bump = pool.bump,                                        
+    )]
+    pool: Account<'info, TokenPool>,
+    vault: Account<'info, TokenAccount>,
+    withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // outras contas..
+    //..
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool {
+    pub mint: Pubkey,
+    pub bump: u8,
+}
+```
+
+Este código tem uma falha crítica: o PDA é derivado usando apenas o endereço da mint. Isso significa que todos os cofres para o mesmo tipo de token compartilham a mesma autoridade de assinatura, criando um vetor de ataque perigoso.
+
+Um atacante pode explorar isso:
+- Criando seu próprio cofre para a mesma mint
+- Chamando a instrução com seu próprio endereço como `withdraw_destination`
+- Usando a autoridade PDA compartilhada para sacar tokens de qualquer cofre que use a mesma mint
+- Drenando os fundos de outros usuários para seu próprio destino
+
+O ataque tem sucesso porque a autoridade PDA não distingue entre diferentes instâncias de pool; ela se importa apenas com o tipo de mint, não com o usuário específico que deveria ter acesso a esses fundos.
+
+Uma possível solução é tornar os PDAs específicos para usuários individuais e destinos, e usar as constraints de seeds e bump do Anchor para validar a derivação do PDA:
+
+```rust
+#[derive(Accounts)]
+pub struct WithdrawTokens<'info> {
+    #[account(
+        has_one = vault,
+        has_one = withdraw_destination,
+        seeds = [b"pool", vault.key().as_ref(), withdraw_destination.key().as_ref()],
+        bump = pool.bump,                                        
+    )]
+    pool: Account<'info, TokenPool>, // Autoridade para o cofre
+    #[account(mut)]
+    vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    withdraw_destination: Account<'info, TokenAccount>,
+    //..
+    // outras contas..
+    //..
+    token_program: Program<'info, Token>,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct TokenPool{
+    pub vault:Pubkey,
+    pub withdraw_destination:Pubkey,
+    pub bump:u8
+}
+```
+
+A mesma alteração é feita para o handler da instrução. Uma situação possível onde isso pode se aplicar é um programa de trading com alavancagem que permite que a operação de um usuário seja liquidada quando ele perdeu uma certa quantidade, por exemplo, ele mesmo define um stop loss; o código então verifica a condição de atingir esse valor e permite que qualquer pessoa interrompa a operação e saque os fundos restantes para o destino, a conta de saque.
+
+Um único PDA controlando todos os fundos de uma mint específica criaria uma situação onde, se condições fossem atendidas simultaneamente para usuários (por exemplo, muitos usuários próximos ao stop loss/liquidação), qualquer usuário individual poderia sacar esses fundos para todos esses usuários, possivelmente em uma ou mais transações contendo múltiplas instruções fazendo isso para diferentes usuários.

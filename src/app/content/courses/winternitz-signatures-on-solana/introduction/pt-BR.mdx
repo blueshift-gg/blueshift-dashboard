@@ -1,0 +1,110 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso de assinaturas Winternitz - Criptografia pós-quântica na Solana](/graphics/course-banners/winternitz-signatures-on-solana.png)
+
+# Assinaturas Winternitz na Solana
+
+Diferente das assinaturas RSA ou ECDSA que dependem de problemas matemáticos como fatoração de inteiros ou logaritmos discretos — ambos vulneráveis a ataques quânticos —, as assinaturas Winternitz derivam sua segurança unicamente da propriedade unidirecional de funções de hash criptográficas.
+
+Essa diferença fundamental as torna um pilar da criptografia pós-quântica.
+
+<ArticleSection name="O que é uma Assinatura Winternitz" id="what-is-a-winternitz-signature" level="h2" />
+
+As Assinaturas de Uso Único Winternitz (WOTS) evoluíram do trabalho pioneiro de Leslie Lamport na década de 1970. Lamport demonstrou que era possível criar assinaturas digitais usando apenas uma função de hash criptográfica, sem exigir suposições matemáticas complexas.
+
+O esquema original de Lamport assinava um único bit usando dois valores secretos. Para assinar o bit `b`, você revela a pré-imagem do valor de hash `H₀` (se b=0) ou `H₁` (se b=1). A segurança dependia inteiramente da inviabilidade computacional de encontrar pré-imagens de hash: essencialmente, trabalhar de trás para frente a partir de uma saída de hash para encontrar sua entrada.
+
+No entanto, as assinaturas de Lamport eram extremamente ineficientes. Assinar uma mensagem de `n bits` exigia `2n` valores secretos e produzia assinaturas de `2n` valores. Para uma mensagem de 256 bits, isso significava gerenciar 512 valores secretos e gerar assinaturas de 512 valores.
+
+Robert Winternitz percebeu na década de 1990 que, em vez de assinar bits individuais na base-2, poder-se-ia assinar "dígitos" maiores em bases superiores como base-16 ou base-256. Essa inovação reduziu dramaticamente tanto o tamanho das chaves quanto das assinaturas, mantendo as mesmas garantias de segurança.
+
+<ArticleSection name="Fundamentos Matemáticos" id="mathematical-foundations" level="h2" />
+
+### O Parâmetro Winternitz e Representação em Base
+
+O parâmetro crucial nas assinaturas Winternitz é `w`, que determina como agrupamos os bits da mensagem:
+- Base: `b = 2^w`
+- Intervalo de dígitos: Cada dígito representa `w` bits e pode ter valores de `0` a `2^w - 1`
+
+Escolhas comuns de parâmetros:
+- `w = 1`: Cada posição representa 1 bit (valores 0 ou 1), equivalente às assinaturas de Lamport na base-2
+- `w = 4`: Cada posição representa 4 bits (valores 0-15), representação na base-16
+- `w = 8`: Cada posição representa 8 bits (valores 0-255), representação na base-256
+
+> Valores maiores de `w` criam assinaturas menores, mas exigem mais computação para segurança. Essa compensação é fundamental para entender as características de desempenho do WOTS.
+
+### Cadeias de Hash
+
+As assinaturas Winternitz usam cadeias de hash — sequências de aplicações repetidas de hash começando de um valor secreto: `H⁰(s) = s`, `H¹(s) = H(s)`, `H²(s) = H(H(s))`, ..., `Hⁱ(s) = H(H^(i-1)(s))`
+
+A propriedade de segurança é assimétrica: dado `Hⁱ(s)`, computar qualquer `Hʲ(s)` onde `j > i` é fácil (basta hashear `j-i` vezes mais), mas computar qualquer `Hʲ(s)` onde `j < i` é computacionalmente inviável, pois exigiria inverter a função de hash.
+
+### Mecanismo de Checksum
+
+O mecanismo de checksum previne um tipo específico de ataque de falsificação. Sem ele, um invasor que visse uma assinatura poderia potencialmente modificar a mensagem para uma que exigisse mais operações de hash em algumas cadeias, e então forjar esses componentes.
+
+O checksum garante que o "orçamento de hash" total em todas as cadeias permaneça constante: se um invasor modificar dígitos da mensagem para valores maiores (exigindo mais hashes), os dígitos do checksum automaticamente se tornam menores (exigindo menos hashes em outros valores, o que é impossível de forjar sem a chave privada).
+
+### Processo de Geração de Chaves
+
+Para um comprimento de mensagem de `n` bits com parâmetro Winternitz `w`:
+
+1. Calcule o comprimento da assinatura: Primeiro, descubra quantos "blocos" você precisará para representar qualquer mensagem. Se suas mensagens têm 256 bits e você escolhe um parâmetro Winternitz de `w = 4`, precisará de 64 blocos no total: `l₁ = ⌈n/w⌉`. Usando a fórmula `l₂ = ⌊log₂(l₁ × (2^w - 1))/w⌋ + 1`, descobrimos que para `w = 4`, onde o checksum máximo é 960, `l₂ = 3` e o tamanho da assinatura será `l = l₁ + l₂`
+
+> Durante a geração de chaves, você não sabe qual será o checksum porque ainda não escolheu uma mensagem para assinar, mas ainda assim precisa de `l₂` componentes de chave privada reservados para o checksum.
+
+2. Crie pontos de partida aleatórios: Gere um valor secreto aleatório para cada cadeia de hash que você precisará. Esses valores aleatórios se tornam seus componentes de chave privada. Pense em cada um como o "ponto de partida" de uma cadeia de hash separada: `sk = (sk₁, sk₂, ..., skₗ)`
+
+3. Para cada componente da chave privada, aplique a função de hash repetidamente até ter hasheado o número máximo possível de vezes (`2^w - 1`): `pk = (H^(2^w-1)(sk₁), H^(2^w-1)(sk₂), ..., H^(2^w-1)(skₗ))`
+
+### Processo de Assinatura
+
+Para assinar a mensagem `M`:
+
+1. Converta a mensagem para representação em base: `M → (m₁, m₂, ..., m_l₁)` onde cada `mᵢ ∈ [0, 2^w - 1]`
+
+2. Calcule o checksum: `c = Σ((2^w - 1) - mᵢ) para i = 1 até l₁` e converta c para representação em base: `c → (c₁, c₂, ..., c_l₂)`
+
+> Para calcular o valor real do checksum para essa mensagem, podemos usar os componentes apropriados da chave privada de checksum e hasheá-los o número correto de vezes com base nos dígitos do checksum
+
+3. Gere a assinatura: Onde a representação em base indica o número de vezes que a chave privada precisa ser hasheada.
+
+### Processo de Verificação
+
+Para verificar a assinatura σ na mensagem `M` com a chave pública `pk`:
+
+1. Recalcule a representação da mensagem: `M → (m₁, m₂, ..., m_l₁)`
+
+2. Recalcule o checksum: `c = Σ((2^w - 1) - mᵢ) → (c₁, c₂, ..., c_l₂)`
+
+3. Para cada componente da assinatura, hasheie as vezes restantes:
+   - Para partes da mensagem: verifique `H^((2^w-1)-mᵢ)(σᵢ) = pkᵢ`
+   - Para partes do checksum: verifique `H^((2^w-1)-cⱼ)(σ_(l₁+j)) = pk_(l₁+j)`
+
+> O verificador "continua" cada cadeia de hash de onde o assinante parou, alcançando o ponto final da chave pública conhecida se a assinatura for válida.
+
+<ArticleSection name="Segurança" id="security" level="h2" />
+
+### Limitação de Uso Único
+
+As assinaturas Winternitz são Assinaturas de Uso Único (OTS): elas só podem ser usadas com segurança uma vez por par de chaves.
+
+O ataque funciona da seguinte forma: quando você assina múltiplas mensagens com a mesma chave privada, você revela valores intermediários em suas cadeias de hash.
+
+O mecanismo de checksum exige que aumentar alguns dígitos da mensagem (mais hashes) seja equilibrado pela diminuição dos dígitos do checksum (menos hashes). Com múltiplas assinaturas revelando valores intermediários em posições diferentes, um invasor pode construir falsificações onde usa posições intermediárias mais altas para ir ainda mais alto nos componentes da mensagem, enquanto usa posições intermediárias mais baixas para equilibrar o checksum, respeitando assim a restrição do orçamento total de hash.
+
+### Segurança Pós-Quântica
+
+As assinaturas Winternitz derivam sua segurança unicamente da resistência à pré-imagem de funções de hash. Computadores quânticos não podem inverter eficientemente funções de hash criptográficas como SHA-256 ou SHA-3 — ao contrário dos algoritmos quânticos de tempo polinomial (algoritmo de Shor) que quebram RSA e ECDSA.
+
+Usar SHA-256 com parâmetros apropriados fornece 128 bits de segurança pós-quântica, tornando essas assinaturas adequadas para aplicações criptográficas de longo prazo, mesmo em um mundo pós-quântico.
+
+<ArticleSection name="Assinaturas Winternitz na Solana" id="winternitz-on-solana" level="h2" />
+
+A fundação criptográfica atual da Solana depende inteiramente de assinaturas Ed25519, que são vulneráveis a ataques quânticos através do algoritmo de Shor.
+
+Quando computadores quânticos se tornarem práticos, cada carteira, autoridade de programa e transação na Solana se tornará forjável.
+
+A migração pós-quântica não é algo que se pode fazer da noite para o dia. Sistemas precisam ser projetados hoje com resistência quântica em mente, criando abordagens híbridas que funcionem tanto no mundo pré-quântico quanto no pós-quântico.
+
+Enquanto a camada base da Solana permanece vulnerável a ataques quânticos, desenvolvedores podem construir aplicações resistentes a quânticos sobre ela usando assinaturas Winternitz.

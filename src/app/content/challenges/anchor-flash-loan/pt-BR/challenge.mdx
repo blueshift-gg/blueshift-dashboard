@@ -1,0 +1,184 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Anchor Flash Loan](/graphics/challenge-banners/anchor-flash-loan.png)
+
+# Anchor Flash Loan
+
+A introspecção de instruções é um recurso poderoso que permite a um programa de blockchain examinar e analisar outras instruções dentro do mesmo bundle de transação. Isso inclui instruções que ainda não foram executadas, dando ao seu programa a capacidade de "olhar adiante" e tomar decisões baseadas no que acontecerá mais tarde na transação.
+
+Pense nisso como ter visão de raio-X para transações: seu programa pode ver através de toda a transação para entender a sequência completa de operações antes de decidir como prosseguir.
+
+A aplicação mais interessante da introspecção de instruções são os flash loans. Estes são um tipo único de empréstimo que existe apenas dentro dos limites de uma única transação.
+
+Veja como os flash loans funcionam:
+- **Borrow**: No início de uma transação, você pode pegar emprestado instantaneamente uma grande quantidade de capital usando uma instrução de `loan`
+- **Use**: Você pode usar este capital emprestado para negociação, arbitragem ou outras operações dentro da mesma transação
+- **Repay**: Antes que a transação termine, você deve devolver o empréstimo mais uma pequena taxa usando uma instrução de `repay`
+
+O insight fundamental é que os flash loans dependem da natureza atômica das transações em blockchain. Se qualquer parte da transação falhar (incluindo o reembolso), toda a transação é revertida como se nunca tivesse acontecido. Isso significa que o credor tem risco zero: ou recebe o reembolso, ou o empréstimo nunca aconteceu de fato.
+
+Neste desafio, você criará um programa simples de flash loan que demonstra a introspecção de instruções em ação. O programa examinará dados e contas de instruções em diferentes instruções dentro da mesma transação para garantir que os termos do empréstimo sejam cumpridos.
+
+Se você é novo em introspecção de instruções, recomendamos começar com o [Curso de Instruction Introspection](/pt-BR/courses/instruction-introspection) para entender os conceitos fundamentais usados neste programa.
+
+<ArticleSection name="Instalação" id="installation" level="h2" />
+
+Antes de começar, certifique-se de ter Rust e Anchor instalados. Se precisar de instruções de configuração, consulte a [documentação oficial do Anchor](https://www.anchor-lang.com/docs/installation). Então, no seu terminal execute:
+
+```bash
+anchor init blueshift_anchor_flash_loan
+```
+
+Adicione as dependências necessárias:
+- `anchor-spl`: Fornece utilitários para trabalhar com SPL tokens (padrão de token da Solana)
+
+```bash
+cd blueshift_anchor_flash_loan
+cargo add anchor-spl
+```
+
+Agora você está pronto para mergulhar na construção do seu programa de flash loan!
+
+<ArticleSection name="Template" id="template" level="h2" />
+
+Vamos construir a base do nosso programa de flash loan configurando a estrutura básica, contas e tratamento de erros que ambas as instruções de borrow e repay usarão.
+
+Vamos implementar tudo no `lib.rs` já que temos apenas duas instruções que compartilham a mesma estrutura de contas. Aqui está nosso template inicial com todos os componentes essenciais:
+
+```rust
+use anchor_lang::prelude::*;
+use anchor_spl::{
+  token::{Token, TokenAccount, Mint, Transfer, transfer}, 
+  associated_token::AssociatedToken
+}; 
+use anchor_lang::{
+  Discriminator,
+  solana_program::sysvar::instructions::{
+      ID as INSTRUCTIONS_SYSVAR_ID,
+      load_instruction_at_checked
+  }
+};
+
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_flash_loan {
+  use super::*;
+
+  pub fn borrow(ctx: Context<Loan>, borrow_amount: u64) -> Result<()> {
+    // lógica de borrow...
+    
+    Ok(())
+  }
+
+  pub fn repay(ctx: Context<Loan>) -> Result<()> {
+    // lógica de repay...
+
+    Ok(())
+  }
+}
+
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  // contas do loan...
+}
+
+#[error_code]
+pub enum ProtocolError {
+  // enum de erros..
+}
+```
+
+**Nota**: lembre-se de alterar o program ID para `22222222222222222222222222222222222222222222` já que usamos isso internamente para testar seu programa.
+
+<ArticleSection name="Contas" id="accounts" level="h2" />
+
+Como ambas as instruções `borrow` e `repay` trabalham com as mesmas contas, podemos criar um único contexto `Loan` que serve a ambas as funções. Isso torna nosso código mais fácil de manter e entender.
+
+Nossa struct de contas `Loan` precisa destes componentes:
+- `borrower`: o usuário solicitando o flash loan.
+- `protocol`: um Program Derived Address (PDA) que é dono do pool de liquidez do protocolo.
+- `mint`: o token específico sendo emprestado.
+- `borrower_ata`: a Associated Token Account do borrower que receberá os tokens emprestados.
+- `protocol_ata`: a Associated Token Account do protocolo que fornecerá os tokens emprestados.
+- `instructions`: a conta Instructions Sysvar para introspecção.
+- `token_program`, `associated_token_program` e `system_program`: programas necessários para o programa.
+
+Veja como definimos a struct de contas:
+
+```rust
+#[derive(Accounts)]
+pub struct Loan<'info> {
+  #[account(mut)]
+  pub borrower: Signer<'info>,
+  #[account(
+    seeds = [b"protocol".as_ref()],
+    bump,
+  )]
+  pub protocol: SystemAccount<'info>,
+
+  pub mint: Account<'info, Mint>,
+  #[account(
+    init_if_needed,
+    payer = borrower,
+    associated_token::mint = mint,
+    associated_token::authority = borrower,
+  )]
+  pub borrower_ata: Account<'info, TokenAccount>,
+  #[account(
+    mut,
+    associated_token::mint = mint,
+    associated_token::authority = protocol,
+  )]
+  pub protocol_ata: Account<'info, TokenAccount>,
+
+  #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+  /// CHECK: InstructionsSysvar account
+  instructions: UncheckedAccount<'info>,
+  pub token_program: Program<'info, Token>,
+  pub associated_token_program: Program<'info, AssociatedToken>,
+  pub system_program: Program<'info, System>
+}
+```
+
+Como você pode ver, as contas necessárias para esta instrução e suas restrições são bastante diretas:
+- `protocol`: usa `seeds = [b"protocol".as_ref()]` para criar um endereço determinístico que é dono de toda a liquidez do protocolo. Isso garante que apenas nosso programa pode controlar esses fundos.
+- `borrower_ata`: usa `init_if_needed` porque o borrower pode ainda não ter uma associated token account para este token específico. A restrição cria uma automaticamente se necessário.
+- `protocol_ata`: já deve existir e ser mutável já que transferiremos tokens dela. A restrição `associated_token::authority = protocol` garante que apenas o PDA do protocolo pode autorizar transferências.
+- `instructions`: usa a restrição `address` para verificar se estamos acessando a conta de sistema correta que contém os dados de instrução da transação.
+
+<ArticleSection name="Erros" id="errors" level="h2" />
+
+Flash loans exigem validação precisa em múltiplas etapas, então precisamos de um tratamento de erros abrangente. Aqui está nosso enum de erros completo:
+
+```rust
+#[error_code]
+pub enum ProtocolError {
+    #[msg("Invalid instruction")]
+    InvalidIx,
+    #[msg("Invalid instruction index")]
+    InvalidInstructionIndex,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+    #[msg("Not enough funds")]
+    NotEnoughFunds,
+    #[msg("Program Mismatch")]
+    ProgramMismatch,
+    #[msg("Invalid program")]
+    InvalidProgram,
+    #[msg("Invalid borrower ATA")]
+    InvalidBorrowerAta,
+    #[msg("Invalid protocol ATA")]
+    InvalidProtocolAta,
+    #[msg("Missing repay instruction")]
+    MissingRepayIx,
+    #[msg("Missing borrow instruction")]
+    MissingBorrowIx,
+    #[msg("Overflow")]
+    Overflow,
+}
+```
+
+Com essa base implementada, estamos prontos para implementar a lógica principal das nossas instruções de flash loan. A estrutura de contas garante o tratamento adequado dos tokens, enquanto o sistema de erros fornece feedback claro para depuração e validação de segurança.
+
+> O programa ainda não compila completamente. Você consegue descobrir o porquê?

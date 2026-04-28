@@ -1,0 +1,567 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Tratamento de Erros](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Tratamento de Erros
+
+Conexões com carteiras móveis falham de maneiras que aplicativos desktop nunca veem. O app da carteira pode não estar instalado. O usuário pode sair antes de assinar. A sessão pode expirar no meio de uma transação. O Bluetooth em alguns dispositivos Saga pode interromper a conexão.
+
+Um tratamento de erros robusto é o que separa dApps de produção de demos. Esta lição fornece padrões para cada modo de falha no MWA.
+
+> Não capture erros e mostre mensagens genéricas. Os erros do MWA dizem exatamente o que aconteceu: use essa informação.
+
+<ArticleSection name="Tipos de Erro do MWA" id="error-types" level="h2" />
+
+O SDK do MWA lança tipos de erro específicos. Cada um requer um tratamento diferente:
+
+```typescript
+import {
+  SolanaMobileWalletAdapterError,
+  SolanaMobileWalletAdapterProtocolError,
+} from '@solana-mobile/mobile-wallet-adapter-protocol';
+```
+
+**SolanaMobileWalletAdapterError**: Erros de nível de protocolo (sessão, transporte, falhas de associação)
+
+**SolanaMobileWalletAdapterProtocolError**: Erros de nível da carteira (autorização negada, assinatura rejeitada)
+
+<ArticleSection name="Códigos de Erro do Protocolo" id="error-codes" level="h2" />
+
+O MWA define códigos de erro específicos. O SDK encapsula erros de protocolo no formato JSON-RPC. Aqui está a referência completa:
+
+> **Nota**: A especificação bruta do protocolo MWA define constantes como `ERROR_AUTHORIZATION_FAILED=***, mas o SDK apresenta esses erros como erros JSON-RPC na faixa de `-32xxx`. A tabela abaixo mostra os códigos como aparecem nos objetos de erro JavaScript/TypeScript.
+
+| Código | Constante | Significado | Ação do Usuário |
+|------|----------|---------|-------------|
+| -32700 | `ERROR_JSON_RPC_PARSE` | JSON inválido na requisição | Bug no seu código |
+| -32600 | `ERROR_JSON_RPC_INVALID_REQUEST` | Requisição RPC malformada | Bug no seu código |
+| -32601 | `ERROR_JSON_RPC_METHOD_NOT_FOUND` | Método desconhecido chamado | Verifique o nome do método |
+| -32602 | `ERROR_JSON_RPC_INVALID_PARAMS` | Parâmetros inválidos | Verifique os tipos dos parâmetros |
+| -32603 | `ERROR_JSON_RPC_INTERNAL` | Erro interno da carteira | Tente novamente |
+| -32000 | `ERROR_AUTHORIZATION_FAILED` | Autorização negada pelo usuário | Usuário cancelou. Respeite |
+| -32001 | `ERROR_INVALID_PAYLOADS` | Formato de transação inválido | Verifique a construção da transação |
+| -32002 | `ERROR_NOT_SIGNED` | Usuário recusou assinar | Usuário cancelou. Respeite |
+| -32003 | `ERROR_NOT_SUBMITTED` | A carteira não conseguiu enviar | Verifique a rede, tente novamente |
+| -32004 | `ERROR_NOT_CLONED` | Falha no clone (descontinuado) | Raro, tente novamente |
+| -32005 | `ERROR_TOO_MANY_PAYLOADS` | Muitas transações | Divida em lotes menores |
+| -32010 | `ERROR_ATTEST_ORIGIN_ANDROID` | Falha na atestação de origem | Problema de configuração do Android |
+
+<ArticleSection name="Tratador de Erros Estruturado" id="handler" level="h2" />
+
+Construa um tratador de erros centralizado:
+
+```typescript
+// src/utils/mwaErrorHandler.ts
+import {
+  SolanaMobileWalletAdapterError,
+  SolanaMobileWalletAdapterProtocolError,
+} from '@solana-mobile/mobile-wallet-adapter-protocol';
+
+export interface MWAErrorResult {
+  userMessage: string;
+  shouldRetry: boolean;
+  isUserCancellation: boolean;
+  originalError: Error;
+}
+
+const ERROR_MESSAGES: Record<string, string> = {
+  ERROR_AUTHORIZATION_FAILED: 'Conexão com a carteira cancelada',
+  ERROR_NOT_SIGNED: 'Assinatura da transação recusada',
+  ERROR_NOT_SUBMITTED: 'Não foi possível enviar a transação. Verifique sua conexão.',
+  ERROR_TOO_MANY_PAYLOADS: 'Muitas transações. Tente enviar menos.',
+  ERROR_INVALID_PAYLOADS: 'Formato de transação inválido',
+  ERROR_ATTEST_ORIGIN_ANDROID: 'Falha na verificação do app. Por favor, reinstale.',
+};
+
+export function handleMWAError(error: unknown): MWAErrorResult {
+  // Não é um erro do MWA
+  if (!(error instanceof Error)) {
+    return {
+      userMessage: 'Ocorreu um erro inesperado',
+      shouldRetry: true,
+      isUserCancellation: false,
+      originalError: new Error(String(error)),
+    };
+  }
+
+  // Erro de nível de protocolo (resposta da carteira)
+  if (error instanceof SolanaMobileWalletAdapterProtocolError) {
+    const message = ERROR_MESSAGES[error.code] ?? error.message;
+    const isUserCancellation = 
+      error.code === 'ERROR_AUTHORIZATION_FAILED' ||
+      error.code === 'ERROR_NOT_SIGNED';
+    
+    return {
+      userMessage: message,
+      shouldRetry: !isUserCancellation,
+      isUserCancellation,
+      originalError: error,
+    };
+  }
+
+  // Erro de nível do SDK (associação, sessão)
+  if (error instanceof SolanaMobileWalletAdapterError) {
+    // Comum: nenhuma carteira instalada
+    if (error.message.includes('Found no installed wallet')) {
+      return {
+        userMessage: 'Nenhuma carteira Solana encontrada. Por favor, instale um app de carteira.',
+        shouldRetry: false,
+        isUserCancellation: false,
+        originalError: error,
+      };
+    }
+
+    // Timeout de sessão
+    if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+      return {
+        userMessage: 'A conexão com a carteira expirou. Por favor, tente novamente.',
+        shouldRetry: true,
+        isUserCancellation: false,
+        originalError: error,
+      };
+    }
+
+    // Erro genérico do SDK
+    return {
+      userMessage: 'Não foi possível conectar à carteira. Por favor, tente novamente.',
+      shouldRetry: true,
+      isUserCancellation: false,
+      originalError: error,
+    };
+  }
+
+  // Erro padrão (problemas de rede, etc.)
+  if (error.message.includes('Network') || error.message.includes('fetch')) {
+    return {
+      userMessage: 'Erro de rede. Verifique sua conexão.',
+      shouldRetry: true,
+      isUserCancellation: false,
+      originalError: error,
+    };
+  }
+
+  return {
+    userMessage: error.message || 'Ocorreu um erro',
+    shouldRetry: true,
+    isUserCancellation: false,
+    originalError: error,
+  };
+}
+```
+
+<ArticleSection name="Usando o Tratador de Erros" id="usage" level="h2" />
+
+Envolva suas chamadas `transact`:
+
+```typescript
+import { Alert } from 'react-native';
+import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { handleMWAError } from '../utils/mwaErrorHandler';
+
+async function connectWallet() {
+  try {
+    await transact(async (wallet) => {
+      const result = await wallet.authorize({
+        identity: APP_IDENTITY,
+        chain: 'solana:devnet',
+      });
+      // Lidar com sucesso
+    });
+  } catch (error) {
+    const { userMessage, isUserCancellation, shouldRetry } = handleMWAError(error);
+    
+    if (isUserCancellation) {
+      // Usuário cancelou intencionalmente — não mostrar erro
+      console.log('Usuário cancelou');
+      return;
+    }
+    
+    if (shouldRetry) {
+      Alert.alert('Erro', userMessage, [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Tentar Novamente', onPress: () => connectWallet() },
+      ]);
+    } else {
+      Alert.alert('Erro', userMessage);
+    }
+  }
+}
+```
+
+<ArticleSection name="Padrões de Retry" id="retry" level="h2" />
+
+Implemente backoff exponencial para falhas transitórias:
+
+```typescript
+// src/utils/retry.ts
+export interface RetryOptions {
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+const DEFAULT_OPTIONS: RetryOptions = {
+  maxAttempts: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+};
+
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  shouldRetry: (error: unknown) => boolean,
+  options: Partial<RetryOptions> = {}
+): Promise<T> {
+  const { maxAttempts, baseDelayMs, maxDelayMs } = {
+    ...DEFAULT_OPTIONS,
+    ...options,
+  };
+
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (!shouldRetry(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      // Backoff exponencial com jitter
+      const delay = Math.min(
+        baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 1000,
+        maxDelayMs
+      );
+
+      console.log(`Tentativa ${attempt} falhou, tentando novamente em ${delay}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+```
+
+Use com o MWA:
+
+```typescript
+import { handleMWAError } from '../utils/mwaErrorHandler';
+import { withRetry } from '../utils/retry';
+
+async function sendTransactionWithRetry(transaction: VersionedTransaction) {
+  return await withRetry(
+    async () => {
+      return await transact(async (wallet) => {
+        await authorizeSession(wallet);
+        const [signature] = await wallet.signAndSendTransactions({
+          transactions: [transaction],
+        });
+        return signature;
+      });
+    },
+    (error) => {
+      const result = handleMWAError(error);
+      return result.shouldRetry && !result.isUserCancellation;
+    },
+    { maxAttempts: 3 }
+  );
+}
+```
+
+<ArticleSection name="Erros do Ciclo de Vida da Sessão" id="session-errors" level="h2" />
+
+A sessão do MWA pode encerrar inesperadamente:
+
+**Usuário sai do app**: A sessão permanece ativa brevemente, mas a carteira pode fechá-la.
+
+**Carteira em background por muito tempo**: O Android pode encerrar o processo da carteira.
+
+**Token de autenticação expirado**: Os tokens não duram para sempre.
+
+Trate erros de sessão re-autorizando:
+
+```typescript
+async function robustTransact<T>(
+  callback: (wallet: Web3MobileWallet) => Promise<T>
+): Promise<T> {
+  return await transact(async (wallet) => {
+    try {
+      return await callback(wallet);
+    } catch (error) {
+      // Se for um erro de autenticação, o token pode estar desatualizado
+      if (
+        error instanceof SolanaMobileWalletAdapterProtocolError &&
+        error.code === 'ERROR_AUTHORIZATION_FAILED'
+      ) {
+        // Limpar token em cache
+        await AsyncStorage.removeItem('mwa_auth_token');
+        
+        // Re-autorizar sem o token em cache
+        await wallet.authorize({
+          identity: APP_IDENTITY,
+          chain: 'solana:devnet',
+        });
+        
+        // Tentar a operação novamente
+        return await callback(wallet);
+      }
+      
+      throw error;
+    }
+  });
+}
+```
+
+<ArticleSection name="Nenhuma Carteira Instalada" id="no-wallet" level="h2" />
+
+Trate o caso em que nenhuma carteira está instalada:
+
+```typescript
+import { Linking, Platform } from 'react-native';
+
+const WALLET_STORE_URLS = {
+  phantom: {
+    ios: 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977',
+    android: 'https://play.google.com/store/apps/details?id=app.phantom',
+  },
+  solflare: {
+    ios: 'https://apps.apple.com/app/solflare/id1580902717',
+    android: 'https://play.google.com/store/apps/details?id=com.solflare.mobile',
+  },
+};
+
+function NoWalletPrompt() {
+  const openStore = async (wallet: 'phantom' | 'solflare') => {
+    const url = WALLET_STORE_URLS[wallet][Platform.OS === 'ios' ? 'ios' : 'android'];
+    await Linking.openURL(url);
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Nenhuma Carteira Encontrada</Text>
+      <Text style={styles.subtitle}>
+        Instale uma carteira Solana para continuar
+      </Text>
+      <Button 
+        title="Obter Phantom" 
+        onPress={() => openStore('phantom')} 
+      />
+      <Button 
+        title="Obter Solflare" 
+        onPress={() => openStore('solflare')} 
+      />
+    </View>
+  );
+}
+```
+
+Integre com seu fluxo de conexão:
+
+```typescript
+function ConnectButton() {
+  const [showNoWallet, setShowNoWallet] = useState(false);
+
+  const handleConnect = async () => {
+    try {
+      await transact(async (wallet) => {
+        await wallet.authorize({ /* ... */ });
+      });
+    } catch (error) {
+      const result = handleMWAError(error);
+      
+      if (result.userMessage.includes('Nenhuma carteira Solana')) {
+        setShowNoWallet(true);
+        return;
+      }
+      
+      if (!result.isUserCancellation) {
+        Alert.alert('Erro', result.userMessage);
+      }
+    }
+  };
+
+  if (showNoWallet) {
+    return <NoWalletPrompt />;
+  }
+
+  return <Button title="Conectar Carteira" onPress={handleConnect} />;
+}
+```
+
+<ArticleSection name="Erros de Simulação de Transação" id="simulation" level="h2" />
+
+Antes de enviar para uma carteira, simule transações para capturar erros cedo:
+
+```typescript
+import { 
+  Connection, 
+  VersionedTransaction,
+  SendTransactionError,
+} from '@solana/web3.js';
+
+interface SimulationResult {
+  success: boolean;
+  error?: string;
+  logs?: string[];
+}
+
+async function simulateTransaction(
+  connection: Connection,
+  transaction: VersionedTransaction
+): Promise<SimulationResult> {
+  try {
+    const result = await connection.simulateTransaction(transaction, {
+      commitment: 'confirmed',
+    });
+
+    if (result.value.err) {
+      return {
+        success: false,
+        error: formatSimulationError(result.value.err),
+        logs: result.value.logs ?? undefined,
+      };
+    }
+
+    return { success: true, logs: result.value.logs ?? undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'A simulação falhou',
+    };
+  }
+}
+
+function formatSimulationError(err: any): string {
+  if (typeof err === 'string') return err;
+  
+  if (err.InstructionError) {
+    const [index, reason] = err.InstructionError;
+    if (typeof reason === 'object' && reason.Custom !== undefined) {
+      return `Instrução ${index} falhou com erro personalizado ${reason.Custom}`;
+    }
+    return `Instrução ${index} falhou: ${JSON.stringify(reason)}`;
+  }
+  
+  return JSON.stringify(err);
+}
+```
+
+Use antes da assinatura na carteira:
+
+```typescript
+async function sendWithSimulation(
+  transaction: VersionedTransaction,
+  connection: Connection
+): Promise<string> {
+  // Simular primeiro
+  const simulation = await simulateTransaction(connection, transaction);
+  
+  if (!simulation.success) {
+    throw new Error(`A transação falharia: ${simulation.error}`);
+  }
+  
+  // Abrir a carteira apenas se a simulação passou
+  return await transact(async (wallet) => {
+    await authorizeSession(wallet);
+    const [signature] = await wallet.signAndSendTransactions({
+      transactions: [transaction],
+    });
+    return signature;
+  });
+}
+```
+
+<ArticleSection name="Componente de Feedback do Usuário" id="feedback" level="h2" />
+
+Crie um componente para o status da transação:
+
+```typescript
+// components/TransactionStatus.tsx
+import React from 'react';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+
+type Status = 'idle' | 'simulating' | 'signing' | 'confirming' | 'success' | 'error';
+
+interface Props {
+  status: Status;
+  signature?: string;
+  error?: string;
+}
+
+const STATUS_MESSAGES: Record<Status, string> = {
+  idle: '',
+  simulating: 'Simulando transação...',
+  signing: 'Aprove na sua carteira...',
+  confirming: 'Confirmando na blockchain...',
+  success: 'Transação confirmada!',
+  error: 'A transação falhou',
+};
+
+export function TransactionStatus({ status, signature, error }: Props) {
+  if (status === 'idle') return null;
+
+  return (
+    <View style={styles.container}>
+      {(status === 'simulating' || status === 'signing' || status === 'confirming') && (
+        <ActivityIndicator size="small" />
+      )}
+      <Text style={[styles.text, status === 'error' && styles.errorText]}>
+        {STATUS_MESSAGES[status]}
+      </Text>
+      {status === 'error' && error && (
+        <Text style={styles.errorDetail}>{error}</Text>
+      )}
+      {status === 'success' && signature && (
+        <Text style={styles.signature}>
+          {signature.slice(0, 20)}...
+        </Text>
+      )}
+    </View>
+  );
+}
+```
+
+<ArticleSection name="Logging para Debug" id="logging" level="h2" />
+
+Em desenvolvimento, registre todas as interações do MWA:
+
+```typescript
+// src/utils/mwaLogger.ts
+const DEBUG = __DEV__;
+
+export function logMWARequest(method: string, params: unknown): void {
+  if (!DEBUG) return;
+  console.log(`[MWA] → ${method}`, JSON.stringify(params, null, 2));
+}
+
+export function logMWAResponse(method: string, result: unknown): void {
+  if (!DEBUG) return;
+  console.log(`[MWA] ← ${method}`, JSON.stringify(result, null, 2));
+}
+
+export function logMWAError(method: string, error: unknown): void {
+  console.error(`[MWA] ✕ ${method}`, error);
+}
+```
+
+Envolva suas chamadas transact:
+
+```typescript
+async function trackedTransact<T>(
+  callback: (wallet: Web3MobileWallet) => Promise<T>
+): Promise<T> {
+  const startTime = Date.now();
+  
+  try {
+    const result = await transact(callback);
+    console.log(`[MWA] Sessão concluída em ${Date.now() - startTime}ms`);
+    return result;
+  } catch (error) {
+    console.error(`[MWA] Sessão falhou após ${Date.now() - startTime}ms`, error);
+    throw error;
+  }
+}
+```
+
+Um bom tratamento de erros faz seu dApp parecer profissional. Na próxima lição, abordaremos como testar sua implementação em dispositivos reais.

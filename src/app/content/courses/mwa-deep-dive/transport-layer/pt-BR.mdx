@@ -1,0 +1,246 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Camada de Transporte
+
+A camada de transporte responde a uma pergunta: como os bytes fluem entre seu dApp e a carteira? O protocolo suporta múltiplos transportes, mas a especificação define cuidadosamente o que qualquer transporte deve fornecer.
+
+<ArticleSection name="Requisitos do Transporte" id="requirements" level="h2" />
+
+Qualquer transporte MWA deve garantir:
+
+**Full-Duplex**: Ambos os apps podem enviar mensagens simultaneamente. A carteira pode precisar enviar notificações enquanto o dApp ainda está enviando solicitações.
+
+**Orientado a Mensagens**: Bytes chegam como mensagens discretas, não como um fluxo contínuo. O transporte preserva os limites das mensagens. Quando o dApp envia uma mensagem de 100 bytes, a carteira recebe exatamente 100 bytes como uma unidade.
+
+**Entrega Confiável e Ordenada**: Mensagens chegam na ordem enviada, sem corrupção. TCP fornece isso; Bluetooth bruto não (então MWA sobre Bluetooth precisaria adicionar).
+
+**App-para-App em Dispositivo Único**: Para conexões locais, o transporte deve permitir que dois apps no mesmo dispositivo se comuniquem.
+
+A especificação atualmente define um transporte concreto: WebSocket sobre localhost. Um transporte futuro (Bluetooth LE) está delineado mas ainda não padronizado.
+
+<ArticleSection name="Transporte WebSocket" id="websocket" level="h2" />
+
+Para conexões locais (ambos os apps no mesmo dispositivo Android), o MWA usa WebSocket:
+
+- **Servidor**: A carteira abre um servidor WebSocket em `ws://127.0.0.1:<porta>`
+- **Cliente**: O dApp conecta a esse endereço
+- **Faixa de Portas**: 49152-65535 (portas efêmeras, especificadas pelo dApp)
+
+O dApp especifica a porta na URI de associação:
+
+```
+solana-wallet:/v1/associate/local?association=<token>&port=49200
+```
+
+Quando a carteira recebe esta URI (via Android Intent), inicia seu servidor WebSocket na porta 49200 e aguarda o dApp conectar.
+
+### Negociação de Subprotocolo
+
+Durante o handshake WebSocket, cliente e servidor negociam um subprotocolo via o cabeçalho `Sec-WebSocket-Protocol`:
+
+| Nome do Subprotocolo | Tipo de Frame | Codificação |
+|---------------------|---------------|-------------|
+| `com.solana.mobilewalletadapter.v1` | Binário | Bytes brutos |
+| `com.solana.mobilewalletadapter.v1.base64` | Texto | Codificado em Base64 |
+
+O subprotocolo binário é preferido por eficiência. A variante base64 existe para ambientes onde frames WebSocket binários são problemáticos.
+
+```typescript
+// O SDK MWA negocia isso automaticamente
+const ws = new WebSocket(uri, [
+  'com.solana.mobilewalletadapter.v1',
+  'com.solana.mobilewalletadapter.v1.base64'
+]);
+```
+
+<ArticleSection name="Ciclo de Vida da Conexão" id="lifecycle" level="h2" />
+
+A conexão segue esta sequência:
+
+```
++----------+                           +----------+
+|   dApp   |                           |  Carteira |
++----+-----+                           +----+-----+
+     |                                      |
+     |  Intent: solana-wallet:/v1/...       |
+     |------------------------------------->|
+     |                                      |
+     |               (Carteira inicia servidor WS na porta)
+     |                                      |
+     |  WebSocket connect to 127.0.0.1:porta |
+     |------------------------------------->|
+     |                                      |
+     |  WebSocket handshake (subprotocolo)  |
+     |<-------------------------------------|
+     |                                      |
+     |  (Transporte estabelecido)           |
+     |                                      |
+```
+
+### Restrições de Tempo
+
+A especificação define timeouts para prevenir conexões travadas:
+
+- **Inicialização da carteira**: A carteira deve iniciar seu servidor WebSocket dentro de um tempo razoável após receber o Intent (definido pela implementação)
+- **Estabelecimento de sessão**: Após o transporte ser estabelecido, a sessão deve ser estabelecida dentro de um timeout (tipicamente 30 segundos)
+- **Reconhecimento de mensagem**: Para conexões refletor, timeouts específicos se aplicam a estados semi-abertos
+
+### Fechamento Graceful vs Anormal
+
+Um fechamento WebSocket pode ser:
+
+- **Graceful**: Um lado envia um frame Close, o outro reconhece. Este é o fim normal de sessão.
+- **Anormal**: A conexão cai sem um frame Close. Isso acontece se a carteira é forçada a fechar, a rede falha, ou o dispositivo entra em modo de repouso.
+
+O SDK do dApp lida com ambos os casos. Quando `transact()` completa normalmente, envia um fechamento graceful. Se a conexão cair inesperadamente, o SDK lança um erro que seu app deve capturar.
+
+<ArticleSection name="Transporte Local vs Remoto" id="local-vs-remote" level="h2" />
+
+A camada de transporte abstrai a topologia de conexão:
+
+**Transporte Local**: Ambos os apps no mesmo dispositivo. WebSocket sobre localhost. Baixa latência (sub-milissegundo). Sem dependência de rede.
+
+**Transporte Remoto**: dApp em um dispositivo (laptop), carteira em outro (celular). WebSocket via servidor refletor. Latência maior (dependente de rede). Requer internet.
+
+As camadas de sessão e RPC acima não mudam entre local e remoto. A criptografia garante que mesmo que o tráfego passe por um refletor, o conteúdo das mensagens permanece privado.
+
+<ArticleSection name="O Protocolo do Servidor Refletor" id="reflector-protocol" level="h2" />
+
+Para conexões remotas, ambos os endpoints conectam a um refletor:
+
+```
+wss://<refletor-host>/reflect
+```
+
+O protocolo tem tipos específicos de mensagens. Note que mensagens neste protocolo não usam prefixos de byte de tipo; em vez disso, o formato e contexto da mensagem determinam o significado:
+
+### Mensagens do Refletor para o dApp
+
+**`REFLECTOR_ID`**: Enviado ao dApp imediatamente após a conexão. Formato: `<comprimento><bytes_id>` onde comprimento é um comprimento de byte codificado como varint. Este ID vai para o QR code que a carteira escaneia.
+
+**`APP_PING`**: Uma **mensagem vazia** (zero bytes). Enviada pelo refletor para ambos os endpoints quando a contraparte conecta. O dApp deve aguardar por isso antes de enviar `HELLO_REQ`.
+
+### Encaminhamento de Mensagens
+
+Uma vez que ambos os clientes estão conectados e `APP_PING` foi enviado, o refletor entra em modo de encaminhamento. Cada mensagem de um cliente é **encaminhada diretamente** para o outro. Sem prefixo ou wrapper é adicionado.
+
+```
+dApp envia: [bytes HELLO_REQ]
+Refletor encaminha: [bytes HELLO_REQ] (inalterados)
+Carteira recebe: [bytes HELLO_REQ]
+```
+
+O refletor é transparente para todos os dados após o início do estabelecimento de sessão.
+
+### Timeouts do Refletor
+
+| Estado | Timeout | Ação |
+|--------|---------|------|
+| Aguardando carteira conectar | 30 segundos | Fechar conexão |
+| Sessão conectada | 90 segundos de inatividade | Fechar ambas conexões |
+| Limite de tamanho de mensagem | 4096 bytes | Fechar conexão |
+
+<ArticleSection name="Transporte no SDK" id="sdk-transport" level="h2" />
+
+Olhando o código fonte real do SDK MWA, a lógica de transporte vive em `transact.ts`. Aqui está a máquina de estados que gerencia conexões:
+
+```typescript
+type State =
+  | { __type: 'connecting' }
+  | { __type: 'connected'; ws: WebSocket }
+  | { __type: 'hello_req_sent'; ws: WebSocket }
+  | { __type: 'hello_rsp_received'; 
+      associationPublicKey: CryptoKey;
+      ecdhPrivateKey: CryptoKey;
+      sessionKeyPair: Readonly<{
+        aes_key: Uint8Array;
+        hmac_key: Uint8Array;
+      }>;
+      sequenceNumber: number;
+      ws: WebSocket; 
+    }
+  | { __type: 'connected_and_authorized'; /* ... */ }
+  | { __type: 'disconnected' }
+  | { __type: 'error'; message: string };
+```
+
+Transições da máquina de estados:
+
+1. `connecting` → `connected`: WebSocket aberto
+2. `connected` → `hello_req_sent`: Enviou a mensagem HELLO_REQ
+3. `hello_req_sent` → `hello_rsp_received`: Recebeu HELLO_RSP, derivou chaves de sessão
+4. `hello_rsp_received` → `connected_and_authorized`: Autorizado (ou re-autorizado) com sucesso
+5. Qualquer estado → `disconnected`: Fechamento normal
+6. Qualquer estado → `error`: Fechamento anormal ou violação de protocolo
+
+<ArticleSection name="Estratégia de Seleção de Porta" id="port-selection" level="h2" />
+
+O dApp escolhe a porta. Por quê? Porque:
+
+1. O dApp inicia; ele sabe quando precisa de uma sessão de carteira
+2. O dApp pode tentar novamente com portas diferentes se uma estiver ocupada
+3. O sistema de Intent não tem um canal de retorno para a carteira comunicar uma porta
+
+O SDK tipicamente escolhe uma porta da faixa efêmera (49152-65535) e verifica se está disponível. Se a carteira não puder se vincular a essa porta (raro mas possível), a conexão falha e o SDK pode tentar novamente.
+
+```typescript
+// Do SDK: seleção de porta em transact()
+const port = 49152 + Math.floor(Math.random() * 16383);
+```
+
+<ArticleSection name="Enquadramento de Mensagens" id="framing" level="h2" />
+
+WebSocket cuida do enquadramento, então MWA não precisa de prefixos de comprimento. Mas as mensagens têm estrutura:
+
+**Mensagens não criptografadas** (durante estabelecimento de sessão):
+```
++-----------------------------------------+
+|  Tipo de Mensagem (1 byte)  |  Payload   |
++-----------------------------------------+
+```
+
+**Mensagens criptografadas** (após estabelecimento de sessão):
+```
++------------------------------------------------------+
+|  Número de Sequência (4 bytes)  |  Ciphertext AES-GCM |
+|       (big-endian)              |  (inclui auth tag)  |
++------------------------------------------------------+
+```
+
+O número de sequência previne ataques de replay. Cada lado mantém seu próprio contador, incrementando com cada mensagem enviada.
+
+<ArticleSection name="Debugando Problemas de Transporte" id="debugging" level="h2" />
+
+Problemas comuns no nível de transporte:
+
+**"Conexão recusada"**: A carteira ainda não iniciou seu servidor. Isso pode acontecer se:
+- O app da carteira demorou muito para iniciar
+- A carteira não suporta MWA
+- A porta já está em uso por outro processo
+
+**"Conexão resetada"**: A carteira fechou inesperadamente. Verifique se:
+- A carteira crashou
+- O usuário forçou o fechamento da carteira
+- A carteira rejeitou a conexão durante o estabelecimento de sessão
+
+**"Timeout WebSocket"**: Sem resposta da carteira. Causas possíveis:
+- A carteira está congelada ou extremamente lenta
+- Em conexões refletor, problemas de rede
+- A UI da carteira está bloqueando (usuário não interagiu)
+
+**"Subprotocolo inválido"**: A carteira aceitou a conexão mas não concordou com um subprotocolo. Isso indica incompatibilidade de versão. A carteira pode estar executando uma implementação MWA mais antiga.
+
+<ArticleSection name="Considerações de Segurança do Transporte" id="security" level="h2" />
+
+A camada de transporte em si fornece segurança mínima:
+
+- **Apenas localhost**: Conexões WebSocket locais são para `127.0.0.1`, que não pode ser alcançado de outros dispositivos
+- **Sem TLS localmente**: `ws://` (não `wss://`) porque TLS para localhost é desnecessário e complica o gerenciamento de certificados
+- **TLS para refletor**: Conexões remotas usam `wss://` para o refletor
+
+A verdadeira segurança vem da camada de sessão. Suposições de segurança do transporte:
+1. Tráfego localhost está razoavelmente isolado de outros apps (imposição do SO)
+2. A conexão refletor usa TLS para prevenir espionagem do ciphertext
+3. Todo conteúdo de mensagem é criptografado independentemente do transporte
+
+Na próxima lição, examinamos o mecanismo de associação: como o dApp diz à carteira onde conectar e prova sua identidade.

@@ -1,0 +1,118 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso Solana Pay - Construa soluções de pagamento na blockchain Solana](/graphics/course-banners/solana-pay.png)
+
+# Solana Pay
+
+O Solana Pay é um framework de pagamentos open-source que permite transações instantâneas com taxas quase zero na Solana.
+
+Já confiável por milhões de empresas através da integração com Shopify, ele transforma o comércio eliminando inteiramente os intermediários de pagamento tradicionais.
+
+> O Solana Pay padroniza pagamentos através de URLs. Em vez de integrações complexas com carteiras, você cria links simples que funcionam automaticamente em todas as carteiras Solana.
+
+<ArticleSection name="Funcionalidades Principais" id="core-functionalities" level="h2" />
+
+O Solana Pay se caracteriza por:
+- **Liquidação Direta:** Os pagamentos vão diretamente das carteiras dos clientes para as dos merchants em SOL ou qualquer token SPL. Sem bancos, processadores ou intermediários ficando com uma parte.
+- **Finalidade Instantânea:** Os fundos chegam imediatamente após a confirmação graças ao settlement sub-segundo da Solana.
+- **Compatibilidade Universal:** Uma única implementação funciona com todas as carteiras e aplicações Solana.
+
+Tudo através de dois tipos fundamentais de requisição:
+
+### Transfer Requests (Pagamentos Simples)
+
+URLs não-interativas para transações predeterminadas. Tudo codificado na URL.
+
+```
+solana:mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN?amount=0.01&spl-token=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+```
+
+> Ideal para: Checkouts de e-commerce, doações, assinaturas, qualquer transferência simples de tokens.
+
+### Transaction Requests (Pagamentos Dinâmicos)
+
+URLs interativas que compõem transações complexas no lado do servidor.
+
+A carteira faz uma requisição HTTP para o seu servidor, que retorna uma transação personalizada construída com dados em tempo real.
+
+> Ideal para: NFTs com preço dinâmico, interações DeFi, programas de fidelidade, lógica de negócio complexa.
+
+### Opções de Integração
+
+O Solana Pay vem com:
+- **QR Codes:** Pagamentos presenciais instantâneos
+- **Links Compartilháveis:** Funcionam em qualquer plataforma
+- **Botões Embutidos:** Experiências de checkout fluidas
+- **Fluxos Personalizados:** Transações multi-parte, acesso condicional, assinatura parcial
+
+<ArticleSection name="Por Que Importa" id="why-it-matters" level="h2" />
+
+O Solana Pay substitui toda a pilha de pagamentos tradicional por URLs simples. Em vez de integrar com múltiplas carteiras e lidar com fluxos complexos de transações, você cria links padronizados que funcionam automaticamente em qualquer lugar.
+
+**Fluxo de Pagamento Tradicional:** Cliente → Banco → Processador de Pagamento → Seu Banco → Você (dias depois, menos taxas)
+
+**Fluxo Solana Pay:** Cliente → Você (instantaneamente, taxas quase zero)
+
+> A especificação do Solana Pay transforma fundamentalmente os pagamentos em blockchain ao substituir integrações complexas de carteiras por URLs simples e padronizadas que funcionam em qualquer lugar.
+
+<ArticleSection name="Referência" id="reference" level="h2" />
+
+Referências são uma das partes mais importantes da stack do Solana Pay. Como seu backend não envia transações para a rede, mas apenas retorna respostas de transação que as carteiras assinam, não há assinaturas de transação para ajudar a determinar se o pagamento foi concluído.
+
+Uma `reference` é uma chave pública única incluída como uma conta não-signatária e não-gravável nas transações. Ela não afeta o comportamento da transação, mas serve como identificador de rastreamento.
+
+Aqui está o fluxo:
+1. Gere uma referência única (publickey) para cada solicitação de pagamento
+2. Inclua-a nas suas URLs de requisição de transação como um parâmetro
+3. Adicione-a às suas instruções de transação como uma conta não-signatária
+4. Rastreie a transação usando a referência
+
+Você pode usar o método RPC `getSignaturesForAddress` da Solana ou o helper `findReference` da biblioteca `@solana/pay` para localizar transações contendo sua referência assim:
+
+```ts
+useEffect(() => {
+    // Consultar a rede por transações que incluem o endereço de referência
+    const interval = setInterval(async () => {
+        try {
+            // Encontrar transações que incluem o endereço de referência
+            const signatureInfo = await findReference(connection, reference, {
+                until: mostRecentNotifiedTransaction.current, // Procurar apenas transações após a mais recente que encontramos
+                finality: "confirmed",
+            });
+            // Atualizar a transação mais recente com a transação que acabamos de encontrar
+            mostRecentNotifiedTransaction.current = signatureInfo.signature;
+            // Notificação toast
+            displayToast(signatureInfo.signature);
+        } catch (e) {
+            if (e instanceof FindReferenceError) {
+                // Nenhuma transação encontrada ainda, ignorar este erro
+                return;
+            }
+            console.error("Erro desconhecido", e);
+        }
+    }, 1000); // Verificar novas transações a cada segundo
+    
+    return () => {
+        clearInterval(interval);
+    };
+}, [reference]);
+```
+
+<ArticleSection name="Geração de QR Code" id="qr-code-generation" level="h2" />
+
+Transforme qualquer requisição de transação em um QR code escaneável usando a biblioteca `@solana/pay`:
+
+```ts
+import { createQR, encodeURL, TransactionRequestURLFields } from '@solana/pay'; 
+
+const urlParams: TransactionRequestURLFields = {
+  link: new URL("https://yourapi.com/pay"),
+};
+const solanaUrl = encodeURL(urlParams);
+
+const qr = createQR(
+  solanaUrl,
+  400,
+  "transparent"
+);
+```

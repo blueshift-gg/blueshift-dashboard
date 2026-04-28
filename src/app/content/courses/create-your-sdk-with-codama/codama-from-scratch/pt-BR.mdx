@@ -1,0 +1,229 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Construa seu Codama IDL do zero
+
+Construir um Codama IDL do zero significa criar a árvore completa de nós para o seu programa. Para fazer isso de forma eficiente, vamos examinar os tipos de nós disponíveis para uso.
+
+<ArticleSection name="Node Types" id="node-types" level="h2" />
+
+### Value Node
+
+Para passar valores específicos para um nó, usamos `ValueNode`. Este tipo representa todos os nós de valor disponíveis que podem conter diferentes tipos de dados.
+
+[Aqui](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/valueNodes/README.md) você encontra documentação detalhada sobre todos os valores disponíveis.
+
+> `ValueNode` é um alias de tipo e não pode ser usado diretamente como um nó. Quando um `ValueNode` é necessário, use um dos tipos específicos de nó de valor.
+
+### Type Node
+
+Para definir a estrutura e o formato dos dados, usamos `TypeNode`. Esses nós descrevem que tipo de dado é esperado: como números, strings, structs, arrays ou tipos personalizados.
+
+Eles definem o esquema sem conter valores reais.
+
+[Aqui](https://github.com/codama-idl/codama/blob/main/packages/nodes/docs/typeNodes/README.md) você encontra documentação detalhada sobre todos os tipos disponíveis.
+
+> `TypeNode` é um alias de tipo e não pode ser usado diretamente como um nó. Quando um `TypeNode` é necessário, use um dos tipos específicos de nó de tipo.
+
+### Discriminator Node
+
+Para diferenciar entre contas e instruções no nosso programa, usamos discriminators. Existem diferentes métodos para isso, e o `DiscriminatorNode` fornece todas as opções disponíveis:
+
+- `ConstantDiscriminatorNode`: Usado para descrever um valor constante em um determinado offset. Recebe um `ConstantValueNode` como constante e um `number` como offset:
+    
+    ```ts
+    const discriminatorNode = constantDiscriminatorNode(constantValueNodeFromString('utf8', 'Hello'), 64);
+    ```
+
+- `FieldDiscriminatorNode`: Usado para descrever um valor padrão de um campo de struct em um determinado offset. Recebe um `CamelCaseString` como nome do campo e um `number` como offset:
+    
+    ```ts
+    const discriminatorNode = fieldDiscriminatorNode('accountState', 64);
+    ```
+
+    > O campo deve estar disponível nos dados da conta ou nos argumentos da instrução e deve ter um valor padrão. Por exemplo:
+
+    ```ts
+    accountNode({
+        data: structTypeNode([
+            structFieldTypeNode({
+                name: 'discriminator',
+                type: numberTypeNode('u32'),
+                defaultValue: numberValueNode(42),
+                defaultValueStrategy: 'omitted',
+            }),
+            // ...
+        ]),
+        discriminators: [fieldDiscriminatorNode('discriminator')],
+        // ...
+    });
+    ```
+
+- `SizeDiscriminatorNode`: Usado para distinguir contas ou instruções com base no tamanho dos seus dados. Recebe um `number` como parâmetro de tamanho:
+    
+    ```ts
+    const discriminatorNode = sizeDiscriminatorNode(165);
+    ```
+
+> `DiscriminatorNode` é um alias de tipo e não pode ser usado diretamente como um nó. Quando um `DiscriminatorNode` é necessário, use um dos tipos específicos de nó discriminator.
+
+### Pda Seed Node
+
+Para definir seeds para Program Derived Addresses (PDAs), usamos `PdaSeedNode`. Esses nós especificam como os endereços PDA devem ser derivados, seja a partir de valores constantes ou entradas variáveis. O `PdaSeedNode` fornece diferentes métodos para definir seeds de PDA:
+
+- `ConstantPdaSeedNode`: Usado para descrever uma seed constante para um endereço derivado de programa. Recebe uma combinação de `TypeNode` e `ValueNode`:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNode(stringTypeNode('utf8'), stringValueNode('auth'));
+    ```
+
+    > Um helper `constantPdaSeedNodeFromString` também pode ser usado para definir constantes baseadas em string mais facilmente. Por exemplo, o exemplo a seguir é equivalente ao anterior:
+
+    ```ts
+    const pdaSeedNode = constantPdaSeedNodeFromString('utf8', 'auth');
+    ```
+
+- `VariablePdaSeedNode`: Usado para descrever uma seed variável para um endereço derivado de programa. Recebe um nome e um `TypeNode`:
+
+    ```ts
+    const pdaSeedNode = variablePdaSeedNode('authority', publicKeyTypeNode())
+    ```
+
+Veja como eles são usados em um `pdaNode`:
+
+```ts
+const counterPda = pdaNode({
+    name: 'counter',
+    seeds: [
+        constantPdaSeedNodeFromString('utf8', 'counter'),
+        variablePdaSeedNode('authority', publicKeyTypeNode()),
+    ],
+});
+```
+
+> `PdaSeedNode` é um alias de tipo e não pode ser usado diretamente como um nó. Quando um `PdaSeedNode` é necessário, use um dos tipos específicos de nó de seed PDA.
+
+<ArticleSection name="Writing a Codama IDL" id="writing-a-codama-idl" level="h2" />
+
+Agora que examinamos os nós mais importantes disponíveis em um programa, vamos descobrir como criar um Codama IDL do zero.
+
+### Root Node
+
+Para criar a base do seu Codama IDL, usamos `RootNode`. Este nó serve como o contêiner de nível superior que contém seu `ProgramNode` principal, bem como quaisquer programas adicionais que possam ser referenciados pelo programa principal.
+
+```ts
+const node = rootNode(programNode({ ... }));
+```
+
+### Program Node
+
+Para definir um programa on-chain inteiro, usamos `ProgramNode`. Este nó representa o programa completo implantado on-chain e define todos os elementos mínimos viáveis, como contas, instruções, PDAs e erros.
+
+Além desses elementos principais, este nó aceita o nome do programa, versão, chave pública de implantação e documentação em markdown:
+
+
+```ts
+const node = programNode({
+    name: 'counter',
+    publicKey: '22222222222222222222222222222222222222222222',
+    version: '0.0.1',
+    docs: [],
+    accounts: [],
+    instructions: [],
+    definedTypes: [],
+    pdas: [],
+    errors: [],
+});
+```
+
+Nas próximas seções, examinaremos todos esses elementos em detalhes.
+
+### Account Node
+
+Para definir contas on-chain, usamos `AccountNode`. Este nó é caracterizado pelo seu nome, estrutura de dados e atributos opcionais, como definições de PDA e discriminators de conta.
+
+Ele representa as contas que tipicamente correspondem ao arquivo `state.rs` do seu programa.
+
+O campo docs pode ser usado para adicionar documentação explicando o que esta conta realiza dentro do programa:
+
+```ts
+const node = accountNode({
+    name: 'token',
+    data: structTypeNode([
+        structFieldTypeNode({ name: 'mint', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'owner', type: publicKeyTypeNode() }),
+        structFieldTypeNode({ name: 'amount', type: numberTypeNode('u64') }),
+    ]),
+    discriminators: [sizeDiscriminatorNode(72)],
+    size: 72,
+    pda: pdaLinkNode("associatedTokenAccount"),
+});
+```
+
+> O `AccountNode` não armazena um array de `PdaNode`, mas sim um link opcional para um `PdaNode` via `PdaLinkNode`, para que, se um `PdaNode` for definido dentro de um `ProgramNode`, os dois possam ser vinculados aqui.
+
+### Instruction Node
+
+Para definir instruções do programa, usamos `InstructionNode`. Este nó representa uma instrução em um programa e permite especificar o discriminator, as contas necessárias e os dados da instrução sem complicações.
+
+Além disso, você pode incluir contas opcionais. Com base no design do seu programa, essas contas opcionais podem ser resolvidas de duas formas: sendo omitidas ou passando o ID do programa como uma conta. Você pode selecionar o método de resolução usando o campo `optionalAccountStrategy: "omitted" | "programId"`.
+
+> Quando o `optionalAccountStrategy` não é fornecido, a estratégia `programId` é assumida por padrão.
+
+O campo docs pode ser usado para adicionar documentação explicando o que esta instrução realiza dentro do programa.
+
+```ts
+const node = instructionNode({
+    name: 'increment',
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    arguments: [
+        instructionArgumentNode({
+            name: 'discriminator',
+            type: numberTypeNode('u8'),
+            defaultValue: numberValueNode(1),
+            defaultValueStrategy: 'omitted',
+        }),
+    ],
+    accounts: [
+        instructionAccountNode({ name: 'counter', isWritable: true, isSigner: true }),
+        instructionAccountNode({ name: 'authority', isWritable: false, isSigner: false }),
+    ],
+    remainingAccounts: [instructionRemainingAccountsNode(argumentValueNode('authorities'), { isSigner: true })],
+    optionalAccountStrategy: 'omitted',
+});
+```
+
+Em `instructionAccountNode`, você pode especificar a opcionalidade da conta usando o campo `isOptional: boolean`, ou fornecer um `defaultValue` que resolve para um `ValueNode`.
+
+> A funcionalidade defaultValue também funciona para `instructionArgumentNode`.
+
+O defaultValueStrategy em instructionArgumentNode determina como os valores padrão são tratados: "optional" significa que o valor padrão do argumento pode ser substituído por um argumento fornecido, ou "omitted" significa que nenhum argumento deve ser fornecido e o valor padrão deve sempre ser usado.
+
+A estratégia padrão é "optional" se não for especificada.
+
+### Error Node
+
+Para definir erros que podem ser retornados por um programa, usamos `ErrorNode`. Este nó é caracterizado por um nome, um código numérico que será retornado e uma mensagem legível associada para depuração.
+
+```ts
+const node = errorNode({
+    name: 'invalidAmountArgument',
+    code: 1,
+    message: 'The amount argument is invalid.',
+});
+```
+
+### PDA Node
+
+Para fornecer definições para Program-Derived Addresses específicos, usamos `PdaNode`. Este nó é caracterizado por um nome e uma lista de seeds que podem ser constantes ou variáveis, permitindo geração flexível de PDAs.
+
+```ts
+const node = pdaNode({
+    name: 'counter',
+    seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+    docs: ['The counter PDA derived from its authority.'],
+});
+```
+
+> Se o ID do programa for diferente do ancestral ProgramNode mais próximo, você precisa especificá-lo usando o campo programId.
+
+Isso pode ser usado para vincular PDAs como `defaultValue` no `instructionAccountNode` usando o `pdaValueNode`.

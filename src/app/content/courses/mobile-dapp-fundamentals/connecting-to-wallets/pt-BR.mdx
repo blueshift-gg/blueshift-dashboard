@@ -1,0 +1,395 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Conectando a Carteiras](/graphics/course-banners/mobile-dapp-fundamentals.png)
+
+# Conectando a Carteiras
+
+A função `transact()` parece enganosamente simples. Ela recebe um callback, abre uma carteira, executa seu código e fecha a sessão. Uma função, um callback, pronto.
+
+Mas entender o que acontece dentro desse callback, e que garantias ele oferece, é a chave para construir dApps mobile profissionais que não frustram os usuários com erros crípticos ou estados travados.
+
+> Cada chamada a `transact()` é autocontida. A carteira é iniciada, você faz seu trabalho, a carteira devolve o controle. Não há conexão persistente para gerenciar ou monitorar.
+
+Nesta lição, você vai construir a lógica de conexão com a carteira. Ao final, você terá um componente `ConnectButton` funcional que autoriza com qualquer carteira compatível com MWA.
+
+<ArticleSection name="O Padrão transact" id="transact-pattern" level="h2" />
+
+Importe `transact` do pacote wrapper do web3.js (não do pacote base do protocolo):
+
+```typescript
+import { 
+  transact, 
+  Web3MobileWallet 
+} from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+```
+
+O padrão básico:
+
+```typescript
+const result = await transact(async (wallet: Web3MobileWallet) => {
+  // wallet é sua interface com o app da carteira
+  // Você pode chamar authorize, signTransactions, etc.
+  
+  // O que você retornar torna-se o resultado de transact()
+  return someValue;
+});
+
+// result === someValue
+```
+
+Quando `transact()` é chamado:
+1. Seu app gera credenciais de associação
+2. Um URI intent inicia o app da carteira
+3. A carteira vem para o primeiro plano
+4. Seu callback executa com o parâmetro `wallet`
+5. Quando seu callback retorna (ou lança uma exceção), a sessão é encerrada
+6. O controle retorna ao seu app
+
+O app da carteira fica visível durante o passo 4. Os usuários veem a identidade do seu app e podem aprovar ou rejeitar solicitações.
+
+<ArticleSection name="Fluxo de Autorização" id="authorization-flow" level="h2" />
+
+Antes que você possa assinar qualquer coisa, você precisa autorizar. Isso diz à carteira "Eu sou este app, e quero acesso às contas do usuário."
+
+```typescript
+import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { PublicKey } from '@solana/web3.js';
+import { toByteArray } from 'react-native-quick-base64';
+
+const APP_IDENTITY = {
+  name: 'My Solana dApp',
+  uri: 'https://mydapp.com',
+  icon: 'favicon.ico',
+};
+
+async function connectWallet(): Promise<PublicKey> {
+  return await transact(async (wallet: Web3MobileWallet) => {
+    const authResult = await wallet.authorize({
+      identity: APP_IDENTITY,
+      chain: 'solana:devnet',
+    });
+    
+    // authResult.accounts contém as contas autorizadas
+    // os endereços estão codificados em base64
+    const firstAccount = authResult.accounts[0];
+    const publicKey = new PublicKey(toByteArray(firstAccount.address));
+    
+    return publicKey;
+  });
+}
+```
+
+A resposta de `authorize` contém:
+
+```typescript
+type AuthorizationResult = {
+  accounts: Account[];
+  auth_token: string;
+  wallet_uri_base?: string;
+  sign_in_result?: SolanaSignInOutput;
+};
+
+type Account = {
+  address: string;           // chave pública codificada em base64
+  display_address?: string;  // codificada em base58 (legível para humanos)
+  label?: string;            // Nome do usuário para esta conta
+  chains: string[];          // Chains suportadas
+  features: string[];        // Funcionalidades suportadas
+};
+```
+
+A maioria das carteiras atualmente retorna uma única conta, mas o protocolo suporta múltiplas. Sempre trate `accounts` como um array.
+
+### Base64 vs Base58
+
+Uma peculiaridade do MWA: os endereços das contas vêm como strings base64, não no formato base58 que você vê nos exploradores da Solana.
+
+```typescript
+// O que você recebe
+const base64Address = authResult.accounts[0].address;
+// ex.: "JBgT8LS5+..."
+
+// O que você precisa para @solana/web3.js
+const publicKey = new PublicKey(toByteArray(base64Address));
+// Agora você tem um objeto PublicKey real
+
+// Versão legível (opcional, para exibição)
+const display = authResult.accounts[0].display_address;
+// ex.: "7F9k..." (base58)
+```
+
+<ArticleSection name="Armazenando Tokens de Autenticação em Cache" id="caching-auth-tokens" level="h2" />
+
+Ninguém quer aprovar conexões de carteira repetidamente. O MWA fornece tokens de autenticação para reautorização silenciosa.
+
+Na primeira conexão, você recebe um `auth_token`:
+
+```typescript
+const authResult = await wallet.authorize({
+  identity: APP_IDENTITY,
+  chain: 'solana:devnet',
+});
+
+// Salve este token
+await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
+```
+
+Em conexões subsequentes, inclua o token:
+
+```typescript
+async function connectWithCachedToken(): Promise<PublicKey | null> {
+  const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
+  
+  return await transact(async (wallet) => {
+    try {
+      const authResult = await wallet.authorize({
+        identity: APP_IDENTITY,
+        chain: 'solana:devnet',
+        auth_token: cachedToken ?? undefined,
+      });
+      
+      // Salve o token potencialmente atualizado
+      await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
+      
+      return new PublicKey(toByteArray(authResult.accounts[0].address));
+    } catch (error: any) {
+      if (error.code === -32000 && cachedToken) {
+        // Token expirado ou inválido, limpe e tente novamente
+        await AsyncStorage.removeItem('mwa_auth_token');
+        
+        // Solicite uma nova autorização
+        const freshResult = await wallet.authorize({
+          identity: APP_IDENTITY,
+          chain: 'solana:devnet',
+        });
+        
+        await AsyncStorage.setItem('mwa_auth_token', freshResult.auth_token);
+        return new PublicKey(toByteArray(freshResult.accounts[0].address));
+      }
+      throw error;
+    }
+  });
+}
+```
+
+Quando um token válido é fornecido, a carteira pode pular o diálogo de aprovação do usuário inteiramente; a sessão é autorizada silenciosamente.
+
+**Importante:** Tokens de autenticação são strings opacas. Seu formato varia por carteira. Nunca os analise ou modifique; apenas armazene e passe-os.
+
+<ArticleSection name="Consultando Funcionalidades" id="querying-capabilities" level="h2" />
+
+As carteiras diferem no que suportam. Antes de assumir que uma funcionalidade funciona, consulte a carteira:
+
+```typescript
+await transact(async (wallet) => {
+  const capabilities = await wallet.getCapabilities();
+  
+  console.log('Máximo de transações por solicitação:', capabilities.max_transactions_per_request);
+  console.log('Máximo de mensagens por solicitação:', capabilities.max_messages_per_request);
+  console.log('Versões de transação suportadas:', capabilities.supported_transaction_versions);
+  console.log('Funcionalidades opcionais:', capabilities.features);
+});
+```
+
+A resposta informa:
+- **max_transactions_per_request**: Quantas transações podem ser assinadas de uma vez
+- **max_messages_per_request**: Quantas mensagens podem ser assinadas de uma vez
+- **supported_transaction_versions**: `['legacy', 0]` ou similar
+- **features**: Funcionalidades opcionais como `solana:signInWithSolana`, `solana:cloneAuthorization`
+
+Este é um método não privilegiado; você não precisa autorizar primeiro.
+
+<ArticleSection name="Desautorização" id="deauthorizing" level="h2" />
+
+Para "desconectar" uma carteira, invalidando quaisquer tokens de autenticação em cache, use `deauthorize`:
+
+```typescript
+async function disconnect(): Promise<void> {
+  const authToken = await AsyncStorage.getItem('mwa_auth_token');
+  
+  if (!authToken) return;
+  
+  await transact(async (wallet) => {
+    await wallet.deauthorize({ auth_token: authToken });
+  });
+  
+  await AsyncStorage.removeItem('mwa_auth_token');
+}
+```
+
+Após a desautorização, o token é invalidado do lado da carteira. Mesmo que você tente usá-lo depois, não funcionará.
+
+**Nota:** Isso abre uma sessão apenas para desautorizar. Alguns apps pulam isso e apenas limpam o armazenamento local. O token se torna inútil de qualquer forma quando expira. Mas a desautorização explícita é mais limpa e rápida para usuários que trocam de carteira com frequência.
+
+<ArticleSection name="Gerenciando Múltiplas Contas" id="multiple-accounts" level="h2" />
+
+Algumas carteiras suportam múltiplas contas. A resposta de `authorize` pode conter várias:
+
+```typescript
+const authResult = await wallet.authorize({
+  identity: APP_IDENTITY,
+  chain: 'solana:devnet',
+});
+
+// Podem ser múltiplas contas
+authResult.accounts.forEach((account, index) => {
+  console.log(`Conta ${index}:`, account.display_address);
+  console.log(`  Rótulo: ${account.label ?? 'Sem rótulo'}`);
+  console.log(`  Chains: ${account.chains.join(', ')}`);
+});
+```
+
+Se você precisar de uma conta específica, deixe o usuário escolher:
+
+```typescript
+const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+
+// Após a autorização
+if (authResult.accounts.length > 1) {
+  // Mostre a interface de seleção
+  showAccountPicker(authResult.accounts, (account) => {
+    setSelectedAccount(account);
+  });
+} else {
+  setSelectedAccount(authResult.accounts[0]);
+}
+```
+
+Ao assinar, use o endereço da conta selecionada.
+
+<ArticleSection name="Construindo um Botão de Conexão" id="connect-button" level="h2" />
+
+Aqui está um componente de botão de conexão completo e pronto para produção:
+
+```typescript
+import React, { useState, useCallback } from 'react';
+import { TouchableOpacity, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { PublicKey } from '@solana/web3.js';
+import { toByteArray } from 'react-native-quick-base64';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const APP_IDENTITY = {
+  name: 'My Solana dApp',
+  uri: 'https://mydapp.com',
+  icon: 'favicon.ico',
+};
+
+interface ConnectButtonProps {
+  onConnect: (publicKey: PublicKey, authToken: string) => void;
+  onError: (error: Error) => void;
+}
+
+export function ConnectButton({ onConnect, onError }: ConnectButtonProps) {
+  const [connecting, setConnecting] = useState(false);
+
+  const handleConnect = useCallback(async () => {
+    if (connecting) return;
+    setConnecting(true);
+    
+    try {
+      const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
+      
+      await transact(async (wallet: Web3MobileWallet) => {
+        const authResult = await wallet.authorize({
+          identity: APP_IDENTITY,
+          chain: 'solana:devnet',
+          auth_token: cachedToken ?? undefined,
+        });
+        
+        await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
+        
+        const publicKey = new PublicKey(
+          toByteArray(authResult.accounts[0].address)
+        );
+        
+        onConnect(publicKey, authResult.auth_token);
+      });
+    } catch (error: any) {
+      if (error.code === 4001) {
+        // Usuário cancelou - não é um erro a ser relatado
+        console.log('Usuário cancelou a conexão');
+      } else {
+        onError(error);
+      }
+    } finally {
+      setConnecting(false);
+    }
+  }, [connecting, onConnect, onError]);
+
+  return (
+    <TouchableOpacity
+      style={[styles.button, connecting && styles.buttonDisabled]}
+      onPress={handleConnect}
+      disabled={connecting}
+    >
+      {connecting ? (
+        <ActivityIndicator color="#fff" />
+      ) : (
+        <Text style={styles.buttonText}>Conectar Carteira</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  button: {
+    backgroundColor: '#512da8',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+```
+
+Detalhes importantes:
+- **Estado de carregamento**: Previne toques duplos durante a conexão
+- **Token em cache**: Tenta reautenticação silenciosa primeiro
+- **Tratamento de erros**: Distingue cancelamento do usuário de erros reais
+- **Padrão de callback**: Permite que componentes pai gerenciem o estado conectado
+
+<ArticleSection name="Tempo de Sessão" id="session-timing" level="h2" />
+
+O protocolo MWA especifica timeouts:
+
+- **Timeout de associação**: 30 segundos para o app da carteira iniciar e iniciar seu servidor WebSocket
+- **Timeout de solicitação**: 10 segundos para solicitações RPC individuais dentro de uma sessão
+
+Se a carteira não responder a tempo, você recebe um erro de timeout. Isso geralmente significa:
+- O app da carteira não está instalado
+- A carteira travou durante a inicialização
+- O dispositivo está sob carga pesada
+
+Trate timeouts de forma elegante:
+
+```typescript
+try {
+  await transact(async (wallet) => {
+    await wallet.authorize({ identity: APP_IDENTITY, chain: 'solana:devnet' });
+  });
+} catch (error: any) {
+  if (error.message?.includes('timeout')) {
+    Alert.alert(
+      'Timeout de Conexão',
+      'A carteira demorou muito para responder. Certifique-se de que você tem uma carteira Solana instalada.',
+      [{ text: 'OK' }]
+    );
+  }
+}
+```
+
+<ArticleSection name="O Que Vem a Seguir" id="whats-next" level="h2" />
+
+Agora você pode conectar a carteiras, armazenar tokens de autenticação em cache para reconexão sem atrito e tratar os casos extremos mais comuns. Mas conectar é apenas o começo.
+
+Na próxima lição, vamos construir e assinar transações reais: transferindo SOL, trabalhando com transações versionadas e tratando a resposta da carteira.

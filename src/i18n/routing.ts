@@ -8,10 +8,11 @@ export const localeNames = {
   id: "Bahasa Indonesia",
   vi: "Tiếng Việt",
   uk: "Українська",
-  de: "Deutsch"
+  de: "Deutsch",
+  "pt-BR": "Português (Brasil)"
 };
 
 export const routing = defineRouting({
-  locales: ["en", "zh-CN", "zh-HK", "fr", "id", "vi", "uk", "de"],
+  locales: ["en", "zh-CN", "zh-HK", "fr", "id", "vi", "uk", "de", "pt-BR"],
   defaultLocale: "en",
 });

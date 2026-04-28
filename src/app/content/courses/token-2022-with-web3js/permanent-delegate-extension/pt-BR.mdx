@@ -1,0 +1,99 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# A Extensão Permanent Delegate
+
+A extensão `PermanentDelegate` é uma extensão de conta Mint que permite um delegado permanente para todos os tokens do mint, capaz de transferir ou queimar qualquer token desse mint, de qualquer conta de token.
+
+<ArticleSection name="Inicializando a Conta Mint" id="initializing-the-mint-account" level="h2" />
+
+Para inicializar a extensão `PermanentDelegate` em uma conta `Mint`, vamos precisar da função `initializePermanentDelegate()`.
+
+Veja como criar um mint com a extensão Permanent Delegate:
+
+```ts
+import {
+    Keypair,
+    SystemProgram,
+    Transaction,
+    sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+    createInitializeMintInstruction,
+    createInitializePermanentDelegateInstruction,
+    getMintLen,
+    ExtensionType,
+    TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+
+const mint = Keypair.generate();
+
+// Calcula o tamanho necessário para uma conta Mint com a extensão Permanent Delegate
+const mintLen = getMintLen([ExtensionType.PermanentDelegate]);
+
+// Calcula os lamports mínimos necessários para isenção de aluguel
+const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+// Cria a conta com o tamanho e proprietário corretos
+const createAccountInstruction = SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: mint.publicKey,
+    space: mintLen,
+    lamports,
+    programId: TOKEN_2022_PROGRAM_ID,
+});
+
+// Inicializa a extensão Permanent Delegate
+const initializePermanentDelegate = createInitializePermanentDelegateInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Inicializa o mint em si
+const initializeMintInstruction = createInitializeMintInstruction(
+    mint.publicKey,
+    6,
+    keypair.publicKey,
+    null,
+    TOKEN_2022_PROGRAM_ID,
+);
+
+// Combina todas as instruções na ordem correta
+const transaction = new Transaction().add(
+    createAccountInstruction,
+    initializePermanentDelegate,
+    initializeMintInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
+
+console.log(`Mint criado! Confira sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Fechando a Conta Mint" id="closing-the-mint-account" level="h2" />
+
+Se uma conta `Mint` tem uma oferta zero, o `CloseMint Authority` pode reclamar o aluguel dessa conta usando a instrução `closeAccount` assim:
+
+```ts
+const closeMintInstruction = createCloseAccountInstruction(
+    mint.publicKey,
+    keypair.publicKey,
+    keypair.publicKey,
+    [],
+    TOKEN_2022_PROGRAM_ID,
+);
+
+const transaction = new Transaction().add(closeMintInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: false});
+
+console.log(`Mint fechado! Confira sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Ações Permissionadas" id="permissioned-actions" level="h2" />
+
+Diferente dos delegados regulares que podem ser revogados, esta autoridade de delegação é permanente e imutável.
+
+Isso significa que toda ação normal como `transfer()`, `burn()`, `approve()` e `freeze()` pode ser executada sempre que necessário diretamente pela autoridade sem precisar da assinatura do proprietário real.
+
+Isso significa que podemos simplesmente usar as instruções `transferChecked()`, `burnChecked()`, ... normais e passar a autoridade `PermanentDelegate` no campo `authority`.

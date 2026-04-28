@@ -1,0 +1,137 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Curso do framework Anchor - Aprenda desenvolvimento de smart contracts na Solana com Anchor](/graphics/course-banners/anchor-for-dummies.png)
+
+# Anchor 101
+
+<ArticleSection name="What is Anchor" id="what-is-anchor" level="h2" />
+
+Anchor é o principal framework para desenvolvimento de smart contracts na Solana, oferecendo um fluxo de trabalho completo para escrever, testar, implantar e interagir com programas onchain.
+
+### Principais vantagens
+
+- **Menos código repetitivo**: O Anchor abstrai o trabalho repetitivo de gerenciamento de accounts, serialização de instructions e tratamento de erros, para que você possa focar apenas na lógica de negócio principal.
+- **Segurança integrada**: Verificações rigorosas, como verificação de propriedade de account e validação de dados, funcionam automaticamente, mitigando muitas vulnerabilidades comuns antes que elas apareçam.
+
+### Macros do Anchor
+
+- `declare_id!()`: Declara em qual endereço onchain o program reside.
+- `#[program]`: Marca o módulo que contém todos os entrypoints de instruction e funções de lógica de negócio.
+- `#[derive(Accounts)]`: Lista as accounts que uma instruction requer e aplica suas restrições automaticamente.
+- `#[error_code]`: Define tipos de erro personalizados e legíveis que tornam o debugging mais claro e rápido.
+
+Juntas, essas macros procedurais abstraem o gerenciamento de baixo nível de bytes, permitindo que você entregue programas Solana seguros e prontos para produção com muito menos esforço.
+
+### Estrutura do Programa
+
+Vamos começar com uma versão básica de um program para explicar em detalhes o que cada macro realmente faz:
+
+```rust
+declare_id!("22222222222222222222222222222222222222222222");
+
+#[program]
+pub mod blueshift_anchor_vault {
+    use super::*;
+
+    pub fn deposit(ctx: Context<VaultAction>, amount: u64) -> Result<()> {
+        // ...
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<VaultAction>) -> Result<()> {
+        // ...
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+    // ...
+}
+
+#[error_code]
+pub enum VaultError {
+    // ...
+}
+```
+
+Isso será transformado em módulos focados em vez de colocar tudo no `lib.rs`, resultando em programas mais estruturados. A árvore de pastas do program ficará aproximadamente assim:
+
+```
+src
+├── instructions
+│       ├── instruction1.rs
+│       ├── mod.rs
+│       ├── instruction2.rs
+│       └── instruction3.rs
+├── errors.rs
+├── lib.rs
+└── state.rs
+```
+
+#### `declare_id!()`
+
+A macro `declare_id!()` atribui ao seu program o seu endereço onchain; uma chave pública única derivada do keypair na pasta `target` do projeto. Esse keypair assina e implanta o binário `.so` compilado contendo toda a lógica e dados do program.
+
+**Nota:** Usamos o placeholder `222222...` nos exemplos do Blueshift por causa do nosso conjunto de testes interno. Em produção, o Anchor gerará um novo program ID para você quando você executar os comandos padrão de build e deploy.
+
+#### `#[program]` & `#[derive(Accounts)]`
+
+Cada instruction tem sua própria struct **Context** que lista todas as accounts e, opcionalmente, qualquer dado que a instruction precisará.
+
+Neste exemplo, tanto `deposit` quanto `withdraw` compartilham as mesmas accounts; por essa razão, vamos criar uma única struct de account chamada `VaultAction` para manter as coisas mais eficientes e simples.
+
+#### Olhando mais de perto a macro `#[derive(Accounts)]`
+
+```rust
+#[derive(Accounts)]
+pub struct VaultAction<'info> {
+  #[account(mut)]
+  pub signer: Signer<'info>,
+
+  #[account(
+    mut,
+    seeds = [b"vault", signer.key().as_ref()],
+    bump,
+  )]
+  pub vault: SystemAccount<'info>,
+
+  pub system_program: Program<'info, System>,
+}
+```
+
+Como podemos ver no trecho de código, a macro `#[derive(Accounts)]` cumpre três responsabilidades essenciais:
+- Declara todas as accounts que uma instruction específica precisa.
+- Aplica verificações de restrições automaticamente, bloqueando muitos bugs e potenciais explorações em tempo de execução.
+- Gera métodos auxiliares que permitem acessar e modificar accounts com segurança.
+
+Ela realiza isso através de uma combinação de tipos de account e atributos inline.
+
+**Tipos de account no nosso exemplo**
+- `Signer<'info>`: Verifica se a account assinou a transação; essencial para segurança e para CPIs que exigem uma assinatura.
+- `SystemAccount<'info>`: Confirma que a account é de propriedade do System Program.
+- `Program<'info, System>`: Garante que a account é executável e corresponde ao ID do System Program, habilitando CPIs como criação de accounts ou transferências de lamports.
+
+**Atributos inline que você encontrará**
+- `mut`: Marca a account como mutável; obrigatório sempre que seu saldo de lamports ou dados possam ser alterados.
+- `seeds & bump`: Verifica se a account é um Program-Derived Address (PDA) gerado a partir das seeds fornecidas mais um byte de bump.
+
+**Nota** PDAs são importantes porque:
+- Quando usados pelo program que os possui, PDAs podem assinar CPIs em nome do program.
+- Eles fornecem endereços determinísticos e verificáveis para persistir o estado do program.
+
+#### `#[error_code]`
+
+A macro `#[error_code]` permite definir erros claros e personalizados dentro do program.
+
+```rust
+#[error_code]
+pub enum VaultError {
+    #[msg("Vault already exists")]
+    VaultAlreadyExists,
+    #[msg("Invalid amount")]
+    InvalidAmount,
+}
+```
+
+Cada variante do enum pode carregar um atributo `#[msg(...)]` que registra uma string descritiva sempre que o erro ocorre; muito mais útil do que um código numérico bruto durante o debugging.

@@ -1,0 +1,63 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Introspecção de Instrução com Pinocchio
+
+O Pinocchio usa tipos diferentes do crate `solana_program`. Isso significa que tivemos que criar um novo SDK otimizado para o Pinocchio.
+
+Com a ajuda do [Orion](https://x.com/BasedOrion_), criamos um conjunto de helpers que respeitavam a implementação "original", mas tornaram a sysvar `Instruction` — uma das sysvars mais caras de usar — uma das mais eficientes.
+
+Por esse motivo, podemos usar *Instruction Introspection* no Pinocchio sem instalar nenhum crate externo e acessar todas as informações de que precisamos importando estas funções:
+
+```rust
+use pinocchio::sysvars::instructions::Instructions;
+```
+
+<ArticleSection name="Como usar Introspecção" id="como-usar-introspeccao" level="h2" />
+
+Como mencionado anteriormente, a Introspecção de Instrução simplesmente desserializa os dados da conta da sysvar `Instruction` para fornecer todos os dados de que precisamos sobre nossas instruções.
+
+Começamos verificando o índice atual. Podemos fazer isso usando a função `load_current_index_checked`, assim:
+
+```rust
+let instruction_sysvar = unsafe { Instructions::new_unchecked(&self.accounts.sysvar_instructions.try_borrow_data()?) };
+let index = instruction_sysvar.load_current_index();
+```
+
+Após isso, podemos verificar uma instrução em um índice relativo usando `load_instruction_at_checked`. Desta vez, verificaremos a instrução imediatamente seguinte à que está realizando a introspecção, assim:
+
+```rust
+// Carregamos a próxima instrução, que é aquela que queremos verificar quanto à entrada correta.
+let instruction = instruction_sysvar.load_instruction_at(index as usize + 1)?;
+```
+
+Antes de ir para o próximo passo, devemos nos perguntar que informação é essencial para prevenir um ataque malicioso.
+
+Geralmente começamos verificando se o programa sendo usado é o que esperamos. Neste exemplo, estamos introspectando outra instrução do system program, então podemos fazer assim:
+
+```rust
+if instruction.get_program_id() != &pinocchio_system::ID {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Em seguida, verificamos se a instrução é a que esperamos. Para isso, comparamos o discriminator e os dados da instrução com os valores esperados. Começamos criando uma variável `instruction_data` e verificando contra ela, assim:
+
+```rust
+let mut instruction_data = [0u8; 12];
+instruction_data[0..4].copy_from_slice(&2u32.to_le_bytes());
+instruction_data[4..12].copy_from_slice(&100_000_000u64.to_le_bytes());
+
+if instruction.get_instruction_data() != instruction_data {
+    return Err(ProgramError::InvalidInstructionData);
+}
+```
+
+Podemos então realizar verificações mais específicas do programa com base na lógica da instrução que estamos verificando.
+
+Também podemos verificar as contas presentes na instrução introspectada. Esta etapa exige que conheçamos a estrutura exata da struct de conta, já que estaremos solicitando os dados ou pubkey de uma conta em um índice específico, assim:
+
+```rust
+if !pubkey_eq(instruction.get_account_meta_at(0)?.key(), self.accounts.from.key()) {
+    return Err(ProgramError::InvalidAccountData);
+}
+```

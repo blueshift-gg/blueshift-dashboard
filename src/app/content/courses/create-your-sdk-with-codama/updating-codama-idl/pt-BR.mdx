@@ -1,0 +1,186 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Atualize sua Codama IDL
+
+O sistema de visitors do Codama permite transformar e aprimorar programaticamente sua IDL após a criação.
+
+Não importa se você começou a partir de uma Anchor IDL ou construiu do zero, os visitors permitem aprimorar e personalizar ainda mais a Codama IDL antes de gerar os clientes para, por exemplo, otimizar a experiência do desenvolvedor
+
+<ArticleSection name="Visitors Essenciais" id="essential-visitors" level="h2" />
+
+Os visitors seguem o padrão visitor, percorrendo os nós da sua IDL e aplicando transformações.
+
+Vamos explorar os visitors mais impactantes para criar SDKs prontos para produção:
+
+### Visitor de Adição de PDAs
+
+Para adicionar definições de PDA aos seus programas, usamos `addPdasVisitor`. Este visitor é essencial quando sua Anchor IDL não inclui informações de PDA, mas a lógica do seu programa depende de Program Derived Addresses específicos.
+
+Ele aceita um objeto onde as chaves são nomes de programas e os valores são arrays de definições de PDA a serem adicionados.
+
+```ts
+codama.update(
+    addPdasVisitor({
+        // Adicionar um PDA ao programa 'token'.
+        token: [
+            {
+                name: 'associatedToken',
+                seeds: [
+                    variablePdaSeedNode('mint', publicKeyTypeNode()),
+                    constantPdaSeedNode(
+                        publicKeyTypeNode(),
+                        publicKeyValueNode('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+                    ),
+                    variablePdaSeedNode('owner', publicKeyTypeNode()),
+                ],
+            },
+        ],
+        // Adicionar dois PDAs ao programa 'counter'.
+        counter: [
+            {
+                name: 'counter',
+                seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+            },
+            {
+                name: 'counterConfig',
+                seeds: [variablePdaSeedNode('counter', publicKeyTypeNode())],
+            },
+        ],
+    }),
+);
+```
+
+### Visitor de Atualização de Contas
+
+Para modificar definições de contas existentes ou remover as indesejadas, usamos `updateAccountsVisitor`. Este visitor é crucial para renomear contas de acordo com suas convenções de nomenclatura preferidas ou adicionar associações de PDA ausentes.
+
+Você deve usar este visitor quando os nomes de contas gerados pelo Anchor não correspondem às suas preferências de nomenclatura do cliente, ou quando precisa associar PDAs a contas específicas para melhor geração de código.
+
+```ts
+codama.update(
+    updateAccountsVisitor({
+        vault: {
+            // Renomear a conta 'vault' para 'safe'.
+            name: 'safe',
+            // Renomear o campo 'owner' para 'authority'.
+            data: { owner: 'authority' },
+            // Criar um novo nó PDA e vinculá-lo a esta conta.
+            seeds: [variablePdaSeedNode('authority', publicKeyTypeNode())],
+        },
+        counter: {
+            // Excluir a conta 'counter'.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Visitor de Atualização de Instruções
+
+Para aprimorar definições de instruções com melhores padrões, nomenclatura ou configurações de contas, usamos `updateInstructionsVisitor`. Este é um dos visitors mais poderosos para melhorar a experiência do desenvolvedor dos clientes gerados.
+
+Você deve usar este visitor quando deseja fornecer padrões sensatos para argumentos de instrução, renomear instruções ou contas para maior clareza, ou marcar contas como opcionais para simplificar o uso do cliente.
+
+```ts
+codama.update(
+    updateInstructionsVisitor({
+        send: {
+            // Renomear a instrução 'send' para 'transfer'.
+            name: 'transfer',
+            accounts: {
+                // Renomear a conta de instrução 'owner' para 'authority'.
+                owner: { name: 'authority' },
+                // Definir um valor padrão para a conta de instrução 'associatedToken'.
+                associatedToken: { defaultValue: pdaValueNode('associatedToken') },
+                // Atualizar o status de signer da conta de instrução 'payer' para `true`.
+                payer: { isSigner: true },
+                // Marcar a conta de instrução 'mint' como opcional.
+                mint: { isOptional: true },
+            },
+            arguments: {
+                // Definir um valor padrão para o argumento de instrução 'amount' como 1.
+                amount: { defaultValue: numberValueNode(1) },
+                // Renomear o argumento de instrução 'decimals' para 'mintDecimals'.
+                decimals: { name: 'mintDecimals' },
+            },
+        },
+        burn: {
+            // Excluir a instrução 'burn'.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Visitor de Atualização de Tipos Definidos
+
+Para modificar definições de tipos personalizados ou limpar tipos não utilizados, usamos `updateDefinedTypesVisitor`. Este visitor ajuda a manter tipos limpos e bem nomeados nos clientes gerados.
+
+Você deve usar este visitor quando o Anchor gera nomes de tipos que não correspondem às suas convenções preferidas, ou quando precisa remover tipos obsoletos da sua IDL.
+
+```ts
+codama.update(
+    updateDefinedTypesVisitor({
+        options: {
+            // Renomear o tipo 'options' para 'configs'.
+            name: 'configs',
+            // Renomear o campo 'sol' para 'lamports'.
+            data: { sol: 'lamports' },
+        },
+        player: {
+            // Excluir o tipo 'player'.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Visitor de Atualização de Erros
+
+Para melhorar definições de erros com nomes, mensagens ou códigos mais claros, usamos `updateErrorsVisitor`. Este visitor garante que seu tratamento de erros seja descritivo e siga padrões consistentes.
+
+Você deve usar este visitor quando deseja nomes ou mensagens de erro mais descritivos do que os gerados pelo Anchor, ou quando precisa padronizar códigos de erro em seu conjunto de programas.
+
+```ts
+codama.update(
+    updateErrorsVisitor({
+        invalidPda: {
+            // Renomear o erro 'invalidPda' para 'invalidProgramDerivedAddress'.
+            name: 'invalidProgramDerivedAddress',
+            // Alterar a mensagem de erro.
+            message: 'The program-derived address is invalid.',
+            // Alterar o código do erro.
+            code: 123,
+        },
+        accountMismatch: {
+            // Excluir o erro 'accountMismatch'.
+            delete: true,
+        },
+    }),
+);
+```
+
+### Visitor de Atualização de Programas
+
+Para modificar informações em nível de programa, como nomes, versões ou chaves públicas, usamos `updateProgramsVisitor`. Este visitor é essencial para manter metadados precisos dos programas.
+
+Você deve usar este visitor quando precisa atualizar versões de programas, padronizar nomes de programas entre ambientes ou remover programas obsoletos da sua IDL.
+
+```ts
+codama.update(
+    updateProgramsVisitor({
+        splToken: {
+            // Renomear o programa 'splToken' para 'token'.
+            name: 'token',
+            // Alterar a versão do programa.
+            version: '3.0.0',
+            // Alterar a chave pública do programa.
+            publicKey: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        },
+        splAssociatedToken: {
+            // Excluir o programa 'splAssociatedToken'.
+            delete: true,
+        },
+    }),
+);
+```

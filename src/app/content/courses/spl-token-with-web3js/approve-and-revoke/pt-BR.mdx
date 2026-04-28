@@ -1,0 +1,112 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Instruções de Approve e Revoke
+
+Approve concede a um delegate a autoridade para transferir uma quantidade específica de tokens em nome do dono da conta. Isso permite transferências programáticas de tokens sem conceder controle total da conta.
+
+> Definimos um valor "aprovado", e o delegate pode transferir apenas até esse valor
+
+Revoke remove a autoridade do delegate atual sobre a conta, devolvendo o controle total ao dono da conta.
+
+> Cancela imediatamente qualquer delegação existente e apenas o dono da conta pode revogar a delegação (não o próprio delegate)
+
+Antes de podermos delegar ou revogar qualquer conta de token, precisaremos já ter:
+- Inicializado uma conta `Mint`
+- Inicializado uma conta `Token` ou `Associated Token` sobre a qual vamos assumir o controle
+
+> A quantidade de tokens que aprovamos é "normalizada" para decimais. Isso significa que se queremos aprovar 1 token que tem 6 decimais, precisaremos colocar `1e6` como valor
+
+<ArticleSection name="Instrução Raw" id="raw-instruction" level="h2" />
+
+Usando apenas instruções "raw" sem nenhuma abstração, é assim que aprovar um token ficaria:
+
+```ts
+const keypair = Keypair.generate();
+
+const tokenAccount = await getAssociatedTokenAddress(
+    mint.publicKey,
+    keypair.publicKey,
+);
+
+// Criar instrução de criação de ATA
+const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
+    keypair.publicKey, // pagador
+    tokenAccount, // endereço da conta associated token
+    destination.publicKey, // dono
+    mint.publicKey, // mint
+);
+
+// Delegar um ATA
+const approveInstruction = createApproveInstruction(
+    tokenAccount // conta
+    delegate.publicKey, // delegate
+    keypair.publickey // dono
+    1e6, // quantidade de tokens
+);
+
+const transaction = new Transaction().add(
+    createAtaInstruction,
+    approveInstruction,
+);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Contas de token criadas e delegadas! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+Usando apenas instruções "raw" sem nenhuma abstração, é assim que revogar um token ficaria:
+
+```ts
+// Revogar o delegate de um ATA
+const revokeInstruction = createRevokeInstruction(
+    tokenAccount // conta
+    keypair.publickey // dono
+);
+
+const transaction = new Transaction().add(revokeInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+
+console.log(`Delegate da conta de token revogado! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+```
+
+<ArticleSection name="Instrução Abstraída" id="abstracted-instruction" level="h2" />
+
+É assim que as mesmas instruções ficariam abstraídas com a instrução `approve()`:
+
+```ts
+const tokenAccount = Keypair.generate();
+
+const ata = await getOrCreateAssociatedTokenAccount(
+    connection,
+    keypair,
+    mint,
+    tokenAccount.publicKey
+);
+
+console.log(`Este é o seu ATA: ${ata.address}!`)
+
+let tx = await approve(
+    connection,
+    keypair,
+    ata.address, // conta Token
+    delegate-publicKey, // delegate
+    keypair.publicKey, // dono
+    1e6, // quantidade
+);
+
+console.log(`Delegado com sucesso! Transação aqui: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```
+
+É assim que as mesmas instruções ficariam abstraídas com a instrução `revoke()`:
+
+```ts
+let tx = await revoke(
+    connection,
+    keypair,
+    ata.address, // conta Token
+    keypair.publicKey, // dono
+);
+
+console.log(`Delegate revogado com sucesso! Transação aqui: https://explorer.solana.com/tx/${tx}?cluster=devnet`)
+```

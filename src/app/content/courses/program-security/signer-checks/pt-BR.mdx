@@ -1,0 +1,128 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Verificações de Assinante (Signer Checks)
+
+Verificações de assinante são o equivalente digital de exigir uma assinatura manuscrita — elas provam que um titular de conta realmente autorizou uma transação em vez de outra pessoa agindo em seu nome. No ambiente trustless da Solana, essa prova criptográfica é a única forma de verificar uma autorização autêntica.
+
+Isso se torna crítico ao lidar com Program Derived Accounts (PDAs) e operações protegidas por autoridade. A maioria das contas de programa armazena um campo `authority` que determina quem pode modificá-las, e muitos PDAs são derivados de contas de usuários específicas. Sem verificação de assinante, seu programa não tem como distinguir entre proprietários legítimos e impostores maliciosos.
+
+As consequências de verificações de assinante ausentes são devastadoras: qualquer conta pode realizar operações que deveriam ser restritas a autoridades específicas, levando a acesso não autorizado, contas drenadas e perda completa de controle sobre o estado do programa.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere esta instrução vulnerável que transfere a propriedade de uma conta de programa:
+
+```rust
+#[program]
+pub mod insecure_update{
+    use super::*;
+
+    //..
+
+    pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+        ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+    
+        Ok(())
+    }
+
+    //..
+}
+
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+
+#[account]
+pub struct ProgramAccount {
+    owner: Pubkey,
+}
+```
+
+À primeira vista, isso parece seguro. A restrição `has_one = owner` garante que a conta owner passada à instrução corresponde ao campo `owner` armazenado no `program_account`. A validação de dados é perfeita, mas há uma falha fatal.
+
+Note que `owner` é uma `UncheckedAccount`, não um `Signer`. Isso significa que, embora o Anchor verifique se a conta fornecida corresponde ao proprietário armazenado, ele nunca verifica se essa conta realmente assinou a transação.
+
+Um invasor pode explorar isso:
+- Encontrando qualquer conta de programa que deseja sequestrar
+- Lendo a chave pública do proprietário atual dos dados da conta
+- Criando uma transação que passa a chave pública do proprietário real como parâmetro owner
+- Configurando a si mesmo como `new_owner`
+- Enviando a transação sem a assinatura do proprietário real
+
+A restrição `has_one` passa porque as chaves públicas correspondem, mas como não há verificação de assinante, o invasor transfere a propriedade para si mesmo sem o consentimento do proprietário legítimo. Uma vez no controle da conta, ele pode realizar qualquer operação como a nova autoridade.
+
+Felizmente, o `Anchor` torna super fácil realizar essa verificação diretamente na struct de conta, basta mudar `UncheckedAccount` para `Signer` assim:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    pub owner: Signer<'info>,
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Ou você pode adicionar a restrição de conta `signer` assim:
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateOwnership<'info> {
+    #[account(signer)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Ou você pode simplesmente adicionar uma verificação de assinante na instrução usando a verificação `ctx.accounts.owner.is_signer` assim:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    if !ctx.accounts.owner.is_signer {
+        return Err(ProgramError::MissingRequiredSignature.into());
+    }
+
+    ctx.accounts.program_account.owner = ctx.accounts.new_owner.key();
+
+    Ok(())
+}
+```
+
+Ao adicionar essa verificação, o handler da instrução só prosseguirá se a conta de autoridade tiver assinado a transação. Se a conta não estiver assinada, a transação falhará.
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+No Pinocchio, como não temos a possibilidade de adicionar verificações de segurança diretamente dentro da struct de conta, somos obrigados a fazê-lo na lógica da instrução.
+
+Podemos fazer isso de forma muito semelhante ao Anchor usando a função `is_signer()` assim:
+
+```rust
+if !self.accounts.owner.is_signer() {
+    return Err(ProgramError::MissingRequiredSignature.into());
+}
+```
+
+
+
+

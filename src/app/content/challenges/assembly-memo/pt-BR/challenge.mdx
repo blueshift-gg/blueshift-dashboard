@@ -1,0 +1,85 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+![Desafio Assembly Memo](/graphics/challenge-banners/assembly-memo.png)
+
+# Assembly Memo
+
+Nesta unidade, usaremos sBPF Assembly para criar um mecanismo de registro de log para nosso programa.
+
+A simplicidade de um programa de memo compacto é o ponto de partida perfeito para sua jornada em sBPF assembly!
+
+Se você não está familiarizado com programação em assembly, siga o [curso de Introdução ao Assembly](/pt-BR/courses/introduction-to-assembly)
+
+<ArticleSection name="Design do Programa" id="program-design" level="h2" />
+
+Nosso programa simplesmente colocará a localização de memória correta no registrador correto e então realizará a syscall `sol_log_`. Ficará assim:
+
+```sbpf
+.equ NUM_ACCOUNTS, 0x00
+.equ DATA_LEN, 0x08
+.equ DATA, 0x10
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]
+  ldxdw r2, [r1+DATA_LEN]
+  add64 r1, DATA
+  call sol_log_
+  exit
+```
+
+<ArticleSection name="Offsets de Memória" id="memory-offsets" level="h2" />
+
+O programa começa declarando três constantes `.equ` que definem o layout de memória dos nossos dados de instrução:
+
+```sbpf
+.equ NUM_ACCOUNTS, 0x00  ; Offset para o número de contas
+.equ DATA_LEN, 0x08      ; Offset para o comprimento dos dados
+.equ DATA, 0x10          ; Offset para os dados reais
+```
+
+Essas constantes marcam os offsets de bytes relativos ao ponteiro do buffer de entrada em `r1`:
+- `NUM_ACCOUNTS` (0x0000): Aponta para a contagem de contas no cabeçalho dos dados de instrução para validação
+- `DATA_LEN` (0x08): Aponta para o comprimento dos dados de instrução no cabeçalho dos dados de instrução
+- `DATA` (0x10): Aponta para os dados de instrução no cabeçalho dos dados de instrução
+
+Diferente de linguagens de alto nível que abstraem o layout de memória, assembly exige saber exatamente onde cada dado reside.
+
+<ArticleSection name="Entrypoint e Validação Inicial" id="entrypoint-and-validations" level="h2" />
+
+```sbpf
+.globl entrypoint
+entrypoint:
+  ldxdw r0, [r1+NUM_ACCOUNTS]   ; Carregar número de contas em r0
+```
+
+Todo programa sBPF começa no símbolo global `.entrypoint`. O runtime da Solana fornece dados de contas e instruções através do registrador `r1`.
+
+Esta primeira instrução então carrega o número de contas em `r0`. Como `r0` é o registrador que a VM lê na saída, isso serve a dois propósitos:
+1. Carrega a contagem de contas para nosso uso
+2. Garante que o programa falhará automaticamente se quaisquer contas forem passadas (valor não zero em r0)
+
+<ArticleSection name="Syscall sol_log_" id="sol-log-syscall" level="h2" />
+
+Em seguida, preparamos os argumentos para a syscall `sol_log_`:
+
+```sbpf
+ldxdw r2, [r1+DATA_LEN]   ; Carregar comprimento do memo em r2
+add64 r1, DATA            ; Ajustar r1 para apontar para os bytes do memo
+```
+
+Essas instruções configuram os argumentos para `sol_log_`:
+- `r2` recebe o comprimento dos dados do memo
+- `r1` é ajustado para apontar diretamente para os bytes do memo
+
+E depois disso, chamamos `sol_log_` e saímos:
+
+```sbpf
+call 16   ; Chamar sol_log_ (helper ID 16)
+exit      ; Retornar usando o valor de r0
+```
+
+<ArticleSection name="Conclusão" id="conclusion" level="h2" />
+
+O programa:
+1. Chama 16 (`sol_log_`) para imprimir o memo no log do validador
+2. Sai usando o valor em `r0`

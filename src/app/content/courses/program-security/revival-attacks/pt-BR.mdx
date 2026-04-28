@@ -1,0 +1,139 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Ataques de Reanimação (Revival Attacks)
+
+Ataques de reanimação exploram o mecanismo de fechamento de contas da Solana trazendo contas "mortas" de volta à vida dentro da mesma transação.
+
+Quando você fecha uma conta transferindo seus lamports para fora, a Solana não faz coleta de lixo imediatamente; a conta só é limpa após a conclusão da transação. Esse atraso cria uma janela perigosa onde atacantes podem "reanima" contas fechadas enviando lamports de volta a elas, deixando contas zumbi com dados desatualizados que seu programa ainda pode confiar.
+
+O ataque é bem-sucedido devido a um mal-entendido fundamental sobre o ciclo de vida das contas. Desenvolvedores assumem que fechar uma conta a torna imediatamente inutilizável, mas na realidade, a conta permanece acessível até o fim da transação. Um atacante pode fazer um sanduíche da sua instrução de fechamento com uma transferência que reembolsa a isenção de aluguel da conta, impedindo a coleta de lixo e mantendo a conta em um estado explorável.
+
+Isso é particularmente devastador em protocolos onde o fechamento de conta representa finalização, como: completar escrows, resolver disputas ou queimar ativos. Uma conta reanimada pode enganar seu programa fazendo-o acreditar que essas operações nunca foram concluídas, potencialmente permitindo gasto duplo, acesso não autorizado ou manipulação do protocolo.
+
+<ArticleSection name="Anchor" id="anchor" level="h2" />
+
+Considere esta instrução vulnerável que fecha uma conta de programa:
+
+```rust
+#[program]
+pub mod insecure_close{
+    use super::*;
+
+    //..
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+        **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+            .checked_add(ctx.accounts.account_to_close.to_account_info().lamports())
+            .unwrap();
+        **ctx.accounts.account_to_close.to_account_info().lamports.borrow_mut() = 0;
+
+        Ok(())
+    }
+        
+    //..
+}
+
+#[derive(Accounts)]
+pub struct Close<'info> {
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+
+}
+```
+
+Este código parece correto: ele transfere todos os lamports da conta para o destino, o que deveria acionar a coleta de lixo. No entanto, os dados da conta permanecem intactos, e a conta ainda está acessível dentro da mesma transação.
+
+Um atacante pode explorar isso criando uma transação com múltiplas instruções:
+- Instrução 1: Chamar sua função de fechamento para drenar os lamports da conta
+- Instrução 2: Transferir lamports de volta para a conta "fechada" (reanimação)
+- Instrução 3: Usar a conta reanimada em operações subsequentes
+
+O resultado é uma conta zumbi que parece fechada para a lógica do seu programa, mas permanece funcional com todos os seus dados originais intactos. Isso pode levar a:
+- Gasto duplo: Usando contas de escrow "fechadas" múltiplas vezes
+- Bypass de autorização: Reanimando contas de administrador que deveriam estar desativadas
+- Corrupção de estado: Operando em contas que não deveriam mais existir
+
+A solução mais segura é usar a constraint `close` do Anchor, que trata do fechamento seguro automaticamente:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+   #[account(
+        mut,
+        close = owner,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Ou você poderia adicionar a constraint de conta `signer` como esta:
+
+```rust
+#[derive(Accounts)]
+pub struct Close<'info> {
+    #[account(signer)]
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: Esta conta não será verificada pelo Anchor
+    pub new_owner: UncheckedAccount<'info>,
+   #[account(
+        mut,
+        has_one = owner
+    )]
+    pub program_account: Account<'info, ProgramAccount>,
+}
+```
+
+Para lógica de fechamento personalizada, implemente o padrão completo de fechamento seguro:
+
+```rust
+pub fn update_ownership(ctx: Context<UpdateOwnership>) -> Result<()> {
+    let account = ctx.accounts.account.to_account_info();
+
+    let dest_starting_lamports = ctx.accounts.destination.lamports();
+
+    **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
+        .checked_add(account.lamports())
+        .unwrap();
+    **account.lamports.borrow_mut() = 0;
+
+    let mut data = account.try_borrow_mut_data()?;
+    for byte in data.deref_mut().iter_mut() {
+        *byte = 0;
+    }
+
+    let dst: &mut [u8] = &mut data;
+    let mut cursor = std::io::Cursor::new(dst);
+    cursor
+        .write_all(&anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR)
+        .unwrap();
+
+    Ok(())
+}
+```
+
+<ArticleSection name="Pinocchio" id="pinocchio" level="h2" />
+
+No Pinocchio, implemente o padrão de fechamento manualmente:
+
+```rust
+self.program_account.realloc(0, true)?;
+self.program_account.close()?;
+
+let mut data_ref = self.program_account.try_borrow_mut_data()?;
+data_ref[0] = 0xff;
+```
+
+
+
+
