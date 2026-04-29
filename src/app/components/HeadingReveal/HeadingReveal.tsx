@@ -1,10 +1,8 @@
 "use client";
 
-import { animate, stagger, anticipate } from "motion";
-import { splitText } from "motion-plus";
-import { useEffect, useRef } from "react";
 import classNames from "classnames";
-import { useSplitLocaleBy } from "@/i18n/hooks";
+import { useTokenRevealAnimation } from "@/hooks/useTokenRevealAnimation";
+import { type TextSplitBy } from "@/lib/text/segmentText";
 
 export default function HeadingReveal({
   text,
@@ -14,6 +12,7 @@ export default function HeadingReveal({
   cursorColor = "#00FFFF",
   baseDelay = 0,
   splitBy,
+  locale,
   speed = 0.25,
 }: {
   text: string;
@@ -22,65 +21,39 @@ export default function HeadingReveal({
   color?: string;
   cursorColor?: string;
   baseDelay?: number;
-  splitBy?: "words" | "chars";
+  splitBy?: TextSplitBy;
+  locale?: string | string[];
   speed?: number;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const localeSegmentation = useSplitLocaleBy();
-  splitBy ??= localeSegmentation;
+  const resolvedSplitBy = splitBy ?? "words";
 
-  useEffect(() => {
-    document.fonts.ready.then(() => {
-      if (!containerRef.current) return;
+  const { containerRef, tokens, getTokenRef } = useTokenRevealAnimation({
+    text,
+    splitBy: resolvedSplitBy,
+    locale,
+    color,
+    cursorColor,
+    baseDelay,
+    speed,
+  });
 
-      // Hide the container until the fonts are loaded
-      containerRef.current.style.visibility = "visible";
+  const HeadingTag = headingLevel;
 
-      const { words, chars } = splitText(
-        containerRef.current.querySelector(headingLevel)!
-      );
-
-      // Animate the words in the h1
-      animate(
-        splitBy === "words" ? words : chars,
-        {
-          backgroundColor: [
-            "rgba(255,255,255,0)",
-            "rgba(255,255,255,0)",
-            cursorColor,
-            cursorColor,
-            cursorColor,
-            "rgba(255,255,255,0)",
-          ],
-          color: [
-            "rgba(255,255,255,0)",
-            "rgba(255,255,255,0)",
-            cursorColor,
-            cursorColor,
-            cursorColor,
-            color,
-          ],
-        },
-        {
-          ease: anticipate,
-          duration: speed,
-          delay: stagger(speed / 2, { startDelay: baseDelay }),
-        }
-      );
-    });
-  }, []);
+  const headingContent = tokens.map((token, index) => (
+    <span
+      key={`${index}-${token.text}`}
+      aria-hidden="true"
+      ref={getTokenRef(index)}
+    >
+      {token.text}
+    </span>
+  ));
 
   return (
     <div ref={containerRef}>
-      {headingLevel === "h1" && (
-        <h1 className={classNames("h1", className)}>{text}</h1>
-      )}
-      {headingLevel === "h2" && (
-        <h2 className={classNames("h2", className)}>{text}</h2>
-      )}
-      {headingLevel === "h3" && (
-        <h3 className={classNames("h3", className)}>{text}</h3>
-      )}
+      <HeadingTag className={classNames(headingLevel, className)} aria-label={text}>
+        {headingContent}
+      </HeadingTag>
     </div>
   );
 }
