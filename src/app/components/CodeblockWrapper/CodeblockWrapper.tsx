@@ -1,8 +1,8 @@
 "use client";
 
 import { Codeblock } from "@blueshift-gg/ui-components";
-import { PathLanguages } from "@/app/utils/path";
-import { useRef, useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PathLanguages } from "@/app/utils/path";
 
 interface CodeblockWrapperProps {
   children: React.ReactNode;
@@ -19,7 +19,7 @@ export function CodeblockWrapper(props: CodeblockWrapperProps) {
     if (preRef.current) {
       setText(preRef.current.textContent ?? "");
     }
-  }, [children]);
+  });
 
   return (
     <Codeblock

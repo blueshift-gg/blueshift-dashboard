@@ -1,22 +1,35 @@
 "use client";
 
-import { usePersistentStore, useStore } from "@/stores/store";
-import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import { getChallengeDropdownItems } from "@/app/utils/dropdownItems";
-import { useEffect, useState, useMemo, useRef, forwardRef } from "react";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import ChallengeCard from "../ChallengeCard/ChallengeCard";
-import NFTViewer from "../NFTViewer/NFTViewer";
-import { useNftOwnership } from "@/hooks/useNftOwnership";
-import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
-import ChallengesEmpty from "./ChallengesEmpty";
-import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import { useWindowSize } from "usehooks-ts";
-import { CourseLanguages } from "@/app/utils/course";
+import {
+  Banner,
+  Dropdown,
+  Icon,
+  type IconName,
+  Input,
+  Tabs,
+} from "@blueshift-gg/ui-components";
 import { PaginationButton } from "@blueshift-gg/ui-components/Pagination";
+import classNames from "classnames";
+import { useTranslations } from "next-intl";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useWindowSize } from "usehooks-ts";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { CourseLanguages } from "@/app/utils/course";
+import { getChallengeDropdownItems } from "@/app/utils/dropdownItems";
 import { recommendChallenges } from "@/app/utils/recommendations";
+import { useNftOwnership } from "@/hooks/useNftOwnership";
+import { usePersistentStore, useStore } from "@/stores/store";
+import ChallengeCard from "../ChallengeCard/ChallengeCard";
+import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
+import NFTViewer from "../NFTViewer/NFTViewer";
+import ChallengesEmpty from "./ChallengesEmpty";
 
 const challengeSections = {
   Anchor: {
@@ -46,6 +59,12 @@ type ChallengesListProps = {
   isLoading?: boolean;
 };
 
+const CHALLENGE_SKELETON_KEYS = [
+  "challenge-skeleton-1",
+  "challenge-skeleton-2",
+  "challenge-skeleton-3",
+] as const;
+
 const ScrollableSection = forwardRef<
   HTMLDivElement,
   { children: React.ReactNode; className?: string; onScroll?: () => void }
@@ -70,11 +89,11 @@ ScrollableSection.displayName = "ScrollableSection";
 
 type ChallengeSectionProps = {
   language: string;
-  section: { icon: string; title: string };
+  section: { icon: IconName; title: string };
   challenges: ChallengeMetadata[];
   setIsNFTViewerOpen: (isOpen: boolean) => void;
   setSelectedChallenge: (challenge: ChallengeMetadata) => void;
-  t: any;
+  t: (key: string) => string;
   completedCount: number;
   totalCount: number;
 };
@@ -95,7 +114,7 @@ function ChallengeSection({
     isAtEnd: false,
   });
 
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (scrollRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
       // Use a small threshold for floating point comparisons
@@ -105,13 +124,13 @@ function ChallengeSection({
         isAtEnd: isAtEnd,
       });
     }
-  };
+  }, []);
 
   useEffect(() => {
     updateScrollState();
     window.addEventListener("resize", updateScrollState);
     return () => window.removeEventListener("resize", updateScrollState);
-  }, [challenges]);
+  }, [updateScrollState]);
 
   const handleScroll = (direction: "left" | "right") => {
     if (scrollRef.current) {
@@ -127,9 +146,10 @@ function ChallengeSection({
     <div className="flex flex-col group/section border border-border-light">
       <div className="flex flex-col gap-y-1 p-1">
         <Banner
-          icon={{ name: section.icon as any, size: 16 }}
+          icon={{ name: section.icon, size: 16 }}
           title={t(section.title)}
-          variant={language as any}
+          // biome-ignore lint/suspicious/noExplicitAny: Banner variant is typed too narrowly upstream for the supported challenge language variants.
+          variant={language.toLowerCase() as any}
         >
           <span className="text-current ml-auto">
             {completedCount}/{totalCount} completed
@@ -199,7 +219,7 @@ export default function ChallengesList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -207,7 +227,7 @@ export default function ChallengesList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -222,7 +242,7 @@ export default function ChallengesList({
       // Cleanup
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   const handleScrollLeft = () => {
     if (carouselRef.current) {
@@ -347,7 +367,7 @@ export default function ChallengesList({
   }, [initialChallenges, challengeStatuses]);
 
   const hasNoResults = filteredChallenges.length === 0;
-  const hasNoFilters =
+  const _hasNoFilters =
     !searchValue &&
     selectedLanguages.length === 0 &&
     selectedDifficulties.length === 0 &&
@@ -485,8 +505,8 @@ export default function ChallengesList({
               )}
             >
               {isLoading
-                ? Array.from({ length: 3 }).map((_, index) => (
-                    <ChallengeCardSkeleton />
+                ? CHALLENGE_SKELETON_KEYS.map((skeletonKey) => (
+                    <ChallengeCardSkeleton key={skeletonKey} />
                   ))
                 : recommendedChallenges.map((challenge) => (
                     <ChallengeCard
@@ -504,6 +524,7 @@ export default function ChallengesList({
             <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
             <div className="w-full h-[48px] flex justify-end">
               <button
+                type="button"
                 disabled={scrollState.isAtStart}
                 onClick={handleScrollLeft}
                 className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
@@ -511,6 +532,7 @@ export default function ChallengesList({
                 <Icon name="Chevron" className="rotate-90" />
               </button>
               <button
+                type="button"
                 disabled={scrollState.isAtEnd}
                 onClick={handleScrollRight}
                 className="mr-px absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"

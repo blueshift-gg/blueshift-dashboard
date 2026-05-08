@@ -1,5 +1,5 @@
-import { CourseMetadata, withCourseNumber } from "@/app/utils/course";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import { type CourseMetadata, withCourseNumber } from "@/app/utils/course";
 
 export const courses: CourseMetadata[] = withCourseNumber([
   {

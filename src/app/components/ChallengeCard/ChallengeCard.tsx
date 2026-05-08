@@ -1,30 +1,28 @@
 "use client";
 
-import React, { useRef, useState } from "react";
-import classNames from "classnames";
-import { Link } from "@/i18n/navigation";
-import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
-  anticipate,
   Badge,
-  breeze,
+  BRAND_COLOURS,
   Button,
   CrosshairCorners,
   Difficulty,
   Divider,
-  glide,
-  IconName,
+  Icon,
+  type IconName,
 } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
+import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import { useTranslations } from "next-intl";
+import type React from "react";
+import { useRef, useState } from "react";
+import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import { difficulty as difficultyMap } from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
+import { useAuth } from "@/hooks/useAuth";
 import useMintNFT from "@/hooks/useMintNFT";
 import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
-import { useAuth } from "@/hooks/useAuth";
+import { Link } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
 
 type ChallengeCardProps = {
   challenge: ChallengeMetadata;
@@ -42,7 +40,7 @@ export default function ChallengeCard({
   hrefOverride,
 }: ChallengeCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const [hasHovered, setHasHovered] = useState(false);
+  const [_hasHovered, setHasHovered] = useState(false);
   const [isHoveredFooter, setIsHoveredFooter] = useState(false);
 
   const {
@@ -73,6 +71,7 @@ export default function ChallengeCard({
   const challengeHref = hrefOverride ?? `/challenges/${challenge.slug}`;
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: this container only tracks pointer hover for decorative motion, while actual navigation and actions remain on child controls.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {
@@ -204,6 +203,7 @@ export default function ChallengeCard({
               </Link>
               <div className="flex items-center justify-center gap-x-2">
                 <button
+                  type="button"
                   className="font-mono flex items-center justify-center gap-x-1.5 text-xs text-shade-tertiary/50 cursor-not-allowed w-full flex-shrink uppercase"
                   onMouseEnter={() => setIsHoveredFooter(true)}
                   onMouseLeave={() => setIsHoveredFooter(false)}

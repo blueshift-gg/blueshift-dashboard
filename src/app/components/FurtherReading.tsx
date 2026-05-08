@@ -1,9 +1,17 @@
 "use client";
 
-import { memo, useCallback } from "react";
-import { getResearchForCourse, type CourseId } from "@/lib/cross-linking";
-import { CrosshairCorners, Button } from "@blueshift-gg/ui-components";
+import { Button, CrosshairCorners } from "@blueshift-gg/ui-components";
 import Link from "next/link";
+import { memo, useCallback } from "react";
+import { type CourseId, getResearchForCourse } from "@/lib/cross-linking";
+
+type AnalyticsClient = {
+  track: (event: string, properties: Record<string, string>) => void;
+};
+
+type AnalyticsWindow = Window & {
+  analytics?: AnalyticsClient;
+};
 
 interface Props {
   courseId: CourseId;
@@ -42,8 +50,13 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
 
   const handleClick = useCallback(
     (articleId: string) => {
-      if (typeof window !== "undefined" && (window as any).analytics) {
-        (window as any).analytics.track("research_link_clicked", {
+      const analytics =
+        typeof window !== "undefined"
+          ? (window as AnalyticsWindow).analytics
+          : undefined;
+
+      if (analytics) {
+        analytics.track("research_link_clicked", {
           source: "course_conclusion",
           course: courseId,
           article: articleId,

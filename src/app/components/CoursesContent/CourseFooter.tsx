@@ -1,47 +1,32 @@
 "use client";
 
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { CourseMetadata } from "@/app/utils/course";
 import {
-  Icon,
+  Badge,
   Button,
   CrosshairCorners,
-  Badge,
+  Icon,
 } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { usePathContent } from "@/app/hooks/usePathContent";
-import { getResearchForCourse, type CourseId } from "@/lib/cross-linking";
 import { useCallback } from "react";
+import { usePathContent } from "@/app/hooks/usePathContent";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { CourseMetadata } from "@/app/utils/course";
+import { type CourseId, getResearchForCourse } from "@/lib/cross-linking";
 
 interface CourseFooterProps {
   nextLesson: boolean;
   courseMetadata: CourseMetadata;
   nextLessonSlug: string;
-  challenge: ChallengeMetadata;
+  challenge?: ChallengeMetadata;
 }
 
-const COURSE_TOPICS: Record<string, string> = {
-  "introduction-to-assembly": "sBPF assembly optimization and JIT compilation",
-  "pinocchio-for-dummies": "low-level Solana optimization techniques",
-  "introduction-to-blockchain-and-solana": "Solana development",
-  "anchor-for-dummies": "Anchor framework internals",
-  "program-security": "Solana security",
-  "secp256r1-on-solana": "cryptography on Solana",
-  "tokens-on-solana": "token development",
-  "nfts-on-solana": "NFT development",
-  "spl-token-with-web3js": "SPL token development",
-  "spl-token-with-anchor": "SPL token development",
-  "token-2022-program": "Token-2022 development",
-  "token-2022-with-web3js": "Token-2022 development",
-  "token-2022-with-anchor": "Token-2022 development",
-  "instruction-introspection": "advanced Solana patterns",
-  "testing-with-mollusk": "Solana testing",
-  "solana-pay": "Solana payments",
-  "create-your-sdk-with-codama": "SDK development",
-  "winternitz-signatures-on-solana": "cryptography on Solana",
-  "testing-with-litesvm": "Solana testing",
-  "testing-with-surfpool": "Solana testing",
+type AnalyticsClient = {
+  track: (event: string, properties: Record<string, string>) => void;
+};
+
+type AnalyticsWindow = Window & {
+  analytics?: AnalyticsClient;
 };
 
 export default function CourseFooter({
@@ -91,12 +76,15 @@ export default function CourseFooter({
 
   const isLastPathUnit =
     !!pathSlug && !!steps && currentPathIndex >= 0 && !nextStep;
-  const topic = COURSE_TOPICS[courseMetadata.slug] || "advanced Solana topics";
-
   const handleArticleClick = useCallback(
     (articleId: string) => {
-      if (typeof window !== "undefined" && (window as any).analytics) {
-        (window as any).analytics.track("research_link_clicked", {
+      const analytics =
+        typeof window !== "undefined"
+          ? (window as AnalyticsWindow).analytics
+          : undefined;
+
+      if (analytics) {
+        analytics.track("research_link_clicked", {
           source: "course_conclusion",
           course: courseMetadata.slug,
           article: articleId,
@@ -113,8 +101,8 @@ export default function CourseFooter({
 
   const getChallengeHref = () =>
     pathSlug
-      ? `/paths/${pathSlug}/challenges/${challenge.slug}`
-      : `/challenges/${challenge.slug}`;
+      ? `/paths/${pathSlug}/challenges/${challenge?.slug}`
+      : `/challenges/${challenge?.slug}`;
 
   return (
     <div className="flex flex-col w-[calc(100%+42px)] -ml-[21px] lg:w-[calc(100%+50px)] lg:-ml-[25px]">
@@ -133,27 +121,25 @@ export default function CourseFooter({
       </div>
       <div className="w-full flex items-center flex-col gap-y-10">
         {nextLesson && (
-          <>
-            <Link
-              href={getLessonHref(nextLessonSlug)}
-              className="flex justify-between items-center w-full bg-card-solid border-x border-border-light group py-5 px-5"
-            >
-              <div className="flex items-center gap-x-2">
-                <span className="text-mute text-sm font-mono text-shade-tertiary">
-                  Next Lesson
-                </span>
-                <span className="font-medium text-shade-primary">
-                  {t(
-                    `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`,
-                  )}
-                </span>
-              </div>
-              <Icon
-                name="ArrowRight"
-                className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
-              />
-            </Link>
-          </>
+          <Link
+            href={getLessonHref(nextLessonSlug)}
+            className="flex justify-between items-center w-full bg-card-solid border-x border-border-light group py-5 px-5"
+          >
+            <div className="flex items-center gap-x-2">
+              <span className="text-mute text-sm font-mono text-shade-tertiary">
+                Next Lesson
+              </span>
+              <span className="font-medium text-shade-primary">
+                {t(
+                  `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`,
+                )}
+              </span>
+            </div>
+            <Icon
+              name="ArrowRight"
+              className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
+            />
+          </Link>
         )}
 
         {!nextLesson && challenge && (

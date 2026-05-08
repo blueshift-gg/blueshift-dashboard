@@ -1,26 +1,24 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-import { anticipate } from "motion";
-import { Button } from "@blueshift-gg/ui-components";
-import { motion } from "motion/react";
+import { Button, HeadingReveal, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
-import React, { useState, useEffect } from "react";
-import {
+import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { URLS } from "@/constants/urls";
+import { useAuth } from "@/hooks/useAuth";
+import type {
   ChallengeRequirement,
   VerificationApiResponse,
 } from "@/hooks/useChallengeVerifier";
-import { Icon } from "@blueshift-gg/ui-components";
-import Divider from "../Divider/Divider";
-import { HeadingReveal } from "@blueshift-gg/ui-components";
-import { usePersistentStore } from "@/stores/store";
-import ChallengeCompleted from "../Modals/ChallengeComplete";
 import { Link } from "@/i18n/navigation";
-import { useAuth } from "@/hooks/useAuth";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { useSearchParams } from "next/navigation";
-import { URLS } from "@/constants/urls";
+import { usePersistentStore } from "@/stores/store";
+import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
+import Divider from "../Divider/Divider";
+import ChallengeCompleted from "../Modals/ChallengeComplete";
 
 // Copy feedback timeout duration
 const COPY_FEEDBACK_TIMEOUT_MS = 3000; // 3 seconds
@@ -286,36 +284,34 @@ export default function ChallengeTable({
               )}
             >
               {!allIncomplete ? (
-                <>
-                  {requirements.map((requirement, index) => (
-                    <motion.div
-                      key={requirement.instructionKey}
-                      className={classNames(
-                        "left-[1px]",
-                        requirement.status === "passed" &&
-                          "[background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#00E66B]",
-                        requirement.status === "failed" &&
-                          "[background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#FF285A]",
-                        // Make incomplete segments transparent to show the parent background
-                        requirement.status === "incomplete" && "bg-transparent",
-                      )}
-                      initial={{
-                        width: `0%`,
-                        height: 6,
-                      }}
-                      animate={{
-                        // Use derived requirements length for width calculation
-                        width: `${100 / requirements.length}%`,
-                        height: 6,
-                      }}
-                      transition={{
-                        duration: 0.4,
-                        ease: anticipate,
-                        delay: 0.2 * index,
-                      }}
-                    />
-                  ))}
-                </>
+                requirements.map((requirement, index) => (
+                  <motion.div
+                    key={requirement.instructionKey}
+                    className={classNames(
+                      "left-[1px]",
+                      requirement.status === "passed" &&
+                        "[background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#00E66B]",
+                      requirement.status === "failed" &&
+                        "[background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#FF285A]",
+                      // Make incomplete segments transparent to show the parent background
+                      requirement.status === "incomplete" && "bg-transparent",
+                    )}
+                    initial={{
+                      width: `0%`,
+                      height: 6,
+                    }}
+                    animate={{
+                      // Use derived requirements length for width calculation
+                      width: `${100 / requirements.length}%`,
+                      height: 6,
+                    }}
+                    transition={{
+                      duration: 0.4,
+                      ease: anticipate,
+                      delay: 0.2 * index,
+                    }}
+                  />
+                ))
               ) : (
                 // Initial state when all are incomplete
                 <div className="w-4 h-1.5 [background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#ADB9D2]" />
@@ -497,12 +493,12 @@ export default function ChallengeTable({
                                   result.instruction ===
                                   requirement.instructionKey,
                               )
-                              ?.program_logs?.map((log, index) => (
+                              ?.program_logs?.map((_log, index) => (
                                 <HeadingReveal
                                   baseDelay={index * 0.1}
                                   text="PROGRAM"
                                   headingLevel="h3"
-                                  key={index}
+                                  key={`${requirement.instructionKey}-program-label-${_log}`}
                                   splitBy="chars"
                                   speed={0.1}
                                   className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
@@ -551,7 +547,7 @@ export default function ChallengeTable({
                                     ease: anticipate,
                                     delay: 1 + index * 0.1,
                                   }}
-                                  key={index}
+                                  key={`${requirement.instructionKey}-program-log-${log}`}
                                   className="text-start font-fira-code font-medium text-nowrap text-shade-secondary"
                                 >
                                   {log.slice(7, log.length)}

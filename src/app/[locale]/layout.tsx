@@ -1,22 +1,22 @@
-import { getTranslations } from "next-intl/server";
 import localFont from "next/font/local";
-import { NextIntlClientProvider, hasLocale } from "next-intl";
 import { notFound } from "next/navigation";
+import { hasLocale, NextIntlClientProvider } from "next-intl";
+import { getTranslations } from "next-intl/server";
 import { routing } from "@/i18n/routing";
 import "@/app/globals.css";
-import Header from "@/app/components/Header/Header";
-import Footer from "@/app/components/Footer/Footer";
-import GlobalModals from "@/app/components/Modals/GlobalModals";
-import { AuthProvider } from "@/contexts/AuthContext";
-import WalletProvider from "@/contexts/WalletProvider";
-import TanstackProvider from "@/contexts/TanstackProvider";
-import { Fira_Code, Funnel_Display } from "next/font/google";
+import { Icon } from "@blueshift-gg/ui-components";
 import { GoogleAnalytics } from "@next/third-parties/google";
+import { Fira_Code, Funnel_Display } from "next/font/google";
 import { headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
 import { Toaster as SonnerToaster } from "sonner";
-import { Icon } from "@blueshift-gg/ui-components";
+import Footer from "@/app/components/Footer/Footer";
+import Header from "@/app/components/Header/Header";
+import GlobalModals from "@/app/components/Modals/GlobalModals";
 import { URLS } from "@/constants/urls";
+import { AuthProvider } from "@/contexts/AuthContext";
+import TanstackProvider from "@/contexts/TanstackProvider";
+import WalletProvider from "@/contexts/WalletProvider";
 
 const FiraCode = Fira_Code({
   subsets: ["latin"],
@@ -159,12 +159,9 @@ export default async function RootLayout({
             <WalletProvider>
               <AuthProvider>
                 {organizationSchema && (
-                  <script
-                    type="application/ld+json"
-                    dangerouslySetInnerHTML={{
-                      __html: JSON.stringify(organizationSchema),
-                    }}
-                  />
+                  <script type="application/ld+json">
+                    {JSON.stringify(organizationSchema)}
+                  </script>
                 )}
                 <GlobalModals />
                 {!pathname?.includes("/nft-generator") ? (

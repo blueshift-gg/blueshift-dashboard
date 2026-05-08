@@ -1,20 +1,20 @@
 import "server-only";
 
-import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
-import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
-import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
 import { Icon } from "@blueshift-gg/ui-components";
-import IDE from "@/app/components/TSChallengeEnv/IDE";
-import { Requirement } from "@/app/components/Challenges/Requirement";
-import { RequirementList } from "@/app/components/Challenges/RequirementList";
-import { FurtherReading } from "@/app/components/FurtherReading";
+import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import { Fragment, type JSX, jsx, jsxs } from "react/jsx-runtime";
 import { SafeMdxRenderer } from "safe-mdx";
 import { mdxParse } from "safe-mdx/parse";
+import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
+import { Requirement } from "@/app/components/Challenges/Requirement";
+import { RequirementList } from "@/app/components/Challenges/RequirementList";
+import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
+import { FurtherReading } from "@/app/components/FurtherReading";
+import IDE from "@/app/components/TSChallengeEnv/IDE";
+import { SKIP_HIGHLIGHT_LANGS, THEME_NAME } from "@/lib/shiki/config";
 import { getSingletonHighlighter } from "@/lib/shiki/highlighter";
-import { THEME_NAME, SKIP_HIGHLIGHT_LANGS } from "@/lib/shiki/config";
-import { toJsxRuntime } from "hast-util-to-jsx-runtime";
-import { Fragment, jsxs, jsx } from "react/jsx-runtime";
-import { fetchCompiledContent, CompiledMDX } from "./content-source";
+import { type CompiledMDX, fetchCompiledContent } from "./content-source";
 
 export async function renderSafeMdx(compiled: CompiledMDX) {
   // In production, mdast is already compiled and included
@@ -126,7 +126,9 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
 /**
  * Fetches and renders pre-compiled MDX content.
  */
-export async function getCompiledMdx(relativePath: string) {
+export async function getCompiledMdx(
+  relativePath: string,
+): Promise<JSX.Element> {
   const compiled = await fetchCompiledContent(relativePath);
   return renderSafeMdx(compiled);
 }

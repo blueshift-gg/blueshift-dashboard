@@ -1,11 +1,11 @@
-import typescript from "@shikijs/langs-precompiled/typescript";
-import rust from "@shikijs/langs-precompiled/rust";
-import toml from "@shikijs/langs-precompiled/toml";
-import shellscript from "@shikijs/langs-precompiled/shellscript";
 import json from "@shikijs/langs-precompiled/json";
 import python from "@shikijs/langs-precompiled/python";
-import sbpfGrammar from "./sbpf-grammar.json" with { type: "json" };
+import rust from "@shikijs/langs-precompiled/rust";
+import shellscript from "@shikijs/langs-precompiled/shellscript";
+import toml from "@shikijs/langs-precompiled/toml";
+import typescript from "@shikijs/langs-precompiled/typescript";
 import blueshiftTheme from "./blueshift-theme.json" with { type: "json" };
+import sbpfGrammar from "./sbpf-grammar.json" with { type: "json" };
 
 /**
  * Theme configuration for Shiki

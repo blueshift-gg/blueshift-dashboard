@@ -1,20 +1,14 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-import {
-  Avatar,
-  Button,
-  CrosshairCorners,
-  IconName,
-  Tabs,
-} from "@blueshift-gg/ui-components";
 import { Faucet, type FaucetConfig } from "@blueshift-gg/faucet-react";
+import { CrosshairCorners, Tabs } from "@blueshift-gg/ui-components";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import { useAuth } from "@/hooks/useAuth";
 import PerksCard from "./PerksCard";
 import PerksSkeletonCard from "./PerksSkeletonCard";
-import { useAuth } from "@/hooks/useAuth";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
 
 export type Perk = {
   productName: string;
@@ -33,6 +27,8 @@ const FAUCET_API_CONFIG = {
 };
 
 const FAUCET_CLAIM_AMOUNTS: number[] = [1, 2, 5, 10];
+
+const PERKS_SKELETON_KEYS = ["perk-skeleton-1", "perk-skeleton-2"] as const;
 
 export default function Perks() {
   const perks: Perk[] = [
@@ -81,6 +77,7 @@ export default function Perks() {
             <img
               src="/graphics/connect-wallet.svg"
               className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
+              alt="Connect wallet"
             />
             <div className="flex flex-col gap-y-3 max-w-[90dvw]">
               <div className="text-center text-lg sm:text-xl font-medium leading-none font-mono text-shade-primary">
@@ -143,8 +140,8 @@ export default function Perks() {
                 ]}
               />
               {isLoading ? (
-                Array.from({ length: 2 }).map((_, index) => (
-                  <PerksSkeletonCard key={`list-skeleton-${index}`} />
+                PERKS_SKELETON_KEYS.map((skeletonKey) => (
+                  <PerksSkeletonCard key={skeletonKey} />
                 ))
               ) : activeTab === "unlocked" ? (
                 perks.length > 0 ? (

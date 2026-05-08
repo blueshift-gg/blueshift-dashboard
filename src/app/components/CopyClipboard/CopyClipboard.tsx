@@ -1,10 +1,10 @@
 "use client";
 
 import { Icon } from "@blueshift-gg/ui-components";
-import DecryptedText from "../HeadingReveal/DecryptText";
-import { useState, useEffect } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { anticipate } from "motion";
+import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useState } from "react";
+import DecryptedText from "../HeadingReveal/DecryptText";
 
 export default function CopyClipboard({
   value,
@@ -32,7 +32,8 @@ export default function CopyClipboard({
   };
 
   return (
-    <div
+    <button
+      type="button"
       className="relative z-10 cursor-pointer items-center justify-center flex flex-col"
       onClick={handleCopy}
     >
@@ -60,6 +61,6 @@ export default function CopyClipboard({
         className="transition text-mute hover:text-shade-tertiary"
         size={iconSize as 18 | 14 | 12}
       />
-    </div>
+    </button>
   );
 }

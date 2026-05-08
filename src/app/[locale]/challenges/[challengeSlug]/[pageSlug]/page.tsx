@@ -1,6 +1,6 @@
-import ChallengePageContainer from "@/app/components/Challenges/ChallengePageContainer";
-import { Metadata } from "next";
+import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
+import ChallengePageContainer from "@/app/components/Challenges/ChallengePageContainer";
 import { getPathname } from "@/i18n/navigation";
 
 interface ChallengePageProps {

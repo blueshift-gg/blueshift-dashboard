@@ -1,6 +1,6 @@
+import { Suspense } from "react";
 import { getAllPaths } from "@/app/utils/content";
 import PathList from "./PathList";
-import { Suspense } from "react";
 
 async function PathsContent() {
   const paths = await getAllPaths();

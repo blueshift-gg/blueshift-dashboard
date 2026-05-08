@@ -1,8 +1,8 @@
-import useMinter from "@/hooks/useMinter";
-import { usePersistentStore } from "@/stores/store";
-import { findUnitPda } from "@/lib/nft/sdk";
 import { useCallback, useState } from "react";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import useMinter from "@/hooks/useMinter";
+import { findUnitPda } from "@/lib/nft/sdk";
+import { usePersistentStore } from "@/stores/store";
 
 export default function useMintNFT() {
   const { program: minter, error: minterError } = useMinter();

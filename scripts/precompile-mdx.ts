@@ -1,9 +1,10 @@
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
-import { join, dirname, relative } from "node:path";
+// biome-ignore-all lint/suspicious/noExplicitAny: safe-mdx and shiki expose loosely typed AST structures in this build script.
 import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { mdxParse } from "safe-mdx/parse";
+import { SKIP_HIGHLIGHT_LANGS, THEME_NAME } from "../src/lib/shiki/config";
 import { createShikiHighlighter } from "../src/lib/shiki/highlighter";
-import { THEME_NAME, SKIP_HIGHLIGHT_LANGS } from "../src/lib/shiki/config";
 
 const CONTENT_DIR = join(process.cwd(), "src/app/content");
 const OUTPUT_DIR = join(process.cwd(), ".compiled-mdx");
@@ -125,9 +126,9 @@ async function precompileMDX(
       }
 
       if (node.children) {
-        node.children.forEach((child: any) =>
-          traverseNodes(child, currentIndex),
-        );
+        node.children.forEach((child: any) => {
+          traverseNodes(child, currentIndex);
+        });
       }
     }
 
@@ -232,7 +233,7 @@ async function main() {
         try {
           await precompileMDX(inputPath, outputPath, highlighter, cache, file);
           compiled++;
-        } catch (error) {
+        } catch (_error) {
           failed++;
         }
       }),

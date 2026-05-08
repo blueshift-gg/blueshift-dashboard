@@ -1,8 +1,8 @@
 import { AnchorProvider, Program } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useMemo, useState } from "react";
 import type { BlueshiftCredentials } from "@/lib/nft/blueshift_credentials_idl";
 import idl from "@/lib/nft/blueshift_credentials_idl.json";
-import { useMemo, useState } from "react";
 
 export default function useMinter() {
   const { connection } = useConnection();

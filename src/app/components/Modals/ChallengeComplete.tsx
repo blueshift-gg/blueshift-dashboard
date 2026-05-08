@@ -1,17 +1,16 @@
 "use client";
 
-import Modal from "./Modal";
-import { useTranslations } from "next-intl";
 import { Button } from "@blueshift-gg/ui-components";
-import DecryptedText from "../HeadingReveal/DecryptText";
-import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { anticipate } from "motion";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import useMintNFT from "@/hooks/useMintNFT";
-import { usePersistentStore } from "@/stores/store";
-import { Link } from "@/i18n/navigation";
-import { ChallengeMetadata } from "@/app/utils/challenges";
 import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
+import { Link } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
+import DecryptedText from "../HeadingReveal/DecryptText";
+import Modal from "./Modal";
 
 interface ChallengeCompletedProps {
   isOpen: boolean;
@@ -25,7 +24,7 @@ export default function ChallengeCompleted({
   challenge,
 }: ChallengeCompletedProps) {
   const t = useTranslations();
-  const [isAnimating, setIsAnimating] = useState(false);
+  const [_isAnimating, setIsAnimating] = useState(false);
   const { mint, isLoading } = useMintNFT();
   const { challengeStatuses } = usePersistentStore();
   const currentCourseStatus = challengeStatuses[challenge.slug];
@@ -66,6 +65,7 @@ export default function ChallengeCompleted({
       >
         <img
           src={`/graphics/nft-${challenge.slug}.png`}
+          alt={`${challenge.slug} NFT preview`}
           className="w-full animate-nft"
         ></img>
       </motion.div>
@@ -75,7 +75,7 @@ export default function ChallengeCompleted({
         transition={{ duration: 0.75 }}
         className="overflow-hidden h-full absolute top-0"
       >
-        <img src="/graphics/nft-stage.png"></img>
+        <img src="/graphics/nft-stage.png" alt=""></img>
       </motion.div>
       <div className="flex flex-col gap-y-8 px-6 pt-16 relative z-10">
         <div className="flex flex-col gap-y-2 text-center">
@@ -103,7 +103,8 @@ export default function ChallengeCompleted({
                 onClick={handleMint}
                 disabled={isLoading}
               />
-              <div
+              <button
+                type="button"
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
@@ -113,7 +114,7 @@ export default function ChallengeCompleted({
                   text={t("ChallengePage.mint_modal_skip")}
                   isHovering={isHovering}
                 />
-              </div>
+              </button>
             </>
           ) : (
             <>
@@ -126,7 +127,8 @@ export default function ChallengeCompleted({
                   className="!w-full !flex-shrink"
                 />
               </Link>
-              <div
+              <button
+                type="button"
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
@@ -136,7 +138,7 @@ export default function ChallengeCompleted({
                   text={t("ChallengePage.mint_modal_skip")}
                   isHovering={isHovering}
                 />
-              </div>
+              </button>
             </>
           )}
         </div>

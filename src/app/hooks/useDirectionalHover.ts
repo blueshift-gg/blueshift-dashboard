@@ -1,4 +1,4 @@
-import { useState, useCallback, RefObject } from "react";
+import { type RefObject, useCallback, useState } from "react";
 
 type Direction =
   | "top-left"

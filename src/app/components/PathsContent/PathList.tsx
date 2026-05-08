@@ -1,30 +1,38 @@
 "use client";
 
-import { PathMetadata, getPathCompletedSteps } from "@/app/utils/path";
-import { CourseLanguages } from "@/app/utils/course";
-import { languageFilterMap, difficultyFilterMap } from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
-import PathCard from "../PathCard/PathCard";
+import { Banner, Icon, Input, Tabs } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { getPathDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import { recommendPaths } from "@/app/utils/recommendations";
-import {
-  Banner,
-  Dropdown,
-  Input,
-  Icon,
-  Tabs,
-} from "@blueshift-gg/ui-components";
-import { useStore } from "@/stores/store";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { difficultyFilterMap, languageFilterMap } from "@/app/utils/common";
+import type { CourseLanguages } from "@/app/utils/course";
+import { getPathDropdownItems } from "@/app/utils/dropdownItems";
+import { getPathCompletedSteps, type PathMetadata } from "@/app/utils/path";
+import { recommendPaths } from "@/app/utils/recommendations";
+import { usePersistentStore, useStore } from "@/stores/store";
+import PathCard from "../PathCard/PathCard";
 import PathCardSkeleton from "../PathCard/PathCardSkeleton";
 
 type PathsContentProps = {
   initialPaths?: PathMetadata[];
   isLoading?: boolean;
 };
+
+const FEATURED_PATH_SKELETON_KEYS = [
+  "featured-path-skeleton-1",
+  "featured-path-skeleton-2",
+  "featured-path-skeleton-3",
+] as const;
+
+const PATH_LIST_SKELETON_KEYS = [
+  "path-list-skeleton-1",
+  "path-list-skeleton-2",
+  "path-list-skeleton-3",
+  "path-list-skeleton-4",
+  "path-list-skeleton-5",
+  "path-list-skeleton-6",
+] as const;
 
 export default function PathList({
   initialPaths = [],
@@ -73,7 +81,7 @@ export default function PathList({
   const [activeTab, setActiveTab] = useState("all-paths");
 
   const { width } = useWindowSize();
-  const [isMobile, setIsMobile] = useState(false);
+  const [_isMobile, setIsMobile] = useState(false);
 
   const [scrollState, setScrollState] = useState({
     isAtStart: true,
@@ -83,7 +91,7 @@ export default function PathList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -91,7 +99,7 @@ export default function PathList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -101,7 +109,7 @@ export default function PathList({
       carousel.addEventListener("scroll", updateScrollState);
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   useEffect(() => {
     setIsMobile(width < 768);
@@ -116,7 +124,7 @@ export default function PathList({
     setActiveTab(tab);
   }, []);
 
-  const handleFilterChange = (value: string | string[] | undefined) => {
+  const _handleFilterChange = (value: string | string[] | undefined) => {
     if (Array.isArray(value)) {
       const newLanguages: CourseLanguages[] = [];
       const newDifficulties: number[] = [];
@@ -218,7 +226,7 @@ export default function PathList({
 
   const hasNoResults = filteredPaths.length === 0;
 
-  const dropdownItems = getPathDropdownItems();
+  const _dropdownItems = getPathDropdownItems();
 
   const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -323,8 +331,8 @@ export default function PathList({
             )}
           >
             {isLoading
-              ? Array.from({ length: 3 }).map((_, index) => (
-                  <PathCardSkeleton key={`featured-skeleton-${index}`} />
+              ? FEATURED_PATH_SKELETON_KEYS.map((skeletonKey) => (
+                  <PathCardSkeleton key={skeletonKey} />
                 ))
               : recommendedPaths.map((path) => {
                   const { courseCount, challengeCount } = getPathStats(path);
@@ -359,6 +367,7 @@ export default function PathList({
           <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
           <div className="w-full h-[48px] flex justify-end">
             <button
+              type="button"
               disabled={scrollState.isAtStart}
               onClick={handleScrollLeft}
               className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
@@ -366,6 +375,7 @@ export default function PathList({
               <Icon name="Chevron" className="rotate-90" />
             </button>
             <button
+              type="button"
               disabled={scrollState.isAtEnd}
               onClick={handleScrollRight}
               className="mr-[1px] absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
@@ -402,8 +412,8 @@ export default function PathList({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {isLoading
-            ? Array.from({ length: 6 }).map((_, index) => (
-                <PathCardSkeleton key={`list-skeleton-${index}`} />
+            ? PATH_LIST_SKELETON_KEYS.map((skeletonKey) => (
+                <PathCardSkeleton key={skeletonKey} />
               ))
             : filteredPaths.map((path) => {
                 const { courseCount, challengeCount } = getPathStats(path);

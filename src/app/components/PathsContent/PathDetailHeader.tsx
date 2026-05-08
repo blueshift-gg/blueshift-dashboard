@@ -1,15 +1,12 @@
 "use client";
 
+import classNames from "classnames";
+import { useTranslations } from "next-intl";
 import {
   getPathCompletedSteps,
-  PathStep,
-  PathStepWithMetadata,
+  type PathStepWithMetadata,
 } from "@/app/utils/path";
 import { usePersistentStore } from "@/stores/store";
-import { useTranslations } from "next-intl";
-import { Icon } from "@blueshift-gg/ui-components";
-
-import classNames from "classnames";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 interface PathDetailHeaderProps {

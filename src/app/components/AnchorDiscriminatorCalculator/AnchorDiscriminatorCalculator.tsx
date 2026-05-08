@@ -1,5 +1,26 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+
+const sha256 = async (message: string) => {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray;
+};
+
+const toPascalCase = (str: string) => {
+  return str
+    .replace(/[^a-zA-Z0-9]+(.)/g, (_, char) => char.toUpperCase())
+    .replace(/^[a-z]/, (char) => char.toUpperCase());
+};
+
+const toSnakeCase = (str: string) => {
+  return str
+    .replace(/([A-Z])/g, "_$1")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .toLowerCase()
+    .replace(/^_+|_+$/g, "");
+};
 
 export interface AnchorDiscriminatorCalculatorProps {
   value: string;
@@ -13,77 +34,45 @@ export const AnchorDiscriminatorCalculator = ({
   const [seed, setSeed] = useState(value);
   const [accountDiscriminator, setAccountDiscriminator] = useState("");
   const [instructionDiscriminator, setInstructionDiscriminator] = useState("");
-  const [accountSeedFormatted, setAccountSeedFormatted] = useState("");
-  const [instructionSeedFormatted, setInstructionSeedFormatted] = useState("");
-
-  // SHA256 implementation for browser
-  const sha256 = async (message: string) => {
-    const msgBuffer = new TextEncoder().encode(message);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray;
-  };
-
-  // Convert to PascalCase
-  const toPascalCase = (str: string) => {
-    return str
-      .replace(/[^a-zA-Z0-9]+(.)/g, (_, char) => char.toUpperCase())
-      .replace(/^[a-z]/, (char) => char.toUpperCase());
-  };
-
-  // Convert to snake_case
-  const toSnakeCase = (str: string) => {
-    return str
-      .replace(/([A-Z])/g, "_$1")
-      .replace(/[^a-zA-Z0-9]+/g, "_")
-      .toLowerCase()
-      .replace(/^_+|_+$/g, "");
-  };
-
-  const calculateDiscriminators = async (inputSeed: string) => {
-    if (!inputSeed.trim()) {
-      setAccountDiscriminator("");
-      setInstructionDiscriminator("");
-      setAccountSeedFormatted("");
-      setInstructionSeedFormatted("");
-      return;
-    }
-
-    try {
-      // Convert seed to appropriate case
-      const accountSeed = toPascalCase(inputSeed);
-      const instructionSeed = toSnakeCase(inputSeed);
-
-      setAccountSeedFormatted(accountSeed);
-      setInstructionSeedFormatted(instructionSeed);
-
-      // Account discriminator: sha256("account:" + PascalCase)[0..8]
-      const accountHash = await sha256(`account:${accountSeed}`);
-      const accountDisc = accountHash.slice(0, 8);
-
-      // Instruction discriminator: sha256("global:" + snake_case)[0..8]
-      const instructionHash = await sha256(`global:${instructionSeed}`);
-      const instructionDisc = instructionHash.slice(0, 8);
-
-      // Convert to hex strings
-      // const accountHex = accountDisc.map(b => b.toString(16).padStart(2, '0')).join('');
-      // const instructionHex = instructionDisc.map(b => b.toString(16).padStart(2, '0')).join('');
-
-      // Also show as byte arrays
-      const accountBytes = `[${accountDisc.join(", ")}]`;
-      const instructionBytes = `[${instructionDisc.join(", ")}]`;
-
-      setAccountDiscriminator(`${accountBytes}`);
-      setInstructionDiscriminator(`${instructionBytes}`);
-    } catch (error) {
-      console.error("Error calculating discriminators:", error);
-      setAccountDiscriminator("Error calculating");
-      setInstructionDiscriminator("Error calculating");
-    }
-  };
+  const [_accountSeedFormatted, setAccountSeedFormatted] = useState("");
+  const [_instructionSeedFormatted, setInstructionSeedFormatted] = useState("");
 
   useEffect(() => {
-    calculateDiscriminators(seed);
+    const calculateDiscriminators = async () => {
+      if (!seed.trim()) {
+        setAccountDiscriminator("");
+        setInstructionDiscriminator("");
+        setAccountSeedFormatted("");
+        setInstructionSeedFormatted("");
+        return;
+      }
+
+      try {
+        const accountSeed = toPascalCase(seed);
+        const instructionSeed = toSnakeCase(seed);
+
+        setAccountSeedFormatted(accountSeed);
+        setInstructionSeedFormatted(instructionSeed);
+
+        const accountHash = await sha256(`account:${accountSeed}`);
+        const accountDisc = accountHash.slice(0, 8);
+
+        const instructionHash = await sha256(`global:${instructionSeed}`);
+        const instructionDisc = instructionHash.slice(0, 8);
+
+        const accountBytes = `[${accountDisc.join(", ")}]`;
+        const instructionBytes = `[${instructionDisc.join(", ")}]`;
+
+        setAccountDiscriminator(accountBytes);
+        setInstructionDiscriminator(instructionBytes);
+      } catch (error) {
+        console.error("Error calculating discriminators:", error);
+        setAccountDiscriminator("Error calculating");
+        setInstructionDiscriminator("Error calculating");
+      }
+    };
+
+    void calculateDiscriminators();
   }, [seed]);
 
   return (

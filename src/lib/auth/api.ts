@@ -1,3 +1,4 @@
+import { WalletSignMessageError } from "@solana/wallet-adapter-base";
 import bs58 from "bs58";
 import {
   AuthError,
@@ -6,7 +7,6 @@ import {
   UnknownAuthError,
   UserRejectedSignatureError,
 } from "@/lib/auth/errors";
-import { WalletSignMessageError } from "@solana/wallet-adapter-base";
 
 type SignMessage = (message: Uint8Array) => Promise<Uint8Array>;
 

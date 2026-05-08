@@ -1,4 +1,4 @@
-import { IconName } from "@blueshift-gg/ui-components";
+import type { IconName } from "@blueshift-gg/ui-components";
 
 export const challengeLanguages = {
   Anchor: "Anchor",

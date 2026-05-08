@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 import "./style.css";
-import Editor, { Monaco } from "@monaco-editor/react";
-import type { editor } from "monaco-editor";
-import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import { motion, AnimatePresence } from "motion/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
+import classNames from "classnames";
+import type { editor } from "monaco-editor";
 import { anticipate } from "motion";
+import { AnimatePresence, motion } from "motion/react";
+import { useTranslations } from "next-intl";
 
 /**
  * Props for the BlueshiftEditor component
@@ -389,6 +389,7 @@ export default function BlueshiftEditor({
         )}
 
         <button
+          type="button"
           className="group/refresh font-medium flex items-center gap-x-2 text-sm text-shade-tertiary cursor-pointer hover:text-shade-secondary transition-colors"
           onClick={handleRefreshClick}
         >
@@ -438,12 +439,14 @@ export default function BlueshiftEditor({
               </p>
               <div className="flex gap-x-3 justify-end">
                 <button
+                  type="button"
                   className="px-4 py-2 text-sm font-medium text-shade-secondary hover:text-shade-primary border border-border  hover:bg-card-solid-hover transition-colors cursor-pointer"
                   onClick={handleCancelRefresh}
                 >
                   {t("ChallengePage.reset_code_modal.cancel")}
                 </button>
                 <button
+                  type="button"
                   className="px-4 py-2 text-sm font-medium bg-[#ff285a] hover:bg-[#e6234f] text-white transition-colors cursor-pointer"
                   onClick={handleConfirmRefresh}
                 >

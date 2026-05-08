@@ -1,9 +1,9 @@
-import { getTranslations } from "next-intl/server";
-import { ChallengeMetadata, challengeColors } from "@/app/utils/challenges";
-import TableOfContents from "@/app/components/TableOfContents/TableOfContents";
-import PageHero from "@/app/components/PageHero/PageHero";
-import Breadcrumbs from "@/app/components/Breadcrumbs";
 import classNames from "classnames";
+import { getTranslations } from "next-intl/server";
+import Breadcrumbs from "@/app/components/Breadcrumbs";
+import PageHero from "@/app/components/PageHero/PageHero";
+import TableOfContents from "@/app/components/TableOfContents/TableOfContents";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 
 interface ChallengeLayoutProps {
   challengeMetadata: ChallengeMetadata;

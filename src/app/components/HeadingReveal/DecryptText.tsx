@@ -1,5 +1,19 @@
-import { useEffect, useState } from "react";
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
+
+const getStableCharacterEntries = (value: string) => {
+  const seenCounts = new Map<string, number>();
+
+  return value.split("").map((char) => {
+    const nextCount = (seenCounts.get(char) ?? 0) + 1;
+    seenCounts.set(char, nextCount);
+
+    return {
+      char,
+      key: `${char}-${nextCount}`,
+    };
+  });
+};
 
 interface DecryptedTextProps {
   text: string;
@@ -110,7 +124,7 @@ export default function DecryptedText({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isHovering, text, speed]);
+  }, [isHovering, text, speed, revealedIndices.size]);
 
   return (
     <motion.span
@@ -120,7 +134,7 @@ export default function DecryptedText({
       <span className="sr-only">{displayText}</span>
 
       <span aria-hidden="true" className="inline-flex tracking-tight">
-        {displayText.split("").map((char, index) => {
+        {getStableCharacterEntries(displayText).map(({ char, key }, index) => {
           const isRevealedOrDone =
             (isExiting
               ? !revealedIndices.has(index)
@@ -130,7 +144,7 @@ export default function DecryptedText({
 
           return (
             <span
-              key={index}
+              key={key}
               className={isRevealedOrDone ? className : encryptedClassName}
             >
               {char}

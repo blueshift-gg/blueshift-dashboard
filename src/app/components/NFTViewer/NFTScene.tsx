@@ -1,23 +1,29 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: imperative Three.js, react-three-fiber, and dat.gui refs in this scene require loose handles and window bridges.
 "use client";
 
+import {
+  OrbitControls,
+  shaderMaterial,
+  Text,
+  useTexture,
+} from "@react-three/drei";
+import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
+import classNames from "classnames";
 import React, {
   Suspense,
+  useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
-  useCallback,
-  useEffect,
 } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, useTexture, shaderMaterial } from "@react-three/drei";
 import * as THREE from "three";
-import { extend } from "@react-three/fiber";
-import { courseColors, CourseDifficulty } from "@/app/utils/course";
-import { Text } from "@react-three/drei";
-import { useWindowSize } from "usehooks-ts";
-import { CourseLanguages } from "@/app/utils/course";
-import classNames from "classnames";
 import { resolveColorVar } from "@/app/utils/color-helper";
+import {
+  type CourseDifficulty,
+  type CourseLanguages,
+  courseColors,
+} from "@/app/utils/course";
 
 // Custom shader material that combines all effects
 const NFTMaterial = shaderMaterial(
@@ -460,7 +466,7 @@ function Scene({
 }) {
   const orbitControlsRef = useRef<any>(null);
   const meshRef = useRef<any>(null);
-  const light = useRef<any>(null);
+  const _light = useRef<any>(null);
   const { gl, scene, camera } = useThree();
 
   // Animation state for the entire group
@@ -767,11 +773,11 @@ function Scene({
 
   // Ease-out cubic function for smooth deceleration
   const easeOutCubic = useCallback((t: number) => {
-    return 1 - Math.pow(1 - t, 3);
+    return 1 - (1 - t) ** 3;
   }, []);
 
   // Animation loop for the entire group
-  useFrame((state, delta) => {
+  useFrame((_state, delta) => {
     if (!meshRef.current) return;
 
     const currentTime = Date.now();
@@ -997,6 +1003,7 @@ function GUIControls({
   const controlsRef = useRef<any>(null);
 
   // Initialize GUI once on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: this GUI must be created once and the follow-up effect syncs prop changes without destroying user controller state.
   useEffect(() => {
     // Dynamically import dat.gui only on client side
     const initializeGUI = async () => {
@@ -1153,8 +1160,6 @@ export default function NFTScene({
   showControls?: boolean;
   showBackground?: boolean;
 }) {
-  const { width } = useWindowSize();
-
   // State for controllable parameters
   const [challengeName, setChallengeName] = useState(initialChallengeName);
   const [challengeLanguage, setChallengeLanguage] = useState(

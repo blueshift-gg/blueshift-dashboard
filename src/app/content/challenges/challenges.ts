@@ -1,5 +1,5 @@
-import { ChallengeMetadata } from "@/app/utils/challenges";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 
 export const challenges: ChallengeMetadata[] = [
   {

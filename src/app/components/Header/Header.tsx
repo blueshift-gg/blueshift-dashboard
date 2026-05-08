@@ -1,21 +1,25 @@
 "use client";
 
-import classNames from "classnames";
-import { Icon, Logo } from "@blueshift-gg/ui-components";
-import { AnimatePresence, anticipate, motion } from "motion/react";
-import { useState, useRef, useEffect } from "react";
-import { useOnClickOutside, useWindowSize } from "usehooks-ts";
-import { useTranslations, useLocale } from "next-intl";
-import { useRouter, usePathname, Link } from "@/i18n/navigation";
-import { localeNames, routing } from "@/i18n/routing";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
-import { usePersistentStore } from "@/stores/store";
-
 // import Logo from "../Logo/Logo";
-import { Button, Tabs, DropdownMenu } from "@blueshift-gg/ui-components";
+import {
+  Button,
+  DropdownMenu,
+  Icon,
+  Logo,
+  Tabs,
+} from "@blueshift-gg/ui-components";
+import classNames from "classnames";
+import { AnimatePresence, anticipate, motion } from "motion/react";
+import { useLocale, useTranslations } from "next-intl";
+import { useEffect, useRef, useState } from "react";
+import { useOnClickOutside, useWindowSize } from "usehooks-ts";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import { URLS } from "@/constants/urls";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
+import { localeNames, routing } from "@/i18n/routing";
+import { usePersistentStore } from "@/stores/store";
 // import LogoGlyph from "../Logo/LogoGlyph";
 import MarketingBanner from "../MarketingBanner/MarketingBanner";
-import { URLS } from "@/constants/urls";
 
 export default function HeaderContent() {
   const [isOpen, setIsOpen] = useState(false);

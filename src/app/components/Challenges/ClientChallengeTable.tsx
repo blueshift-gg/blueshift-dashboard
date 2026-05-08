@@ -1,25 +1,22 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-import { anticipate } from "motion";
-import { Button } from "@blueshift-gg/ui-components";
-import { motion } from "motion/react";
+import { Button, HeadingReveal, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
-import React, { useState, useEffect } from "react";
-import {
+import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type {
   ChallengeRequirement,
   VerificationApiResponse,
 } from "@/hooks/useChallengeVerifier";
-import { Icon } from "@blueshift-gg/ui-components";
-import Divider from "../Divider/Divider";
-import { HeadingReveal } from "@blueshift-gg/ui-components";
-
-import { usePersistentStore } from "@/stores/store";
+import type { LogMessage } from "@/hooks/useEsbuildRunner";
 import { Link } from "@/i18n/navigation";
-import { LogMessage } from "@/hooks/useEsbuildRunner";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { useSearchParams } from "next/navigation";
+import { usePersistentStore } from "@/stores/store";
+import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
+import Divider from "../Divider/Divider";
 
 interface ChallengeTableProps {
   onRunCodeClick: () => void;
@@ -71,7 +68,7 @@ export default function ChallengeTable({
     }
   }, [verificationData, requirements]);
 
-  const overallIsLoading = isCodeRunning || !isEsbuildReady;
+  const _overallIsLoading = isCodeRunning || !isEsbuildReady;
 
   return (
     <motion.div
@@ -147,7 +144,7 @@ export default function ChallengeTable({
                 <div className="max-w-full sm:max-w-[450px] overflow-x-scroll flex flex-col gap-y-1 items-start px-3 pr-5 pb-2 w-max max-h-80 custom-scrollbar font-fira-code text-xs">
                   {runnerLogs.map((log, index) => (
                     <motion.div
-                      key={index}
+                      key={log.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ duration: 0.2, delay: index * 0.03 }}
@@ -299,12 +296,12 @@ export default function ChallengeTable({
                                     result.instruction ===
                                     requirement.instructionKey,
                                 )
-                                ?.program_logs?.map((log, index) => (
+                                ?.program_logs?.map((_log, index) => (
                                   <HeadingReveal
                                     baseDelay={index * 0.1}
                                     text="PROGRAM"
                                     headingLevel="h3"
-                                    key={index}
+                                    key={`${requirement.instructionKey}-program-label-${_log}`}
                                     splitBy="chars"
                                     speed={0.1}
                                     className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
@@ -353,7 +350,7 @@ export default function ChallengeTable({
                                       ease: anticipate,
                                       delay: 1 + index * 0.1,
                                     }}
-                                    key={index}
+                                    key={`${requirement.instructionKey}-program-log-${log}`}
                                     className="text-start font-fira-code font-medium text-nowrap text-shade-secondary"
                                   >
                                     {log.slice(7, log.length)}

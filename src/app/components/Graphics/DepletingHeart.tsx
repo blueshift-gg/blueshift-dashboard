@@ -37,6 +37,7 @@ export default function DepletingHeart({
       viewBox="0 0 15 15"
       className={className}
     >
+      <title>Depleting heart</title>
       <motion.g className="Frame 1321317495">
         <g className="Group 166">
           <g className="Row 11">

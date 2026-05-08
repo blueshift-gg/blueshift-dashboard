@@ -1,10 +1,10 @@
 "use client";
 
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { Icon, Button, CrosshairCorners } from "@blueshift-gg/ui-components";
+import { Button, CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { usePathContent } from "@/app/hooks/usePathContent";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 
 interface ChallengeFooterProps {
   challengeMetadata: ChallengeMetadata;

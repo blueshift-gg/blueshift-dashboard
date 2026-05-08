@@ -1,31 +1,36 @@
-import type { AccountInfo } from "@solana/web3.js";
-import type { AccountMeta } from "@solana/web3.js";
-import type { Commitment } from "@solana/web3.js";
-import type { ConfirmOptions } from "@solana/web3.js";
-import type { Connection } from "@solana/web3.js";
-import { createEmitInstruction } from "@solana/spl-token-metadata";
-import { createInitializeGroupInstruction } from "@solana/spl-token-group";
-import { createInitializeInstruction } from "@solana/spl-token-metadata";
-import { createInitializeMemberInstruction } from "@solana/spl-token-group";
-import { createRemoveKeyInstruction } from "@solana/spl-token-metadata";
-import { createUpdateAuthorityInstruction } from "@solana/spl-token-metadata";
-import { createUpdateFieldInstruction } from "@solana/spl-token-metadata";
-import { createUpdateGroupAuthorityInstruction } from "@solana/spl-token-group";
-import { createUpdateGroupMaxSizeInstruction } from "@solana/spl-token-group";
-import { Field } from "@solana/spl-token-metadata";
-import { Keypair } from "@solana/web3.js";
+// biome-ignore-all lint/complexity/noBannedTypes: this vendored declaration file mirrors upstream SPL Token extension marker types.
 import type { Layout } from "@solana/buffer-layout";
-import { PublicKey } from "@solana/web3.js";
-import type { Signer } from "@solana/web3.js";
 import { Structure } from "@solana/buffer-layout";
-import { TOKEN_GROUP_MEMBER_SIZE } from "@solana/spl-token-group";
-import { TOKEN_GROUP_SIZE } from "@solana/spl-token-group";
-import { TokenGroup } from "@solana/spl-token-group";
-import { TokenGroupMember } from "@solana/spl-token-group";
+import {
+  createInitializeGroupInstruction,
+  createInitializeMemberInstruction,
+  createUpdateGroupAuthorityInstruction,
+  createUpdateGroupMaxSizeInstruction,
+  TOKEN_GROUP_MEMBER_SIZE,
+  TOKEN_GROUP_SIZE,
+  TokenGroup,
+  TokenGroupMember,
+} from "@solana/spl-token-group";
 import type { TokenMetadata } from "@solana/spl-token-metadata";
-import type { TransactionError } from "@solana/web3.js";
-import { TransactionInstruction } from "@solana/web3.js";
-import type { TransactionSignature } from "@solana/web3.js";
+import {
+  createEmitInstruction,
+  createInitializeInstruction,
+  createRemoveKeyInstruction,
+  createUpdateAuthorityInstruction,
+  createUpdateFieldInstruction,
+  Field,
+} from "@solana/spl-token-metadata";
+import type {
+  AccountInfo,
+  AccountMeta,
+  Commitment,
+  ConfirmOptions,
+  Connection,
+  Signer,
+  TransactionError,
+  TransactionSignature,
+} from "@solana/web3.js";
+import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 
 /** Information about a token account */
 export declare interface Account {
@@ -1642,11 +1647,11 @@ export declare function createUpdateDefaultAccountStateInstruction(
   programId?: PublicKey,
 ): TransactionInstruction;
 
-export { createUpdateFieldInstruction };
-
-export { createUpdateGroupAuthorityInstruction };
-
-export { createUpdateGroupMaxSizeInstruction };
+export {
+  createUpdateFieldInstruction,
+  createUpdateGroupAuthorityInstruction,
+  createUpdateGroupMaxSizeInstruction,
+};
 
 export declare function createUpdateGroupMemberPointerInstruction(
   mint: PublicKey,
@@ -4142,7 +4147,7 @@ export declare const harvestWithheldTokensToMintInstructionData: Structure<Harve
 export declare const IMMUTABLE_OWNER_SIZE: number;
 
 /** ImmutableOwner as stored by the program */
-export declare interface ImmutableOwner {}
+export declare type ImmutableOwner = {};
 
 /** Buffer layout for de/serializing an account */
 export declare const ImmutableOwnerLayout: Structure<ImmutableOwner>;
@@ -4692,10 +4697,10 @@ export declare const NON_TRANSFERABLE_ACCOUNT_SIZE: number;
 export declare const NON_TRANSFERABLE_SIZE: number;
 
 /** Non-transferable mint state as stored by the program */
-export declare interface NonTransferable {}
+export declare type NonTransferable = {};
 
 /** Non-transferable token account state as stored by the program */
-export declare interface NonTransferableAccount {}
+export declare type NonTransferableAccount = {};
 
 /** Buffer layout for de/serializing an account */
 export declare const NonTransferableLayout: Structure<NonTransferable>;
@@ -4707,7 +4712,7 @@ export declare const PAUSABLE_ACCOUNT_SIZE: number;
 export declare const PAUSABLE_CONFIG_SIZE: number;
 
 /** Pausable token account state as stored by the program */
-export declare interface PausableAccount {}
+export declare type PausableAccount = {};
 
 /** Buffer layout for de/serializing a pausable account */
 export declare const PausableAccountLayout: Structure<PausableAccount>;
@@ -5056,9 +5061,7 @@ export declare const thawAccountInstructionData: Structure<ThawAccountInstructio
 /** Address of the SPL Token 2022 program */
 export declare const TOKEN_2022_PROGRAM_ID: PublicKey;
 
-export { TOKEN_GROUP_MEMBER_SIZE };
-
-export { TOKEN_GROUP_SIZE };
+export { TOKEN_GROUP_MEMBER_SIZE, TOKEN_GROUP_SIZE };
 
 /** Address of the SPL Token program */
 export declare const TOKEN_PROGRAM_ID: PublicKey;
@@ -6175,5 +6178,3 @@ export declare interface WithdrawWithheldTokensFromMintInstructionData {
 }
 
 export declare const withdrawWithheldTokensFromMintInstructionData: Structure<WithdrawWithheldTokensFromMintInstructionData>;
-
-export {};

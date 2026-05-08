@@ -1,12 +1,12 @@
 "use client";
 
-import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import { Icon } from "@blueshift-gg/ui-components";
 import { PaginationButton } from "@blueshift-gg/ui-components/Pagination";
 import classNames from "classnames";
-import { usePathContent } from "@/app/hooks/usePathContent";
 import { useTranslations } from "next-intl";
 import type { PathNavigationStep } from "@/app/contexts/PathContentContext";
+import { usePathContent } from "@/app/hooks/usePathContent";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
 
 interface BreadcrumbItem {
   label: string;

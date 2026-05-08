@@ -1,6 +1,6 @@
+import { Suspense } from "react";
 import { getAllChallenges } from "@/app/utils/content";
 import ChallengesList from "./ChallengesList";
-import { Suspense } from "react";
 
 async function ChallengesContent() {
   const challenges = await getAllChallenges();

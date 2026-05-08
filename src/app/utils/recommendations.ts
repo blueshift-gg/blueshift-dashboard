@@ -1,6 +1,6 @@
-import { CourseMetadata, CourseLanguages } from "./course";
-import { ChallengeMetadata } from "./challenges";
-import { PathMetadata, getPathCompletedSteps } from "./path";
+import type { ChallengeMetadata } from "./challenges";
+import type { CourseLanguages, CourseMetadata } from "./course";
+import { getPathCompletedSteps, type PathMetadata } from "./path";
 
 export type RecommendationSignals = {
   preferredLanguages?: CourseLanguages[];

@@ -1,8 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+
+const ASCII_BACKGROUND_ROWS = Array.from(
+  { length: 50 },
+  (_, rowNumber) => `ascii-row-${rowNumber + 1}`,
+);
 
 interface AsciiAnimationProps {
   textPath: string;
@@ -19,7 +23,7 @@ const AsciiAnimation = ({ textPath, color }: AsciiAnimationProps) => {
       .then((text) => {
         setText(text);
       });
-  }, []);
+  }, [textPath]);
 
   return (
     <motion.div
@@ -29,12 +33,13 @@ const AsciiAnimation = ({ textPath, color }: AsciiAnimationProps) => {
       <pre
         ref={preRef}
         className="absolute left-0 md:-left-1/5 xl:left-[25px] text-[8px] tracking-wider text-current"
-        dangerouslySetInnerHTML={{ __html: text || "" }}
-      />
+      >
+        {text}
+      </pre>
 
       <div className="flex flex-col max-w-[700px] break-all opacity-20 absolute left-0 text-current text-[8px] tracking-wider">
-        {Array.from({ length: 50 }).map((_, index) => (
-          <span key={index}>{`.`.repeat(500)}</span>
+        {ASCII_BACKGROUND_ROWS.map((rowKey) => (
+          <span key={rowKey}>{".".repeat(500)}</span>
         ))}
       </div>
     </motion.div>

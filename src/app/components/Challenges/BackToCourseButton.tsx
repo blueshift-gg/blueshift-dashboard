@@ -1,10 +1,10 @@
 "use client";
 
-import { Link } from "@/i18n/navigation";
 import { Button } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
-import { CourseMetadata } from "@/app/utils/course";
+import type { CourseMetadata } from "@/app/utils/course";
 import { useCurrentLessonSlug } from "@/hooks/useCurrentLessonSlug";
+import { Link } from "@/i18n/navigation";
 
 interface BackToCourseButtonProps {
   course: CourseMetadata;

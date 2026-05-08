@@ -1,8 +1,8 @@
 import "server-only";
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import type { Root } from "mdast";
 import type { Nodes } from "hast";
+import type { Root } from "mdast";
 
 const CONTENT_ROOT = "src/app/content";
 const DEFAULT_BUCKET_PREFIX = "compiled-mdx";

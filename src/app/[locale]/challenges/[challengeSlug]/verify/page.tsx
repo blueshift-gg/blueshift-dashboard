@@ -1,16 +1,17 @@
-import { getTranslations } from "next-intl/server";
-import MdxLayout from "@/app/mdx-layout";
-import ProgramChallengesContent from "@/app/components/Challenges/ProgramChallengesContent";
-import ClientChallengesContent from "@/app/components/Challenges/ClientChallengesContent";
+import { Connection, PublicKey } from "@solana/web3.js";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
+import ClientChallengesContent from "@/app/components/Challenges/ClientChallengesContent";
+import ProgramChallengesContent from "@/app/components/Challenges/ProgramChallengesContent";
+import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
+import ChallengeLayout from "@/app/components/Layout/ChallengeLayout";
+import MdxLayout from "@/app/mdx-layout";
 import { getChallenge } from "@/app/utils/content";
 import { getCompiledMdx } from "@/app/utils/mdx";
-import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
-import { Metadata } from "next";
 import { getPathname } from "@/i18n/navigation";
-import ChallengeLayout from "@/app/components/Layout/ChallengeLayout";
-import { Connection, PublicKey } from "@solana/web3.js";
 import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
+import type { JSX } from "react/jsx-runtime";
 
 interface ChallengePageProps {
   params: Promise<{
@@ -65,7 +66,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
     notFound();
   }
 
-  let ChallengeContent;
+  let ChallengeContent: JSX.Element;
   let challengeLocale = locale;
   try {
     ChallengeContent = await getCompiledMdx(
@@ -118,8 +119,8 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
     <ChallengeLayout
       challengeMetadata={challengeMetadata}
       collectionSize={collectionSize}
-      pagination={<></>}
-      footer={<></>}
+      pagination={null}
+      footer={null}
       isTestPage={true}
     >
       <div className="flex flex-col w-full">

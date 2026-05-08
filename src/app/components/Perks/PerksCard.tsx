@@ -1,5 +1,5 @@
-import { Avatar, IconName, Button } from "@blueshift-gg/ui-components";
-import { Perk } from "./Perks";
+import { Avatar, Button, type IconName } from "@blueshift-gg/ui-components";
+import type { Perk } from "./Perks";
 
 export default function PerksCard({ perk }: { perk: Perk }) {
   return (

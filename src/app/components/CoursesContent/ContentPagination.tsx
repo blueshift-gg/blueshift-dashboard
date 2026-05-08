@@ -1,17 +1,15 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-import { anticipate, motion } from "motion/react";
+import { CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
+import { anticipate, motion } from "motion/react";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
-import { useRouter } from "@/i18n/navigation";
-import { usePersistentStore } from "@/stores/store";
-import { Link } from "@/i18n/navigation";
-import { Icon } from "@blueshift-gg/ui-components";
-import { CourseMetadata } from "@/app/utils/course";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { CrosshairCorners } from "@blueshift-gg/ui-components";
 import { usePathContent } from "@/app/hooks/usePathContent";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { CourseMetadata } from "@/app/utils/course";
+import { Link, useRouter } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
 
 type ContentPaginationProps = {
   className?: string;
@@ -101,6 +99,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 className={classNames(
                   "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                 )}
+                type="button"
               >
                 <Icon name="ArrowLeft" />
               </button>
@@ -124,6 +123,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 className={classNames(
                   "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                 )}
+                type="button"
               >
                 <Icon name="ArrowRight" />
               </button>
@@ -261,6 +261,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 {/* Mobile Pagination */}
                 <div className="flex xl:hidden items-center justify-between min-w-[80dvw] md:min-w-[250px] px-4">
                   <button
+                    type="button"
                     onClick={() => prevPage && router.push(getLink(prevPage))}
                     disabled={!prevPage}
                     className={classNames(
@@ -271,6 +272,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   </button>
                   <span className="font-medium">{currentPage.title}</span>
                   <button
+                    type="button"
                     onClick={() => nextPage && router.push(getLink(nextPage))}
                     disabled={!nextPage}
                     className={classNames(

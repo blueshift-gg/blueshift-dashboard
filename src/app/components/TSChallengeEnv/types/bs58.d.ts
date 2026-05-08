@@ -10,5 +10,3 @@ declare namespace base {
 
 declare const _default: base.BaseConverter;
 export default _default;
-
-export {};

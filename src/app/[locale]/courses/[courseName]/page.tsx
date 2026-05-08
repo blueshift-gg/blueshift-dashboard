@@ -1,5 +1,5 @@
-import { redirect } from "@/i18n/navigation";
 import { getCourseLessons } from "@/app/utils/content";
+import { redirect } from "@/i18n/navigation";
 
 interface CoursePageProps {
   params: Promise<{

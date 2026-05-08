@@ -1,12 +1,6 @@
-import {
-  languages,
-  languageColors,
-  difficulty,
-  Language,
-  Difficulty,
-} from "./common";
-import { CourseDifficulty, CourseMetadata } from "./course";
-import { ChallengeMetadata } from "./challenges";
+import type { ChallengeMetadata } from "./challenges";
+import { difficulty, type Language, languageColors, languages } from "./common";
+import type { CourseDifficulty, CourseMetadata } from "./course";
 
 // Re-export with path-specific names for consistency
 export const pathLanguages = languages;

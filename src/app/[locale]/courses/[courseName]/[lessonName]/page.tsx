@@ -1,20 +1,20 @@
+import { Connection, PublicKey } from "@solana/web3.js";
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { getTranslations } from "next-intl/server";
+import Breadcrumbs from "@/app/components/Breadcrumbs";
+import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
+import ContentPagination from "@/app/components/CoursesContent/ContentPagination";
+import CourseFooter from "@/app/components/CoursesContent/CourseFooter";
+import PageHero from "@/app/components/PageHero/PageHero";
+import TableOfContents from "@/app/components/TableOfContents/TableOfContents";
 import MdxLayout from "@/app/mdx-layout";
+import { difficulty } from "@/app/utils/common";
 import { getChallenge, getCourse } from "@/app/utils/content";
 import { getCompiledMdx } from "@/app/utils/mdx";
-import TableOfContents from "@/app/components/TableOfContents/TableOfContents";
-import ContentPagination from "@/app/components/CoursesContent/ContentPagination";
-import PageHero from "@/app/components/PageHero/PageHero";
-import { notFound } from "next/navigation";
-import { getPathname } from "@/i18n/navigation";
-import { Metadata } from "next";
-import { Connection, PublicKey } from "@solana/web3.js";
-import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
-import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
-import CourseFooter from "@/app/components/CoursesContent/CourseFooter";
-import Breadcrumbs from "@/app/components/Breadcrumbs";
 import { URLS } from "@/constants/urls";
-import { difficulty } from "@/app/utils/common";
+import { getPathname } from "@/i18n/navigation";
+import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 
 interface LessonPageProps {
   params: Promise<{
@@ -86,7 +86,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
   const t = await getTranslations();
   const { courseName, lessonName, locale } = await params;
 
-  let Lesson;
+  let Lesson: Awaited<ReturnType<typeof getCompiledMdx>>;
   let lessonLocale = locale;
 
   try {
@@ -245,22 +245,15 @@ export default async function LessonPage({ params }: LessonPageProps) {
   return (
     <>
       {/* JSON-LD Course Schema */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(courseSchema) }}
-      />
+      <script type="application/ld+json">{JSON.stringify(courseSchema)}</script>
       {/* JSON-LD LearningResource Schema for individual lesson */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify(learningResourceSchema),
-        }}
-      />
+      <script type="application/ld+json">
+        {JSON.stringify(learningResourceSchema)}
+      </script>
       {/* JSON-LD BreadcrumbList Schema */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
-      />
+      <script type="application/ld+json">
+        {JSON.stringify(breadcrumbSchema)}
+      </script>
       <div className="flex flex-col w-full border-b border-b-border">
         <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
           <Breadcrumbs
@@ -299,7 +292,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
                 nextLesson={!!nextLesson}
                 courseMetadata={courseMetadata}
                 nextLessonSlug={nextLessonSlug}
-                challenge={challenge!}
+                challenge={challenge}
               />
             </div>
             <TableOfContents />

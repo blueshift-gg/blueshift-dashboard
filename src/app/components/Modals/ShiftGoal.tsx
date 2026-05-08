@@ -1,9 +1,9 @@
 "use client";
 
-import Modal from "./Modal";
-import { useStore } from "@/stores/store";
-import { useTranslations } from "next-intl";
 import { Button } from "@blueshift-gg/ui-components";
+import { useTranslations } from "next-intl";
+import { useStore } from "@/stores/store";
+import Modal from "./Modal";
 export default function ShiftGoal() {
   const t = useTranslations();
   const { openedModal, closeModal } = useStore();

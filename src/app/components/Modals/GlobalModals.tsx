@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
-import ShiftGoal from "./ShiftGoal";
-import { usePersistentStore, useStore } from "@/stores/store";
-import ConnectWalletRecommended from "./ConnectWalletRecommended";
 import { useIsClient } from "usehooks-ts";
 import { challenges } from "@/app/content/challenges/challenges";
+import { usePersistentStore, useStore } from "@/stores/store";
+import ConnectWalletRecommended from "./ConnectWalletRecommended";
+import ShiftGoal from "./ShiftGoal";
 
 export default function GlobalModals() {
   const { connectionRecommendedViewed, challengeStatuses, setChallengeStatus } =

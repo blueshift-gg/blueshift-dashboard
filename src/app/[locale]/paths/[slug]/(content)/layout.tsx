@@ -1,7 +1,7 @@
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   PathContentProvider,
-  PathNavigationStep,
+  type PathNavigationStep,
 } from "@/app/contexts/PathContentContext";
 import { getPathStepsWithMetadata } from "@/app/utils/content";
 

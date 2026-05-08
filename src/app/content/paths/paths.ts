@@ -1,5 +1,5 @@
-import { PathMetadata } from "@/app/utils/path";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import type { PathMetadata } from "@/app/utils/path";
 
 export const paths: PathMetadata[] = [
   {

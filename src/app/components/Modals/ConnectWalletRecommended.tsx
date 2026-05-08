@@ -1,9 +1,9 @@
 "use client";
-import Modal from "./Modal";
-import { useStore, usePersistentStore } from "@/stores/store";
-import { useTranslations } from "next-intl";
 import { Button } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
+import { useTranslations } from "next-intl";
+import { usePersistentStore, useStore } from "@/stores/store";
+import Modal from "./Modal";
 export default function ConnectWalletRecommended() {
   const t = useTranslations();
   const { openedModal, closeModal } = useStore();
@@ -27,6 +27,7 @@ export default function ConnectWalletRecommended() {
           <img
             src="/graphics/connect-wallet.svg"
             className="h-28 mx-auto"
+            alt="Connect wallet"
           ></img>
           <div className="text-xl font-medium">
             {t("wallet_recommended.title")}
@@ -44,7 +45,8 @@ export default function ConnectWalletRecommended() {
             icon={{ name: "Wallet" }}
             onClick={closeModal}
           />
-          <div
+          <button
+            type="button"
             className="text-mute transition hover:text-shade-tertiary text-sm font-medium mx-auto cursor-pointer"
             onClick={() => {
               setConnectionRecommendedViewed(true);
@@ -52,7 +54,7 @@ export default function ConnectWalletRecommended() {
             }}
           >
             {t("wallet_recommended.dont_show_again")}
-          </div>
+          </button>
         </div>
       </div>
     </Modal>

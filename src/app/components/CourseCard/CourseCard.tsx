@@ -1,29 +1,29 @@
 "use client";
 
-import { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
-import {
-  difficulty as difficultyMap,
-  languageColors,
-  Language,
-} from "@/app/utils/common";
-import React, { useRef, useState } from "react";
-import classNames from "classnames";
-import { Link } from "@/i18n/navigation";
-import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
   Avatar,
   Badge,
-  breeze,
+  BRAND_COLOURS,
   Button,
+  breeze,
   Difficulty,
   Divider,
 } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
+import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import ProgressCircle from "../ProgressCircle/ProgressCircle";
-import { Icon } from "@blueshift-gg/ui-components";
+import { useTranslations } from "next-intl";
+import type React from "react";
+import { useRef, useState } from "react";
+import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import {
+  difficulty as difficultyMap,
+  type Language,
+  languageColors,
+} from "@/app/utils/common";
+import type { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
+import { Link } from "@/i18n/navigation";
 import AsciiAnimation from "../Ascii/Ascii";
+import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 type CourseCardProps = {
   name: string;
@@ -63,7 +63,7 @@ export default function CourseCard({
 
   const t = useTranslations();
 
-  const badgeDifficulty = difficultyMap[difficulty ?? 1];
+  const _badgeDifficulty = difficultyMap[difficulty ?? 1];
 
   // Map language to a valid BRAND_COLOURS key (handles "Mobile" -> "general")
   const brandColorKey = (
@@ -75,6 +75,7 @@ export default function CourseCard({
     languageColors[language as Language] || BRAND_COLOURS.general;
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: this container only tracks pointer hover for decorative motion, while navigation stays on nested links and buttons.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {
@@ -202,20 +203,21 @@ export default function CourseCard({
           </AnimatePresence>
         </div>
         <div className="relative z-20">
-          <Link href={link!}>
-            <Button
-              variant="secondary"
-              size="lg"
-              className="w-max"
-              label={
-                completedLessonsCount === 0
-                  ? t("lessons.start_course")
-                  : completedLessonsCount === totalLessonCount
-                    ? t("lessons.review_course")
-                    : t("lessons.continue_learning")
-              }
-              children={
-                completedLessonsCount === 0 ? null : (
+          {link ? (
+            <Link href={link}>
+              <Button
+                variant="secondary"
+                size="lg"
+                className="w-max"
+                label={
+                  completedLessonsCount === 0
+                    ? t("lessons.start_course")
+                    : completedLessonsCount === totalLessonCount
+                      ? t("lessons.review_course")
+                      : t("lessons.continue_learning")
+                }
+              >
+                {completedLessonsCount === 0 ? null : (
                   <div className="flex items-center gap-x-2 order-last">
                     <Divider direction="vertical" className="h-[20px]!" />
                     <ProgressCircle
@@ -229,10 +231,18 @@ export default function CourseCard({
                       {completedLessonsCount ?? 0}/{totalLessonCount ?? 0}
                     </span>
                   </div>
-                )
-              }
+                )}
+              </Button>
+            </Link>
+          ) : (
+            <Button
+              variant="secondary"
+              size="lg"
+              className="w-max"
+              disabled={true}
+              label={t("lessons.start_course")}
             />
-          </Link>
+          )}
         </div>
       </div>
     </div>

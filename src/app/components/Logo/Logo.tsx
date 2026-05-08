@@ -1,5 +1,5 @@
-import { AnimatePresence, anticipate, motion } from "motion/react";
 import classNames from "classnames";
+import { AnimatePresence, anticipate, motion } from "motion/react";
 
 export default function Logo({
   width = 144,

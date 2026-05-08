@@ -1,25 +1,29 @@
 "use client";
 
-import { CourseMetadata, CourseLanguages } from "@/app/utils/course";
 import {
-  languageFilterMap,
-  reverseLanguageFilterMap,
-  difficultyFilterMap,
-  reverseDifficultyFilterMap,
-} from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
-import CourseCard from "../CourseCard/CourseCard";
+  Banner,
+  Dropdown,
+  Icon,
+  Input,
+  Tabs,
+} from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
-import { getCourseDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import CoursesEmpty from "./CoursesEmpty";
-import { useStore } from "@/stores/store";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import {
+  difficultyFilterMap,
+  languageFilterMap,
+  reverseDifficultyFilterMap,
+  reverseLanguageFilterMap,
+} from "@/app/utils/common";
+import type { CourseLanguages, CourseMetadata } from "@/app/utils/course";
+import { getCourseDropdownItems } from "@/app/utils/dropdownItems";
 import { recommendCourses } from "@/app/utils/recommendations";
+import { usePersistentStore, useStore } from "@/stores/store";
+import CourseCard from "../CourseCard/CourseCard";
+import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import CoursesEmpty from "./CoursesEmpty";
 
 type CoursesContentProps = {
   searchValue?: string;
@@ -31,6 +35,21 @@ type CoursesContentProps = {
   }[];
   isLoading?: boolean;
 };
+
+const FEATURED_SKELETON_KEYS = [
+  "featured-skeleton-1",
+  "featured-skeleton-2",
+  "featured-skeleton-3",
+] as const;
+
+const COURSE_LIST_SKELETON_KEYS = [
+  "list-skeleton-1",
+  "list-skeleton-2",
+  "list-skeleton-3",
+  "list-skeleton-4",
+  "list-skeleton-5",
+  "list-skeleton-6",
+] as const;
 
 export default function CourseList({
   initialCourses = [],
@@ -80,7 +99,7 @@ export default function CourseList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -88,7 +107,7 @@ export default function CourseList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -103,7 +122,7 @@ export default function CourseList({
       // Cleanup
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   const handleScrollLeft = () => {
     if (carouselRef.current) {
@@ -346,8 +365,8 @@ export default function CourseList({
             )}
           >
             {isLoading
-              ? Array.from({ length: 3 }).map((_, index) => (
-                  <CourseCardSkeleton key={`featured-skeleton-${index}`} />
+              ? FEATURED_SKELETON_KEYS.map((skeletonKey) => (
+                  <CourseCardSkeleton key={skeletonKey} />
                 ))
               : recommendedCourses.map((course) => {
                   const totalLessons =
@@ -356,7 +375,7 @@ export default function CourseList({
                   const currentLessonSlug = getCurrentLessonSlug(course.slug);
                   const completedLessonsCount =
                     courseProgress[course.slug] || 0;
-                  let link;
+                  let link: string | undefined;
                   if (currentLessonSlug && course.slug) {
                     link = `/courses/${course.slug}/${currentLessonSlug}`;
                   } else if (course.slug && !currentLessonSlug) {
@@ -385,6 +404,7 @@ export default function CourseList({
           <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
           <div className="w-full h-[48px] flex justify-end">
             <button
+              type="button"
               disabled={scrollState.isAtStart}
               onClick={handleScrollLeft}
               className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
@@ -392,6 +412,7 @@ export default function CourseList({
               <Icon name="Chevron" className="rotate-90" />
             </button>
             <button
+              type="button"
               disabled={scrollState.isAtEnd}
               onClick={handleScrollRight}
               className="mr-[1px] absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
@@ -451,8 +472,8 @@ export default function CourseList({
           )}
         >
           {isLoading
-            ? Array.from({ length: 6 }).map((_, index) => (
-                <CourseCardSkeleton key={`list-skeleton-${index}`} />
+            ? COURSE_LIST_SKELETON_KEYS.map((skeletonKey) => (
+                <CourseCardSkeleton key={skeletonKey} />
               ))
             : filteredCourses.map((course) => {
                 const totalLessons =
@@ -460,7 +481,7 @@ export default function CourseList({
                     ?.totalLessons || 0;
                 const currentLessonSlug = getCurrentLessonSlug(course.slug);
                 const completedLessonsCount = courseProgress[course.slug] || 0;
-                let link;
+                let link: string | undefined;
                 if (currentLessonSlug && course.slug) {
                   link = `/courses/${course.slug}/${currentLessonSlug}`;
                 } else if (course.slug && !currentLessonSlug) {

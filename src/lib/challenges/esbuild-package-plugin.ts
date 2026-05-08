@@ -1,4 +1,4 @@
-import * as esbuild from "esbuild-wasm";
+import type * as esbuild from "esbuild-wasm";
 
 // esbuild plugin to fetch modules from a CDN (esm.sh)
 export const createCdnPlugin = (
@@ -57,7 +57,7 @@ export const createCdnPlugin = (
       build.onLoad(
         { filter: /.*/, namespace: namespace },
         async (args: esbuild.OnLoadArgs) => {
-          let fetchUrl;
+          let fetchUrl: string;
           if (args.path.startsWith("/")) {
             // Handles resolved paths from esm.sh which start with /
             fetchUrl = `https://esm.sh${args.path}`;

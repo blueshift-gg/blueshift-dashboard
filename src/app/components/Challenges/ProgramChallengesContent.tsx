@@ -1,15 +1,15 @@
 "use client";
 
-import { ReactNode } from "react";
+import { anticipate } from "motion";
+import { motion } from "motion/react";
 import { useTranslations } from "next-intl";
+import type { ReactNode } from "react";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { useAuth } from "@/hooks/useAuth";
+import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
 import ChallengeRequirements from "./ProgramChallengeRequirements";
 import ChallengeTable from "./ProgramChallengeTable";
-import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
-import { motion } from "motion/react";
-import { anticipate } from "motion";
-import { useAuth } from "@/hooks/useAuth";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
-import { ChallengeMetadata } from "@/app/utils/challenges";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -59,6 +59,7 @@ export default function ChallengesContent({
           <div className="flex flex-col gap-y-0 max-w-[90dvw]">
             <img
               src="/graphics/connect-wallet.svg"
+              alt="Connect wallet"
               className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
             />
             <div className="flex flex-col gap-y-3">
@@ -73,31 +74,29 @@ export default function ChallengesContent({
           <WalletMultiButton />
         </div>
       ) : (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{
-              opacity: 1,
-              transition: { duration: 0.4, ease: anticipate },
-            }}
-            exit={{ opacity: 0 }}
-            className="max-w-app mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-5 lg:gap-x-10"
-          >
-            <div className="hidden lg:block w-px h-full bg-border-light left-2/5 absolute top-0 -translate-x-1/2"></div>
-            <ChallengeRequirements content={content} />
-            <ChallengeTable
-              isLoading={isLoading}
-              error={error}
-              onUploadClick={uploadProgram}
-              requirements={requirements}
-              completedRequirementsCount={completedRequirementsCount}
-              allIncomplete={allIncomplete}
-              verificationData={verificationData}
-              challenge={currentChallenge}
-              onRedoChallenge={handleRedoChallenge}
-            />
-          </motion.div>
-        </>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{
+            opacity: 1,
+            transition: { duration: 0.4, ease: anticipate },
+          }}
+          exit={{ opacity: 0 }}
+          className="max-w-app mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-5 lg:gap-x-10"
+        >
+          <div className="hidden lg:block w-px h-full bg-border-light left-2/5 absolute top-0 -translate-x-1/2"></div>
+          <ChallengeRequirements content={content} />
+          <ChallengeTable
+            isLoading={isLoading}
+            error={error}
+            onUploadClick={uploadProgram}
+            requirements={requirements}
+            completedRequirementsCount={completedRequirementsCount}
+            allIncomplete={allIncomplete}
+            verificationData={verificationData}
+            challenge={currentChallenge}
+            onRedoChallenge={handleRedoChallenge}
+          />
+        </motion.div>
       )}
     </div>
   );

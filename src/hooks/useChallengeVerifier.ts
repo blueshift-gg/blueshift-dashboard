@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { Certificate, TestResult } from "@/lib/challenges/types";
 import { usePersistentStore } from "@/stores/store";
-import { Certificate, TestResult } from "@/lib/challenges/types";
-import { ChallengeMetadata } from "@/app/utils/challenges";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -161,11 +161,11 @@ export function useChallengeVerifier({
               } else {
                 errorMessage = "Upload failed. Please try again.";
               }
-            } catch (jsonParseError) {
+            } catch (_jsonParseError) {
               // If not JSON, use a generic user-friendly message
               errorMessage = "Upload failed. Please try again.";
             }
-          } catch (textError) {
+          } catch (_textError) {
             // If we can't read the response text, use a generic user-friendly message
             errorMessage = "Upload failed. Please try again.";
           }
@@ -235,12 +235,7 @@ export function useChallengeVerifier({
 
     document.body.appendChild(input);
     input.click();
-  }, [
-    challenge.slug,
-    verificationEndpoint,
-    handleVerificationRequest,
-    setError,
-  ]);
+  }, [verificationEndpoint, handleVerificationRequest]);
 
   const uploadTransaction = useCallback(
     async (base64EncodedTx: string) => {
@@ -262,7 +257,7 @@ export function useChallengeVerifier({
         { "Content-Type": "application/json" },
       );
     },
-    [challenge, verificationEndpoint, handleVerificationRequest, setError],
+    [verificationEndpoint, handleVerificationRequest],
   );
 
   const completedRequirementsCount = useMemo(() => {

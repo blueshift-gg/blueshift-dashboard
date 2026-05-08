@@ -1,9 +1,9 @@
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { useMemo } from "react";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { findCertificationPda, findUnitPda } from "@/lib/nft/sdk";
+import type { Connection, PublicKey } from "@solana/web3.js";
 import { useQuery } from "@tanstack/react-query";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { useMemo } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { findCertificationPda, findUnitPda } from "@/lib/nft/sdk";
 
 const EMPTY_OWNERSHIP: Record<string, boolean> = {};
 

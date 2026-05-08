@@ -1,17 +1,16 @@
-import { getTranslations } from "next-intl/server";
-import { getChallenge } from "@/app/utils/content";
-import { getCompiledMdx } from "@/app/utils/mdx";
-import { notFound } from "next/navigation";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
+import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
+import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
 import ContentPagination from "@/app/components/CoursesContent/ContentPagination";
-import { Link } from "@/i18n/navigation";
-import { Button } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
 import ChallengeLayout from "@/app/components/Layout/ChallengeLayout";
 import MdxLayout from "@/app/mdx-layout";
-import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { getChallenge } from "@/app/utils/content";
+import { getCompiledMdx } from "@/app/utils/mdx";
+import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 import ChallengeFooter from "./ChallengeFooter";
+import type { JSX } from "react/jsx-runtime";
 
 interface ChallengePageContainerProps {
   params: Promise<{
@@ -24,7 +23,7 @@ interface ChallengePageContainerProps {
 export default async function ChallengePageContainer({
   params,
 }: ChallengePageContainerProps) {
-  const t = await getTranslations();
+  const _t = await getTranslations();
   const { challengeSlug, pageSlug, locale } = await params;
 
   const challengeMetadata = await getChallenge(challengeSlug);
@@ -33,7 +32,7 @@ export default async function ChallengePageContainer({
     notFound();
   }
 
-  let MdxComponent;
+  let MdxComponent: JSX.Element;
   let challengeLocale = locale;
   if (pageSlug) {
     const pageExists = challengeMetadata.pages?.some(
@@ -46,13 +45,13 @@ export default async function ChallengePageContainer({
       MdxComponent = await getCompiledMdx(
         `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`,
       );
-    } catch (error) {
+    } catch (_error) {
       try {
         MdxComponent = await getCompiledMdx(
           `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`,
         );
         challengeLocale = "en";
-      } catch (error) {
+      } catch (_error) {
         notFound();
       }
     }
@@ -61,13 +60,13 @@ export default async function ChallengePageContainer({
       MdxComponent = await getCompiledMdx(
         `challenges/${challengeSlug}/${locale}/challenge.mdx`,
       );
-    } catch (error) {
+    } catch (_error) {
       try {
         MdxComponent = await getCompiledMdx(
           `challenges/${challengeSlug}/en/challenge.mdx`,
         );
         challengeLocale = "en";
-      } catch (error) {
+      } catch (_error) {
         notFound();
       }
     }
@@ -105,7 +104,7 @@ export default async function ChallengePageContainer({
     }
   }
 
-  let nextPage;
+  let nextPage: NonNullable<ChallengeMetadata["pages"]>[number] | null = null;
   if (pageSlug) {
     const currentPageIndex = challengeMetadata.pages?.findIndex(
       (p) => p.slug === pageSlug,

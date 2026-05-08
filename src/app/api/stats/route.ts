@@ -1,6 +1,6 @@
+import { Connection, PublicKey } from "@solana/web3.js";
 import { challenges } from "@/app/content/challenges/challenges";
 import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
-import { Connection, PublicKey } from "@solana/web3.js";
 
 interface ChallengeStats {
   [key: string]: number;

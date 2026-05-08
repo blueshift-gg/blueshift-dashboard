@@ -1,20 +1,19 @@
 "use client";
 
-import { PathMetadata } from "@/app/utils/path";
-import { CourseMetadata } from "@/app/utils/course";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { useTranslations } from "next-intl";
-import { usePersistentStore } from "@/stores/store";
-import { useState, Fragment, useEffect } from "react";
-import CourseCard from "../CourseCard/CourseCard";
-import ChallengeCard from "../ChallengeCard/ChallengeCard";
-import NFTViewer from "../NFTViewer/NFTViewer";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
-import PathItemDivider from "./PathItemDivider";
+import { useTranslations } from "next-intl";
+import { Fragment, useEffect, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { CourseMetadata } from "@/app/utils/course";
+import type { PathMetadata } from "@/app/utils/path";
+import { usePersistentStore } from "@/stores/store";
+import ChallengeCard from "../ChallengeCard/ChallengeCard";
 import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
+import CourseCard from "../CourseCard/CourseCard";
+import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import NFTViewer from "../NFTViewer/NFTViewer";
+import PathItemDivider from "./PathItemDivider";
 
 type PathStepsListProps = {
   path: PathMetadata;
@@ -24,7 +23,6 @@ type PathStepsListProps = {
     description?: string;
     metadata: CourseMetadata | ChallengeMetadata | undefined;
   }>;
-  locale: string;
 };
 
 const chunk = <T,>(arr: T[], size: number): T[][] =>
@@ -32,11 +30,7 @@ const chunk = <T,>(arr: T[], size: number): T[][] =>
     arr.slice(i * size, i * size + size),
   );
 
-export default function PathStepsList({
-  path,
-  steps,
-  locale,
-}: PathStepsListProps) {
+export default function PathStepsList({ path, steps }: PathStepsListProps) {
   const t = useTranslations();
   const { courseProgress, challengeStatuses } = usePersistentStore();
   const [isNFTViewerOpen, setIsNFTViewerOpen] = useState(false);
@@ -104,7 +98,7 @@ export default function PathStepsList({
       const completedLessonsCount = courseProgress[course.slug] || 0;
       const currentLessonSlug = getCurrentLessonSlug(course.slug, course);
 
-      let link;
+      let link: string | undefined;
       if (currentLessonSlug && course.slug) {
         link = `${pathBase}/courses/${course.slug}/${currentLessonSlug}`;
       } else if (course.slug) {
@@ -154,9 +148,9 @@ export default function PathStepsList({
     return (
       <div className="min-h-[calc(100dvh-128px)] relative w-full p-6 pb-12 max-w-app mx-auto app:border-x app:border-border-light">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-y-12 gap-x-0 md:gap-x-24">
-          {steps.map((step, index) => (
+          {steps.map((step) => (
             <div
-              key={index}
+              key={step.slug}
               className="w-full aspect-4/5 lg:aspect-square xl:aspect-5/6"
             >
               {step.type === "course" ? (
@@ -182,10 +176,13 @@ export default function PathStepsList({
         {chunks.map((rowSteps, rowIndex) => {
           // Only alternate direction on non-mobile
           const isReverseRow = !isMobile && rowIndex % 2 === 1;
+          const rowKey = rowSteps
+            .map((step) => `${step.type}-${step.slug}`)
+            .join("|");
 
           return (
             <div
-              key={rowIndex}
+              key={rowKey}
               className={classNames(
                 "flex flex-col w-full items-center",
                 !isMobile && "flex-row", // md+ use row

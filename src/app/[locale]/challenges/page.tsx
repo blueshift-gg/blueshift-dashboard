@@ -1,10 +1,10 @@
+import type { Metadata } from "next";
 import { useTranslations } from "next-intl";
-import Challenges from "@/app/components/ChallengeCenterContent/Challenges";
-import { Metadata } from "next";
-import { getPathname } from "@/i18n/navigation";
 import { getTranslations } from "next-intl/server";
-import { URLS } from "@/constants/urls";
+import Challenges from "@/app/components/ChallengeCenterContent/Challenges";
 import PageHero from "@/app/components/PageHero/PageHero";
+import { URLS } from "@/constants/urls";
+import { getPathname } from "@/i18n/navigation";
 
 interface ChallengesPageProps {
   params: Promise<{

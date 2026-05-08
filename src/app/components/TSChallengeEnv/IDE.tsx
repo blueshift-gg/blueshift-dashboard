@@ -1,27 +1,25 @@
 "use client";
 
-import classNames from "classnames";
-import { anticipate } from "motion";
-import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
-import { motion } from "motion/react";
-import {
-  FetchDecision,
-  InterceptedRpcCallData,
-  InterceptedWsReceiveData,
-  InterceptedWsSendData,
-  useEsbuildRunner,
-  WsReceiveDecision,
-  WsSendDecision,
-} from "@/hooks/useEsbuildRunner";
-import { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
-import { useEffect, useState } from "react";
-import { Icon } from "@blueshift-gg/ui-components";
-import { Button } from "@blueshift-gg/ui-components";
-import LogoGlyph from "../Logo/LogoGlyph";
-import { useTranslations } from "next-intl";
-
+import { Button, Icon } from "@blueshift-gg/ui-components";
 import { Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
+import classNames from "classnames";
+import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
+import type { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
+import {
+  type FetchDecision,
+  type InterceptedRpcCallData,
+  type InterceptedWsReceiveData,
+  type InterceptedWsSendData,
+  useEsbuildRunner,
+  type WsReceiveDecision,
+  type WsSendDecision,
+} from "@/hooks/useEsbuildRunner";
+import LogoGlyph from "../Logo/LogoGlyph";
 
 const rpcEndpoint = process.env.NEXT_PUBLIC_CHALLENGE_RPC_ENDPOINT;
 
@@ -95,7 +93,11 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       wsSendData,
     );
 
-    const targetHost = new URL(rpcEndpoint!).host;
+    if (!rpcEndpoint) {
+      return { decision: "PROCEED" };
+    }
+
+    const targetHost = new URL(rpcEndpoint).host;
 
     if (wsSendData.url.includes(targetHost)) {
       if (
@@ -208,7 +210,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
     addLog,
   ]);
 
-  const handleRunCode = () => {
+  const _handleRunCode = () => {
     if (esBuildInitializationState !== "initialized") {
       // TODO Consider using a toast notification or inline message instead of alert
       alert("Code runner is not ready yet. Please wait a moment.");
@@ -221,7 +223,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   };
 
   // Test requirements
-  const requirements: TestRequirement[] = [
+  const _requirements: TestRequirement[] = [
     {
       status: "incomplete",
       instructionKey: "test_1",
@@ -230,7 +232,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   ];
 
   // Test verification data received from the backend
-  const verificationData = {
+  const _verificationData = {
     success: true,
     results: [
       {
@@ -244,7 +246,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   };
 
   // Used to indicate if there is some kind of error in the verification process
-  const verificationError = null;
+  const _verificationError = null;
   // Indicate if the verification is in progress
   // TODO rename this to isVerifying
   const isVerificationLoading = false;
@@ -271,6 +273,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
             <div className="flex items-center gap-x-2">
               <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
               <button
+                type="button"
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/minimize",
                   ideView === "expanded" && "!bg-[#FFBD2D]",
@@ -288,6 +291,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
                 />
               </button>
               <button
+                type="button"
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/expand",
                   ideView === "minified" && "!bg-[#28C840]",

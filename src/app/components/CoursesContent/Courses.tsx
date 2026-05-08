@@ -1,6 +1,6 @@
+import { Suspense } from "react";
 import { getAllCourses, getCourseLessons } from "@/app/utils/content";
 import CourseList from "./CourseList";
-import { Suspense } from "react";
 
 async function CoursesContent() {
   const courses = await getAllCourses();

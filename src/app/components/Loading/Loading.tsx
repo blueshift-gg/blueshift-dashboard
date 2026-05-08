@@ -10,6 +10,7 @@ export default function Loading({ className }: { className?: string }) {
       viewBox="0 0 40 40"
       className={className}
     >
+      <title>Loading</title>
       <path
         opacity="0.2"
         fill="currentColor"

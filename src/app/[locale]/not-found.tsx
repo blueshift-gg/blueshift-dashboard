@@ -1,8 +1,8 @@
 "use client";
-import { Link } from "@/i18n/navigation";
 import { Button } from "@blueshift-gg/ui-components";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { Link } from "@/i18n/navigation";
 
 export default function NotFound() {
   const pathname = usePathname();

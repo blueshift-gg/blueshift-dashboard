@@ -1,7 +1,7 @@
 import classNames from "classnames";
-import Loading from "../Loading/Loading";
-import { motion } from "motion/react";
 import { anticipate } from "motion";
+import { motion } from "motion/react";
+import Loading from "../Loading/Loading";
 export default function Badge({
   label,
   variant,

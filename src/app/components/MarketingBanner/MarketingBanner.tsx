@@ -1,14 +1,11 @@
 "use client";
+import { Button, CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import { AnimatePresence, anticipate, motion } from "motion/react";
-import { CrosshairCorners } from "@blueshift-gg/ui-components";
 import { useTranslations } from "next-intl";
-import { Icon } from "@blueshift-gg/ui-components";
-import { Button } from "@blueshift-gg/ui-components";
-
-import { usePersistentStore } from "@/stores/store";
-import DepletingHeart from "../Graphics/DepletingHeart";
 import { useState } from "react";
 import { URLS } from "@/constants/urls";
+import { usePersistentStore } from "@/stores/store";
+import DepletingHeart from "../Graphics/DepletingHeart";
 
 export default function MarketingBanner() {
   const t = useTranslations();
@@ -69,6 +66,7 @@ export default function MarketingBanner() {
               href={stakingUrl}
               target="_blank"
               className="hidden sm:block text-brand-primary font-medium"
+              rel="noopener"
             >
               <Button
                 size="xs"
@@ -79,6 +77,7 @@ export default function MarketingBanner() {
             </a>
           </motion.div>
           <button
+            type="button"
             onClick={() => handleCloseBanner()}
             className="z-10 text-brand-secondary transition hover:text-brand-primary hover:cursor-pointer h-[32px] w-[32px] flex items-center justify-center absolute right-3 top-1/2 -translate-y-1/2 bg-background/60 sm:bg-transparent hover:bg-background/60"
           >

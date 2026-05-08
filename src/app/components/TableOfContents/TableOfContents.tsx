@@ -1,12 +1,12 @@
 "use client";
 
-import { motion, AnimatePresence } from "motion/react";
-import { Icon, CrosshairCorners } from "@blueshift-gg/ui-components";
-import { useEffect, useState, useRef } from "react";
-import { anticipate } from "motion";
+import { CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { useTranslations } from "next-intl";
+import { anticipate } from "motion";
+import { AnimatePresence, motion } from "motion/react";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useRef, useState } from "react";
 import { URLS } from "@/constants/urls";
 import { usePersistentStore } from "@/stores/store";
 
@@ -135,11 +135,15 @@ export default function TableOfContents() {
 
     // Observe all h2 and h3 elements
     const allHeadings = article.querySelectorAll("h2, h3");
-    allHeadings.forEach((heading) => observer.observe(heading));
+    allHeadings.forEach((heading) => {
+      observer.observe(heading);
+    });
 
     return () => {
       clearTimeout(timeoutId);
-      allHeadings.forEach((heading) => observer.unobserve(heading));
+      allHeadings.forEach((heading) => {
+        observer.unobserve(heading);
+      });
     };
   }, []);
 
@@ -217,7 +221,8 @@ export default function TableOfContents() {
                     />
                   )}
                   {section.subsections.length > 0 && (
-                    <div
+                    <button
+                      type="button"
                       className="relative w-[14px] h-[14px] flex items-center justify-center shrink-0 mr-2 cursor-pointer z-10"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -237,7 +242,7 @@ export default function TableOfContents() {
                       <span className="font-mono text-[10px] leading-none text-shade-tertiary select-none">
                         {isExpanded ? "-" : "+"}
                       </span>
-                    </div>
+                    </button>
                   )}
                   {section.text}
                 </a>

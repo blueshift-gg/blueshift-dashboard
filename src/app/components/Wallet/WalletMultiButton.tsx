@@ -1,12 +1,11 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
-import { breeze, Button, crisp } from "@blueshift-gg/ui-components";
-import DecryptedText from "../HeadingReveal/DecryptText";
-import { useAuth } from "@/hooks/useAuth";
-import { motion } from "motion/react";
-import { Icon } from "@blueshift-gg/ui-components";
+import { Button, crisp, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
+import { motion } from "motion/react";
+import { useCallback, useState } from "react";
+import { useAuth } from "@/hooks/useAuth";
+import DecryptedText from "../HeadingReveal/DecryptText";
 
 interface WalletButtonProps {
   disabled?: boolean;
@@ -44,6 +43,7 @@ export default function WalletMultiButton({
   }, [status, login, logout]);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: this wrapper only tracks pointer hover for nested button text effects; the actual interaction stays on the Button.
     <div
       onMouseEnter={() => setIsHoveringLocal(true)}
       onMouseLeave={() => setIsHoveringLocal(false)}

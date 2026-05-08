@@ -1,6 +1,6 @@
 import { useTranslations } from "next-intl";
-import Paths from "@/app/components/PathsContent/Paths";
 import PageHero from "@/app/components/PageHero/PageHero";
+import Paths from "@/app/components/PathsContent/Paths";
 
 export default function PathsPage() {
   const t = useTranslations();

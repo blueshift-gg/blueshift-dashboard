@@ -1,4 +1,4 @@
-import { breeze, glide, nova, silk } from "@blueshift-gg/ui-components";
+import { glide, nova } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";

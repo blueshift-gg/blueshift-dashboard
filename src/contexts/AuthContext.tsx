@@ -1,21 +1,20 @@
 "use client";
 
-import {
-  useEffect,
-  useCallback,
-  useMemo,
-  createContext,
-  ReactNode,
-  useReducer,
-} from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { usePersistentStore } from "@/stores/store";
+import type { PublicKey } from "@solana/web3.js";
 import { useMutation } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import {
-  isTokenExpired as isTokenExpiredUtil,
-  getPublicKeyFromToken,
-} from "@/lib/auth/utils";
+  createContext,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+} from "react";
+import { toast } from "react-hot-toast";
+import { type AuthResponse, performSignIn } from "@/lib/auth/api";
 import {
   AuthError,
   AuthenticationAPIError,
@@ -23,10 +22,11 @@ import {
   UserRejectedSignatureError,
   WalletDisconnectError,
 } from "@/lib/auth/errors";
-import { useTranslations } from "next-intl";
-import { toast } from "react-hot-toast";
-import { performSignIn, AuthResponse } from "@/lib/auth/api";
-import { PublicKey } from "@solana/web3.js";
+import {
+  getPublicKeyFromToken,
+  isTokenExpired as isTokenExpiredUtil,
+} from "@/lib/auth/utils";
+import { usePersistentStore } from "@/stores/store";
 
 export type AuthStatus =
   | "signed-out"
@@ -160,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [t, connected, disconnect, dispatch],
+    [t, connected, disconnect],
   );
 
   const signInMutation = useMutation<AuthResponse, Error>({
@@ -212,7 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "CLEAR_ERROR" });
       setModalVisible(true);
     }
-  }, [status, setModalVisible, dispatch]);
+  }, [status, setModalVisible]);
 
   const logout = useCallback(() => {
     if (status === "signing-out") return;
@@ -254,7 +254,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     error,
     doSignIn,
     clearAuthToken,
-    dispatch,
   ]);
 
   // --- Context Value ---

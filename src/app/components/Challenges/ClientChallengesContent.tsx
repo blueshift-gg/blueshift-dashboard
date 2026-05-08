@@ -1,34 +1,33 @@
 "use client";
 
-import { ReactNode, useEffect, useState, useRef } from "react";
-import { Button } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import ClientChallengeTable from "./ClientChallengeTable";
-import { motion, useDragControls } from "motion/react";
-import { anticipate } from "motion";
-import {
-  useEsbuildRunner,
-  FetchDecision,
-  InterceptedRpcCallData,
-  InterceptedWsSendData,
-  WsSendDecision,
-  InterceptedWsReceiveData,
-  WsReceiveDecision,
-} from "@/hooks/useEsbuildRunner";
-import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
+import { Button, Icon } from "@blueshift-gg/ui-components";
 import { Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
-import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
-import LogoGlyph from "../Logo/LogoGlyph";
-import { useAuth } from "@/hooks/useAuth";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { useAutoSave } from "@/hooks/useAutoSave";
 import classNames from "classnames";
+import { anticipate } from "motion";
+import { motion, type PanInfo, useDragControls } from "motion/react";
+import { useTranslations } from "next-intl";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import ChallengeCompleted from "../Modals/ChallengeComplete";
+import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { useAuth } from "@/hooks/useAuth";
+import { useAutoSave } from "@/hooks/useAutoSave";
+import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
+import {
+  type FetchDecision,
+  type InterceptedRpcCallData,
+  type InterceptedWsReceiveData,
+  type InterceptedWsSendData,
+  useEsbuildRunner,
+  type WsReceiveDecision,
+  type WsSendDecision,
+} from "@/hooks/useEsbuildRunner";
 import { usePersistentStore } from "@/stores/store";
+import LogoGlyph from "../Logo/LogoGlyph";
+import ChallengeCompleted from "../Modals/ChallengeComplete";
+import ClientChallengeTable from "./ClientChallengeTable";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
 const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
@@ -122,7 +121,11 @@ export default function ChallengesContent({
   const handleWsSendForDecision = async (
     wsSendData: InterceptedWsSendData,
   ): Promise<WsSendDecision> => {
-    const targetHost = new URL(rpcEndpoint!).host;
+    if (!rpcEndpoint) {
+      return { decision: "PROCEED" };
+    }
+
+    const targetHost = new URL(rpcEndpoint).host;
 
     if (wsSendData.url.includes(targetHost)) {
       if (
@@ -241,7 +244,7 @@ export default function ChallengesContent({
   useEffect(() => {
     setHasInitiallyLoaded(false);
     clearLoadedFromAutoSave();
-  }, [currentChallenge.slug, clearLoadedFromAutoSave]);
+  }, [clearLoadedFromAutoSave]);
 
   // Effect to check for missing sendTransaction after code execution
   useEffect(() => {
@@ -360,7 +363,10 @@ export default function ChallengesContent({
     setIsDragging(true);
   };
 
-  const handleDrag = (_event: any, info: any) => {
+  const handleDrag = (
+    _event: MouseEvent | TouchEvent | PointerEvent,
+    info: PanInfo,
+  ) => {
     if (!isMobile || !editorRef.current) return;
 
     // Calculate height constraints in dvh
@@ -416,7 +422,7 @@ export default function ChallengesContent({
           const progress = Math.min(elapsed / duration, 1);
 
           // Ease out cubic function for smooth animation
-          const easeOut = 1 - Math.pow(1 - progress, 3);
+          const easeOut = 1 - (1 - progress) ** 3;
           const currentHeight =
             startHeight + (targetHeight - startHeight) * easeOut;
 
@@ -475,6 +481,7 @@ export default function ChallengesContent({
           <div className="flex flex-col gap-y-0 max-w-[90dvw]">
             <img
               src="/graphics/connect-wallet.svg"
+              alt="Connect wallet"
               className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
             />
             <div className="flex flex-col gap-y-3">

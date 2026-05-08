@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { CourseLanguages, courseLanguages } from "@/app/utils/course";
-import { Certificate } from "@/lib/challenges/types";
-import { challengeStatus, ChallengeStatus } from "@/app/utils/challenges";
+import { type ChallengeStatus, challengeStatus } from "@/app/utils/challenges";
+import { type CourseLanguages, courseLanguages } from "@/app/utils/course";
+import type { Certificate } from "@/lib/challenges/types";
 
 export type ChallengeStatuses = "open" | "completed" | "claimed";
 

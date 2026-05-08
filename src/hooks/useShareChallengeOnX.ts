@@ -1,5 +1,5 @@
 import { useLocale, useTranslations } from "next-intl";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import { URLS } from "@/constants/urls";
 
 /**

@@ -1,11 +1,11 @@
-import { getTranslations } from "next-intl/server";
-import { getPathStepsWithMetadata } from "@/app/utils/content";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import PathStepsList from "@/app/components/PathsContent/PathStepsList";
-import PathDetailHeader from "@/app/components/PathsContent/PathDetailHeader";
-import { Metadata } from "next";
-import { getPathname } from "@/i18n/navigation";
+import { getTranslations } from "next-intl/server";
 import Breadcrumbs from "@/app/components/Breadcrumbs";
+import PathDetailHeader from "@/app/components/PathsContent/PathDetailHeader";
+import PathStepsList from "@/app/components/PathsContent/PathStepsList";
+import { getPathStepsWithMetadata } from "@/app/utils/content";
+import { getPathname } from "@/i18n/navigation";
 
 interface PathPageProps {
   params: Promise<{
@@ -50,9 +50,9 @@ export async function generateMetadata({
 
 export default async function PathPage({ params }: PathPageProps) {
   const t = await getTranslations();
-  const { slug, locale } = await params;
+  const { slug } = await params;
 
-  let pathData;
+  let pathData: Awaited<ReturnType<typeof getPathStepsWithMetadata>>;
   try {
     pathData = await getPathStepsWithMetadata(slug);
   } catch {
@@ -77,7 +77,7 @@ export default async function PathPage({ params }: PathPageProps) {
           showBorder={false}
         />
       </div>
-      <PathStepsList path={path} steps={stepsWithMetadata} locale={locale} />
+      <PathStepsList path={path} steps={stepsWithMetadata} />
     </div>
   );
 }

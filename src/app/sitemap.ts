@@ -1,8 +1,8 @@
-import { MetadataRoute } from "next";
+import type { MetadataRoute } from "next";
 import { challenges } from "@/app/content/challenges/challenges";
 import { courses } from "@/app/content/courses/courses";
-import { routing } from "@/i18n/routing";
 import { URLS } from "@/constants/urls";
+import { routing } from "@/i18n/routing";
 
 const BASE_URL = URLS.BLUESHIFT_EDUCATION;
 

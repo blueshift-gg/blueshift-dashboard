@@ -1,10 +1,10 @@
-import { CourseMetadata, LessonMetadata } from "./course";
 import { notFound } from "next/navigation";
-import { courses } from "@/app/content/courses/courses";
 import { challenges } from "@/app/content/challenges/challenges";
+import { courses } from "@/app/content/courses/courses";
 import { paths } from "@/app/content/paths/paths";
-import { ChallengeMetadata } from "./challenges";
-import { PathMetadata } from "./path";
+import type { ChallengeMetadata } from "./challenges";
+import type { CourseMetadata, LessonMetadata } from "./course";
+import type { PathMetadata } from "./path";
 
 export async function getCourse(courseSlug: string): Promise<CourseMetadata> {
   const course = courses.find((course) => course.slug === courseSlug);

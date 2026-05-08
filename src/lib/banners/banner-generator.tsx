@@ -1,10 +1,10 @@
+// biome-ignore-all lint/a11y/noSvgWithoutTitle: this file renders SVG fragments into generated banner images, not accessible DOM content.
 import { ImageResponse } from "next/og";
 import { createTranslator } from "next-intl";
-
-import { CourseMetadata, LessonMetadata } from "@/app/utils/course";
-import { getCourse, getChallenge, getPath } from "@/app/utils/content";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { PathMetadata } from "@/app/utils/path";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { getChallenge, getCourse, getPath } from "@/app/utils/content";
+import type { CourseMetadata, LessonMetadata } from "@/app/utils/course";
+import type { PathMetadata } from "@/app/utils/path";
 
 export interface GeneratedBannerData {
   data: ArrayBuffer;
@@ -49,7 +49,7 @@ export const generateBannerData = async ({
       return null;
     }
 
-    let lessonMetaData;
+    let lessonMetaData: LessonMetadata | undefined;
     if (lessonSlug && "lessons" in item && Array.isArray(item.lessons)) {
       lessonMetaData = item.lessons.find(
         (l: LessonMetadata) => l.slug === lessonSlug,
@@ -1612,9 +1612,10 @@ export const generateBannerData = async ({
       width: imageResponseOptions.width,
       height: imageResponseOptions.height,
     };
-  } catch (e: any) {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     console.error(
-      `[BannerGenerator] Failed to generate banner for ${itemSlug}${lessonSlug ? "/" + lessonSlug : ""}: ${e.message}`,
+      `[BannerGenerator] Failed to generate banner for ${itemSlug}${lessonSlug ? `/${lessonSlug}` : ""}: ${message}`,
     );
     return null;
   }
@@ -1629,7 +1630,7 @@ async function loadGoogleFont(font: string, text: string) {
 
   if (resource) {
     const response = await fetch(resource[1]);
-    if (response.status == 200) {
+    if (response.status === 200) {
       return await response.arrayBuffer();
     }
   }

@@ -1,15 +1,15 @@
 "use client";
 
-import { PathDifficulty, PathLanguages } from "@/app/utils/path";
-import { difficulty as difficultyMap } from "@/app/utils/common";
-import React, { useRef, useState } from "react";
+import { Button, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { Link } from "@/i18n/navigation";
-import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
-import { Button } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
-import { Icon } from "@blueshift-gg/ui-components";
+import { useTranslations } from "next-intl";
+import type React from "react";
+import { useRef, useState } from "react";
+import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import { difficulty as difficultyMap } from "@/app/utils/common";
+import type { PathDifficulty, PathLanguages } from "@/app/utils/path";
+import { Link } from "@/i18n/navigation";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 type PathCardProps = {
@@ -43,7 +43,7 @@ export default function PathCard({
   pathSlug,
 }: PathCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const [hasHovered, setHasHovered] = useState(false);
+  const [_hasHovered, setHasHovered] = useState(false);
   const {
     isHovered,
     direction,
@@ -54,13 +54,14 @@ export default function PathCard({
 
   const t = useTranslations();
 
-  const badgeDifficulty = difficultyMap[difficulty ?? 1];
+  const _badgeDifficulty = difficultyMap[difficulty ?? 1];
 
   const isCompleted =
     completedStepsCount === totalStepsCount && totalStepsCount > 0;
   const hasProgress = completedStepsCount > 0;
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: this container only tracks pointer hover for decorative motion, while navigation stays on nested links and buttons.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {
@@ -142,20 +143,21 @@ export default function PathCard({
               </div>
             )}
           </div>
-          <Link href={link!}>
-            <Button
-              variant="secondary"
-              size="lg"
-              className="w-full"
-              label={
-                isCompleted
-                  ? t("paths.review_path")
-                  : hasProgress
-                    ? t("paths.continue_path")
-                    : t("paths.start_path")
-              }
-              children={
-                hasProgress ? (
+          {link ? (
+            <Link href={link}>
+              <Button
+                variant="secondary"
+                size="lg"
+                className="w-full"
+                label={
+                  isCompleted
+                    ? t("paths.review_path")
+                    : hasProgress
+                      ? t("paths.continue_path")
+                      : t("paths.start_path")
+                }
+              >
+                {hasProgress ? (
                   <div className="flex items-center gap-x-2 order-last ml-auto">
                     <ProgressCircle
                       percentFilled={
@@ -174,10 +176,45 @@ export default function PathCard({
                       {totalStepsCount} {t("paths.units")}
                     </span>
                   </div>
-                )
+                )}
+              </Button>
+            </Link>
+          ) : (
+            <Button
+              variant="secondary"
+              size="lg"
+              className="w-full"
+              disabled={true}
+              label={
+                isCompleted
+                  ? t("paths.review_path")
+                  : hasProgress
+                    ? t("paths.continue_path")
+                    : t("paths.start_path")
               }
-            />
-          </Link>
+            >
+              {hasProgress ? (
+                <div className="flex items-center gap-x-2 order-last ml-auto">
+                  <ProgressCircle
+                    percentFilled={
+                      totalStepsCount > 0
+                        ? (completedStepsCount / totalStepsCount) * 100
+                        : 0
+                    }
+                  />
+                  <span className="text-sm text-shade-tertiary font-mono">
+                    {completedStepsCount}/{totalStepsCount}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-x-2 order-last ml-auto">
+                  <span className="text-sm font-medium bg-clip-text text-shade-tertiary">
+                    {totalStepsCount} {t("paths.units")}
+                  </span>
+                </div>
+              )}
+            </Button>
+          )}
         </div>
       </div>
     </div>

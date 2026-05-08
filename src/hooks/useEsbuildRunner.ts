@@ -1,10 +1,12 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: this runner intentionally proxies arbitrary console, RPC, and WebSocket payloads between the worker and UI.
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { createCdnPlugin } from "@/lib/challenges/esbuild-package-plugin";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useEsbuild } from "@/hooks/useEsbuild";
+import { createCdnPlugin } from "@/lib/challenges/esbuild-package-plugin";
 
 export interface LogMessage {
+  id: string;
   type:
     | "LOG"
     | "ERROR"
@@ -103,7 +105,7 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
   const addLog = useCallback((type: LogMessage["type"], ...payload: any[]) => {
     setLogs((prevLogs) => [
       ...prevLogs,
-      { type, payload, timestamp: new Date() },
+      { id: crypto.randomUUID(), type, payload, timestamp: new Date() },
     ]);
   }, []);
 
@@ -203,7 +205,7 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
                 build.onLoad(
                   { filter: /.*/, namespace: "custom-entry-ns" },
                   () => ({
-                    contents: code + "\n" + mainHandlingSuffix, // User code + main handling logic
+                    contents: `${code}\n${mainHandlingSuffix}`, // User code + main handling logic
                     loader: "ts",
                   }),
                 );
@@ -463,7 +465,7 @@ self.WebSocket = WebSocketProxy;
           workerRef.current = workerInstance;
 
           workerInstance.onmessage = (event) => {
-            const message = event.data as { type: string; payload: any };
+            const message = event.data as { type: string; payload: unknown };
             switch (message.type) {
               case "LOG":
                 addLog(
@@ -525,7 +527,7 @@ self.WebSocket = WebSocketProxy;
                 setIsRunning(false);
                 // Note: Worker termination is handled by main try-catch or useEffect cleanup
                 break;
-              case "INTERCEPTED_RPC_CALL_AWAIT_DECISION":
+              case "INTERCEPTED_RPC_CALL_AWAIT_DECISION": {
                 const decisionPayload =
                   message.payload as InterceptedRpcCallData;
 
@@ -575,8 +577,9 @@ self.WebSocket = WebSocketProxy;
                   }
                 }
                 break;
+              }
 
-              case "INTERCEPTED_WS_SEND_AWAIT_DECISION":
+              case "INTERCEPTED_WS_SEND_AWAIT_DECISION": {
                 const wsSendData = message.payload as InterceptedWsSendData;
                 if (props?.onWsSendInterceptedForDecision) {
                   props
@@ -622,7 +625,8 @@ self.WebSocket = WebSocketProxy;
                   }
                 }
                 break;
-              case "INTERCEPTED_WS_RECEIVE_AWAIT_DECISION":
+              }
+              case "INTERCEPTED_WS_RECEIVE_AWAIT_DECISION": {
                 const wsReceiveData =
                   message.payload as InterceptedWsReceiveData;
                 if (props?.onWsReceiveInterceptedForDecision) {
@@ -669,6 +673,7 @@ self.WebSocket = WebSocketProxy;
                   }
                 }
                 break;
+              }
               // End of new WebSocket message handlers
               default:
                 addLog("SYSTEM", "Unknown message from worker:", message);
@@ -710,6 +715,7 @@ self.WebSocket = WebSocketProxy;
       isRunning,
       addLog,
       props,
+      esbuild.build,
     ],
   );
 

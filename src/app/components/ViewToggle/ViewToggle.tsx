@@ -1,8 +1,8 @@
 "use client";
 
-import { anticipate, motion } from "motion/react";
-import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
+import classNames from "classnames";
+import { anticipate, motion } from "motion/react";
 import { usePersistentStore } from "@/stores/store";
 
 type ViewToggleProps = {
@@ -20,6 +20,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
       )}
     >
       <button
+        type="button"
         className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
         onClick={() => setView("grid")}
       >
@@ -38,6 +39,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         )}
       </button>
       <button
+        type="button"
         className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
         onClick={() => setView("list")}
       >
