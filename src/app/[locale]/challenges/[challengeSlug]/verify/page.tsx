@@ -69,12 +69,12 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
   let challengeLocale = locale;
   try {
     ChallengeContent = await getCompiledMdx(
-      `challenges/${challengeMetadata.slug}/${locale}/verify.mdx`
+      `challenges/${challengeMetadata.slug}/${locale}/verify.mdx`,
     );
   } catch {
     try {
       ChallengeContent = await getCompiledMdx(
-        `challenges/${challengeMetadata.slug}/en/verify.mdx`
+        `challenges/${challengeMetadata.slug}/en/verify.mdx`,
       );
       challengeLocale = "en";
     } catch {
@@ -98,18 +98,18 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
           console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`
+            `Failed to decode num_minted for collection ${collectionMintAddress}`,
           );
         }
       } else {
         console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`
+          `Failed to fetch account info for ${collectionMintAddress}`,
         );
       }
     } catch (error) {
       console.error(
         `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error
+        error,
       );
     }
   }

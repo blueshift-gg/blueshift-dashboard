@@ -66,7 +66,7 @@ export default function BlueshiftEditor({
 
   const handleEditorDidMount = (
     editorInstance: editor.IStandaloneCodeEditor,
-    monaco: Monaco
+    monaco: Monaco,
   ) => {
     if (editorRefInternal.current) return;
 
@@ -77,14 +77,14 @@ export default function BlueshiftEditor({
 
     monaco.languages.typescript.typescriptDefaults.addExtraLib(
       processEnvTypes,
-      "file:///node_modules/@types/node/index.d.ts"
+      "file:///node_modules/@types/node/index.d.ts",
     );
 
     const addMonacoTypesForModule = async (
       moduleName: string,
       dtsImportPromise: Promise<{ default: string }>,
       monacoTypesPath: string,
-      monacoModulePath: string
+      monacoModulePath: string,
     ) => {
       try {
         const dtsModule = await dtsImportPromise;
@@ -92,12 +92,12 @@ export default function BlueshiftEditor({
 
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           dtsContent,
-          monacoTypesPath
+          monacoTypesPath,
         );
 
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           `declare module '${moduleName}' { export * from '${monacoTypesPath}'; export { default } from '${monacoTypesPath}'; }`,
-          monacoModulePath
+          monacoModulePath,
         );
       } catch (error) {
         console.error(`Error adding ${moduleName} types:`, error);
@@ -108,21 +108,21 @@ export default function BlueshiftEditor({
       "@solana/web3.js",
       import("@solana/web3.js/lib/index.d.ts?raw"),
       "file:///node_modules/@types/@solana/web3.js/index.d.ts",
-      "file:///node_modules/@solana/web3.js/index.d.ts"
+      "file:///node_modules/@solana/web3.js/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "@solana/spl-token",
       import("./types/spl-token.d.ts?raw"),
       "file:///node_modules/@types/@solana/spl-token/index.d.ts",
-      "file:///node_modules/@solana/spl-token/index.d.ts"
+      "file:///node_modules/@solana/spl-token/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "bs58",
       import("./types/bs58.d.ts?raw"),
       "file:///node_modules/@types/bs58/index.d.ts",
-      "file:///node_modules/bs58/index.d.ts"
+      "file:///node_modules/bs58/index.d.ts",
     );
 
     monaco.editor.defineTheme("dracula", {

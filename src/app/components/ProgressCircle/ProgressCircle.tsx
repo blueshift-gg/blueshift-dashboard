@@ -28,7 +28,7 @@ const ProgressCircle = ({
     <div
       className={classNames(
         "w-[16px] h-[16px] flex items-center relative justify-center border-[1.5px] border-shade-secondary rounded-full",
-        className
+        className,
       )}
     >
       <AnimatePresence mode="wait">
@@ -65,7 +65,7 @@ const ProgressCircle = ({
             }}
             className={classNames(
               "h-[8px] w-[8px] shrink-0 rounded-full bg-[conic-gradient(#ced5e4_var(--percentFilled),transparent_0)]",
-              innerClassName
+              innerClassName,
             )}
           ></motion.div>
         )}

@@ -48,7 +48,7 @@ export default function PathList({
     const completedSteps = getPathCompletedSteps(
       path.steps,
       courseProgress,
-      challengeStatuses
+      challengeStatuses,
     );
     const totalSteps = path.steps.length;
     return completedSteps > 0 && completedSteps < totalSteps;
@@ -61,7 +61,7 @@ export default function PathList({
     const completedSteps = getPathCompletedSteps(
       path.steps,
       courseProgress,
-      challengeStatuses
+      challengeStatuses,
     );
     const totalSteps = path.steps.length;
     return completedSteps === totalSteps;
@@ -197,7 +197,7 @@ export default function PathList({
       const completedSteps = getPathCompletedSteps(
         path.steps,
         courseProgress,
-        challengeStatuses
+        challengeStatuses,
       );
       const totalSteps = path.steps.length;
 
@@ -220,10 +220,7 @@ export default function PathList({
 
   const dropdownItems = getPathDropdownItems();
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedPaths = useMemo(
     () =>
@@ -242,7 +239,7 @@ export default function PathList({
       selectedLanguages,
       selectedDifficulties,
       seed,
-    ]
+    ],
   );
 
   // Create tabs array with conditional ordering
@@ -285,7 +282,7 @@ export default function PathList({
   const getPathStats = (path: PathMetadata) => {
     const courseCount = path.steps.filter((s) => s.type === "course").length;
     const challengeCount = path.steps.filter(
-      (s) => s.type === "challenge"
+      (s) => s.type === "challenge",
     ).length;
     return { courseCount, challengeCount };
   };
@@ -312,7 +309,7 @@ export default function PathList({
     <div
       className={classNames(
         "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
+        isLoading && "animate-pulse",
       )}
     >
       {/* Featured Paths */}
@@ -322,7 +319,7 @@ export default function PathList({
           <div
             ref={carouselRef}
             className={classNames(
-              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
             )}
           >
             {isLoading
@@ -334,7 +331,7 @@ export default function PathList({
                   const completedSteps = getPathCompletedSteps(
                     path.steps,
                     courseProgress,
-                    challengeStatuses
+                    challengeStatuses,
                   );
                   return (
                     <PathCard
@@ -413,7 +410,7 @@ export default function PathList({
                 const completedSteps = getPathCompletedSteps(
                   path.steps,
                   courseProgress,
-                  challengeStatuses
+                  challengeStatuses,
                 );
                 return (
                   <PathCard

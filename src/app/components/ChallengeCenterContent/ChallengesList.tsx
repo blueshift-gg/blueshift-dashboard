@@ -57,7 +57,7 @@ const ScrollableSection = forwardRef<
         onScroll={onScroll}
         className={classNames(
           "flex gap-3 overflow-x-auto snap-x snap-mandatory hide-scrollbar--always -mx-3 px-3",
-          className
+          className,
         )}
       >
         {children}
@@ -259,7 +259,7 @@ export default function ChallengesList({
       .filter(
         (challenge) =>
           ownership[challenge.slug] &&
-          challengeStatuses[challenge.slug] !== "claimed"
+          challengeStatuses[challenge.slug] !== "claimed",
       )
       .map((challenge) => challenge.slug);
 
@@ -285,7 +285,7 @@ export default function ChallengesList({
               .toLowerCase()
               .includes(searchLower) ||
             (challenge.tags || []).some((tag) =>
-              tag.toLowerCase().includes(searchLower)
+              tag.toLowerCase().includes(searchLower),
             );
 
           // 2. Language Filter (Empty = All)
@@ -323,7 +323,7 @@ export default function ChallengesList({
       activeTab,
       challengeStatuses,
       t,
-    ]
+    ],
   );
 
   const countsByLanguage = useMemo(() => {
@@ -364,13 +364,10 @@ export default function ChallengesList({
       isFeatured: false,
       apiPath: "",
       requirements: [],
-    }
+    },
   );
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedChallenges = useMemo(
     () =>
@@ -387,7 +384,7 @@ export default function ChallengesList({
       selectedLanguages,
       selectedDifficulties,
       seed,
-    ]
+    ],
   );
 
   const difficultyMap: Record<string, number> = {
@@ -465,7 +462,7 @@ export default function ChallengesList({
     <div
       className={classNames(
         "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
+        isLoading && "animate-pulse",
       )}
     >
       <NFTViewer
@@ -484,7 +481,7 @@ export default function ChallengesList({
             <div
               ref={carouselRef}
               className={classNames(
-                "flex pl-4 -mx-4 lg:mx-0 lg:pl-0 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+                "flex pl-4 -mx-4 lg:mx-0 lg:pl-0 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
               )}
             >
               {isLoading

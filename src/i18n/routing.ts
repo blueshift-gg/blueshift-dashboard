@@ -9,7 +9,7 @@ export const localeNames = {
   vi: "Tiếng Việt",
   uk: "Українська",
   de: "Deutsch",
-  "pt-BR": "Português (Brasil)"
+  "pt-BR": "Português (Brasil)",
 };
 
 export const routing = defineRouting({

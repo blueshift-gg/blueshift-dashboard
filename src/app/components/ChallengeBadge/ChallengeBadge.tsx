@@ -23,7 +23,7 @@ export default function Badge({
         variant === "passed" && "bg-success/8 text-success",
         variant === "failed" && "bg-error/8 text-error",
         variant === "loading" &&
-          "pl-2 pr-3 bg-brand-primary/8 text-brand-primary"
+          "pl-2 pr-3 bg-brand-primary/8 text-brand-primary",
       )}
     >
       {variant === "loading" ? (

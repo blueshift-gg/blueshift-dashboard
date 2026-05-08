@@ -29,14 +29,14 @@ export default function PathItemDivider({
       className={classNames(
         "w-24 shrink-0 flex items-center justify-center",
         rotationClass,
-        className
+        className,
       )}
     >
       <div
         className={classNames(
           "h-px w-full shrink border-t",
           status === "completed" && "border-brand-primary",
-          status === "incomplete" && "border-border border-dashed"
+          status === "incomplete" && "border-border border-dashed",
         )}
       />
       <div
@@ -44,7 +44,7 @@ export default function PathItemDivider({
           "w-[56px] h-[56px] flex items-center justify-center shrink-0 border",
           status === "completed" &&
             "bg-brand-primary/5 border-brand-primary/25 shadow-[inset_0px_0px_32px] shadow-brand-primary/15",
-          status === "incomplete" && "bg-card-solid/50 border-border"
+          status === "incomplete" && "bg-card-solid/50 border-border",
         )}
       >
         <Icon
@@ -52,7 +52,7 @@ export default function PathItemDivider({
           size={20}
           className={classNames(
             status === "completed" ? "text-brand-primary" : "text-shade-mute!",
-            status === "completed" && iconRotationClass
+            status === "completed" && iconRotationClass,
           )}
         />
       </div>
@@ -60,7 +60,7 @@ export default function PathItemDivider({
         className={classNames(
           "h-px w-full shrink border-t",
           status === "completed" && "border-brand-primary",
-          status === "incomplete" && "border-border border-dashed"
+          status === "incomplete" && "border-border border-dashed",
         )}
       />
     </div>

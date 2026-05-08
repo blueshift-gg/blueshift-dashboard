@@ -21,17 +21,17 @@ export default function SolanaWalletProvider({
   if (!rpcEndpoint) {
     throw new Error("NEXT_PUBLIC_MAINNET_RPC_ENDPOINT is not set");
   }
-  
+
   const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter(),
-    ],
-    []
+    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
+    [],
   );
 
   return (
-    <ConnectionProvider endpoint={rpcEndpoint} config={{ commitment: "processed", httpAgent: false }}>
+    <ConnectionProvider
+      endpoint={rpcEndpoint}
+      config={{ commitment: "processed", httpAgent: false }}
+    >
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>

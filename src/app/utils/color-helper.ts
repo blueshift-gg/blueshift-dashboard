@@ -9,7 +9,9 @@ export function resolveColorVar(colorString: string): [number, number, number] {
   if (colorString.startsWith("var(")) {
     const varName = colorString.match(/var\((.+?)\)/)?.[1];
     if (varName) {
-      const computed = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+      const computed = getComputedStyle(document.documentElement)
+        .getPropertyValue(varName)
+        .trim();
       if (computed) resolved = computed;
     }
   }
@@ -17,17 +19,20 @@ export function resolveColorVar(colorString: string): [number, number, number] {
   // Handle "rgba(r, g, b, a)" or "rgb(r, g, b)"
   const rgbaMatch = resolved.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
   if (rgbaMatch) {
-    return [parseInt(rgbaMatch[1]), parseInt(rgbaMatch[2]), parseInt(rgbaMatch[3])];
+    return [
+      parseInt(rgbaMatch[1]),
+      parseInt(rgbaMatch[2]),
+      parseInt(rgbaMatch[3]),
+    ];
   }
-  
+
   // Handle comma-separated "r,g,b" (legacy format)
   if (resolved.includes(",")) {
-     const parts = resolved.split(",").map(Number);
-     if (parts.length >= 3 && !parts.some(isNaN)) {
-         return [parts[0], parts[1], parts[2]];
-     }
+    const parts = resolved.split(",").map(Number);
+    if (parts.length >= 3 && !parts.some(isNaN)) {
+      return [parts[0], parts[1], parts[2]];
+    }
   }
 
   return [0, 0, 0];
 }
-

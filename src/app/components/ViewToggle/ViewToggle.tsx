@@ -16,7 +16,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
     <div
       className={classNames(
         "hidden md:flex w-max items-center gap-x-2  bg-card-solid p-1 relative",
-        className
+        className,
       )}
     >
       <button

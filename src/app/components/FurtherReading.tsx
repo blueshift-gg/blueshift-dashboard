@@ -1,13 +1,13 @@
-"use client"
+"use client";
 
-import { memo, useCallback } from "react"
-import { getResearchForCourse, type CourseId } from "@/lib/cross-linking"
-import { CrosshairCorners, Button } from "@blueshift-gg/ui-components"
-import Link from "next/link"
+import { memo, useCallback } from "react";
+import { getResearchForCourse, type CourseId } from "@/lib/cross-linking";
+import { CrosshairCorners, Button } from "@blueshift-gg/ui-components";
+import Link from "next/link";
 
 interface Props {
-  courseId: CourseId
-  className?: string
+  courseId: CourseId;
+  className?: string;
 }
 
 // Map course IDs to contextual topic descriptions
@@ -34,34 +34,34 @@ const COURSE_TOPICS: Record<CourseId, string> = {
   "testing-with-surfpool": "Solana testing",
   "introduction-to-low-level-solana": "low-level Solana",
   "quantum-vault": "quantum-resistant cryptography",
-  "research-crateless-program": "crateless programs"
-}
+  "research-crateless-program": "crateless programs",
+};
 
 export const FurtherReading = memo<Props>(({ courseId, className }) => {
-  const articles = getResearchForCourse(courseId)
+  const articles = getResearchForCourse(courseId);
 
   const handleClick = useCallback(
     (articleId: string) => {
       if (typeof window !== "undefined" && (window as any).analytics) {
-        ; (window as any).analytics.track("research_link_clicked", {
+        (window as any).analytics.track("research_link_clicked", {
           source: "course_conclusion",
           course: courseId,
           article: articleId,
-        })
+        });
       }
     },
-    [courseId]
-  )
+    [courseId],
+  );
 
   if (articles.length === 0) {
-    return null
+    return null;
   }
 
-  const topic = COURSE_TOPICS[courseId] || "advanced Solana topics"
+  const topic = COURSE_TOPICS[courseId] || "advanced Solana topics";
 
   return (
     <aside
-      className={`-mx-5 lg:-mx-6 mt-16 md:mt-24 bg-card-solid/50 border-y border-border relative ${className || ''}`}
+      className={`-mx-5 lg:-mx-6 mt-16 md:mt-24 bg-card-solid/50 border-y border-border relative ${className || ""}`}
       aria-labelledby="further-reading-heading"
     >
       <CrosshairCorners
@@ -78,7 +78,8 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
           Dive Deeper
         </h2>
         <p className="text-shade-secondary mb-8">
-          Learn how these concepts are applied in production with research on {topic}:
+          Learn how these concepts are applied in production with research on{" "}
+          {topic}:
         </p>
 
         <div className="grid gap-4 md:gap-6 md:grid-cols-2">
@@ -117,7 +118,7 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
         </div>
       </div>
     </aside>
-  )
-})
+  );
+});
 
-FurtherReading.displayName = "FurtherReading"
+FurtherReading.displayName = "FurtherReading";

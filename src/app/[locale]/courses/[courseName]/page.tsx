@@ -14,15 +14,15 @@ export default async function CoursePage({ params }: CoursePageProps) {
 
   // Sort lessons by lessonNumber and get the first one
   const firstLesson = lessons.sort(
-    (a, b) => a.lessonNumber - b.lessonNumber
+    (a, b) => a.lessonNumber - b.lessonNumber,
   )[0];
 
   if (!firstLesson) {
     // Handle case where no lessons are found
-    redirect({href: "/courses", locale});
+    redirect({ href: "/courses", locale });
   }
 
   // Convert lesson title to URL-friendly slug
   const firstLessonSlug = firstLesson.slug.toLowerCase().replace(/\s+/g, "-");
-  redirect({href: `/courses/${courseName}/${firstLessonSlug}`, locale});
+  redirect({ href: `/courses/${courseName}/${firstLessonSlug}`, locale });
 }

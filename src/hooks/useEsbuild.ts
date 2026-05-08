@@ -51,7 +51,7 @@ if (typeof window !== "undefined") {
       state = {
         ...state,
         initError: error,
-      }
+      };
     });
 }
 

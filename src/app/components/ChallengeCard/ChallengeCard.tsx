@@ -89,7 +89,7 @@ export default function ChallengeCard({
       className={classNames(
         "max-w-[360px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border",
         isHovered && `swoosh-${direction}`,
-        className
+        className,
       )}
     >
       <Link
@@ -105,7 +105,7 @@ export default function ChallengeCard({
             ],
         }}
         className={classNames(
-          "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20"
+          "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20",
         )}
       >
         <CrosshairCorners
@@ -124,7 +124,7 @@ export default function ChallengeCard({
           </span>
           {/* <Divider direction="vertical" className="!h-[12px] !w-[2px]" /> */}
           {/* <span className="text-xs font-medium font-mono bg-xp-gradient bg-clip-text text-transparent"> */}
-            {/* 50 XP */}
+          {/* 50 XP */}
           {/* </span> */}
         </div>
       </div>
@@ -133,7 +133,7 @@ export default function ChallengeCard({
         <div
           className={classNames(
             "flex flex-col gap-y-4 min-h-[90px]",
-            tags.length > 0 && "min-h-[110px]"
+            tags.length > 0 && "min-h-[110px]",
           )}
         >
           <div className="flex flex-col gap-y-2">

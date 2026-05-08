@@ -54,7 +54,7 @@ async function needsRecompilation(
   inputPath: string,
   outputPath: string,
   cache: Cache,
-  relativePath: string
+  relativePath: string,
 ): Promise<boolean> {
   try {
     // Check if output exists
@@ -85,7 +85,7 @@ async function precompileMDX(
   outputPath: string,
   highlighter: Awaited<ReturnType<typeof createShikiHighlighter>>,
   cache: Cache,
-  relativePath: string
+  relativePath: string,
 ) {
   try {
     const raw = await readFile(inputPath, "utf-8");
@@ -96,7 +96,7 @@ async function precompileMDX(
 
     function traverseNodes(
       node: any,
-      currentIndex: { value: number } = { value: 0 }
+      currentIndex: { value: number } = { value: 0 },
     ) {
       if (node.type === "code") {
         const lang = node.lang || "text";
@@ -118,7 +118,7 @@ async function precompileMDX(
           } catch (error) {
             console.error(
               `Warning: Failed to highlight code block in ${inputPath} (lang: ${lang})`,
-              error
+              error,
             );
           }
         }
@@ -126,7 +126,7 @@ async function precompileMDX(
 
       if (node.children) {
         node.children.forEach((child: any) =>
-          traverseNodes(child, currentIndex)
+          traverseNodes(child, currentIndex),
         );
       }
     }
@@ -157,7 +157,7 @@ async function precompileMDX(
 
 async function findMDXFiles(
   dir: string,
-  baseDir: string = dir
+  baseDir: string = dir,
 ): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -235,13 +235,13 @@ async function main() {
         } catch (error) {
           failed++;
         }
-      })
+      }),
     );
 
     // Log progress after each batch
     if (compiled % 100 === 0 || compiled === filesToCompile.length) {
       console.log(
-        `Progress: ${compiled}/${filesToCompile.length} files compiled`
+        `Progress: ${compiled}/${filesToCompile.length} files compiled`,
       );
     }
   }

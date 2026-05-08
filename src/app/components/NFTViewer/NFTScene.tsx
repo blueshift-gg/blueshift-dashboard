@@ -224,7 +224,7 @@ const NFTMaterial = shaderMaterial(
       
       gl_FragColor = vec4(finalColor, 1.0);
     }
-  `
+  `,
 );
 
 // Extend the material so we can use it as JSX
@@ -339,7 +339,7 @@ const IridescentSVGMaterial = shaderMaterial(
       
       gl_FragColor = vec4(finalColor, baseColor.a);
     }
-  `
+  `,
 );
 
 // Extend the iridescent material
@@ -556,7 +556,7 @@ function Scene({
         // Calculate center crop area
         const sourceSize = Math.min(
           renderedCanvas.width,
-          renderedCanvas.height
+          renderedCanvas.height,
         );
         const sourceX = (renderedCanvas.width - sourceSize) / 2;
         const sourceY = (renderedCanvas.height - sourceSize) / 2;
@@ -584,7 +584,7 @@ function Scene({
               0,
               0,
               intermediateSize,
-              intermediateSize
+              intermediateSize,
             );
 
             // Final downsampling pass
@@ -597,7 +597,7 @@ function Scene({
               0,
               0,
               targetSize,
-              targetSize
+              targetSize,
             );
           } else {
             // Fallback to direct downsampling
@@ -610,7 +610,7 @@ function Scene({
               0,
               0,
               targetSize,
-              targetSize
+              targetSize,
             );
           }
         } else {
@@ -624,7 +624,7 @@ function Scene({
             0,
             0,
             targetSize,
-            targetSize
+            targetSize,
           );
         }
 
@@ -647,7 +647,7 @@ function Scene({
 
           const dataUrl = screenshotRenderer.domElement.toDataURL(
             "image/png",
-            1.0
+            1.0,
           );
           const link = document.createElement("a");
           const backgroundSuffix = useTransparentBackground
@@ -673,7 +673,7 @@ function Scene({
         (camera as THREE.PerspectiveCamera).updateProjectionMatrix();
       }
     },
-    [gl, scene, camera, challengeName, challengeLanguage, challengeDifficulty]
+    [gl, scene, camera, challengeName, challengeLanguage, challengeDifficulty],
   );
 
   // Start 1080-degree rotation animation
@@ -782,7 +782,7 @@ function Scene({
         currentTime - animationStateRef.current.specialAnimation.startTime;
       const progress = Math.min(
         elapsed / (animationStateRef.current.specialAnimation.duration * 1000),
-        1
+        1,
       );
 
       // Use ease-out cubic for smooth deceleration
@@ -858,28 +858,28 @@ function Scene({
       width / 2,
       -height / 2,
       width / 2,
-      -height / 2 + radius
+      -height / 2 + radius,
     );
     shape.lineTo(width / 2, height / 2 - radius);
     shape.quadraticCurveTo(
       width / 2,
       height / 2,
       width / 2 - radius,
-      height / 2
+      height / 2,
     );
     shape.lineTo(-width / 2 + radius, height / 2);
     shape.quadraticCurveTo(
       -width / 2,
       height / 2,
       -width / 2,
-      height / 2 - radius
+      height / 2 - radius,
     );
     shape.lineTo(-width / 2, -height / 2 + radius);
     shape.quadraticCurveTo(
       -width / 2,
       -height / 2,
       -width / 2 + radius,
-      -height / 2
+      -height / 2,
     );
 
     // Extrude settings for proper beveling
@@ -1158,10 +1158,10 @@ export default function NFTScene({
   // State for controllable parameters
   const [challengeName, setChallengeName] = useState(initialChallengeName);
   const [challengeLanguage, setChallengeLanguage] = useState(
-    initialChallengeLanguage
+    initialChallengeLanguage,
   );
   const [challengeDifficulty, setChallengeDifficulty] = useState(
-    initialChallengeDifficulty
+    initialChallengeDifficulty,
   );
   const [useAnimation, setUseAnimation] = useState(initialUseAnimation);
   const [showBackgroundValue, setShowBackgroundValue] =
@@ -1191,7 +1191,7 @@ export default function NFTScene({
     <div
       className={classNames(
         "h-full w-full overflow-hidden",
-        showBackgroundValue && "bg-gradient-to-b from-[#0D0E14] to-black"
+        showBackgroundValue && "bg-gradient-to-b from-[#0D0E14] to-black",
       )}
     >
       {showControls && (

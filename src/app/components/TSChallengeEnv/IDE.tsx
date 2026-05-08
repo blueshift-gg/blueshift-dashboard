@@ -44,11 +44,11 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   ] = useState(false);
 
   const handleRpcCallForDecision = async (
-    rpcData: InterceptedRpcCallData
+    rpcData: InterceptedRpcCallData,
   ): Promise<FetchDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted RPC Call, Awaiting Decision:",
-      rpcData
+      rpcData,
     );
 
     if (rpcData.rpcMethod === "sendTransaction") {
@@ -61,7 +61,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       const mockSignature = bs58.encode(tx?.signature ?? []);
 
       console.debug(
-        `[ClientChallengesContent] Mocking successful response for sendTransaction. Signature: ${mockSignature}`
+        `[ClientChallengesContent] Mocking successful response for sendTransaction. Signature: ${mockSignature}`,
       );
 
       return {
@@ -80,7 +80,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
     }
 
     console.debug(
-      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`
+      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`,
     );
 
     // For all other calls, or if rpcMethod is null, proceed as normal
@@ -88,11 +88,11 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   };
 
   const handleWsSendForDecision = async (
-    wsSendData: InterceptedWsSendData
+    wsSendData: InterceptedWsSendData,
   ): Promise<WsSendDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Send, Awaiting Decision:",
-      wsSendData
+      wsSendData,
     );
 
     const targetHost = new URL(rpcEndpoint!).host;
@@ -103,7 +103,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
         wsSendData.data.includes("signatureSubscribe")
       ) {
         console.log(
-          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe"
+          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe",
         );
 
         const data = JSON.parse(wsSendData.data);
@@ -147,17 +147,17 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
 
     console.log(
       "[ClientChallengesContent] WebSocket send allowed to PROCEED:",
-      wsSendData
+      wsSendData,
     );
     return { decision: "PROCEED" };
   };
 
   const handleWsReceiveForDecision = async (
-    wsReceiveData: InterceptedWsReceiveData
+    wsReceiveData: InterceptedWsReceiveData,
   ): Promise<WsReceiveDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Receive, Awaiting Decision:",
-      wsReceiveData
+      wsReceiveData,
     );
 
     return { decision: "PROCEED" };
@@ -185,7 +185,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       (log) =>
         log.type === "SYSTEM" &&
         Array.isArray(log.payload) &&
-        log.payload[0] === "Execution complete."
+        log.payload[0] === "Execution complete.",
     );
 
     if (
@@ -262,7 +262,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       className={classNames(
         "py-4 max-w-app grid grid-cols-1 mx-auto w-full gap-y-12 min-h-[400px]",
         ideView === "expanded" &&
-          "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50"
+          "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50",
       )}
     >
       <div className="w-full h-full flex flex-col overflow-hidden border border-border">
@@ -273,14 +273,15 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
               <button
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/minimize",
-                  ideView === "expanded" && "!bg-[#FFBD2D]"
+                  ideView === "expanded" && "!bg-[#FFBD2D]",
                 )}
                 onClick={() => setIdeView("minified")}
               >
                 <Icon
                   className={classNames(
                     "opacity-0 transition-opacity duration-100",
-                    ideView === "expanded" && "group-hover/minimize:opacity-100"
+                    ideView === "expanded" &&
+                      "group-hover/minimize:opacity-100",
                   )}
                   name="Minimize"
                   size={8}
@@ -289,14 +290,14 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
               <button
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/expand",
-                  ideView === "minified" && "!bg-[#28C840]"
+                  ideView === "minified" && "!bg-[#28C840]",
                 )}
                 onClick={() => setIdeView("expanded")}
               >
                 <Icon
                   className={classNames(
                     "opacity-0 transition-opacity duration-100",
-                    ideView === "minified" && "group-hover/expand:opacity-100"
+                    ideView === "minified" && "group-hover/expand:opacity-100",
                   )}
                   name="Expand"
                   size={8}

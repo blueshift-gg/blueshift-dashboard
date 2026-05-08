@@ -22,7 +22,7 @@ export default function DecryptedText({
   const [displayText, setDisplayText] = useState<string>(text);
   const [isScrambling, setIsScrambling] = useState<boolean>(false);
   const [revealedIndices, setRevealedIndices] = useState<Set<number>>(
-    new Set()
+    new Set(),
   );
   const [isExiting, setIsExiting] = useState<boolean>(false);
 
@@ -31,7 +31,7 @@ export default function DecryptedText({
 
     const shuffleText = (
       currentRevealed: Set<number>,
-      isExiting: boolean = false
+      isExiting: boolean = false,
     ): string => {
       const positions = text.split("").map((char, i) => ({
         char,

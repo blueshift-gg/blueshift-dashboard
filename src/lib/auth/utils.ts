@@ -45,4 +45,4 @@ export function getPublicKeyFromToken(token: string | null): string | null {
     console.error("Error decoding JWT token:", error);
     return null;
   }
-} 
+}

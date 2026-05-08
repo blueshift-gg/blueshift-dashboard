@@ -29,7 +29,7 @@ export default function PathDetailHeader({
   const completedSteps = getPathCompletedSteps(
     steps,
     courseProgress,
-    challengeStatuses
+    challengeStatuses,
   );
   const totalSteps = steps.length;
 
@@ -37,7 +37,7 @@ export default function PathDetailHeader({
     <div
       className={classNames(
         "max-w-app mx-auto w-full relative",
-        showBorder && "border-x border-border-light"
+        showBorder && "border-x border-border-light",
       )}
     >
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-dvw h-px bg-border-light"></div>

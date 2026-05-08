@@ -95,7 +95,7 @@ type V1PersistentStore = Omit<PersistentStore, "selectedLanguages"> & {
 
 const migrate = (
   persistedState: unknown,
-  version: number
+  version: number,
 ): Partial<PersistentStore> => {
   if (version === 0) {
     const oldState = persistedState as V0PersistentStore;
@@ -117,13 +117,13 @@ const migrate = (
     return { ...rest, challengeStatuses: newChallengeStatuses };
   }
 
-    if (version === 1) {
+  if (version === 1) {
     const oldState = persistedState as V1PersistentStore;
     // Migrate any "Research" language filters to "General"
     const migratedLanguages = oldState.selectedLanguages
       .map((lang) => (lang === "Research" ? "General" : lang))
       .filter((lang): lang is CourseLanguages =>
-        Object.keys(courseLanguages).includes(lang as string)
+        Object.keys(courseLanguages).includes(lang as string),
       );
 
     return {
@@ -199,7 +199,7 @@ export const usePersistentStore = create<PersistentStore>()(
       toggleChallengeStatus: (status) =>
         set((state) => ({
           selectedChallengeStatus: state.selectedChallengeStatus.includes(
-            status
+            status,
           )
             ? state.selectedChallengeStatus.filter((s) => s !== status)
             : [...state.selectedChallengeStatus, status],
@@ -234,7 +234,7 @@ export const usePersistentStore = create<PersistentStore>()(
       claimChallenges: (slugs) =>
         set((state) => {
           const statusesToUpdate = Object.fromEntries(
-            slugs.map((slug) => [slug, "claimed" as const])
+            slugs.map((slug) => [slug, "claimed" as const]),
           );
           return {
             challengeStatuses: {
@@ -259,7 +259,7 @@ export const usePersistentStore = create<PersistentStore>()(
               }
               return acc;
             },
-            {} as Record<string, string>
+            {} as Record<string, string>,
           ),
         })),
     }),
@@ -270,6 +270,6 @@ export const usePersistentStore = create<PersistentStore>()(
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },
-    }
-  )
+    },
+  ),
 );

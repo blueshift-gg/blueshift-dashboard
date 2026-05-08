@@ -29,7 +29,7 @@ type PathStepsListProps = {
 
 const chunk = <T,>(arr: T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
-    arr.slice(i * size, i * size + size)
+    arr.slice(i * size, i * size + size),
   );
 
 export default function PathStepsList({
@@ -63,7 +63,7 @@ export default function PathStepsList({
   // Get current lesson slug for a course
   const getCurrentLessonSlug = (
     courseSlug: string,
-    course: CourseMetadata
+    course: CourseMetadata,
   ): string | undefined => {
     const progress = courseProgress[courseSlug] || 0;
     if (progress === 0 && course.lessons?.length > 0) {
@@ -124,7 +124,7 @@ export default function PathStepsList({
           description={t(`courses.${step.slug}.description`)}
           className={classNames(
             "w-full aspect-4/5 lg:aspect-square xl:aspect-5/6",
-            isComplete && "opacity-40"
+            isComplete && "opacity-40",
           )}
         />
       );
@@ -140,7 +140,7 @@ export default function PathStepsList({
           setSelectedChallenge={setSelectedChallenge}
           className={classNames(
             "max-w-none! aspect-4/5 lg:aspect-square xl:aspect-5/6 h-full",
-            isComplete && "opacity-40"
+            isComplete && "opacity-40",
           )}
           hrefOverride={`${pathBase}/challenges/${challenge.slug}`}
         />
@@ -189,7 +189,7 @@ export default function PathStepsList({
               className={classNames(
                 "flex flex-col w-full items-center",
                 !isMobile && "flex-row", // md+ use row
-                isReverseRow && "flex-row-reverse"
+                isReverseRow && "flex-row-reverse",
               )}
             >
               {rowSteps.map((step, stepIndex) => {
@@ -210,7 +210,7 @@ export default function PathStepsList({
                     <div
                       className={classNames(
                         "flex flex-col items-center shrink-0 relative",
-                        isMobile ? "w-full aspect-square" : "aspect-auto"
+                        isMobile ? "w-full aspect-square" : "aspect-auto",
                       )}
                       style={widthStyle}
                     >

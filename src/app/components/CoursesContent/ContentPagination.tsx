@@ -68,7 +68,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
   return (
     <div
       className={classNames(
-        "w-[calc(100dvw-2rem)] md:max-w-[350px] xl:w-full z-30 xl:p-5 col-span-3 xl:col-span-3 bottom-8 !fixed left-1/2 -translate-x-1/2 xl:bottom-0 xl:!relative"
+        "w-[calc(100dvw-2rem)] md:max-w-[350px] xl:w-full z-30 xl:p-5 col-span-3 xl:col-span-3 bottom-8 !fixed left-1/2 -translate-x-1/2 xl:bottom-0 xl:!relative",
       )}
     >
       <motion.div
@@ -76,7 +76,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
         className={classNames(
           "bg-card-solid/50 backdrop-blur-xl border border-border flex flex-col gap-y-4 py-4 relative xl:!sticky xl:top-[calc(78px+1rem)]",
           className,
-          !marketingBannerViewed && "top-[calc(128px+1rem)]!"
+          !marketingBannerViewed && "top-[calc(128px+1rem)]!",
         )}
       >
         <CrosshairCorners
@@ -93,13 +93,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   router.push(
                     getCourseLessonHref(
                       props.course.lessons[props.currentLesson - 2].slug,
-                      props.course.slug
-                    )
+                      props.course.slug,
+                    ),
                   );
                 }}
                 disabled={props.currentLesson === 1}
                 className={classNames(
-                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                 )}
               >
                 <Icon name="ArrowLeft" />
@@ -108,7 +108,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 {t(
                   `courses.${props.course.slug}.lessons.${
                     props.course.lessons[props.currentLesson - 1].slug
-                  }.title`
+                  }.title`,
                 )}
               </span>
               <button
@@ -116,13 +116,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   router.push(
                     getCourseLessonHref(
                       props.course.lessons[props.currentLesson].slug,
-                      props.course.slug
-                    )
+                      props.course.slug,
+                    ),
                   );
                 }}
                 disabled={props.currentLesson === props.course.lessons.length}
                 className={classNames(
-                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                 )}
               >
                 <Icon name="ArrowRight" />
@@ -146,7 +146,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                             isActive,
                           "text-shade-tertiary hover:!text-shade-primary":
                             !isActive,
-                        }
+                        },
                       )}
                     >
                       <div className="flex items-center max-w-[90%]">
@@ -167,11 +167,11 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         <span
                           className={classNames(
                             "font-medium truncate transition text-sm font-mono",
-                            isActive && "pl-1"
+                            isActive && "pl-1",
                           )}
                         >
                           {t(
-                            `courses.${props.course.slug}.lessons.${lesson.slug}.title`
+                            `courses.${props.course.slug}.lessons.${lesson.slug}.title`,
                           )}
                         </span>
                       </div>
@@ -185,14 +185,14 @@ export default function ContentPagination(props: ContentPaginationProps) {
                   >
                     <div
                       className={classNames(
-                        "w-[18px] h-[18px] relative flex items-center justify-center border-2 border-mute"
+                        "w-[18px] h-[18px] relative flex items-center justify-center border-2 border-mute",
                       )}
                     ></div>
                     <div className="flex items-center gap-x-2">
                       <Icon
                         name={
                           ["completed", "claimed"].includes(
-                            challengeStatuses[props.course.challenge]
+                            challengeStatuses[props.course.challenge],
                           )
                             ? "SuccessCircle"
                             : "Challenge"
@@ -200,7 +200,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         size={16 as 14}
                         className={classNames("-ml-2 text-brand-tertiary", {
                           "!text-success": ["completed", "claimed"].includes(
-                            challengeStatuses[props.course.challenge]
+                            challengeStatuses[props.course.challenge],
                           ),
                         })}
                       />
@@ -209,13 +209,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                           "text-sm font-medium text-brand-tertiary",
                           {
                             "!text-success": ["completed", "claimed"].includes(
-                              challengeStatuses[props.course.challenge]
+                              challengeStatuses[props.course.challenge],
                             ),
-                          }
+                          },
                         )}
                       >
                         {["completed", "claimed"].includes(
-                          challengeStatuses[props.course.challenge]
+                          challengeStatuses[props.course.challenge],
                         )
                           ? t("lessons.challenge_completed")
                           : t("lessons.challenge_incomplete")}
@@ -242,7 +242,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
             ];
 
             const currentPageIndex = allChallengePages.findIndex(
-              (p) => p.slug === currentPageSlug
+              (p) => p.slug === currentPageSlug,
             );
 
             if (currentPageIndex === -1) return null;
@@ -264,7 +264,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     onClick={() => prevPage && router.push(getLink(prevPage))}
                     disabled={!prevPage}
                     className={classNames(
-                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                     )}
                   >
                     <Icon name="ArrowLeft" />
@@ -274,7 +274,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     onClick={() => nextPage && router.push(getLink(nextPage))}
                     disabled={!nextPage}
                     className={classNames(
-                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      "text-shade-tertiary hover:bg-brand-primary/5 transition p-1.5 hover:text-brand-primary cursor-pointer disabled:opacity-40 disabled:cursor-default",
                     )}
                   >
                     <Icon name="ArrowRight" />
@@ -300,7 +300,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                                 isActive,
                               "text-shade-tertiary hover:!text-shade-primary":
                                 !isActive,
-                            }
+                            },
                           )}
                         >
                           <div className="flex items-center max-w-[90%]">
@@ -324,7 +324,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                             <span
                               className={classNames(
                                 "font-medium truncate transition text-sm font-mono",
-                                isActive && "pl-1"
+                                isActive && "pl-1",
                               )}
                             >
                               {page.title}

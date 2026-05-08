@@ -54,9 +54,9 @@ export function useChallengeVerifier({
 
   const initialRequirements: ChallengeRequirement[] = useMemo(() => {
     return challenge.requirements.map((req) => ({
-          ...req,
-          status: "incomplete" as const,
-        }));
+      ...req,
+      status: "incomplete" as const,
+    }));
   }, [challenge]);
 
   const [requirements, setRequirements] =
@@ -134,9 +134,9 @@ export function useChallengeVerifier({
           }
           setCertificate(challenge.slug, result.certificate);
         } else {
-            
           if (response.status === 401) {
-            const errorMessage = "Session expired. Please reconnect your wallet and try again.";
+            const errorMessage =
+              "Session expired. Please reconnect your wallet and try again.";
             console.error("Session expired:", errorMessage);
             setError(errorMessage);
             setVerificationData(null);
@@ -262,12 +262,7 @@ export function useChallengeVerifier({
         { "Content-Type": "application/json" },
       );
     },
-    [
-      challenge,
-      verificationEndpoint,
-      handleVerificationRequest,
-      setError,
-    ],
+    [challenge, verificationEndpoint, handleVerificationRequest, setError],
   );
 
   const completedRequirementsCount = useMemo(() => {

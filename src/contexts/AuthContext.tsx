@@ -255,7 +255,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     doSignIn,
     clearAuthToken,
     dispatch,
-    
   ]);
 
   // --- Context Value ---

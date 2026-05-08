@@ -19,7 +19,11 @@ interface PathContentProviderProps extends PathContentContextValue {
   children: ReactNode;
 }
 
-export function PathContentProvider({ pathSlug, steps, children }: PathContentProviderProps) {
+export function PathContentProvider({
+  pathSlug,
+  steps,
+  children,
+}: PathContentProviderProps) {
   return (
     <PathContentContext.Provider value={{ pathSlug, steps }}>
       {children}

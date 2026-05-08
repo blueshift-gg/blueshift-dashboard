@@ -91,12 +91,12 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
   try {
     Lesson = await getCompiledMdx(
-      `courses/${courseName}/${lessonName}/${locale}.mdx`
+      `courses/${courseName}/${lessonName}/${locale}.mdx`,
     );
   } catch {
     try {
       Lesson = await getCompiledMdx(
-        `courses/${courseName}/${lessonName}/en.mdx`
+        `courses/${courseName}/${lessonName}/en.mdx`,
       );
       lessonLocale = "en";
     } catch {
@@ -129,25 +129,25 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
         if (collectionSize === null) {
           console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`
+            `Failed to decode num_minted for collection ${collectionMintAddress}`,
           );
         }
       } else {
         console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`
+          `Failed to fetch account info for ${collectionMintAddress}`,
         );
       }
     } catch (error) {
       console.error(
         `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error
+        error,
       );
     }
   }
 
   const allLessons = courseMetadata.lessons;
   const currentLessonIndex = allLessons.findIndex(
-    (lesson) => lesson.slug === lessonName
+    (lesson) => lesson.slug === lessonName,
   );
   const nextLesson = allLessons[currentLessonIndex + 1];
   const nextLessonSlug = nextLesson ? nextLesson.slug : "";
@@ -188,7 +188,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
 
   // Generate LearningResource JSON-LD Schema for the individual lesson
   const lessonTitle = t(
-    `courses.${courseMetadata.slug}.lessons.${lessonName}.title`
+    `courses.${courseMetadata.slug}.lessons.${lessonName}.title`,
   );
   const learningResourceSchema = {
     "@context": "https://schema.org",
@@ -262,50 +262,50 @@ export default async function LessonPage({ params }: LessonPageProps) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
       />
       <div className="flex flex-col w-full border-b border-b-border">
-      <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
-        <Breadcrumbs
-          items={[
-            { label: t("header.courses"), href: "/courses" },
-            { label: coursePageTitle },
-          ]}
-        />
-        <PageHero
-          badge={courseMetadata.language}
-          title={coursePageTitle}
-          badgeColor={courseMetadata.language}
-          collectionSize={collectionSize}
-          collectionMintAddress={collectionMintAddress}
-          showBorder={false}
-        />
-      </div>
-
-      <div className="max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full app:border-x border-border-light">
-        <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
-          <ContentPagination
-            type="course"
-            course={courseMetadata}
-            currentLesson={currentLessonIndex + 1}
+        <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
+          <Breadcrumbs
+            items={[
+              { label: t("header.courses"), href: "/courses" },
+              { label: coursePageTitle },
+            ]}
           />
-          <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6">
-            <MdxLayout>
-              <ContentFallbackNotice
-                locale={locale}
-                originalLocale={lessonLocale}
-              />
-              {Lesson}
-            </MdxLayout>
+          <PageHero
+            badge={courseMetadata.language}
+            title={coursePageTitle}
+            badgeColor={courseMetadata.language}
+            collectionSize={collectionSize}
+            collectionMintAddress={collectionMintAddress}
+            showBorder={false}
+          />
+        </div>
 
-            <CourseFooter
-              nextLesson={!!nextLesson}
-              courseMetadata={courseMetadata}
-              nextLessonSlug={nextLessonSlug}
-              challenge={challenge!}
+        <div className="max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full app:border-x border-border-light">
+          <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
+            <ContentPagination
+              type="course"
+              course={courseMetadata}
+              currentLesson={currentLessonIndex + 1}
             />
+            <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6">
+              <MdxLayout>
+                <ContentFallbackNotice
+                  locale={locale}
+                  originalLocale={lessonLocale}
+                />
+                {Lesson}
+              </MdxLayout>
+
+              <CourseFooter
+                nextLesson={!!nextLesson}
+                courseMetadata={courseMetadata}
+                nextLessonSlug={nextLessonSlug}
+                challenge={challenge!}
+              />
+            </div>
+            <TableOfContents />
           </div>
-          <TableOfContents />
         </div>
       </div>
-    </div>
     </>
   );
 }

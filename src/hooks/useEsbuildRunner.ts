@@ -78,10 +78,12 @@ export interface UseEsbuildRunnerProps {
   onRpcCallInterceptedForDecision?: (
     rpcCallData: InterceptedRpcCallData,
   ) => Promise<FetchDecision>;
-  onWsSendInterceptedForDecision?: ( // New prop for ws.send()
+  onWsSendInterceptedForDecision?: (
+    // New prop for ws.send()
     wsSendData: InterceptedWsSendData,
   ) => Promise<WsSendDecision>;
-  onWsReceiveInterceptedForDecision?: ( // New prop for messages from server
+  onWsReceiveInterceptedForDecision?: (
+    // New prop for messages from server
     wsReceiveData: InterceptedWsReceiveData,
   ) => Promise<WsReceiveDecision>;
 }
@@ -574,62 +576,95 @@ self.WebSocket = WebSocketProxy;
                 }
                 break;
 
-                case "INTERCEPTED_WS_SEND_AWAIT_DECISION":
+              case "INTERCEPTED_WS_SEND_AWAIT_DECISION":
                 const wsSendData = message.payload as InterceptedWsSendData;
                 if (props?.onWsSendInterceptedForDecision) {
-                  props.onWsSendInterceptedForDecision(wsSendData)
-                    .then(decision => {
-                      if (workerRef.current) { // Check if worker is still active
+                  props
+                    .onWsSendInterceptedForDecision(wsSendData)
+                    .then((decision) => {
+                      if (workerRef.current) {
+                        // Check if worker is still active
                         workerRef.current.postMessage({
                           type: "WS_SEND_DECISION_RESPONSE",
-                          payload: { requestId: wsSendData.wsRequestId, ...decision },
+                          payload: {
+                            requestId: wsSendData.wsRequestId,
+                            ...decision,
+                          },
                         });
                       }
                     })
-                    .catch(err => {
-                      console.error("Error in onWsSendInterceptedForDecision callback:", err);
-                      if (workerRef.current) { // Default to PROCEED on error
+                    .catch((err) => {
+                      console.error(
+                        "Error in onWsSendInterceptedForDecision callback:",
+                        err,
+                      );
+                      if (workerRef.current) {
+                        // Default to PROCEED on error
                         workerRef.current.postMessage({
                           type: "WS_SEND_DECISION_RESPONSE",
-                          payload: { requestId: wsSendData.wsRequestId, decision: "PROCEED" },
+                          payload: {
+                            requestId: wsSendData.wsRequestId,
+                            decision: "PROCEED",
+                          },
                         });
                       }
                     });
-                } else { // No callback, default to PROCEED
+                } else {
+                  // No callback, default to PROCEED
                   if (workerRef.current) {
                     workerRef.current.postMessage({
                       type: "WS_SEND_DECISION_RESPONSE",
-                      payload: { requestId: wsSendData.wsRequestId, decision: "PROCEED" },
+                      payload: {
+                        requestId: wsSendData.wsRequestId,
+                        decision: "PROCEED",
+                      },
                     });
                   }
                 }
                 break;
               case "INTERCEPTED_WS_RECEIVE_AWAIT_DECISION":
-                const wsReceiveData = message.payload as InterceptedWsReceiveData;
+                const wsReceiveData =
+                  message.payload as InterceptedWsReceiveData;
                 if (props?.onWsReceiveInterceptedForDecision) {
-                  props.onWsReceiveInterceptedForDecision(wsReceiveData)
-                    .then(decision => {
-                      if (workerRef.current) { // Check if worker is still active
+                  props
+                    .onWsReceiveInterceptedForDecision(wsReceiveData)
+                    .then((decision) => {
+                      if (workerRef.current) {
+                        // Check if worker is still active
                         workerRef.current.postMessage({
                           type: "WS_RECEIVE_DECISION_RESPONSE",
-                          payload: { requestId: wsReceiveData.wsRequestId, ...decision },
+                          payload: {
+                            requestId: wsReceiveData.wsRequestId,
+                            ...decision,
+                          },
                         });
                       }
                     })
-                    .catch(err => {
-                      console.error("Error in onWsReceiveInterceptedForDecision callback:", err);
-                      if (workerRef.current) { // Default to PROCEED on error
+                    .catch((err) => {
+                      console.error(
+                        "Error in onWsReceiveInterceptedForDecision callback:",
+                        err,
+                      );
+                      if (workerRef.current) {
+                        // Default to PROCEED on error
                         workerRef.current.postMessage({
                           type: "WS_RECEIVE_DECISION_RESPONSE",
-                          payload: { requestId: wsReceiveData.wsRequestId, decision: "PROCEED" },
+                          payload: {
+                            requestId: wsReceiveData.wsRequestId,
+                            decision: "PROCEED",
+                          },
                         });
                       }
                     });
-                } else { // No callback, default to PROCEED
+                } else {
+                  // No callback, default to PROCEED
                   if (workerRef.current) {
                     workerRef.current.postMessage({
                       type: "WS_RECEIVE_DECISION_RESPONSE",
-                      payload: { requestId: wsReceiveData.wsRequestId, decision: "PROCEED" },
+                      payload: {
+                        requestId: wsReceiveData.wsRequestId,
+                        decision: "PROCEED",
+                      },
                     });
                   }
                 }

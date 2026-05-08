@@ -44,7 +44,7 @@ function buildPathHref(step: PathNavigationStep, pathSlug: string) {
 function deriveBreadcrumbItems(
   items: BreadcrumbItem[],
   pathSlug: string | null,
-  t: ReturnType<typeof useTranslations>
+  t: ReturnType<typeof useTranslations>,
 ) {
   if (!pathSlug) return items;
 
@@ -53,7 +53,7 @@ function deriveBreadcrumbItems(
     (item) =>
       !scopedTexts.includes(item.label) &&
       item.href !== "/courses" &&
-      item.href !== "/challenges"
+      item.href !== "/challenges",
   );
 
   let pathTitle = pathSlug;
@@ -77,7 +77,7 @@ function deriveBreadcrumbItems(
       item.label === pathsLabel ||
       item.href === "/paths" ||
       item.href?.startsWith(`/paths/${pathSlug}`) ||
-      item.label === pathTitle
+      item.label === pathTitle,
   );
 
   return alreadyScoped ? sanitizedItems : [...pathItems, ...sanitizedItems];
@@ -86,7 +86,7 @@ function deriveBreadcrumbItems(
 function derivePathPagination(
   pathname: string,
   pathSlug: string | null,
-  pathSteps: PathNavigationStep[] | undefined
+  pathSteps: PathNavigationStep[] | undefined,
 ) {
   if (!pathSlug || !pathSteps?.length) return null;
 
@@ -152,7 +152,7 @@ export default function Breadcrumbs({
   const pathPagination = derivePathPagination(
     pathname,
     resolvedPathSlug,
-    pathSteps
+    pathSteps,
   );
 
   const shouldShowPagination = hasPagination || Boolean(pathPagination);
@@ -187,7 +187,7 @@ export default function Breadcrumbs({
     <nav
       className={classNames(
         "max-w-app relative mx-auto w-full px-5 py-3 flex items-center gap-2 text-sm font-medium text-shade-tertiary",
-        className
+        className,
       )}
     >
       <div className="absolute inset-0 -z-1 w-dvw left-1/2 -translate-x-1/2 border-b border-border-light bg-card-solid"></div>

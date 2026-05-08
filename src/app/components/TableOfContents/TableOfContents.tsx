@@ -130,7 +130,7 @@ export default function TableOfContents() {
       {
         rootMargin: "-20% 0px -60% 0px",
         threshold: [0, 0.1, 0.5, 1],
-      }
+      },
     );
 
     // Observe all h2 and h3 elements
@@ -152,7 +152,7 @@ export default function TableOfContents() {
       transition={{ duration: 0.4, ease: anticipate }}
       className={classNames(
         "font-content order-1 lg:order-2 h-max lg:sticky top-[78px] md:col-span-2 lg:col-span-3 xl:col-span-3 flex flex-col gap-y-6 py-6 px-5 lg:py-6 xl:px-6",
-        !marketingBannerViewed && "top-[128px]!"
+        !marketingBannerViewed && "top-[128px]!",
       )}
     >
       <div className="flex items-center space-x-2">
@@ -168,7 +168,7 @@ export default function TableOfContents() {
           {sections.map((section) => {
             const isSectionActive = activeSection === section.id;
             const containsActiveSubsection = section.subsections.some(
-              (sub) => sub.id === activeSection
+              (sub) => sub.id === activeSection,
             );
             const shouldCollapse = sections.length > 5;
             const isExpandedDerived =
@@ -209,7 +209,7 @@ export default function TableOfContents() {
                   {shouldShowParentIndicator && (
                     <motion.div
                       className={classNames(
-                        "absolute -left-[calc(24px-2.5px)] w-[1.5px] bg-brand-secondary"
+                        "absolute -left-[calc(24px-2.5px)] w-[1.5px] bg-brand-secondary",
                       )}
                       style={{ height: "24px" }}
                       layoutId={`article`}
@@ -310,7 +310,7 @@ export default function TableOfContents() {
           })}
         </div>
       </div>
-      {githubUrl ?
+      {githubUrl ? (
         <a
           href={githubUrl}
           target="_blank"
@@ -322,7 +322,7 @@ export default function TableOfContents() {
             {t("contents.view_source")}
           </span>
         </a>
-      : null}
+      ) : null}
     </motion.div>
   );
 }

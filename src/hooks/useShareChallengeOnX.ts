@@ -17,7 +17,7 @@ export function useShareChallengeOnX(challenge: ChallengeMetadata): string {
 
   const tweetText = t("ChallengePage.challenge_share_tweet", {
     challengeTitle,
-    challengeUrl
+    challengeUrl,
   });
 
   return `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;

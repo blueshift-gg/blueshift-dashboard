@@ -43,9 +43,7 @@ export const challenges: ChallengeMetadata[] = [
     unitName: "Anchor Flash Loan",
     apiPath: "/v1/verify/anchor/flash-loan",
     pages: [{ slug: "borrow" }, { slug: "repay" }],
-    requirements: [
-      { instructionKey: "flash_loan" },
-    ],
+    requirements: [{ instructionKey: "flash_loan" }],
     collectionMintAddress: "4HJoxVtwKsLNKx3QsxG34FW39ENQZSZHmXi7wsuEVrAy",
   },
   {
@@ -130,9 +128,7 @@ export const challenges: ChallengeMetadata[] = [
     unitName: "Pinocchio Flash Loan",
     apiPath: "/v1/verify/pinocchio/flash-loan",
     pages: [{ slug: "borrow" }, { slug: "repay" }],
-    requirements: [
-      { instructionKey: "flash_loan" },
-    ],
+    requirements: [{ instructionKey: "flash_loan" }],
     collectionMintAddress: "9L975Y5Y6Gub2RHNFECyP3cJh3aiE1eVgo2A6mVV8YQu",
   },
   {
@@ -178,7 +174,6 @@ export const challenges: ChallengeMetadata[] = [
       { instructionKey: "slippage" },
       { instructionKey: "slippage_failure" },
       { instructionKey: "slippage_token2022" },
-
     ],
     collectionMintAddress: "EEzodaKLa7KKbWdUAtjTJxjQXgrfQkkDEnQWzGTYFBBf",
   },
@@ -204,15 +199,8 @@ export const challenges: ChallengeMetadata[] = [
     isFeatured: true,
     unitName: "Pinocchio Quantum Vault",
     apiPath: "/v1/verify/pinocchio/quantum-vault",
-    pages: [
-      { slug: "open" },
-      { slug: "split" },
-      { slug: "close" },
-    ],
-    requirements: [
-      { instructionKey: "open" },
-      { instructionKey: "close" },
-    ],
+    pages: [{ slug: "open" }, { slug: "split" }, { slug: "close" }],
+    requirements: [{ instructionKey: "open" }, { instructionKey: "close" }],
     collectionMintAddress: "HEZn1PnhPBejGJQS7wtNAeBv73ExhqDhxYMxdRs8AM8W",
   },
 ];

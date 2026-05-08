@@ -37,7 +37,7 @@ export default function Checkbox({
                 theme === "primary",
               "checked:border-shade-secondary indeterminate:border-shade-secondary focus-visible:outline-secondary":
                 theme === "secondary",
-            }
+            },
           )}
         />
         <div
@@ -46,7 +46,7 @@ export default function Checkbox({
             {
               "bg-brand-primary": theme === "primary",
               "bg-shade-secondary": theme === "secondary",
-            }
+            },
           )}
         ></div>
       </div>

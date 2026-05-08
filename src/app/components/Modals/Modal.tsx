@@ -51,7 +51,7 @@ export default function Modal({
           className={classNames(
             "fixed inset-0 h-screen w-full z-30 items-center justify-center flex flex-col",
             className,
-            isOpen && "no-scroll"
+            isOpen && "no-scroll",
           )}
         >
           {showBackdrop && (
@@ -74,7 +74,7 @@ export default function Modal({
               cardClassName,
               "max-w-[calc(100dvw-16px)]",
               isResponsive &&
-                "absolute h-max left-1/2 -translate-x-1/2 sm:translate-x-0 sm:left-auto sm:top-auto !top-20 min-w-[calc(100dvw-16px)] sm:min-w-min"
+                "absolute h-max left-1/2 -translate-x-1/2 sm:translate-x-0 sm:left-auto sm:top-auto !top-20 min-w-[calc(100dvw-16px)] sm:min-w-min",
             )}
             style={{
               width: width ? `${width}px` : "auto",

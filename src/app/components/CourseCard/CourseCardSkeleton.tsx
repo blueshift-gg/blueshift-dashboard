@@ -6,7 +6,7 @@ export default function CourseCardSkeleton() {
       <div className="w-full bg-background/50 aspect-2/1 h-full max-h-[200px] group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
       <div
         className={classNames(
-          "flex flex-col gap-y-8 flex-grow justify-between px-4 py-5"
+          "flex flex-col gap-y-8 flex-grow justify-between px-4 py-5",
         )}
       >
         <div className="flex flex-col gap-y-2 min-h-[125px] sm:min-h-[100px]">

@@ -25,7 +25,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
     compiled.mdast || (isDevelopment ? mdxParse(compiled.raw) : null);
   if (!mdast) {
     throw new Error(
-      "MDX AST is missing and runtime parsing is not available in production"
+      "MDX AST is missing and runtime parsing is not available in production",
     );
   }
 

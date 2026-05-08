@@ -67,7 +67,9 @@ const REPORT_FILE = path.join(REPORT_DIR, "mdx-image-banner-map.json");
 
 async function listDirectories(dirPath: string): Promise<string[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  return entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
 }
 
 async function walkMdxFiles(dirPath: string): Promise<string[]> {
@@ -119,8 +121,7 @@ function extractImages(content: string): {
     /<(?:img|Image)\b[^>]*\b(src|source)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{`([^`]+)`\}|\{['"]([^'"]+)['"]\})/g;
   for (const match of content.matchAll(jsxImageRegex)) {
     const attribute = match[1] as "src" | "source";
-    const imagePath =
-      match[2] || match[3] || match[4] || match[5] || undefined;
+    const imagePath = match[2] || match[3] || match[4] || match[5] || undefined;
 
     if (imagePath) {
       images.push({
@@ -168,8 +169,8 @@ async function main() {
   const bannerFiles = await fs.readdir(COURSE_BANNERS_DIR);
   const bannerSlugs = new Set(
     bannerFiles
-      .filter(file => file.endsWith(".png"))
-      .map(file => file.replace(/\.png$/i, "")),
+      .filter((file) => file.endsWith(".png"))
+      .map((file) => file.replace(/\.png$/i, "")),
   );
 
   const courseBannerMap: Record<string, string> = {};
@@ -206,13 +207,13 @@ async function main() {
       ? new Set([expectedBanner, expectedBanner.replace(/^\//, "")])
       : null;
 
-    const reportImages = images.map(image => {
+    const reportImages = images.map((image) => {
       const normalizedPath = normalizeImagePath(image.path);
       const isCourseBanner =
         normalizedPath.includes("/graphics/course-banners/") ||
         normalizedPath.includes("graphics/course-banners/");
       const matchesExpected = expectedBanner
-        ? normalizedExpectedVariants?.has(normalizedPath) ?? false
+        ? (normalizedExpectedVariants?.has(normalizedPath) ?? false)
         : null;
 
       if (courseSlug && isCourseBanner) {
@@ -243,8 +244,8 @@ async function main() {
       };
 
       const bannerPaths = reportImages
-        .filter(image => image.isCourseBanner)
-        .map(image => normalizeImagePath(image.path));
+        .filter((image) => image.isCourseBanner)
+        .map((image) => normalizeImagePath(image.path));
 
       for (const bannerPath of bannerPaths) {
         if (!usage.foundBanners.includes(bannerPath)) {
@@ -273,10 +274,12 @@ async function main() {
     });
   }
 
-  const coursesWithoutBannerUsage = Object.keys(courseBannerMap).filter(slug => {
-    const usage = courseBannerUsage[slug];
-    return !usage || usage.foundBanners.length === 0;
-  });
+  const coursesWithoutBannerUsage = Object.keys(courseBannerMap).filter(
+    (slug) => {
+      const usage = courseBannerUsage[slug];
+      return !usage || usage.foundBanners.length === 0;
+    },
+  );
 
   const report: Report = {
     summary: {
@@ -309,7 +312,7 @@ async function main() {
   console.log(`Report written to: ${REPORT_FILE}`);
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error("Error generating MDX image banner map:", error);
   process.exit(1);
 });

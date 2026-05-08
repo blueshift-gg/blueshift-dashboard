@@ -27,7 +27,7 @@ export async function getAllCourses(): Promise<CourseMetadata[]> {
 }
 
 export async function getCourseLessons(
-  courseSlug: string
+  courseSlug: string,
 ): Promise<LessonMetadata[]> {
   const course = await getCourse(courseSlug);
 
@@ -39,10 +39,10 @@ export async function getCourseLessons(
 }
 
 export async function getChallenge(
-  challengeSlug: string | undefined | null
+  challengeSlug: string | undefined | null,
 ): Promise<ChallengeMetadata | undefined> {
   const challenge = challenges.find(
-    (challenge) => challenge.slug === challengeSlug
+    (challenge) => challenge.slug === challengeSlug,
   );
 
   return structuredClone(challenge);
@@ -85,14 +85,14 @@ export async function getAllPaths(): Promise<PathMetadata[]> {
             ...step,
             metadata,
           };
-        })
+        }),
       );
 
       return {
         ...path,
         steps: stepsWithMetadata,
       };
-    })
+    }),
   );
 
   return enrichedPaths;
@@ -127,7 +127,7 @@ export async function getPathStepsWithMetadata(pathSlug: string): Promise<{
         ...step,
         metadata,
       };
-    })
+    }),
   );
 
   return {

@@ -37,19 +37,19 @@ export default async function ChallengePageContainer({
   let challengeLocale = locale;
   if (pageSlug) {
     const pageExists = challengeMetadata.pages?.some(
-      (p) => p.slug === pageSlug
+      (p) => p.slug === pageSlug,
     );
     if (!pageExists) {
       notFound();
     }
     try {
       MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`
+        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`,
       );
     } catch (error) {
       try {
         MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`
+          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`,
         );
         challengeLocale = "en";
       } catch (error) {
@@ -59,12 +59,12 @@ export default async function ChallengePageContainer({
   } else {
     try {
       MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/challenge.mdx`
+        `challenges/${challengeSlug}/${locale}/challenge.mdx`,
       );
     } catch (error) {
       try {
         MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/challenge.mdx`
+          `challenges/${challengeSlug}/en/challenge.mdx`,
         );
         challengeLocale = "en";
       } catch (error) {
@@ -89,18 +89,18 @@ export default async function ChallengePageContainer({
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
           console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`
+            `Failed to decode num_minted for collection ${collectionMintAddress}`,
           );
         }
       } else {
         console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`
+          `Failed to fetch account info for ${collectionMintAddress}`,
         );
       }
     } catch (error) {
       console.error(
         `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error
+        error,
       );
     }
   }
@@ -108,7 +108,7 @@ export default async function ChallengePageContainer({
   let nextPage;
   if (pageSlug) {
     const currentPageIndex = challengeMetadata.pages?.findIndex(
-      (p) => p.slug === pageSlug
+      (p) => p.slug === pageSlug,
     );
     nextPage =
       currentPageIndex !== undefined &&

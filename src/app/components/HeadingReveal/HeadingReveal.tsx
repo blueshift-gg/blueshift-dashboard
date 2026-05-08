@@ -37,7 +37,7 @@ export default function HeadingReveal({
       containerRef.current.style.visibility = "visible";
 
       const { words, chars } = splitText(
-        containerRef.current.querySelector(headingLevel)!
+        containerRef.current.querySelector(headingLevel)!,
       );
 
       // Animate the words in the h1
@@ -65,7 +65,7 @@ export default function HeadingReveal({
           ease: anticipate,
           duration: speed,
           delay: stagger(speed / 2, { startDelay: baseDelay }),
-        }
+        },
       );
     });
   }, []);

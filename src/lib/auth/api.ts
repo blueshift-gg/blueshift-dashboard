@@ -74,4 +74,4 @@ export async function performSignIn(
     // Fallback for any other unexpected error
     throw new UnknownAuthError();
   }
-} 
+}

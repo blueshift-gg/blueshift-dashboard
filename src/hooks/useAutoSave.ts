@@ -16,24 +16,25 @@ const LOADED_FROM_SAVE_DISPLAY_DURATION = 5000; // 5 seconds
 
 /**
  * Custom hook for auto-saving challenge code with visual feedback
- * 
+ *
  * @param challengeSlug - Unique identifier for the challenge
  * @param code - Current code content to auto-save
  * @param delay - Debounce delay in milliseconds (default: 1000ms)
  * @returns Object with save state, indicators, and control functions
  */
-export function useAutoSave({ 
-  challengeSlug, 
-  code, 
-  delay = DEFAULT_DEBOUNCE_DELAY 
+export function useAutoSave({
+  challengeSlug,
+  code,
+  delay = DEFAULT_DEBOUNCE_DELAY,
 }: UseAutoSaveProps) {
-  const { autoSavedCode, setAutoSavedCode, clearAutoSavedCode } = usePersistentStore();
-  
-     // Refs for timeout management
+  const { autoSavedCode, setAutoSavedCode, clearAutoSavedCode } =
+    usePersistentStore();
+
+  // Refs for timeout management
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const justSavedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const loadedFromSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
+
   // State management
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [justSaved, setJustSaved] = useState(false);
@@ -58,7 +59,7 @@ export function useAutoSave({
     // Check if code has actually changed from what was last saved
     const currentSavedCode = autoSavedCode[challengeSlug] || "";
     const hasChanged = code !== currentSavedCode && code.trim() !== "";
-    
+
     if (!hasChanged) {
       setSaveState("saved");
       return;
@@ -69,14 +70,14 @@ export function useAutoSave({
     debounceTimeoutRef.current = setTimeout(() => {
       if (code && code.trim() !== "") {
         setSaveState("saving");
-        
+
         try {
           setAutoSavedCode(challengeSlug, code);
-          
+
           // Show success state
           setSaveState("saved");
           setJustSaved(true);
-          
+
           // Clear "just saved" indicator after delay
           if (justSavedTimeoutRef.current) {
             clearTimeout(justSavedTimeoutRef.current);
@@ -84,7 +85,6 @@ export function useAutoSave({
           justSavedTimeoutRef.current = setTimeout(() => {
             setJustSaved(false);
           }, JUST_SAVED_DISPLAY_DURATION);
-          
         } catch (error) {
           console.error("Failed to auto-save code:", error);
           setSaveState("saved"); // Reset to avoid stuck saving state
@@ -98,12 +98,12 @@ export function useAutoSave({
    */
   const markAsLoadedFromAutoSave = useCallback(() => {
     setLoadedFromAutoSave(true);
-    
+
     // Clear existing timeout
     if (loadedFromSaveTimeoutRef.current) {
       clearTimeout(loadedFromSaveTimeoutRef.current);
     }
-    
+
     // Auto-hide the notification after delay
     loadedFromSaveTimeoutRef.current = setTimeout(() => {
       setLoadedFromAutoSave(false);
@@ -129,7 +129,7 @@ export function useAutoSave({
       setSaveState("saved");
       setJustSaved(false);
       setLoadedFromAutoSave(false);
-      
+
       // Clear all timeouts
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
@@ -173,4 +173,4 @@ export function useAutoSave({
     markAsLoadedFromAutoSave,
     clearLoadedFromAutoSave,
   };
-} 
+}

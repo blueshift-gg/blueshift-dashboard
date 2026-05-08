@@ -35,7 +35,7 @@ export interface CompiledMDX {
  * content from the CONTENT R2 bucket once deployed to Cloudflare.
  */
 export async function fetchCompiledContent(
-  relativePath: string
+  relativePath: string,
 ): Promise<CompiledMDX> {
   if (!relativePath) {
     throw new Error("A relative content path is required");
@@ -62,12 +62,12 @@ export async function fetchCompiledContent(
   const { env } = getCloudflareContext();
   const bucket = env?.CONTENT;
   const bucketPrefix = resolveBucketPrefix(
-    (env as { CONTENT_PREFIX?: string } | undefined)?.CONTENT_PREFIX
+    (env as { CONTENT_PREFIX?: string } | undefined)?.CONTENT_PREFIX,
   );
 
   if (!bucket) {
     throw new Error(
-      "CONTENT bucket binding is not available in production environment"
+      "CONTENT bucket binding is not available in production environment",
     );
   }
 
@@ -79,8 +79,8 @@ export async function fetchCompiledContent(
   if (!object) {
     throw new Error(
       `Compiled content file not found in R2: ${key}\n` +
-      `This may indicate the content was not uploaded during deployment. ` +
-      `Verify that the precompilation and R2 upload steps completed successfully.`
+        `This may indicate the content was not uploaded during deployment. ` +
+        `Verify that the precompilation and R2 upload steps completed successfully.`,
     );
   }
 

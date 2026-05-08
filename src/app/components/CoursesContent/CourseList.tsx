@@ -234,13 +234,13 @@ export default function CourseList({
           (progress === totalLessons &&
             !!course.challenge &&
             !["completed", "claimed"].includes(
-              challengeStatuses[course.challenge]
+              challengeStatuses[course.challenge],
             ));
       } else if (activeTab === "completed") {
         const isChallengeComplete =
           !course.challenge ||
           ["completed", "claimed"].includes(
-            challengeStatuses[course.challenge]
+            challengeStatuses[course.challenge],
           );
         matchesTab = progress === totalLessons && isChallengeComplete;
       }
@@ -267,7 +267,7 @@ export default function CourseList({
 
     // Find the lesson with matching number
     const currentLesson = courseLessonData.lessons.find(
-      (lesson) => lesson.number === progress
+      (lesson) => lesson.number === progress,
     );
 
     return currentLesson?.slug || "";
@@ -275,10 +275,7 @@ export default function CourseList({
 
   const dropdownItems = getCourseDropdownItems(isMobile);
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedCourses = useMemo(
     () =>
@@ -297,7 +294,7 @@ export default function CourseList({
       selectedLanguages,
       selectedDifficulties,
       seed,
-    ]
+    ],
   );
 
   // Create tabs array with conditional ordering
@@ -335,7 +332,7 @@ export default function CourseList({
     <div
       className={classNames(
         "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
+        isLoading && "animate-pulse",
       )}
     >
       {/* Get Started */}
@@ -345,7 +342,7 @@ export default function CourseList({
           <div
             ref={carouselRef}
             className={classNames(
-              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
             )}
           >
             {isLoading
@@ -432,7 +429,7 @@ export default function CourseList({
                   (d) =>
                     reverseDifficultyFilterMap[
                       d as keyof typeof reverseDifficultyFilterMap
-                    ]
+                    ],
                 ),
                 ...(activeTab !== "all-courses" ? [activeTab] : []),
               ]}
@@ -450,7 +447,7 @@ export default function CourseList({
         </div>
         <div
           className={classNames(
-            "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+            "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3",
           )}
         >
           {isLoading

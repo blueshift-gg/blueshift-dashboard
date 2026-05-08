@@ -73,7 +73,7 @@ export default function ChallengeTable({
   useEffect(() => {
     if (verificationData) {
       const firstFailedRequirement = requirements.find(
-        (req) => req.status === "failed"
+        (req) => req.status === "failed",
       );
       if (firstFailedRequirement) {
         setSelectedRequirement(firstFailedRequirement);
@@ -81,7 +81,7 @@ export default function ChallengeTable({
 
       // Check if all requirements are successful
       const allRequirementsPassed = requirements.every(
-        (req) => req.status === "passed"
+        (req) => req.status === "passed",
       );
       if (allRequirementsPassed) {
         setTimeout(() => {
@@ -137,7 +137,7 @@ export default function ChallengeTable({
     if (!verificationData) return;
 
     const result = verificationData.results.find(
-      (result) => result.instruction === requirement.instructionKey
+      (result) => result.instruction === requirement.instructionKey,
     );
 
     if (!result) return;
@@ -245,14 +245,14 @@ export default function ChallengeTable({
                   label={t(
                     fromCourse
                       ? "ChallengePage.challenge_completed.view_other_courses"
-                      : "ChallengePage.challenge_completed.view_other_challenges"
+                      : "ChallengePage.challenge_completed.view_other_challenges",
                   )}
                 />
               </Link>
               <div className="relative w-full">
                 <div className="font-mono absolute text-xs text-mute top-1/2 z-10 -translate-y-1/2 left-1/2 -translate-x-1/2 px-4 bg-background">
                   {t(
-                    `ChallengePage.challenge_completed.divider_label`
+                    `ChallengePage.challenge_completed.divider_label`,
                   ).toUpperCase()}
                 </div>
                 <div className="w-full h-[1px] bg-border absolute"></div>
@@ -272,7 +272,7 @@ export default function ChallengeTable({
           )}
         <div
           className={classNames(
-            "gap-y-6 sm:gap-y-0 flex sm:flex-row flex-col items-center justify-between px-4 sm:px-6 py-4 sm:py-5 bg-card-solid-foreground"
+            "gap-y-6 sm:gap-y-0 flex sm:flex-row flex-col items-center justify-between px-4 sm:px-6 py-4 sm:py-5 bg-card-solid-foreground",
           )}
         >
           <div className="flex flex-col gap-y-4 w-full sm:w-1/2">
@@ -282,7 +282,7 @@ export default function ChallengeTable({
             </span>
             <div
               className={classNames(
-                "h-[8px] w-full flex items-center gap-x-0.5 justify-start relative p-px bg-background"
+                "h-[8px] w-full flex items-center gap-x-0.5 justify-start relative p-px bg-background",
               )}
             >
               {!allIncomplete ? (
@@ -297,7 +297,7 @@ export default function ChallengeTable({
                         requirement.status === "failed" &&
                           "[background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#FF285A]",
                         // Make incomplete segments transparent to show the parent background
-                        requirement.status === "incomplete" && "bg-transparent"
+                        requirement.status === "incomplete" && "bg-transparent",
                       )}
                       initial={{
                         width: `0%`,
@@ -384,7 +384,7 @@ export default function ChallengeTable({
                   "pb-6 bg-card-solid-foreground/50",
                 selectedRequirement !== null &&
                   selectedRequirement !== requirement &&
-                  "opacity-40"
+                  "opacity-40",
               )}
               key={requirement.instructionKey}
             >
@@ -394,7 +394,7 @@ export default function ChallengeTable({
               >
                 <span className="font-medium text-sm sm:text-base truncate max-w-[60%]">
                   {t(
-                    `challenges.${challengeSlug}.requirements.${requirement.instructionKey}.title`
+                    `challenges.${challengeSlug}.requirements.${requirement.instructionKey}.title`,
                   )}
                 </span>
                 {isLoading ? (
@@ -405,7 +405,7 @@ export default function ChallengeTable({
                   <div className="flex items-center gap-x-4">
                     <ChallengeBadge
                       label={t(
-                        `ChallengePage.test_results.${requirement.status}`
+                        `ChallengePage.test_results.${requirement.status}`,
                       )}
                       variant={requirement.status}
                     />
@@ -414,7 +414,7 @@ export default function ChallengeTable({
                       className={classNames(
                         "transition-transform",
                         requirement.status === "incomplete" && "opacity-40",
-                        selectedRequirement === requirement && "rotate-180"
+                        selectedRequirement === requirement && "rotate-180",
                       )}
                       size={14}
                     />
@@ -434,7 +434,7 @@ export default function ChallengeTable({
                   <Divider />
                   {verificationData?.results?.find(
                     (result) =>
-                      result.instruction === requirement.instructionKey
+                      result.instruction === requirement.instructionKey,
                   ) && (
                     <div className="flex flex-col gap-y-2 text-sm">
                       <div className="flex flex-col gap-y-4 items-start overflow-hidden bg-background pt-4 px-1 pb-1">
@@ -466,7 +466,7 @@ export default function ChallengeTable({
                                 {
                                   "!text-brand-primary !cursor-default":
                                     isCopied,
-                                }
+                                },
                               )}
                             />
                           </motion.div>
@@ -479,7 +479,7 @@ export default function ChallengeTable({
                             {verificationData.results.find(
                               (result) =>
                                 result.instruction ===
-                                requirement.instructionKey
+                                requirement.instructionKey,
                             )?.message && (
                               <HeadingReveal
                                 baseDelay={0}
@@ -495,7 +495,7 @@ export default function ChallengeTable({
                               .find(
                                 (result) =>
                                   result.instruction ===
-                                  requirement.instructionKey
+                                  requirement.instructionKey,
                               )
                               ?.program_logs?.map((log, index) => (
                                 <HeadingReveal
@@ -513,7 +513,7 @@ export default function ChallengeTable({
                             {verificationData.results.find(
                               (result) =>
                                 result.instruction ===
-                                requirement.instructionKey
+                                requirement.instructionKey,
                             )?.message && (
                               <motion.span
                                 initial={{ opacity: 0 }}
@@ -530,7 +530,7 @@ export default function ChallengeTable({
                                   verificationData.results.find(
                                     (result) =>
                                       result.instruction ===
-                                      requirement.instructionKey
+                                      requirement.instructionKey,
                                   )?.message
                                 }
                               </motion.span>
@@ -539,7 +539,7 @@ export default function ChallengeTable({
                               .find(
                                 (result) =>
                                   result.instruction ===
-                                  requirement.instructionKey
+                                  requirement.instructionKey,
                               )
                               ?.program_logs?.map((log, index) => (
                                 <motion.span
@@ -576,7 +576,7 @@ export default function ChallengeTable({
                                   verificationData.results.find(
                                     (result) =>
                                       result.instruction ===
-                                      requirement.instructionKey
+                                      requirement.instructionKey,
                                   )?.compute_units_consumed
                                 }
                               </span>
@@ -590,7 +590,7 @@ export default function ChallengeTable({
                                   verificationData.results.find(
                                     (result) =>
                                       result.instruction ===
-                                      requirement.instructionKey
+                                      requirement.instructionKey,
                                   )?.execution_time
                                 }
                                 ms

@@ -56,11 +56,11 @@ export default function Perks() {
   };
   const userAddress = publicKey?.toBase58();
   const [faucetNetwork, setFaucetNetwork] = useState<"devnet" | "testnet">(
-    "devnet"
+    "devnet",
   );
 
   const [activeTab, setActiveTab] = useState<"unlocked" | "claimed">(
-    "unlocked"
+    "unlocked",
   );
 
   // Fake loading

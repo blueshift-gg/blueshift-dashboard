@@ -52,7 +52,9 @@ export type PathDifficulty = keyof typeof pathDifficulty;
  * Calculate the overall difficulty of a path based on its steps' content.
  * Returns the maximum difficulty found across all steps.
  */
-export function calculatePathDifficulty(stepDifficulties: CourseDifficulty[]): PathDifficulty {
+export function calculatePathDifficulty(
+  stepDifficulties: CourseDifficulty[],
+): PathDifficulty {
   if (stepDifficulties.length === 0) return 1;
   return Math.max(...stepDifficulties) as PathDifficulty;
 }
@@ -61,7 +63,7 @@ export function calculatePathDifficulty(stepDifficulties: CourseDifficulty[]): P
  * Determine if a path has mixed languages.
  */
 export function hasMultipleLanguages(langs: Language[]): boolean {
-  const uniqueLanguages = new Set(langs.filter(l => l !== "General"));
+  const uniqueLanguages = new Set(langs.filter((l) => l !== "General"));
   return uniqueLanguages.size > 1;
 }
 
@@ -73,7 +75,7 @@ export function hasMultipleLanguages(langs: Language[]): boolean {
 export function getPathCompletedSteps(
   steps: PathStepWithMetadata[],
   courseProgress: Record<string, number>,
-  challengeStatuses: Record<string, string>
+  challengeStatuses: Record<string, string>,
 ): number {
   return steps.filter((step) => {
     if (step.type === "course") {

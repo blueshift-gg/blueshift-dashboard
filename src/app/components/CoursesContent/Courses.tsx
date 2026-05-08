@@ -18,7 +18,7 @@ async function CoursesContent() {
           slug: lesson.slug.toLowerCase().replace(/\s+/g, "-"),
         })),
       };
-    })
+    }),
   );
 
   return <CourseList initialCourses={courses} courseLessons={courseLessons} />;

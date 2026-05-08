@@ -78,7 +78,7 @@ export default function PathCard({
       className={classNames(
         "transform-gpu group transition-transform animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 relative bg-card-solid border-border-light border",
         isHovered && `swoosh-${direction}`,
-        className
+        className,
       )}
     >
       {link && (
@@ -86,7 +86,7 @@ export default function PathCard({
       )}
       <div
         className={classNames(
-          "flex flex-col gap-y-24 grow justify-between px-4 py-5 pb-6"
+          "flex flex-col gap-y-24 grow justify-between px-4 py-5 pb-6",
         )}
       >
         <div className="flex flex-col gap-y-5">
@@ -99,7 +99,7 @@ export default function PathCard({
             <motion.span
               transition={{ duration: 0.2, ease: "easeInOut" }}
               className={classNames(
-                "text-xl font-medium text-shade-primary leading-[140%]"
+                "text-xl font-medium text-shade-primary leading-[140%]",
               )}
             >
               {name}

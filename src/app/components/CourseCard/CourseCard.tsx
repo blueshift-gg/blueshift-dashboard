@@ -67,13 +67,12 @@ export default function CourseCard({
 
   // Map language to a valid BRAND_COLOURS key (handles "Mobile" -> "general")
   const brandColorKey = (
-    language.toLowerCase() in BRAND_COLOURS
-      ? language.toLowerCase()
-      : "general"
+    language.toLowerCase() in BRAND_COLOURS ? language.toLowerCase() : "general"
   ) as keyof typeof BRAND_COLOURS;
 
   // Get the language color from languageColors (which properly maps Mobile -> general)
-  const langColor = languageColors[language as Language] || BRAND_COLOURS.general;
+  const langColor =
+    languageColors[language as Language] || BRAND_COLOURS.general;
 
   return (
     <div
@@ -93,7 +92,7 @@ export default function CourseCard({
       className={classNames(
         "transform-gpu group transition-transform animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 relative bg-card-solid border-border-light border",
         isHovered && `swoosh-${direction}`,
-        className
+        className,
       )}
     >
       {link && (
@@ -104,10 +103,7 @@ export default function CourseCard({
           src={`/graphics/course-images/${courseSlug}.webp`}
           className="absolute w-full h-full mix-blend-plus-lighter object-contain inset-0"
         ></img> */}
-        <AsciiAnimation
-          textPath={courseSlug || ""}
-          color={brandColorKey}
-        />
+        <AsciiAnimation textPath={courseSlug || ""} color={brandColorKey} />
 
         <Avatar
           icon={{ name: language }}
@@ -123,7 +119,7 @@ export default function CourseCard({
       </div>
       <div
         className={classNames(
-          "flex flex-col gap-y-8 grow justify-between px-4 py-5"
+          "flex flex-col gap-y-8 grow justify-between px-4 py-5",
         )}
       >
         <div className="flex flex-col min-h-[125px] sm:min-h-[100px]">

@@ -122,20 +122,32 @@ export default async function RootLayout({
 
   const requestURL = await headers();
   const pathname = requestURL.get("x-current-path");
-  const isHomepage = pathname === `/${locale}` || pathname === '/';
+  const isHomepage = pathname === `/${locale}` || pathname === "/";
 
   // Organization schema for homepage
-  const organizationSchema = isHomepage ? {
-    "@context": "https://schema.org",
-    "@type": "EducationalOrganization",
-    "name": "Blueshift",
-    "url": URLS.BLUESHIFT_EDUCATION,
-    "logo": `${URLS.BLUESHIFT_EDUCATION}/branding/logo.svg`,
-    "description": "Learn Solana development with hands-on courses, challenges, and on-chain verification. Free education from blockchain basics to advanced program development.",
-    "foundingDate": "2023",
-    "knowsAbout": ["Solana", "Blockchain Development", "Anchor Framework", "Rust Programming", "Web3", "Smart Contracts", "DeFi", "NFTs"],
-    "teaches": "Solana Blockchain Development"
-  } : null;
+  const organizationSchema = isHomepage
+    ? {
+        "@context": "https://schema.org",
+        "@type": "EducationalOrganization",
+        name: "Blueshift",
+        url: URLS.BLUESHIFT_EDUCATION,
+        logo: `${URLS.BLUESHIFT_EDUCATION}/branding/logo.svg`,
+        description:
+          "Learn Solana development with hands-on courses, challenges, and on-chain verification. Free education from blockchain basics to advanced program development.",
+        foundingDate: "2023",
+        knowsAbout: [
+          "Solana",
+          "Blockchain Development",
+          "Anchor Framework",
+          "Rust Programming",
+          "Web3",
+          "Smart Contracts",
+          "DeFi",
+          "NFTs",
+        ],
+        teaches: "Solana Blockchain Development",
+      }
+    : null;
 
   return (
     <html lang={locale}>
@@ -149,7 +161,9 @@ export default async function RootLayout({
                 {organizationSchema && (
                   <script
                     type="application/ld+json"
-                    dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
+                    dangerouslySetInnerHTML={{
+                      __html: JSON.stringify(organizationSchema),
+                    }}
                   />
                 )}
                 <GlobalModals />

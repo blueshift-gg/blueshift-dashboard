@@ -49,7 +49,7 @@ export default async function ChallengeLayout({
       <div
         className={classNames(
           "max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full",
-          !isTestPage && "app:border-x border-border-light"
+          !isTestPage && "app:border-x border-border-light",
         )}
       >
         <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
@@ -60,7 +60,7 @@ export default async function ChallengeLayout({
               !isTestPage && "lg:border-r border-border-light",
               isTestPage
                 ? "md:col-span-9 lg:col-span-10 xl:col-span-14"
-                : "md:col-span-7 xl:col-span-8"
+                : "md:col-span-7 xl:col-span-8",
             )}
           >
             {children}

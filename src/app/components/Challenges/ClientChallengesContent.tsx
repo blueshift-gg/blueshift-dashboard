@@ -85,7 +85,7 @@ export default function ChallengesContent({
   });
 
   const handleRpcCallForDecision = async (
-    rpcData: InterceptedRpcCallData
+    rpcData: InterceptedRpcCallData,
   ): Promise<FetchDecision> => {
     if (rpcData.rpcMethod === "sendTransaction") {
       setWasSendTransactionIntercepted(true);
@@ -120,7 +120,7 @@ export default function ChallengesContent({
   };
 
   const handleWsSendForDecision = async (
-    wsSendData: InterceptedWsSendData
+    wsSendData: InterceptedWsSendData,
   ): Promise<WsSendDecision> => {
     const targetHost = new URL(rpcEndpoint!).host;
 
@@ -167,7 +167,7 @@ export default function ChallengesContent({
   };
 
   const handleWsReceiveForDecision = async (
-    _wsReceiveData: InterceptedWsReceiveData
+    _wsReceiveData: InterceptedWsReceiveData,
   ): Promise<WsReceiveDecision> => {
     return { decision: "PROCEED" };
   };
@@ -189,7 +189,7 @@ export default function ChallengesContent({
   useEffect(() => {
     if (!apiBaseUrl) {
       console.error(
-        "API Base URL is not defined in the environment variables."
+        "API Base URL is not defined in the environment variables.",
       );
     }
   }, []);
@@ -251,7 +251,7 @@ export default function ChallengesContent({
       (log) =>
         log.type === "SYSTEM" &&
         Array.isArray(log.payload) &&
-        log.payload[0] === "Execution complete."
+        log.payload[0] === "Execution complete.",
     );
 
     if (
@@ -291,7 +291,7 @@ export default function ChallengesContent({
   useEffect(() => {
     if (verificationData) {
       const allRequirementsPassed = requirements.every(
-        (req) => req.status === "passed"
+        (req) => req.status === "passed",
       );
       if (allRequirementsPassed) {
         setTimeout(() => {
@@ -316,7 +316,7 @@ export default function ChallengesContent({
       // Show user-friendly error without blocking alert
       addLog(
         "SYSTEM",
-        "Code runner is still initializing. Please wait a moment and try again."
+        "Code runner is still initializing. Please wait a moment and try again.",
       );
       return;
     }
@@ -328,7 +328,7 @@ export default function ChallengesContent({
       console.error("Error running code:", error);
       addLog(
         "SYSTEM",
-        "An error occurred while running your code. Please try again."
+        "An error occurred while running your code. Please try again.",
       );
     });
   };
@@ -371,7 +371,7 @@ export default function ChallengesContent({
     const dragDelta = -info.delta.y; // Invert because dragging up should increase height
     const newHeight = Math.min(
       Math.max(currentHeight + dragDelta, minHeight),
-      maxHeight
+      maxHeight,
     );
 
     setEditorHeight(newHeight);
@@ -508,7 +508,7 @@ export default function ChallengesContent({
               className={classNames(
                 "flex flex-col w-full z-10 fixed left-0 bottom-0",
                 "lg:relative lg:h-full lg:min-h-[65dvh]",
-                isDragging && "select-none"
+                isDragging && "select-none",
               )}
             >
               <div className="w-full h-full flex flex-col overflow-hidden border border-border">
@@ -562,7 +562,7 @@ export default function ChallengesContent({
                       label={t("ChallengePage.view_logs_btn")}
                       className={classNames(
                         "w-max !text-brand-primary lg:hidden flex",
-                        tab === "logs" && "hidden"
+                        tab === "logs" && "hidden",
                       )}
                       onClick={() => {
                         setTab("logs");
@@ -577,7 +577,7 @@ export default function ChallengesContent({
                       label={t("ChallengePage.back_to_editor_btn")}
                       className={classNames(
                         "w-max !text-brand-primary lg:hidden flex",
-                        tab === "editor" && "hidden"
+                        tab === "editor" && "hidden",
                       )}
                       onClick={() => {
                         setTab("editor");

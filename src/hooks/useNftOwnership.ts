@@ -38,9 +38,7 @@ export const useNftOwnership = (challenges: ChallengeMetadata[]) => {
   );
 
   const canonicalQueryKey = useMemo(() => {
-    return challengeDeps
-      .map((c) => `${c.slug}:${c.unitName}`)
-      .join(",");
+    return challengeDeps.map((c) => `${c.slug}:${c.unitName}`).join(",");
   }, [challengeDeps]);
 
   const {
@@ -53,7 +51,7 @@ export const useNftOwnership = (challenges: ChallengeMetadata[]) => {
       if (!publicKey) {
         return EMPTY_OWNERSHIP;
       }
-      
+
       return fetchNftOwnership(publicKey, challengeDeps, connection);
     },
     enabled: !!publicKey,

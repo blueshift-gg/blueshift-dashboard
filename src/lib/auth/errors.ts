@@ -56,4 +56,4 @@ export class UnknownAuthError extends AuthError {
     super("An unknown authentication error occurred.");
     this.name = "UnknownAuthError";
   }
-} 
+}

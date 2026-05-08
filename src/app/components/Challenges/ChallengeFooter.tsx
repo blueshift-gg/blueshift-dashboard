@@ -22,8 +22,9 @@ export default function ChallengeFooter({
 
   const getChallengeHref = (pageSlug?: string) =>
     pathSlug
-      ? `/paths/${pathSlug}/challenges/${challengeSlug}${pageSlug ? `/${pageSlug}` : ""
-      }`
+      ? `/paths/${pathSlug}/challenges/${challengeSlug}${
+          pageSlug ? `/${pageSlug}` : ""
+        }`
       : `/challenges/${challengeSlug}${pageSlug ? `/${pageSlug}` : ""}`;
 
   const getVerifyHref = () =>
@@ -59,7 +60,7 @@ export default function ChallengeFooter({
                 </span>
                 <span className="font-medium text-shade-primary">
                   {t(
-                    `challenges.${challengeMetadata.slug}.pages.${nextPage.slug}.title`
+                    `challenges.${challengeMetadata.slug}.pages.${nextPage.slug}.title`,
                   )}
                 </span>
               </div>
@@ -68,7 +69,6 @@ export default function ChallengeFooter({
                 className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
               />
             </Link>
-
           </div>
         ) : (
           <div className="px-0 lg:px-0 w-full">
@@ -108,7 +108,6 @@ export default function ChallengeFooter({
       </div>
 
       {nextPage && (
-        
         <div className="p-3 w-full">
           <div className="w-full bg-card-solid border border-border-light relative py-8 px-8">
             <div className="max-w-[800px] mx-auto">

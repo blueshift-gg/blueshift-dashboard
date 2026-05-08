@@ -2,7 +2,12 @@
 
 import { ChallengeMetadata } from "@/app/utils/challenges";
 import { CourseMetadata } from "@/app/utils/course";
-import { Icon, Button, CrosshairCorners, Badge } from "@blueshift-gg/ui-components";
+import {
+  Icon,
+  Button,
+  CrosshairCorners,
+  Badge,
+} from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { usePathContent } from "@/app/hooks/usePathContent";
@@ -37,7 +42,7 @@ const COURSE_TOPICS: Record<string, string> = {
   "winternitz-signatures-on-solana": "cryptography on Solana",
   "testing-with-litesvm": "Solana testing",
   "testing-with-surfpool": "Solana testing",
-}
+};
 
 export default function CourseFooter({
   nextLesson,
@@ -54,7 +59,7 @@ export default function CourseFooter({
   const currentPathIndex =
     pathSlug && steps
       ? steps.findIndex(
-          (s) => s.type === "course" && s.slug === courseMetadata.slug
+          (s) => s.type === "course" && s.slug === courseMetadata.slug,
         )
       : -1;
   const nextStep =
@@ -62,26 +67,27 @@ export default function CourseFooter({
       ? steps[currentPathIndex + 1]
       : undefined;
 
-  const nextPathUnit = pathSlug && nextStep
-    ? (() => {
-        if (nextStep.type === "course" && nextStep.defaultLessonSlug) {
+  const nextPathUnit =
+    pathSlug && nextStep
+      ? (() => {
+          if (nextStep.type === "course" && nextStep.defaultLessonSlug) {
+            return {
+              href: `/paths/${pathSlug}/courses/${nextStep.slug}/${nextStep.defaultLessonSlug}`,
+              label: t("lessons.next_unit"),
+            };
+          }
+          if (nextStep.type === "course") {
+            return {
+              href: `/paths/${pathSlug}/courses/${nextStep.slug}`,
+              label: t("lessons.next_unit"),
+            };
+          }
           return {
-            href: `/paths/${pathSlug}/courses/${nextStep.slug}/${nextStep.defaultLessonSlug}`,
+            href: `/paths/${pathSlug}/challenges/${nextStep.slug}?fromCourse=${courseMetadata.slug}`,
             label: t("lessons.next_unit"),
           };
-        }
-        if (nextStep.type === "course") {
-          return {
-            href: `/paths/${pathSlug}/courses/${nextStep.slug}`,
-            label: t("lessons.next_unit"),
-          };
-        }
-        return {
-          href: `/paths/${pathSlug}/challenges/${nextStep.slug}?fromCourse=${courseMetadata.slug}`,
-          label: t("lessons.next_unit"),
-        };
-      })()
-    : null;
+        })()
+      : null;
 
   const isLastPathUnit =
     !!pathSlug && !!steps && currentPathIndex >= 0 && !nextStep;
@@ -90,15 +96,15 @@ export default function CourseFooter({
   const handleArticleClick = useCallback(
     (articleId: string) => {
       if (typeof window !== "undefined" && (window as any).analytics) {
-        ; (window as any).analytics.track("research_link_clicked", {
+        (window as any).analytics.track("research_link_clicked", {
           source: "course_conclusion",
           course: courseMetadata.slug,
           article: articleId,
-        })
+        });
       }
     },
-    [courseMetadata.slug]
-  )
+    [courseMetadata.slug],
+  );
 
   const getLessonHref = (lessonSlug: string) =>
     pathSlug
@@ -138,7 +144,7 @@ export default function CourseFooter({
                 </span>
                 <span className="font-medium text-shade-primary">
                   {t(
-                    `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`
+                    `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`,
                   )}
                 </span>
               </div>
@@ -152,23 +158,26 @@ export default function CourseFooter({
 
         {!nextLesson && challenge && (
           <div className="px-0 lg:px-0 w-full">
-          <div className="w-full bg-card-solid border-x border-border-light relative py-8 px-8">
-            <div className="max-w-[800px] mx-auto">
-              <div className="gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12">
-                <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
-                  {t("lessons.take_challenge_cta")}
-                </span>
-                <Link href={`${getChallengeHref()}?fromCourse=${courseMetadata.slug}`} className="w-max">
-                  <Button
-                    variant="primary"
-                    size="md"
-                    label={t("lessons.take_challenge")}
-                    icon={{ name: "Challenge" }}
-                  />
-                </Link>
+            <div className="w-full bg-card-solid border-x border-border-light relative py-8 px-8">
+              <div className="max-w-[800px] mx-auto">
+                <div className="gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12">
+                  <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
+                    {t("lessons.take_challenge_cta")}
+                  </span>
+                  <Link
+                    href={`${getChallengeHref()}?fromCourse=${courseMetadata.slug}`}
+                    className="w-max"
+                  >
+                    <Button
+                      variant="primary"
+                      size="md"
+                      label={t("lessons.take_challenge")}
+                      icon={{ name: "Challenge" }}
+                    />
+                  </Link>
+                </div>
               </div>
             </div>
-          </div>
           </div>
         )}
         {!nextLesson && !challenge && (
@@ -284,4 +293,3 @@ export default function CourseFooter({
     </div>
   );
 }
-

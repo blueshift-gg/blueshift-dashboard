@@ -107,7 +107,7 @@ async function main() {
   console.log("Banner generation process complete.");
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error("Unexpected error in main execution:", error);
   process.exit(1);
 });

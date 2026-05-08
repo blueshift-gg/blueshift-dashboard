@@ -32,7 +32,7 @@ const getSwooshAngle = (direction: Direction): number => {
 };
 
 export const useDirectionalHover = (
-  elementRef: RefObject<HTMLElement | null>
+  elementRef: RefObject<HTMLElement | null>,
 ) => {
   const [transform, setTransform] = useState<DirectionalTransform>({
     x: 0,
@@ -110,7 +110,7 @@ export const useDirectionalHover = (
       setTransform({ x: transformX, y: transformY, direction, swooshAngle });
       setIsHovered(true);
     },
-    [elementRef]
+    [elementRef],
   );
 
   const handleMouseLeave = useCallback(() => {

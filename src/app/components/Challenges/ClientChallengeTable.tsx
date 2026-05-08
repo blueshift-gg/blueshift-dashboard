@@ -63,7 +63,7 @@ export default function ChallengeTable({
   useEffect(() => {
     if (verificationData) {
       const firstFailedRequirement = requirements.find(
-        (req) => req.status === "failed"
+        (req) => req.status === "failed",
       );
       if (firstFailedRequirement) {
         setSelectedRequirement(firstFailedRequirement);
@@ -78,7 +78,7 @@ export default function ChallengeTable({
       className={classNames(
         "w-[calc(100%-2px)] transition opacity-0 lg:opacity-100 mx-auto flex absolute lg:relative bg-background lg:bg-transparent h-[calc(100%-81px)] lg:h-full lg:w-full",
         isOpen && "opacity-100 z-10 lg:z-1",
-        !isOpen && "pointer-events-none lg:pointer-events-auto"
+        !isOpen && "pointer-events-none lg:pointer-events-auto",
       )}
     >
       <div className="pb-24 bg-card-solid/50 overflow-y-auto w-full min-w-full xl:min-w-[400px] px-2 lg:px-4 lg:right-4 lg:border-l lg:border-l-border lg:pt-6 flex flex-col lg:gap-y-8 justify-between overflow-hidden lg:pb-6 [mask:linear-gradient(to_bottom,black_85%,transparent_100%)]">
@@ -108,14 +108,14 @@ export default function ChallengeTable({
                   label={t(
                     fromCourse
                       ? "ChallengePage.challenge_completed.view_other_courses"
-                      : "ChallengePage.challenge_completed.view_other_challenges"
+                      : "ChallengePage.challenge_completed.view_other_challenges",
                   )}
                 />
               </Link>
               <div className="relative w-full">
                 <div className="font-mono absolute text-xs text-mute top-1/2 z-10 -translate-y-1/2 left-1/2 -translate-x-1/2 px-4 bg-background">
                   {t(
-                    `ChallengePage.challenge_completed.divider_label`
+                    `ChallengePage.challenge_completed.divider_label`,
                   ).toUpperCase()}
                 </div>
                 <div className="w-full h-[1px] bg-border absolute"></div>
@@ -180,7 +180,7 @@ export default function ChallengeTable({
                               .map((p) =>
                                 typeof p === "object"
                                   ? JSON.stringify(p)
-                                  : String(p)
+                                  : String(p),
                               )
                               .join(" ")
                           : String(log.payload)}
@@ -209,7 +209,7 @@ export default function ChallengeTable({
                     "pb-6 bg-card-solid-foreground/50",
                   selectedRequirement !== null &&
                     selectedRequirement !== requirement &&
-                    "opacity-40"
+                    "opacity-40",
                 )}
                 key={requirement.instructionKey}
               >
@@ -219,14 +219,14 @@ export default function ChallengeTable({
                 >
                   <span className="font-medium text-xs xs:text-sm max-w-[60%]">
                     {t(
-                      `challenges.${courseSlug}.requirements.${requirement.instructionKey}.title`
+                      `challenges.${courseSlug}.requirements.${requirement.instructionKey}.title`,
                     )}
                   </span>
                   {!isLoading && !error ? (
                     <div className="flex items-center gap-x-4">
                       <ChallengeBadge
                         label={t(
-                          `ChallengePage.test_results.${requirement.status}`
+                          `ChallengePage.test_results.${requirement.status}`,
                         )}
                         variant={requirement.status}
                       />
@@ -235,7 +235,7 @@ export default function ChallengeTable({
                         className={classNames(
                           "transition-transform",
                           requirement.status === "incomplete" && "opacity-40",
-                          selectedRequirement === requirement && "rotate-180"
+                          selectedRequirement === requirement && "rotate-180",
                         )}
                         size={14}
                       />
@@ -262,7 +262,7 @@ export default function ChallengeTable({
                     <Divider />
                     {verificationData?.results?.find(
                       (result) =>
-                        result.instruction === requirement.instructionKey
+                        result.instruction === requirement.instructionKey,
                     ) && (
                       <div className="flex flex-col gap-y-2 text-sm">
                         <div className="flex flex-col gap-y-4 items-start overflow-hidden bg-background pt-4 px-1 pb-1">
@@ -281,7 +281,7 @@ export default function ChallengeTable({
                               {verificationData.results.find(
                                 (result) =>
                                   result.instruction ===
-                                  requirement.instructionKey
+                                  requirement.instructionKey,
                               )?.message && (
                                 <HeadingReveal
                                   baseDelay={0}
@@ -297,7 +297,7 @@ export default function ChallengeTable({
                                 .find(
                                   (result) =>
                                     result.instruction ===
-                                    requirement.instructionKey
+                                    requirement.instructionKey,
                                 )
                                 ?.program_logs?.map((log, index) => (
                                   <HeadingReveal
@@ -315,7 +315,7 @@ export default function ChallengeTable({
                               {verificationData.results.find(
                                 (result) =>
                                   result.instruction ===
-                                  requirement.instructionKey
+                                  requirement.instructionKey,
                               )?.message && (
                                 <motion.span
                                   initial={{ opacity: 0 }}
@@ -332,7 +332,7 @@ export default function ChallengeTable({
                                     verificationData.results.find(
                                       (result) =>
                                         result.instruction ===
-                                        requirement.instructionKey
+                                        requirement.instructionKey,
                                     )?.message
                                   }
                                 </motion.span>
@@ -341,7 +341,7 @@ export default function ChallengeTable({
                                 .find(
                                   (result) =>
                                     result.instruction ===
-                                    requirement.instructionKey
+                                    requirement.instructionKey,
                                 )
                                 ?.program_logs?.map((log, index) => (
                                   <motion.span
@@ -378,7 +378,7 @@ export default function ChallengeTable({
                                     verificationData.results.find(
                                       (result) =>
                                         result.instruction ===
-                                        requirement.instructionKey
+                                        requirement.instructionKey,
                                     )?.compute_units_consumed
                                   }
                                 </span>
@@ -392,7 +392,7 @@ export default function ChallengeTable({
                                     verificationData.results.find(
                                       (result) =>
                                         result.instruction ===
-                                        requirement.instructionKey
+                                        requirement.instructionKey,
                                     )?.execution_time
                                   }
                                   ms
