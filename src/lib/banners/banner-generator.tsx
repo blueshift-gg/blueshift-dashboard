@@ -1,4 +1,4 @@
-// biome-ignore-all lint/a11y/noSvgWithoutTitle: this file renders SVG fragments into generated banner images, not accessible DOM content.
+// This file renders SVG fragments into generated banner images, not accessible DOM content.
 import { ImageResponse } from "next/og";
 import { createTranslator } from "next-intl";
 import type { ChallengeMetadata } from "@/app/utils/challenges";

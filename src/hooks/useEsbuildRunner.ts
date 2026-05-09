@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: this runner intentionally proxies arbitrary console, RPC, and WebSocket payloads between the worker and UI.
+// This runner intentionally proxies arbitrary console, RPC, and WebSocket payloads between the worker and UI.
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -715,7 +715,7 @@ self.WebSocket = WebSocketProxy;
       isRunning,
       addLog,
       props,
-      esbuild.build,
+      esbuild,
     ],
   );
 

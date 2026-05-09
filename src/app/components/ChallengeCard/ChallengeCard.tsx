@@ -71,7 +71,7 @@ export default function ChallengeCard({
   const challengeHref = hrefOverride ?? `/challenges/${challenge.slug}`;
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: this container only tracks pointer hover for decorative motion, while actual navigation and actions remain on child controls.
+    // This container only tracks pointer hover for decorative motion, while actual navigation and actions remain on child controls.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {

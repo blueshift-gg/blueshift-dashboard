@@ -148,7 +148,7 @@ function ChallengeSection({
         <Banner
           icon={{ name: section.icon, size: 16 }}
           title={t(section.title)}
-          // biome-ignore lint/suspicious/noExplicitAny: Banner variant is typed too narrowly upstream for the supported challenge language variants.
+          // Banner variant is typed too narrowly upstream for the supported challenge language variants.
           variant={language.toLowerCase() as any}
         >
           <span className="text-current ml-auto">

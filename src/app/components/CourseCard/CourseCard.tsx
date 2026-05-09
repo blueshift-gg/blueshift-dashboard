@@ -75,7 +75,7 @@ export default function CourseCard({
     languageColors[language as Language] || BRAND_COLOURS.general;
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: this container only tracks pointer hover for decorative motion, while navigation stays on nested links and buttons.
+    // This container only tracks pointer hover for decorative motion, while navigation stays on nested links and buttons.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {

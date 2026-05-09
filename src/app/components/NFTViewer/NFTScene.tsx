@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: imperative Three.js, react-three-fiber, and dat.gui refs in this scene require loose handles and window bridges.
+// Imperative Three.js, react-three-fiber, and dat.gui refs in this scene require loose handles and window bridges.
 "use client";
 
 import {
@@ -1001,9 +1001,21 @@ function GUIControls({
 }) {
   const guiRef = useRef<any>(null);
   const controlsRef = useRef<any>(null);
+  const latestValuesRef = useRef({
+    challengeName,
+    challengeLanguage,
+    challengeDifficulty,
+    useAnimation,
+    showBackground,
+    onChallengeNameChange,
+    onChallengeLanguageChange,
+    onChallengeDifficultyChange,
+    onUseAnimationChange,
+    onShowBackgroundChange,
+  });
 
   // Initialize GUI once on mount
-  // biome-ignore lint/correctness/useExhaustiveDependencies: this GUI must be created once and the follow-up effect syncs prop changes without destroying user controller state.
+  // This GUI must be created once and the follow-up effect syncs prop changes without destroying user controller state.
   useEffect(() => {
     // Dynamically import dat.gui only on client side
     const initializeGUI = async () => {
@@ -1017,11 +1029,12 @@ function GUIControls({
       guiRef.current = gui;
 
       // Control object for dat.gui
+      const initialValues = latestValuesRef.current;
       const controls = {
-        challengeName: challengeName,
-        challengeLanguage: challengeLanguage,
-        challengeDifficulty: challengeDifficulty,
-        useAnimation: useAnimation,
+        challengeName: initialValues.challengeName,
+        challengeLanguage: initialValues.challengeLanguage,
+        challengeDifficulty: initialValues.challengeDifficulty,
+        useAnimation: initialValues.useAnimation,
         takeScreenshot: () => {
           // Call the screenshot function exposed on window
           if ((window as any).__nftSceneScreenshot) {
@@ -1040,7 +1053,7 @@ function GUIControls({
             (window as any).__nftSceneStartSpinAnimation();
           }
         },
-        showBackground: showBackground,
+        showBackground: initialValues.showBackground,
       };
 
       controlsRef.current = controls;
@@ -1050,7 +1063,7 @@ function GUIControls({
         .add(controls, "challengeName")
         .name("Challenge Name")
         .onChange((value: string) => {
-          onChallengeNameChange(value);
+          latestValuesRef.current.onChallengeNameChange(value);
         });
 
       gui
@@ -1062,7 +1075,7 @@ function GUIControls({
         ])
         .name("Language")
         .onChange((value: string) => {
-          onChallengeLanguageChange(value);
+          latestValuesRef.current.onChallengeLanguageChange(value);
         });
 
       gui
@@ -1074,21 +1087,21 @@ function GUIControls({
         })
         .name("Difficulty")
         .onChange((value: number) => {
-          onChallengeDifficultyChange(value);
+          latestValuesRef.current.onChallengeDifficultyChange(value);
         });
 
       gui
         .add(controls, "useAnimation")
         .name("Enable Animation")
         .onChange((value: boolean) => {
-          onUseAnimationChange(value);
+          latestValuesRef.current.onUseAnimationChange(value);
         });
 
       gui
         .add(controls, "showBackground")
         .name("Show Background")
         .onChange((value: boolean) => {
-          onShowBackgroundChange(value);
+          latestValuesRef.current.onShowBackgroundChange(value);
         });
 
       // Add screenshot button
@@ -1115,6 +1128,19 @@ function GUIControls({
 
   // Update GUI controls when props change (without recreating the GUI)
   useEffect(() => {
+    latestValuesRef.current = {
+      challengeName,
+      challengeLanguage,
+      challengeDifficulty,
+      useAnimation,
+      showBackground,
+      onChallengeNameChange,
+      onChallengeLanguageChange,
+      onChallengeDifficultyChange,
+      onUseAnimationChange,
+      onShowBackgroundChange,
+    };
+
     if (controlsRef.current) {
       // Update the control object values to sync with props
       controlsRef.current.challengeName = challengeName;
@@ -1137,6 +1163,11 @@ function GUIControls({
     challengeDifficulty,
     useAnimation,
     showBackground,
+    onChallengeNameChange,
+    onChallengeLanguageChange,
+    onChallengeDifficultyChange,
+    onUseAnimationChange,
+    onShowBackgroundChange,
   ]);
 
   return null;

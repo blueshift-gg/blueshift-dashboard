@@ -17,7 +17,7 @@ const nextConfig = {
   webpack: (config) => {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
-      ...(config.resolve.alias ?? {}),
+      ...config.resolve.alias,
       canvas: canvasShimPath, // ensure optional canvas import falls back to linkedom shim
     };
 

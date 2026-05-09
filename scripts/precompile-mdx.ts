@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: safe-mdx and shiki expose loosely typed AST structures in this build script.
+// safe-mdx and shiki expose loosely typed AST structures in this build script.
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";

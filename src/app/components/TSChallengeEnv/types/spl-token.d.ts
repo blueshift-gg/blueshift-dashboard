@@ -1,4 +1,4 @@
-// biome-ignore-all lint/complexity/noBannedTypes: this vendored declaration file mirrors upstream SPL Token extension marker types.
+// This vendored declaration file mirrors upstream SPL Token extension marker types.
 import type { Layout } from "@solana/buffer-layout";
 import { Structure } from "@solana/buffer-layout";
 import {

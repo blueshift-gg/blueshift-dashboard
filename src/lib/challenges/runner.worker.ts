@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: the worker forwards arbitrary console arguments and runtime errors back to the main thread.
+// The worker forwards arbitrary console arguments and runtime errors back to the main thread.
 interface ConsoleMessage {
   type: "LOG" | "ERROR" | "INFO" | "EXECUTION_ERROR" | "WORKER_ERROR" | "READY";
   payload: any;

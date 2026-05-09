@@ -43,7 +43,7 @@ export default function WalletMultiButton({
   }, [status, login, logout]);
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: this wrapper only tracks pointer hover for nested button text effects; the actual interaction stays on the Button.
+    // This wrapper only tracks pointer hover for nested button text effects; the actual interaction stays on the Button.
     <div
       onMouseEnter={() => setIsHoveringLocal(true)}
       onMouseLeave={() => setIsHoveringLocal(false)}

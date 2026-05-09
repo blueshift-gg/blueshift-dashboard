@@ -94,7 +94,10 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             const highlighted = compiled.highlightedCode[highlightId];
             if (highlighted) {
               return (
-                <CodeblockWrapper data-language={highlighted.lang}>
+                <CodeblockWrapper
+                  clipboardText={node.value}
+                  data-language={highlighted.lang}
+                >
                   {toJsxRuntime(highlighted.hast, { Fragment, jsxs, jsx })}
                 </CodeblockWrapper>
               );
@@ -109,7 +112,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             });
 
             return (
-              <CodeblockWrapper data-language={lang}>
+              <CodeblockWrapper clipboardText={node.value} data-language={lang}>
                 {toJsxRuntime(codeHtml, { Fragment, jsxs, jsx })}
               </CodeblockWrapper>
             );
