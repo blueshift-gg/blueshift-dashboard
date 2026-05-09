@@ -1,1 +1,7 @@
-export { default, generateMetadata } from "@/app/[locale]/challenges/[challengeSlug]/verify/page";
+import ChallengeVerifyPage, {
+  generateMetadata,
+} from "@/app/[locale]/challenges/[challengeSlug]/verify/ChallengeVerifyPage";
+
+export { generateMetadata };
+
+export default ChallengeVerifyPage;

@@ -17,6 +17,57 @@ import { URLS } from "@/constants/urls";
 import { AuthProvider } from "@/contexts/AuthContext";
 import TanstackProvider from "@/contexts/TanstackProvider";
 import WalletProvider from "@/contexts/WalletProvider";
+import { getLocalizedAlternates } from "@/i18n/metadata";
+
+/**
+ * Normalizes absolute URL or relative path to a pathname starting with "/".
+ *
+ * Examples:
+ *   - "https://blueshift.gg/en/courses/intro?tab=overview" becomes "/en/courses/intro"
+ *   - "en/courses/intro" becomes "/en/courses/intro"
+ *  - "/en/courses/intro" stays "/en/courses/intro"
+ * @param rawPath The raw path to normalize
+ * @returns Normalized pathname
+ */
+function normalizePathname(rawPath: string): string {
+  try {
+    return new URL(rawPath, URLS.BLUESHIFT_EDUCATION).pathname;
+  } catch {
+    return rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+  }
+}
+
+// Layout code works with a locale-free pathname so there is one stable shape
+// internally: "/" or "/courses/foo", never "/en/...".
+function stripLocalePrefix(pathname: string): string {
+  for (const locale of routing.locales) {
+    const localePrefix = `/${locale}`;
+
+    if (pathname === localePrefix) {
+      return "/";
+    }
+
+    if (pathname.startsWith(`${localePrefix}/`)) {
+      return pathname.slice(localePrefix.length);
+    }
+  }
+
+  return pathname;
+}
+
+// Server layouts do not get the locale-free pathname from next-intl directly,
+// so this is the one place where we derive it from the current request.
+function getCurrentPath(requestHeaders: Headers): string {
+  const nextUrl = requestHeaders.get("next-url");
+  const rewrittenPath = requestHeaders.get("x-nextjs-rewritten-path");
+  const rawPath = rewrittenPath ?? nextUrl;
+
+  if (!rawPath) {
+    return "/";
+  }
+
+  return stripLocalePrefix(normalizePathname(rawPath));
+}
 
 const FiraCode = Fira_Code({
   subsets: ["latin"],
@@ -69,32 +120,21 @@ interface RootLayoutProps {
 export async function generateMetadata({ params }: RootLayoutProps) {
   const { locale } = await params;
   const t = await getTranslations({ locale, namespace: "metadata" });
-  const requestURL = await headers();
-  const pathname = requestURL.get("x-current-path") || "";
+  const requestHeaders = await headers();
+  const pathname = getCurrentPath(requestHeaders);
+  const alternates = getLocalizedAlternates(pathname, locale);
 
   return {
     metadataBase: new URL(URLS.BLUESHIFT_EDUCATION),
     title: t("title"),
     description: t("description"),
     keywords: t("keywords"),
-    alternates: {
-      canonical: `/${locale}${pathname}`,
-      languages: {
-        en: `/en${pathname}`,
-        "zh-CN": `/zh-CN${pathname}`,
-        "zh-HK": `/zh-HK${pathname}`,
-        fr: `/fr${pathname}`,
-        id: `/id${pathname}`,
-        vi: `/vi${pathname}`,
-        uk: `/uk${pathname}`,
-        de: `/de${pathname}`,
-      },
-    },
+    alternates,
     openGraph: {
       title: t("title"),
       type: "website",
       description: t("description"),
-      url: `/${locale}`,
+      url: alternates.canonical,
       siteName: t("title"),
       images: [
         {
@@ -120,9 +160,9 @@ export default async function RootLayout({
     notFound();
   }
 
-  const requestURL = await headers();
-  const pathname = requestURL.get("x-current-path");
-  const isHomepage = pathname === `/${locale}` || pathname === "/";
+  const requestHeaders = await headers();
+  const pathname = getCurrentPath(requestHeaders);
+  const isHomepage = pathname === "/";
 
   // Organization schema for homepage
   const organizationSchema = isHomepage
@@ -162,7 +202,7 @@ export default async function RootLayout({
                   <script type="application/ld+json">{JSON.stringify(organizationSchema)}</script>
                 )}
                 <GlobalModals />
-                {!pathname?.includes("/nft-generator") ? (
+                {!pathname.includes("/nft-generator") ? (
                   <>
                     <Header />
                     <div className="min-h-[calc(100dvh-74px)] pt-[74px]">{children}</div>

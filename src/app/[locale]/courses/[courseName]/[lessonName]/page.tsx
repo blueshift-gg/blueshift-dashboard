@@ -13,6 +13,7 @@ import { difficulty } from "@/app/utils/common";
 import { getChallenge, getCourse } from "@/app/utils/content";
 import { getCompiledMdx } from "@/app/utils/mdx";
 import { URLS } from "@/constants/urls";
+import { getLocalizedAlternates } from "@/i18n/metadata";
 import { getPathname } from "@/i18n/navigation";
 import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 
@@ -43,25 +44,12 @@ export async function generateMetadata({ params }: LessonPageProps): Promise<Met
   const courseTitle = t(`courses.${courseName}.title`);
   const title = `${lessonTitle} | ${courseTitle} | Blueshift`;
 
-  // Build the relative path without locale for alternates
   const basePath = `/courses/${courseName}/${lessonName}`;
 
   return {
     title: title,
     description: t(`courses.${courseName}.lessons.${lessonName}.description`),
-    alternates: {
-      canonical: `/${locale}${basePath}`,
-      languages: {
-        en: `/en${basePath}`,
-        "zh-CN": `/zh-CN${basePath}`,
-        "zh-HK": `/zh-HK${basePath}`,
-        fr: `/fr${basePath}`,
-        id: `/id${basePath}`,
-        vi: `/vi${basePath}`,
-        uk: `/uk${basePath}`,
-        de: `/de${basePath}`,
-      },
-    },
+    alternates: getLocalizedAlternates(basePath, locale),
     openGraph: {
       title: lessonTitle, // Shorter for social sharing
       type: "article", // More accurate for lesson content

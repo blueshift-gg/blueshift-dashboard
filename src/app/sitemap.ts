@@ -2,96 +2,58 @@ import type { MetadataRoute } from "next";
 import { challenges } from "@/app/content/challenges/challenges";
 import { courses } from "@/app/content/courses/courses";
 import { URLS } from "@/constants/urls";
-import { routing } from "@/i18n/routing";
+import { getLocalizedPathMap } from "@/i18n/metadata";
 
 const BASE_URL = URLS.BLUESHIFT_EDUCATION;
 
+function toAbsoluteUrl(path: string) {
+  return `${BASE_URL}${path}`;
+}
+
+function buildLocalizedEntries(href: string, lastModified: Date): MetadataRoute.Sitemap {
+  const localizedPaths = getLocalizedPathMap(href);
+  const languages = Object.fromEntries(
+    Object.entries(localizedPaths).map(([locale, path]) => [locale, toAbsoluteUrl(path)]),
+  );
+
+  return Object.values(localizedPaths).map((path) => ({
+    url: toAbsoluteUrl(path),
+    lastModified,
+    alternates: {
+      languages,
+    },
+  }));
+}
+
 export default function sitemap(): MetadataRoute.Sitemap {
-  const sitemapEntries: MetadataRoute.Sitemap = [];
+  const lastModified = new Date();
+  const entries: MetadataRoute.Sitemap = [];
 
-  const getLanguageAlternates = (path: string) => {
-    const languages: Record<string, string> = {};
-    for (const locale of routing.locales) {
-      languages[locale] = `${BASE_URL}/${locale}${path}`;
-    }
-    return languages;
-  };
+  entries.push(...buildLocalizedEntries("/", lastModified));
+  entries.push(...buildLocalizedEntries("/challenges", lastModified));
+  entries.push(...buildLocalizedEntries("/courses", lastModified));
 
-  for (const locale of routing.locales) {
-    sitemapEntries.push(
-      // Home
-      {
-        url: `${BASE_URL}/${locale}`,
-        lastModified: new Date(),
-        alternates: {
-          languages: getLanguageAlternates(""),
-        },
-      },
-      // Challenges main pages
-      {
-        url: `${BASE_URL}/${locale}/challenges`,
-        lastModified: new Date(),
-        alternates: {
-          languages: getLanguageAlternates("/challenges"),
-        },
-      },
-      // Courses main pages
-      {
-        url: `${BASE_URL}/${locale}/courses`,
-        lastModified: new Date(),
-        alternates: {
-          languages: getLanguageAlternates("/courses"),
-        },
-      },
-    );
+  for (const challenge of challenges) {
+    entries.push(...buildLocalizedEntries(`/challenges/${challenge.slug}`, lastModified));
 
-    // Challenges
-    for (const challenge of challenges) {
-      sitemapEntries.push({
-        url: `${BASE_URL}/${locale}/challenges/${challenge.slug}`,
-        lastModified: new Date(),
-        alternates: {
-          languages: getLanguageAlternates(`/challenges/${challenge.slug}`),
-        },
-      });
-
-      if (challenge.pages) {
-        for (const page of challenge.pages) {
-          sitemapEntries.push({
-            url: `${BASE_URL}/${locale}/challenges/${challenge.slug}/${page.slug}`,
-            lastModified: new Date(),
-            alternates: {
-              languages: getLanguageAlternates(`/challenges/${challenge.slug}/${page.slug}`),
-            },
-          });
-        }
-      }
-    }
-
-    // Courses
-    for (const course of courses) {
-      // The following to be uncommented when course have dedicated pages
-      //   sitemapEntries.push({
-      //     url: `${BASE_URL}/${locale}/courses/${course.slug}`,
-      //     lastModified: new Date(),
-      //     alternates: {
-      //       languages: getLanguageAlternates(`/courses/${course.slug}`),
-      //     },
-      //   });
-
-      if (course.lessons) {
-        for (const lesson of course.lessons) {
-          sitemapEntries.push({
-            url: `${BASE_URL}/${locale}/courses/${course.slug}/${lesson.slug}`,
-            lastModified: new Date(),
-            alternates: {
-              languages: getLanguageAlternates(`/courses/${course.slug}/${lesson.slug}`),
-            },
-          });
-        }
+    if (challenge.pages) {
+      for (const page of challenge.pages) {
+        entries.push(
+          ...buildLocalizedEntries(`/challenges/${challenge.slug}/${page.slug}`, lastModified),
+        );
       }
     }
   }
 
-  return sitemapEntries;
+  for (const course of courses) {
+    if (course.lessons) {
+      for (const lesson of course.lessons) {
+        entries.push(
+          ...buildLocalizedEntries(`/courses/${course.slug}/${lesson.slug}`, lastModified),
+        );
+      }
+    }
+  }
+
+  return entries;
 }

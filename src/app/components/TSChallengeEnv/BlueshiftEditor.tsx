@@ -46,6 +46,16 @@ declare var process: {
 };
 `;
 
+const fetchRawAsset = async (assetPath: string) => {
+  const response = await fetch(assetPath);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch raw asset: ${assetPath}`);
+  }
+
+  return { default: await response.text() };
+};
+
 /**
  * Monaco-based TypeScript code editor with auto-save functionality
  * Features syntax highlighting, type checking, and visual save state indicators
@@ -100,21 +110,21 @@ export default function BlueshiftEditor({
 
     addMonacoTypesForModule(
       "@solana/web3.js",
-      import("@solana/web3.js/lib/index.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/solana-web3.d.ts"),
       "file:///node_modules/@types/@solana/web3.js/index.d.ts",
       "file:///node_modules/@solana/web3.js/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "@solana/spl-token",
-      import("./types/spl-token.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/spl-token.d.ts"),
       "file:///node_modules/@types/@solana/spl-token/index.d.ts",
       "file:///node_modules/@solana/spl-token/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "bs58",
-      import("./types/bs58.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/bs58.d.ts"),
       "file:///node_modules/@types/bs58/index.d.ts",
       "file:///node_modules/bs58/index.d.ts",
     );

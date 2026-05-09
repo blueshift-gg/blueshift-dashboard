@@ -189,10 +189,15 @@ export default function ChallengesContent({ currentChallenge }: ChallengesConten
   useEffect(() => {
     const fetchSolutionsTemplate = async () => {
       try {
-        const codeModule = await import(
-          `@/app/content/challenges/${currentChallenge.slug}/challenge.ts.template?raw`
+        const response = await fetch(
+          `/editor-assets/challenge-templates/${currentChallenge.slug}/challenge.ts.template`,
         );
-        const template = codeModule.default;
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch challenge template for ${currentChallenge.slug}`);
+        }
+
+        const template = await response.text();
 
         setInitialEditorCode(template);
 
