@@ -47,9 +47,7 @@ export type ChallengeStatus = (typeof challengeStatus)[number];
 type ChallengeLanguages = keyof typeof challengeLanguages;
 type ChallengeDifficulty = keyof typeof challengeDifficulty;
 
-export const challengeStatusToIconName = (
-  status: ChallengeStatus,
-): IconName => {
+export const challengeStatusToIconName = (status: ChallengeStatus): IconName => {
   switch (status) {
     case "open":
       return "Unlocked";

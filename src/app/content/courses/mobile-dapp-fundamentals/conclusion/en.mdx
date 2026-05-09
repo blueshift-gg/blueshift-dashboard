@@ -11,6 +11,7 @@ You've learned the Mobile Wallet Adapter protocol from first principles to produ
 <ArticleSection name="Capstone Project: Token Sender" id="capstone" level="h2" />
 
 Let's build a complete dApp that:
+
 - Connects to a wallet using the AuthorizationProvider
 - Displays account balance
 - Sends SOL to any address
@@ -83,10 +84,10 @@ This hook fetches the connected wallet's SOL balance and refreshes it periodical
 
 ```typescript
 // hooks/useBalance.ts
-import { useState, useEffect, useCallback } from 'react';
-import { LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { useConnection } from '../providers/ConnectionProvider';
-import { useAuthorization } from '../providers/AuthorizationProvider';
+import { useState, useEffect, useCallback } from "react";
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { useConnection } from "../providers/ConnectionProvider";
+import { useAuthorization } from "../providers/AuthorizationProvider";
 
 export function useBalance() {
   const { connection } = useConnection();
@@ -105,7 +106,7 @@ export function useBalance() {
       const lamports = await connection.getBalance(selectedAccount.publicKey);
       setBalance(lamports / LAMPORTS_PER_SOL);
     } catch (error) {
-      console.error('Failed to fetch balance:', error);
+      console.error("Failed to fetch balance:", error);
       setBalance(null);
     } finally {
       setLoading(false);
@@ -114,7 +115,7 @@ export function useBalance() {
 
   useEffect(() => {
     fetchBalance();
-    
+
     // Refresh balance every 30 seconds
     const interval = setInterval(fetchBalance, 30000);
     return () => clearInterval(interval);
@@ -128,20 +129,20 @@ export function useBalance() {
 
 ```typescript
 // hooks/useSendSol.ts
-import { useState, useCallback } from 'react';
+import { useState, useCallback } from "react";
 import {
   PublicKey,
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
   LAMPORTS_PER_SOL,
-} from '@solana/web3.js';
-import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { useConnection } from '../providers/ConnectionProvider';
-import { useAuthorization } from '../providers/AuthorizationProvider';
-import { handleMWAError, MWAErrorResult } from '../utils/mwaErrorHandler';
+} from "@solana/web3.js";
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { useConnection } from "../providers/ConnectionProvider";
+import { useAuthorization } from "../providers/AuthorizationProvider";
+import { handleMWAError, MWAErrorResult } from "../utils/mwaErrorHandler";
 
-type SendStatus = 'idle' | 'building' | 'signing' | 'confirming' | 'success' | 'error';
+type SendStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
 interface SendResult {
   status: SendStatus;
@@ -153,7 +154,7 @@ export function useSendSol() {
   const { connection } = useConnection();
   const { authorizeSession } = useAuthorization();
   const [result, setResult] = useState<SendResult>({
-    status: 'idle',
+    status: "idle",
     signature: null,
     error: null,
   });
@@ -161,7 +162,7 @@ export function useSendSol() {
   const send = useCallback(
     async (recipientAddress: string, amountSol: number): Promise<boolean> => {
       // Reset state
-      setResult({ status: 'building', signature: null, error: null });
+      setResult({ status: "building", signature: null, error: null });
 
       try {
         // Validate recipient address
@@ -169,24 +170,32 @@ export function useSendSol() {
         try {
           recipientPubkey = new PublicKey(recipientAddress);
         } catch {
-          setResult({ status: 'error', signature: null, error: 'Invalid recipient address' });
+          setResult({
+            status: "error",
+            signature: null,
+            error: "Invalid recipient address",
+          });
           return false;
         }
 
         // Validate amount
         if (amountSol <= 0) {
-          setResult({ status: 'error', signature: null, error: 'Amount must be greater than 0' });
+          setResult({
+            status: "error",
+            signature: null,
+            error: "Amount must be greater than 0",
+          });
           return false;
         }
 
         const signature = await transact(async (wallet) => {
-          setResult((prev) => ({ ...prev, status: 'signing' }));
-          
+          setResult((prev) => ({ ...prev, status: "signing" }));
+
           const account = await authorizeSession(wallet);
 
           // Get fresh blockhash
-          const { blockhash, lastValidBlockHeight } = 
-            await connection.getLatestBlockhash('confirmed');
+          const { blockhash, lastValidBlockHeight } =
+            await connection.getLatestBlockhash("confirmed");
 
           // Build transaction
           const transaction = new VersionedTransaction(
@@ -200,7 +209,7 @@ export function useSendSol() {
                   lamports: Math.floor(amountSol * LAMPORTS_PER_SOL),
                 }),
               ],
-            }).compileToV0Message()
+            }).compileToV0Message(),
           );
 
           // Sign and send
@@ -208,38 +217,45 @@ export function useSendSol() {
             transactions: [transaction],
           });
 
-          setResult((prev) => ({ ...prev, status: 'confirming', signature: sig }));
+          setResult((prev) => ({
+            ...prev,
+            status: "confirming",
+            signature: sig,
+          }));
 
           // Wait for confirmation
           await connection.confirmTransaction(
             { signature: sig, blockhash, lastValidBlockHeight },
-            'confirmed'
+            "confirmed",
           );
 
           return sig;
         });
 
-        setResult({ status: 'success', signature, error: null });
+        setResult({ status: "success", signature, error: null });
         return true;
-
       } catch (error) {
         const mwaError = handleMWAError(error);
-        
+
         // Don't show error for user cancellation
         if (mwaError.isUserCancellation) {
-          setResult({ status: 'idle', signature: null, error: null });
+          setResult({ status: "idle", signature: null, error: null });
           return false;
         }
 
-        setResult({ status: 'error', signature: null, error: mwaError.userMessage });
+        setResult({
+          status: "error",
+          signature: null,
+          error: mwaError.userMessage,
+        });
         return false;
       }
     },
-    [connection, authorizeSession]
+    [connection, authorizeSession],
   );
 
   const reset = useCallback(() => {
-    setResult({ status: 'idle', signature: null, error: null });
+    setResult({ status: "idle", signature: null, error: null });
   }, []);
 
   return { send, reset, ...result };
@@ -268,14 +284,14 @@ export function SendScreen() {
   const { selectedAccount } = useAuthorization();
   const { balance, loading: balanceLoading, refresh } = useBalance();
   const { send, status, signature, error, reset } = useSendSol();
-  
+
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
 
   const handleSend = async () => {
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum)) return;
-    
+
     const success = await send(recipient, amountNum);
     if (success) {
       setRecipient('');
@@ -305,7 +321,7 @@ export function SendScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Token Sender</Text>
-      
+
       {/* Account Info */}
       <View style={styles.card}>
         <Text style={styles.label}>Connected Account</Text>
@@ -578,16 +594,19 @@ This course covered:
 You're now equipped to build production mobile Solana dApps. Here's where to go next:
 
 **Advanced MWA Features**:
+
 - Wallet capabilities detection
 - Custom chain identifiers
 - Token account management
 
 **Beyond MWA**:
+
 - Solana Pay for payments and requests
 - Blinks and Actions for shareable transactions
 - Secp256r1 for passkey authentication
 
 **Production Considerations**:
+
 - App Store submission requirements
 - Analytics and crash reporting
 - Security audits for wallet interactions

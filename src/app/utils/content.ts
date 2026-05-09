@@ -26,9 +26,7 @@ export async function getAllCourses(): Promise<CourseMetadata[]> {
   return structuredClone(courses);
 }
 
-export async function getCourseLessons(
-  courseSlug: string,
-): Promise<LessonMetadata[]> {
+export async function getCourseLessons(courseSlug: string): Promise<LessonMetadata[]> {
   const course = await getCourse(courseSlug);
 
   if (!course) {
@@ -41,9 +39,7 @@ export async function getCourseLessons(
 export async function getChallenge(
   challengeSlug: string | undefined | null,
 ): Promise<ChallengeMetadata | undefined> {
-  const challenge = challenges.find(
-    (challenge) => challenge.slug === challengeSlug,
-  );
+  const challenge = challenges.find((challenge) => challenge.slug === challengeSlug);
 
   return structuredClone(challenge);
 }

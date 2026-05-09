@@ -26,15 +26,11 @@ export default function ConnectWalletRecommended() {
         <div className="flex flex-col gap-y-2 text-center">
           <img
             src="/graphics/connect-wallet.svg"
-            className="h-28 mx-auto"
+            className="mx-auto h-28"
             alt="Connect wallet"
           ></img>
-          <div className="text-xl font-medium">
-            {t("wallet_recommended.title")}
-          </div>
-          <span className="text-shade-secondary">
-            {t("wallet_recommended.description")}
-          </span>
+          <div className="text-xl font-medium">{t("wallet_recommended.title")}</div>
+          <span className="text-shade-secondary">{t("wallet_recommended.description")}</span>
         </div>
         <div className="flex flex-col gap-y-4">
           <Button
@@ -47,7 +43,7 @@ export default function ConnectWalletRecommended() {
           />
           <button
             type="button"
-            className="text-mute transition hover:text-shade-tertiary text-sm font-medium mx-auto cursor-pointer"
+            className="text-mute mx-auto cursor-pointer text-sm font-medium transition hover:text-shade-tertiary"
             onClick={() => {
               setConnectionRecommendedViewed(true);
               closeModal();

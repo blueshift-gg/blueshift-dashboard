@@ -52,9 +52,7 @@ export const COURSE_TO_RESEARCH: Record<CourseId, ResearchId[]> = {
     "accelerating-u128-math-with-libcalls-and-jit-intrinsics",
     "sbpf-linker-breakpoint-2025",
   ],
-  "pinocchio-for-dummies": [
-    "accelerating-u128-math-with-libcalls-and-jit-intrinsics",
-  ],
+  "pinocchio-for-dummies": ["accelerating-u128-math-with-libcalls-and-jit-intrinsics"],
   // Other courses don't have research articles yet
   "introduction-to-blockchain-and-solana": [],
   "anchor-for-dummies": [],
@@ -98,8 +96,7 @@ const RESEARCH: Record<ResearchId, ResearchMetadata> = {
   "sbpf-linker-breakpoint-2025": {
     id: "sbpf-linker-breakpoint-2025",
     title: "sBPF Linker Deep Dive",
-    description:
-      "How the sBPF linker works - ELF format, program headers, and linking concepts",
+    description: "How the sBPF linker works - ELF format, program headers, and linking concepts",
     url: "https://blueshift.gg/research/sbpf-linker-breakpoint-2025",
   },
 };

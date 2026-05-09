@@ -82,10 +82,7 @@ interface PersistentStore {
   clearAutoSavedCode: (challengeSlug: string) => void;
 }
 
-type V0PersistentStore = Omit<
-  PersistentStore,
-  "challengeStatuses" | "setNewChallengeStatus"
-> & {
+type V0PersistentStore = Omit<PersistentStore, "challengeStatuses" | "setNewChallengeStatus"> & {
   courseStatus?: Record<string, "Locked" | "Unlocked" | "Claimed">;
 };
 
@@ -93,10 +90,7 @@ type V1PersistentStore = Omit<PersistentStore, "selectedLanguages"> & {
   selectedLanguages: string[];
 };
 
-const migrate = (
-  persistedState: unknown,
-  version: number,
-): Partial<PersistentStore> => {
+const migrate = (persistedState: unknown, version: number): Partial<PersistentStore> => {
   if (version === 0) {
     const oldState = persistedState as V0PersistentStore;
     const newChallengeStatuses: Record<string, ChallengeStatuses> = {};
@@ -155,8 +149,7 @@ export const usePersistentStore = create<PersistentStore>()(
 
       // Marketing Banner
       marketingBannerViewed: false,
-      setMarketingBannerViewed: (viewed) =>
-        set({ marketingBannerViewed: viewed }),
+      setMarketingBannerViewed: (viewed) => set({ marketingBannerViewed: viewed }),
 
       // Store hydration state
       _hasHydrated: false,
@@ -190,17 +183,14 @@ export const usePersistentStore = create<PersistentStore>()(
             ? state.selectedDifficulties.filter((d) => d !== difficulty)
             : [...state.selectedDifficulties, difficulty],
         })),
-      setDifficulties: (difficulties) =>
-        set({ selectedDifficulties: difficulties }),
+      setDifficulties: (difficulties) => set({ selectedDifficulties: difficulties }),
       clearDifficulties: () => set({ selectedDifficulties: [] }),
 
       // Challenge Center
       selectedChallengeStatus: challengeStatus,
       toggleChallengeStatus: (status) =>
         set((state) => ({
-          selectedChallengeStatus: state.selectedChallengeStatus.includes(
-            status,
-          )
+          selectedChallengeStatus: state.selectedChallengeStatus.includes(status)
             ? state.selectedChallengeStatus.filter((s) => s !== status)
             : [...state.selectedChallengeStatus, status],
         })),
@@ -208,8 +198,7 @@ export const usePersistentStore = create<PersistentStore>()(
 
       // Wallet Connection Recommended Viewed
       connectionRecommendedViewed: false,
-      setConnectionRecommendedViewed: (viewed) =>
-        set({ connectionRecommendedViewed: viewed }),
+      setConnectionRecommendedViewed: (viewed) => set({ connectionRecommendedViewed: viewed }),
 
       // Authentication
       authToken: null,

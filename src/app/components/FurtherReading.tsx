@@ -51,9 +51,7 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
   const handleClick = useCallback(
     (articleId: string) => {
       const analytics =
-        typeof window !== "undefined"
-          ? (window as AnalyticsWindow).analytics
-          : undefined;
+        typeof window !== "undefined" ? (window as AnalyticsWindow).analytics : undefined;
 
       if (analytics) {
         analytics.track("research_link_clicked", {
@@ -74,46 +72,39 @@ export const FurtherReading = memo<Props>(({ courseId, className }) => {
 
   return (
     <aside
-      className={`-mx-5 lg:-mx-6 mt-16 md:mt-24 bg-card-solid/50 border-y border-border relative ${className || ""}`}
+      className={`relative -mx-5 mt-16 border-y border-border bg-card-solid/50 md:mt-24 lg:-mx-6 ${className || ""}`}
       aria-labelledby="further-reading-heading"
     >
-      <CrosshairCorners
-        variant="corners"
-        corners={["top-left", "bottom-right"]}
-        size={8}
-      />
+      <CrosshairCorners variant="corners" corners={["top-left", "bottom-right"]} size={8} />
 
-      <div className="max-w-[1000px] mx-auto px-5 lg:px-6 py-8 md:py-12 md:px-12">
+      <div className="mx-auto max-w-[1000px] px-5 py-8 md:px-12 md:py-12 lg:px-6">
         <h2
           id="further-reading-heading"
-          className="text-2xl leading-[120%] font-medium text-shade-primary mb-3"
+          className="mb-3 text-2xl leading-[120%] font-medium text-shade-primary"
         >
           Dive Deeper
         </h2>
-        <p className="text-shade-secondary mb-8">
-          Learn how these concepts are applied in production with research on{" "}
-          {topic}:
+        <p className="mb-8 text-shade-secondary">
+          Learn how these concepts are applied in production with research on {topic}:
         </p>
 
-        <div className="grid gap-4 md:gap-6 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 md:gap-6">
           {articles.map((article) => (
             <a
               key={article.id}
               href={article.url}
               onClick={() => handleClick(article.id)}
-              className="group border border-border bg-card-solid hover:border-brand-primary/50 transition-colors flex flex-col p-4.5 sm:p-6"
+              className="group flex flex-col border border-border bg-card-solid p-4.5 transition-colors hover:border-brand-primary/50 sm:p-6"
               target="_blank"
               rel="noopener noreferrer"
             >
-              <div className="flex items-start gap-2 mb-2">
-                <span className="text-brand-primary mt-0.5">→</span>
-                <h3 className="text-[18px] leading-[130%] text-shade-primary font-medium group-hover:text-brand-primary transition-colors">
+              <div className="mb-2 flex items-start gap-2">
+                <span className="mt-0.5 text-brand-primary">→</span>
+                <h3 className="text-[18px] leading-[130%] font-medium text-shade-primary transition-colors group-hover:text-brand-primary">
                   {article.title}
                 </h3>
               </div>
-              <p className="text-sm text-shade-secondary pl-6">
-                {article.description}
-              </p>
+              <p className="pl-6 text-sm text-shade-secondary">{article.description}</p>
             </a>
           ))}
         </div>

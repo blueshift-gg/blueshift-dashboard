@@ -27,8 +27,7 @@ export function useAutoSave({
   code,
   delay = DEFAULT_DEBOUNCE_DELAY,
 }: UseAutoSaveProps) {
-  const { autoSavedCode, setAutoSavedCode, clearAutoSavedCode } =
-    usePersistentStore();
+  const { autoSavedCode, setAutoSavedCode, clearAutoSavedCode } = usePersistentStore();
 
   // Refs for timeout management
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);

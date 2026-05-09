@@ -46,9 +46,7 @@ export type PathDifficulty = keyof typeof pathDifficulty;
  * Calculate the overall difficulty of a path based on its steps' content.
  * Returns the maximum difficulty found across all steps.
  */
-export function calculatePathDifficulty(
-  stepDifficulties: CourseDifficulty[],
-): PathDifficulty {
+export function calculatePathDifficulty(stepDifficulties: CourseDifficulty[]): PathDifficulty {
   if (stepDifficulties.length === 0) return 1;
   return Math.max(...stepDifficulties) as PathDifficulty;
 }

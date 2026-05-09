@@ -28,16 +28,16 @@ const AsciiAnimation = ({ textPath, color }: AsciiAnimationProps) => {
   return (
     <motion.div
       style={{ color: BRAND_COLOURS[color] }}
-      className="flex justify-center items-center absolute inset-0 w-full mask-[linear-gradient(60deg,transparent_10%,black_40%,black_60%,transparent_100%)] overflow-hidden"
+      className="absolute inset-0 flex w-full items-center justify-center overflow-hidden mask-[linear-gradient(60deg,transparent_10%,black_40%,black_60%,transparent_100%)]"
     >
       <pre
         ref={preRef}
-        className="absolute left-0 md:-left-1/5 xl:left-[25px] text-[8px] tracking-wider text-current"
+        className="absolute left-0 text-[8px] tracking-wider text-current md:-left-1/5 xl:left-[25px]"
       >
         {text}
       </pre>
 
-      <div className="flex flex-col max-w-[700px] break-all opacity-20 absolute left-0 text-current text-[8px] tracking-wider">
+      <div className="absolute left-0 flex max-w-[700px] flex-col text-[8px] tracking-wider break-all text-current opacity-20">
         {ASCII_BACKGROUND_ROWS.map((rowKey) => (
           <span key={rowKey}>{".".repeat(500)}</span>
         ))}

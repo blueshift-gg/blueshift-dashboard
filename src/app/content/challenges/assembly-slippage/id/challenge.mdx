@@ -19,6 +19,7 @@ Jika Anda belum familiar dengan cara menulis program assembly, ikuti [kursus pen
 Program kita mengimplementasikan operasi sederhana namun penting: memvalidasi bahwa akun token memiliki saldo yang cukup sebelum melanjutkan transaksi. Pola ini muncul di mana-mana dalam DeFi—dari pertukaran AMM hingga protokol peminjaman.
 
 Program ini mengharapkan:
+
 - Satu akun SPL token dalam array akun
 - Jumlah 8-byte dalam data instruksi
 - Mengembalikan sukses jika saldo ≥ jumlah, error jika tidak
@@ -52,12 +53,17 @@ entrypoint:
 Setiap program sBPF dimulai pada simbol global `.entrypoint`. Runtime Solana menyediakan data akun dan instruksi melalui register `r1`.
 
 Instruksi `ldxdw` memuat (`ldx`) nilai 8-byte (double word, `dx`) dari memori ke dalam register. Berikut yang terjadi:
+
 - `ldxdw r3, [r1+MINIMUM_BALANCE]`: menghitung alamat memori yang berisi jumlah yang kita butuhkan. Nilai tersebut dimuat ke dalam `r3`.
 - `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`: menunjuk ke bidang saldo akun token. Nilai 64-bit ini masuk ke `r4`.
 
 Kedua operasi tersebut adalah zero-copy: kita membaca langsung dari data akun tanpa overhead deserialisasi.
 
-<ArticleSection name="Logika Kondisional dan Percabangan" id="conditional-logic-and-branching" level="h2" />
+<ArticleSection
+  name="Logika Kondisional dan Percabangan"
+  id="conditional-logic-and-branching"
+  level="h2"
+/>
 
 ```sbpf
 jge r3, r4, end         // Skip to exit if balance is valid
@@ -67,16 +73,21 @@ Instruksi `jge` (jump if greater or equal) membandingkan `r3` (jumlah yang dibut
 
 Jika kondisi gagal, eksekusi berlanjut ke jalur penanganan kesalahan. Pola branch-on-condition ini adalah cara assembly mengimplementasikan logika if/else.
 
-<ArticleSection name="Penanganan Kesalahan dan Logging" id="error-handling-and-logging" level="h2" />
+<ArticleSection
+  name="Penanganan Kesalahan dan Logging"
+  id="error-handling-and-logging"
+  level="h2"
+/>
 
 ```sbpf
 lddw r1, e              // Load error message address
-lddw r2, 17             // Load length of error message  
+lddw r2, 17             // Load length of error message
 call sol_log_           // Log out error message
 lddw r0, 1              // Return error code 1
 ```
 
 Ketika validasi gagal, kita mencatat pesan kesalahan yang dapat dibaca manusia sebelum mengakhiri:
+
 - `lddw` memuat nilai langsung, dalam hal ini alamat string kesalahan kita, yang berada di bagian `.rodata`, dan panjangnya (17 byte untuk "Slippage exceeded").
 - `call sol_log_` memanggil syscall logging Solana. Runtime membaca pesan dari memori dan menambahkannya ke log transaksi.
 - Kemudian kita memuat `1` ke dalam `r0` untuk menandakan kegagalan program. Runtime akan membatalkan transaksi dan mengembalikan kode kesalahan ini.
@@ -102,8 +113,9 @@ Tidak seperti bahasa tingkat tinggi dengan pembersihan otomatis, program assembl
 Bagian `.rodata` (data hanya-baca) berisi string pesan kesalahan kita.
 
 <ArticleSection name="Conclusion" id="conclusion" level="h2" />
-  
-Program kecil ini menyelesaikan apa yang mungkin membutuhkan puluhan CU dengan Rust hanya dengan `4 CUs` dalam kasus berhasil, `6 CUs` dalam kasus gagal, atau `106 CUs` dalam kasus gagal yang mencatat pesan kesalahan.
+Program kecil ini menyelesaikan apa yang mungkin membutuhkan puluhan CU dengan Rust hanya dengan `4
+CUs` dalam kasus berhasil, `6 CUs` dalam kasus gagal, atau `106 CUs` dalam kasus gagal yang mencatat
+pesan kesalahan.
 
 Timbal baliknya adalah kita harus memahami tata letak memori, konvensi pemanggilan, dan penanganan kesalahan pada tingkat terendah. Tetapi untuk operasi yang kritis terhadap kinerja, manfaatnya sering kali membenarkan upaya tersebut.
 

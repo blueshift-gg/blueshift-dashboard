@@ -21,7 +21,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
     >
       <button
         type="button"
-        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
+        className="relative cursor-pointer p-3 text-shade-tertiary transition hover:!text-shade-primary"
         onClick={() => setView("grid")}
       >
         <Icon
@@ -32,7 +32,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "grid" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
+            className="absolute top-0 left-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />
@@ -40,7 +40,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
       </button>
       <button
         type="button"
-        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
+        className="relative cursor-pointer p-3 text-shade-tertiary transition hover:!text-shade-primary"
         onClick={() => setView("list")}
       >
         <Icon
@@ -51,7 +51,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "list" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
+            className="absolute top-0 left-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />

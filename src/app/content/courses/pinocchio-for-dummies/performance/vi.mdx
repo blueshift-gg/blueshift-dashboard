@@ -41,7 +41,7 @@ Bằng cách tối giản hóa những kiểm tra và yêu cầu account không 
 
 <ArticleSection name="Perf Flag" id="perf-flag" level="h2" />
 
-Các cờ chức năng của Rust cung cấp một cách mạnh mẽ để biên dịch mã một cách điều kiện, cho phép bạn bật/tắt các tính năng cho các profile build khác nhau; chẳng hạn như development, testing, hoặc hiệu suất tối đa trong production. 
+Các cờ chức năng của Rust cung cấp một cách mạnh mẽ để biên dịch mã một cách điều kiện, cho phép bạn bật/tắt các tính năng cho các profile build khác nhau; chẳng hạn như development, testing, hoặc hiệu suất tối đa trong production.
 
 Điều này đặc biệt hữu ích trong các chương trình Solana, nơi mỗi compute unit đều quan trọng.
 
@@ -60,7 +60,6 @@ perf = []
 ### Sử dụng Feature Flag trong Code
 
 Bạn có thể sử dụng các thuộc tính biên dịch có điều kiện của Rust để bao gồm hoặc loại trừ mã dựa trên tính năng hoạt động. Ví dụ:
-
 
 ```rust
 pub fn process(ctx: Context<'info>) -> ProgramResult {
@@ -84,6 +83,7 @@ if name.len() > MAX_NAME_LEN {
 Một ví dụ khác là các kiểm tra thừa đã thảo luận trước đó.
 
 Nếu bạn không chắc chắn rằng instruction của bạn là an toàn mà không cần các kiểm tra này, bạn không nên làm chúng mặc định, nhưng thay vào đó ẩn chúng sau một cờ.
+
 > Trong ví dụ này, chúng ta đã tạo một flag `perf` để chỉ ra rằng, nếu chúng ta muốn chương trình đạt được hiệu suất tối đa, chúng ta nên sử dụng flag `perf` khi biên dịch.
 
 ### Building với các Flag khác nhau
@@ -116,7 +116,7 @@ Nếu bạn có nhiều giá trị boolean trong mã của mình, bạn có th�
 
 ```rust
 const FLAG_ACTIVE: u8 = 1 << 0;     // 0000_0001
-const FLAG_VERIFIED: u8 = 1 << 1;   // 0000_0010  
+const FLAG_VERIFIED: u8 = 1 << 1;   // 0000_0010
 const FLAG_PREMIUM: u8 = 1 << 2;    // 0000_0100
 const FLAG_LOCKED: u8 = 1 << 3;     // 0000_1000
 ```
@@ -182,6 +182,7 @@ Máy ảo Solana (SVM) sử dụng kiến trúc bộ nhớ ba tầng, tách bi�
 Hiểu kiến trúc này là rất quan trọng để viết các chương trình Solana hiệu suất cao.
 
 Các chương trình hoạt động trong các không gian địa chỉ ảo cố định với ánh xạ bộ nhớ có thể dự đoán:
+
 - **Program Code**: `0x100000000` - Nơi mã byte đã biên dịch của bạn được lưu trữ
 - **Stack Data**: `0x200000000` - Biến cục bộ và khung gọi hàm
 - **Heap Data**: `0x300000000` - Cấp phát động (đắt đỏ!)
@@ -201,38 +202,40 @@ Cấp phát heap không phải là tệ về bản chất, nhưng trên Solana t
 ### Các kỹ thuật Zero-Allocation
 
 1. Các cấu trúc dữ liệu dựa trên tham chiếu - Chuyển đổi dữ liệu sở hữu thành tham chiếu mượn:
-    ```rust
-    // HEAP ALLOCATION:
-    struct AccountInfo {
-        key: Pubkey,        // Owned data - copied to heap
-        data: Vec<u8>,      // Vector - definitely heap allocated
-    }
 
-    // ZERO ALLOCATION:
-    struct AccountInfo<'a> {
-        key: &'a Pubkey,    // Reference - no allocation
-        data: &'a [u8],     // Slice reference - no allocation
-    }
-    ```
+   ```rust
+   // HEAP ALLOCATION:
+   struct AccountInfo {
+       key: Pubkey,        // Owned data - copied to heap
+       data: Vec<u8>,      // Vector - definitely heap allocated
+   }
+
+   // ZERO ALLOCATION:
+   struct AccountInfo<'a> {
+       key: &'a Pubkey,    // Reference - no allocation
+       data: &'a [u8],     // Slice reference - no allocation
+   }
+   ```
 
 2. Truy cập dữ liệu Zero-Copy - Truy cập dữ liệu tại chỗ mà không cần giải tuần tự hóa:
-    ```rust
-    // Instead of deserializing, access data in-place:
-    pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
-        // Parse accounts directly from byte slice - NO HEAP ALLOCATION
-        let source_account = &accounts[0..36];  // Just slice references
-        let dest_account = &accounts[36..72];
-        
-        // Access fields through pointer arithmetic - NO ALLOCATION
-        let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
-    }
-    ```
+
+   ```rust
+   // Instead of deserializing, access data in-place:
+   pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
+       // Parse accounts directly from byte slice - NO HEAP ALLOCATION
+       let source_account = &accounts[0..36];  // Just slice references
+       let dest_account = &accounts[36..72];
+
+       // Access fields through pointer arithmetic - NO ALLOCATION
+       let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
+   }
+   ```
 
 3. Các ràng buộc No-Std - Ngăn chặn việc sử dụng heap không mong muốn tại thời điểm biên dịch:
-    ```rust
-    // Enforces no-std to prevents accidental heap usage:
-    #![no_std]
-    ```
+   ```rust
+   // Enforces no-std to prevents accidental heap usage:
+   #![no_std]
+   ```
 
 ### Bộ phân phối bộ nhớ của Pinocchio
 

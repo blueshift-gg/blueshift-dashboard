@@ -12,9 +12,7 @@ interface ChallengesPageProps {
   }>;
 }
 
-export async function generateMetadata({
-  params,
-}: ChallengesPageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: ChallengesPageProps): Promise<Metadata> {
   const { locale } = await params;
   const t = await getTranslations({ locale });
   const pathname = getPathname({
@@ -48,11 +46,8 @@ export default function RewardsPage() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
-      <PageHero
-        badge={t("ChallengeCenter.subtitle")}
-        title={t("ChallengeCenter.title")}
-      />
+    <div className="flex w-full flex-col gap-y-0 px-3 sm:px-4">
+      <PageHero badge={t("ChallengeCenter.subtitle")} title={t("ChallengeCenter.title")} />
       <Challenges />
     </div>
   );

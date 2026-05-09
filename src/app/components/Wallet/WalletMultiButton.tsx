@@ -12,13 +12,9 @@ interface WalletButtonProps {
   className?: string;
 }
 
-export default function WalletMultiButton({
-  disabled = false,
-  className,
-}: WalletButtonProps) {
+export default function WalletMultiButton({ disabled = false, className }: WalletButtonProps) {
   const [isHoveringLocal, setIsHoveringLocal] = useState<boolean>(false);
-  const { status, publicKey, login, logout, isLoggingIn, isLoggingOut } =
-    useAuth();
+  const { status, publicKey, login, logout, isLoggingIn, isLoggingOut } = useAuth();
   const address = publicKey?.toBase58();
 
   const showDisconnectOverlay = isHoveringLocal && status === "signed-in";
@@ -56,18 +52,16 @@ export default function WalletMultiButton({
         variant={status === "signed-in" ? "secondary" : "primary"}
         size="md"
         onClick={handleClick}
-        className={
-          status === "signed-in" ? "font-sans! font-semibold" : "font-mono"
-        }
+        className={status === "signed-in" ? "font-sans! font-semibold" : "font-mono"}
       />
       {showDisconnectOverlay && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-card-solid/5 backdrop-blur-[8px]">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-card-solid/5 backdrop-blur-[8px]">
           <motion.span
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9 }}
             transition={{ duration: 0.1, ease: crisp }}
-            className="flex items-center gap-x-1.5 font-mono text-[15px] font-medium leading-none text-shade-primary"
+            className="flex items-center gap-x-1.5 font-mono text-[15px] leading-none font-medium text-shade-primary"
           >
             <Icon name="Disconnect" />
             <DecryptedText isHovering={isHoveringLocal} text="Disconnect" />

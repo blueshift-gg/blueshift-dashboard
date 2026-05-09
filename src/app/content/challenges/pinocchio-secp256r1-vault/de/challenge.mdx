@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="Einzahlung" id="deposit" level="h2" />
 
 Die Einzahlungsanweisung führt die folgenden Schritte aus:
+
 1. Überprüft, ob der Tresor leer ist (keine Lamports enthält), um Doppeleinzahlungen zu verhindern
 2. Stellt sicher, dass der Einzahlungsbetrag das mietfreie Minimum für ein Basiskonto überschreitet
 3. Überträgt Lamports vom Zahler zum Tresor mittels eines CPI an das System-Programm
@@ -118,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 Lassen Sie uns jede Kontoprüfung aufschlüsseln:
+
 1. `payer`: Muss ein Unterzeichner sein, da sie die Übertragung von Lamports autorisieren müssen
-2. `vault`: 
+2. `vault`:
    - Muss dem System-Programm gehören
    - Muss null Lamports haben (stellt eine "frische" Einzahlung sicher)
 
 Für das `vault` werden wir dann prüfen, ob:
+
 - Es aus den richtigen Seeds abgeleitet ist
 - Es mit der erwarteten PDA-Adresse übereinstimmt
-Da ein Teil des Seeds im `instruction_data` enthalten ist, auf das wir zu diesem Zeitpunkt keinen Zugriff haben.
+  Da ein Teil des Seeds im `instruction_data` enthalten ist, auf das wir zu diesem Zeitpunkt keinen Zugriff haben.
 
 Jetzt implementieren wir die Anweisungsdatenstruktur:
 
@@ -156,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Wir deserialisieren die Anweisungsdaten in eine `DepositInstructionData` Struktur, die Folgendes enthält:
+
 - `pubkey`: Der Secp256r1 öffentliche Schlüssel des Benutzers, der die Einzahlung tätigt
 - `amount`: Die Anzahl der einzuzahlenden Lamports
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 Wie bereits erwähnt, müssen wir überprüfen, ob das Vault-PDA aus den richtigen Seeds abgeleitet wurde. In diesem Secp256r1-basierten Vault verwenden wir den `Secp256r1Pubkey` als Teil der Seeds anstelle des traditionellen öffentlichen Schlüssels des Besitzers. Dies ist eine entscheidende Sicherheitsmaßnahme, die sicherstellt, dass nur der Inhaber des entsprechenden Secp256r1-Schlüssels auf den Vault zugreifen kann.
 
 Der `Secp256r1Pubkey` ist 33 Bytes lang, da er eine komprimierte Punktdarstellung für elliptische Kurven-Public-Keys verwendet. Dieses Format besteht aus:
+
 - 1 Byte für die Parität des Punktes (gibt an, ob die y-Koordinate gerade oder ungerade ist)
 - 32 Bytes für die x-Koordinate
 
 Da Solanas `find_program_address`Funktion eine 32-Byte-Begrenzung für jeden Seed hat, müssen wir den `Secp256r1Pubkey` in zwei Teile aufteilen:
+
 1. Das Paritätsbyte (`pubkey[..1]`)
 2. Die x-Koordinaten-Bytes (`pubkey[1..33]`)
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 Die Abhebungsanweisung führt die folgenden Schritte aus:
+
 1. Überprüft, ob der Vault Lamports enthält (nicht leer ist)
 2. Verwendet das PDA des Vaults, um die Überweisung in seinem eigenen Namen zu signieren
 3. Überweist alle Lamports vom Vault zurück an den Besitzer
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 Der Abhebungsprozess umfasst mehrere Sicherheitsprüfungen, um sicherzustellen, dass die Transaktion legitim ist. Betrachten wir genauer, wie wir die Secp256r1-Signatur verifizieren und vor potenziellen Angriffen schützen:
 
 1. **Instruktionsintrospektion**
+
 - Wir verwenden die Instruction-Sysvar, um die nächste Anweisung in der Transaktion zu untersuchen
 - Dies ermöglicht uns, die Secp256r1-Signatur zu überprüfen, die den Besitz des Signaturschlüssels beweist
 - Die Signaturüberprüfung für Secp256r1 erfolgt immer in einer separaten Anweisung
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - Die signierte Nachricht enthält zwei kritische Informationen:
-    - Die Adresse des beabsichtigten Empfängers (32 Bytes)
-    - Ein Zeitstempel für das Ablaufdatum der Signatur (8 Bytes)
+  - Die Adresse des beabsichtigten Empfängers (32 Bytes)
+  - Ein Zeitstempel für das Ablaufdatum der Signatur (8 Bytes)
 - Dies verhindert MEV-Angriffe, bei denen jemand eine gültige Signatur abfangen und wiederverwenden könnte, indem er einen anderen `payer` übergibt und den Betrag beansprucht, der im Vault liegt
 
 4. **Ablaufprüfung**

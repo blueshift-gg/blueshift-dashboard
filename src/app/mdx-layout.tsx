@@ -1,68 +1,6 @@
 export default function MdxLayout({ children }: { children: React.ReactNode }) {
   return (
-    <article
-      className="prose prose-invert max-w-none -mt-2
-      prose-p:text-shade-secondary
-      prose-headings:text-shade-primary
-      prose-headings:font-semibold
-      prose-strong:text-shade-primary prose-strong:font-medium
-      prose-ul:pl-6 prose-ul:pb-3
-      prose-ol:pl-6 prose-ol:pb-3
-      prose-li:m-0 prose-li:relative
-      prose-headings:py-2
-      prose-h1:tracking-[-0.025em]
-      prose-p:empty:hidden
-      md:prose-h1:text-[32px]
-      md:prose-h2:text-[28px]
-      md:prose-h3:text-[24px]
-      md:prose-h4:text-[20px]
-      sm:prose-h1:text-[28px]
-      sm:prose-h2:text-[24px]
-      sm:prose-h3:text-[20px]
-      sm:prose-h4:text-base
-      prose-table:max-w-full
-      prose-table:w-full
-      prose-table:min-w-max
-      prose-thead:min-w-full
-      prose-td:px-2.5
-      prose-thead:font-mono
-      prose-thead:text-[13px]
-      prose-table:border
-      prose-td:whitespace-nowrap
-      prose-th:whitespace-nowrap
-      prose-th:text-left
-      prose-td:text-left
-      prose-table:border-border-light
-      prose-thead:text-shade-primary
-      prose-td:py-2
-      prose-thead:border-b-border-light
-      prose-tr:border-b-border
-      prose-tr:even:bg-background
-      prose-table:bg-card-solid
-      prose-thead:bg-card-foreground
-      prose-table:font-medium
-      prose-blockquote:text-brand-secondary
-      prose-blockquote:pr-4
-      prose-blockquote:[font-style:normal]
-      prose-blockquote:border-l-2
-      prose-figure:my-0
-      prose-code:[font-family:var(--font-fira-code)]
-      prose-code:font-medium
-      prose-code:text-brand-secondary
-      prose-code:before:hidden
-      prose-code:after:hidden
-      prose-headings:font-sans
-      prose-p:font-content
-      prose-li:font-content
-      prose-ol:font-content
-      prose-ul:font-content
-      prose-blockquote:font-content
-      prose-pre:font-content
-      prose-a:font-content
-      prose-li:text-shade-primary
-      prose-li:mb-2
-      prose-pre:bg-card-solid prose-code:px-2 prose-code:py-1"
-    >
+    <article className="prose -mt-2 max-w-none prose-invert prose-headings:py-2 prose-headings:font-sans prose-headings:font-semibold prose-headings:text-shade-primary prose-h1:tracking-[-0.025em] sm:prose-h1:text-[28px] md:prose-h1:text-[32px] sm:prose-h2:text-[24px] md:prose-h2:text-[28px] sm:prose-h3:text-[20px] md:prose-h3:text-[24px] sm:prose-h4:text-base md:prose-h4:text-[20px] prose-p:font-content prose-p:text-shade-secondary prose-p:empty:hidden prose-a:font-content prose-blockquote:border-l-2 prose-blockquote:pr-4 prose-blockquote:font-content prose-blockquote:text-brand-secondary prose-blockquote:[font-style:normal] prose-figure:my-0 prose-strong:font-medium prose-strong:text-shade-primary prose-code:px-2 prose-code:py-1 prose-code:[font-family:var(--font-fira-code)] prose-code:font-medium prose-code:text-brand-secondary prose-code:before:hidden prose-code:after:hidden prose-pre:bg-card-solid prose-pre:font-content prose-ol:pb-3 prose-ol:pl-6 prose-ol:font-content prose-ul:pb-3 prose-ul:pl-6 prose-ul:font-content prose-li:relative prose-li:m-0 prose-li:mb-2 prose-li:font-content prose-li:text-shade-primary prose-table:w-full prose-table:max-w-full prose-table:min-w-max prose-table:border prose-table:border-border-light prose-table:bg-card-solid prose-table:font-medium prose-thead:min-w-full prose-thead:border-b-border-light prose-thead:bg-card-foreground prose-thead:font-mono prose-thead:text-[13px] prose-thead:text-shade-primary prose-tr:border-b-border prose-tr:even:bg-background prose-th:text-left prose-th:whitespace-nowrap prose-td:px-2.5 prose-td:py-2 prose-td:text-left prose-td:whitespace-nowrap">
       {children}
     </article>
   );

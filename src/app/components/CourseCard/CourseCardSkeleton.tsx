@@ -2,18 +2,14 @@ import classNames from "classnames";
 
 export default function CourseCardSkeleton() {
   return (
-    <div className="flex flex-col overflow-hidden p-1 relative bg-card-solid border-border-light border">
-      <div className="w-full bg-background/50 aspect-2/1 h-full max-h-[200px] group-hover/card:scale-[0.99] transition-all duration-100 ease-glide"></div>
-      <div
-        className={classNames(
-          "flex flex-col gap-y-8 flex-grow justify-between px-4 py-5",
-        )}
-      >
-        <div className="flex flex-col gap-y-2 min-h-[125px] sm:min-h-[100px]">
-          <div className="bg-card-foreground w-[100px] h-[24px]"></div>
-          <div className="bg-card-foreground w-[250px] h-[28px]"></div>
+    <div className="relative flex flex-col overflow-hidden border border-border-light bg-card-solid p-1">
+      <div className="aspect-2/1 h-full max-h-[200px] w-full bg-background/50 transition-all duration-100 ease-glide group-hover/card:scale-[0.99]"></div>
+      <div className={classNames("flex flex-col gap-y-8 flex-grow justify-between px-4 py-5")}>
+        <div className="flex min-h-[125px] flex-col gap-y-2 sm:min-h-[100px]">
+          <div className="h-[24px] w-[100px] bg-card-foreground"></div>
+          <div className="h-[28px] w-[250px] bg-card-foreground"></div>
         </div>
-        <div className="bg-card-foreground w-[150px] h-[48px]"></div>
+        <div className="h-[48px] w-[150px] bg-card-foreground"></div>
       </div>
     </div>
   );

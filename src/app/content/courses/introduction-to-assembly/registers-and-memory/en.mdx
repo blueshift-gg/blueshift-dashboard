@@ -13,14 +13,14 @@ The tradeoff is simple: you only get 11 boxes total, so you need to use them str
 sBPF assigns specific roles to each register:
 
 | Register | Role                 | Callee-saved?  | Usage Notes                                 |
-|----------|----------------------|----------------|---------------------------------------------|
+| -------- | -------------------- | -------------- | ------------------------------------------- |
 | `r0`     | Return value         | No             | Function results, syscall return values     |
 | `r1`     | Input buffer pointer | No             | Points to 0x400000000 on entry              |
 | `r2-r5`  | Scratch/arguments    | No             | Helper function arguments, temporary values |
 | `r6-r9`  | General purpose      | Yes            | Must preserve across calls                  |
 | `r10`    | Frame pointer        | Yes, read-only | Stack base, cannot modify directly          |
 
-Registers `r6` through `r9` are _callee-saved_, meaning their values persist across function calls. Use these for important data that must survive function invocations. 
+Registers `r6` through `r9` are _callee-saved_, meaning their values persist across function calls. Use these for important data that must survive function invocations.
 
 The remaining registers (`r0`-`r5`) get overwritten during syscalls and function calls.
 
@@ -31,7 +31,7 @@ Register `r10` is "special" because it serves as your frame pointer, pointing to
 While registers hold actively used values, memory stores everything else. sBPF organizes memory into fixed regions with identical layouts across all programs:
 
 | Region | Start Address | Purpose                 | Size/Notes                                             |
-|--------|---------------|-------------------------|--------------------------------------------------------|
+| ------ | ------------- | ----------------------- | ------------------------------------------------------ |
 | Text   | 0x100000000   | Code and read-only data | Program binary                                         |
 | Stack  | 0x200000000   | Local variables         | 4 KiB per stack frame, with a maximum call depth of 64 |
 | Heap   | 0x300000000   | Dynamic allocation      | 32 KiB                                                 |
@@ -53,17 +53,18 @@ Here's how registers and memory work together in practice:
 .globl entrypoint
 entrypoint:
     // On entry: r1 points to input data at 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Load first 8 bytes from input into r0
     mov64 r2, 42            // Put 42 in register r2
     add64 r0, r2            // Add them: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Store result on stack
     mov64 r0, 0             // Return success
     exit
 ```
 
 This program demonstrates the typical pattern:
+
 - Uses register `r1` (input pointer) to read from memory
 - Uses registers `r0` and `r2` for calculations
 - Uses register `r10` (frame pointer) to access stack memory
@@ -105,7 +106,8 @@ entrypoint:
 ```
 
 Exit behavior depends on call depth:
-- At call depth 0, exit terminates the program with `r0` as the result code. 
+
+- At call depth 0, exit terminates the program with `r0` as the result code.
 - At deeper call levels, exit acts like a return statement, restoring caller-saved registers (`r6`-`r9`) and the caller's frame pointer (`r10`) before continuing execution at the return address.
 
 The runtime automatically handles setup and teardown through implicit prologue and epilogue code, including initial register state configuration and final return processing.

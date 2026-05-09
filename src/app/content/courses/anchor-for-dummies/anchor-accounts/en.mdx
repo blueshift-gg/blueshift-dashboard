@@ -54,6 +54,7 @@ pub struct Escrow { … }
 ```
 
 **Important Notes about Discriminators**:
+
 - They must be unique across your program
 - Using `[1]` prevents using `[1, 2, …]` as these also start with `1`
 - `[0]` cannot be used as it conflicts with uninitialized accounts
@@ -73,6 +74,7 @@ pub struct CustomAccountType {
 ```
 
 Key points about program accounts:
+
 - Maximum size is 10,240 bytes (10 KiB)
 - For larger accounts, you'll need `zero_copy` and chunked writes
 - The `InitSpace` derive macro automatically calculates the required space
@@ -94,6 +96,7 @@ pub account: Account<'info, CustomAccountType>,
 ```
 
 Here are some of the fields used in the `#[account]` macro, beyond the `seeds` and `bump` fields that we have already covered, and what they do:
+
 - `init`: tells Anchor to create the account
 - `payer`: which signer funds the rent (here, the maker)
 - `space`: how many bytes to allocate. This is where the rent calculation happens as well
@@ -182,7 +185,7 @@ pub fn handler(ctx: Context<MyInstruction>) -> Result<()> {
     // Load specific field
     let balance = ctx.accounts.account.get_balance()?;
     let metadata = ctx.accounts.account.get_metadata()?;
-    
+
     Ok(())
 }
 ```
@@ -209,6 +212,7 @@ let updated_value = ctx.accounts.my_account.unload()?.load_field()?;
 The Token Program, part of the Solana Program Library (SPL), is the built-in toolkit for minting and moving any asset that isn't native SOL. It has instructions to create tokens, mint new supply, transfer balances, burn, freeze, and more.
 
 This program owns two key account types:
+
 - **Mint Account**: stores the metadata for one specific token: supply, decimals, mint authority, freeze authority, and so on
 - **Token Account**: holds a balance of that mint for a particular owner. Only the owner can reduce the balance (transfer, burn, etc.), but anyone can send tokens to the account, increasing its balance
 
@@ -217,6 +221,7 @@ This program owns two key account types:
 Natively, the core Anchor crate only bundles CPI and Accounts helpers for the System Program. If you want the same hand-holding for SPL tokens you pull in the `anchor_spl` crate.
 
 `anchor_spl` adds:
+
 - Helper builders for every instruction in both the SPL Token and Token-2022 programs
 - Type wrappers that make it painless to verify and deserialize Mint and Token accounts
 
@@ -241,6 +246,7 @@ pub maker_ata_a: Account<'info, TokenAccount>,
 ```
 
 `Account<'info, Mint>` and `Account<'info, TokenAccount>` tell Anchor to:
+
 - confirm the account really is a Mint or Token account
 - deserialize its data so you can read fields directly
 - enforce any extra constraints you specify (`authority`, `decimals`, `mint`, `token_program`, etc.)
@@ -301,6 +307,7 @@ The `Signer` type automatically checks if the account has signed the transaction
 `AccountInfo` and `UncheckedAccount` are low-level account types that provide direct access to account data without automatic validation. They are identical in functionality, but `UncheckedAccount` is the preferred choice as its name better reflects its purpose.
 
 These types are useful in three main scenarios:
+
 1. Working with accounts that lack a defined structure
 2. Implementing custom validation logic
 3. Interacting with accounts from other programs that don't have Anchor type definitions
@@ -323,6 +330,7 @@ pub struct InstructionAccounts<'info> {
 ### Option
 
 The `Option` type in Anchor allows you to make accounts optional in your instruction. When an account is wrapped in `Option`, it can either be provided or omitted in the transaction. This is particularly useful for:
+
 - Building flexible instructions that can work with or without certain accounts
 - Implementing optional parameters that may not always be needed
 - Creating backward-compatible instructions that can work with new or old account structures
@@ -341,6 +349,7 @@ pub struct InstructionAccounts<'info> {
 ### Box
 
 The `Box` type is used to store accounts on the heap rather than the stack. This is necessary in several scenarios:
+
 - When dealing with large account structures that would be inefficient to store on the stack
 - When working with recursive data structures
 - When you need to work with accounts that have a size that can't be determined at compile time
@@ -365,6 +374,7 @@ The `Program` type is used to validate and interact with other Solana programs. 
 There are two main ways to use the `Program` type:
 
 1. Using built-in program types (recommended when available):
+
 ```rust
 use anchor_spl::token::Token;
 
@@ -376,6 +386,7 @@ pub struct InstructionAccounts<'info> {
 ```
 
 2. Using a custom program address when the program type isn't available:
+
 ```rust
 // Address of the Program
 const PROGRAM_ADDRESS: Pubkey = pubkey!("22222222222222222222222222222222222222222222")
@@ -486,7 +497,7 @@ These constraints can be combined to create powerful validation rules for your a
 
 <ArticleSection name="Remaining Accounts" id="remaining-accounts" level="h2" />
 
-Sometimes when writing programs, the fixed structure of instruction accounts doesn't provide the flexibility your program needs. 
+Sometimes when writing programs, the fixed structure of instruction accounts doesn't provide the flexibility your program needs.
 
 Remaining accounts solve this by allowing you to pass additional accounts beyond the defined instruction structure, enabling dynamic behavior based on runtime conditions.
 
@@ -520,7 +531,7 @@ pub struct BatchTransfer<'info> {
 pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<()> {
     // Handle the first transfer using fixed accounts
     transfer_tokens(&ctx.accounts.from, &ctx.accounts.to, amounts[0])?;
-    
+
     let remaining_accounts = &ctx.remaining_accounts;
 
     // CRITICAL: Validate remaining accounts schema
@@ -535,16 +546,17 @@ pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<
         let from_account = &chunk[0];
         let to_account = &chunk[1];
         let amount = amounts[i + 1];
-        
+
         // Apply the same transfer logic to remaining accounts
         transfer_tokens(from_account, to_account, amount)?;
     }
-    
+
     Ok(())
 }
 ```
 
-Batching instructions means: 
+Batching instructions means:
+
 - Smaller instruction size: the repeating accounts and data doesn't need to be included
 - Efficiency: each CPI costs 1000 CU, meaning that somebody that uses your program could invoke it only one time instead of 3 if they need to do batch instructions
 
@@ -555,15 +567,17 @@ Batching instructions means:
 We can easily pass remaining accounts using the Anchor SDK generated once we do `anchor build`. Since those are "raw" accounts we'll need to specify if they need to be passed as signer and/or mutable like this:
 
 ```ts
-await program.methods.someMethod().accounts({
-  // some accounts
-})
-.remainingAccounts([
-  {
-    isSigner: false,
-    isWritable: true,
-    pubkey: new Pubkey().default
-  }
-])
-.rpc();
+await program.methods
+  .someMethod()
+  .accounts({
+    // some accounts
+  })
+  .remainingAccounts([
+    {
+      isSigner: false,
+      isWritable: true,
+      pubkey: new Pubkey().default,
+    },
+  ])
+  .rpc();
 ```

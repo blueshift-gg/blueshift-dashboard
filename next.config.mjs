@@ -2,9 +2,7 @@ import { fileURLToPath } from "node:url";
 import createNextIntlPlugin from "next-intl/plugin";
 import redirects from "./redirects.mjs";
 
-const canvasShimPath = fileURLToPath(
-  new URL("./src/shims/canvas-shim.js", import.meta.url),
-);
+const canvasShimPath = fileURLToPath(new URL("./src/shims/canvas-shim.js", import.meta.url));
 
 const nextConfig = {
   async redirects() {

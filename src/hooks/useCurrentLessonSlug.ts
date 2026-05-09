@@ -16,9 +16,7 @@ export function useCurrentLessonSlug(course: CourseMetadata): string {
     return "";
   }
 
-  const currentLesson = courseLessons.find(
-    (lesson) => lesson.lessonNumber === progress,
-  );
+  const currentLesson = courseLessons.find((lesson) => lesson.lessonNumber === progress);
 
   return currentLesson?.slug || "";
 }

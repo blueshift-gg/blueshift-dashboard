@@ -57,6 +57,7 @@ solana-wallet:/v1/associate/local
 ```
 
 Breaking this down:
+
 - `solana-wallet:`: The URI scheme registered by MWA wallets
 - `/v1/associate/local`: Local connection (same device)
 - `association`: The base64url-encoded public key from Step 1
@@ -76,6 +77,7 @@ await Linking.openURL(associationUri);
 ### Step 4: Wallet Starts Server
 
 The wallet app:
+
 1. Parses the `port` parameter
 2. Starts a WebSocket server on that port
 3. Begins listening for exactly one connection
@@ -126,6 +128,7 @@ Qd || Signature(Qd, association_private_key)
 ```
 
 Where:
+
 - `Qd`: X9.62-encoded ECDH public key (65 bytes)
 - `Signature`: ECDSA-SHA256 proof that this comes from the same app that created the association URI
 
@@ -153,15 +156,16 @@ The SDK then derives the AES-128 encryption key using HKDF:
 
 ```typescript
 const encryptionKey = hkdf({
-  ikm: sharedSecret,          // 32 bytes from ECDH
+  ikm: sharedSecret, // 32 bytes from ECDH
   salt: associationPublicKey, // 65 bytes (X9.62 format)
-  length: 16,                 // 128-bit AES key
+  length: 16, // 128-bit AES key
 });
 ```
 
 ### Why This Complexity?
 
 Every session uses fresh ephemeral keys. Even if an attacker:
+
 - Intercepts the association URI
 - Monitors the WebSocket traffic
 - Records the entire handshake
@@ -190,14 +194,14 @@ The sequence number is included as Additional Authenticated Data (AAD). If an at
 function encryptMessage(payload: string): Uint8Array {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const sequenceBytes = uint32ToBytes(this.sequenceNumber++);
-  
+
   const { ciphertext, tag } = aesGcmEncrypt({
     key: this.encryptionKey,
     iv,
     plaintext: new TextEncoder().encode(payload),
     aad: sequenceBytes,
   });
-  
+
   return concat(sequenceBytes, iv, ciphertext, tag);
 }
 ```
@@ -210,22 +214,22 @@ With encryption established, your dApp sends JSON-RPC 2.0 requests. The wallet r
 
 These work immediately after session establishment:
 
-| Method | Purpose |
-|--------|---------|
-| `authorize` | Request account access and/or re-authorize with cached token |
-| `deauthorize` | Invalidate an auth token |
-| `get_capabilities` | Query wallet features and limits |
+| Method             | Purpose                                                      |
+| ------------------ | ------------------------------------------------------------ |
+| `authorize`        | Request account access and/or re-authorize with cached token |
+| `deauthorize`      | Invalidate an auth token                                     |
+| `get_capabilities` | Query wallet features and limits                             |
 
 ### Privileged Methods
 
 These require a successful `authorize` first:
 
-| Method | Purpose |
-|--------|---------|
-| `sign_and_send_transactions` | Sign and broadcast transactions |
-| `sign_transactions` | Sign transactions (without sending) |
-| `sign_messages` | Sign arbitrary byte payloads |
-| `clone_authorization` | Create a new auth token from existing one |
+| Method                       | Purpose                                   |
+| ---------------------------- | ----------------------------------------- |
+| `sign_and_send_transactions` | Sign and broadcast transactions           |
+| `sign_transactions`          | Sign transactions (without sending)       |
+| `sign_messages`              | Sign arbitrary byte payloads              |
+| `clone_authorization`        | Create a new auth token from existing one |
 
 If you call a privileged method without authorizing, you get:
 
@@ -308,17 +312,17 @@ For remote sessions (desktop to mobile via QR code), the connection goes through
 
 MWA uses JSON-RPC error codes. Knowing these helps you write better error handling:
 
-| Code | Name | Meaning |
-|------|------|---------|
-| -32700 | Parse Error | Invalid JSON |
-| -32600 | Invalid Request | Not a valid JSON-RPC request |
-| -32601 | Method Not Found | Unknown method name |
-| -32602 | Invalid Params | Wrong parameter types |
-| -32603 | Internal Error | Transaction simulation failed |
-| -32000 | Server Error | Generic wallet error |
-| -32001 | Not Authorized | Call `authorize` first |
-| -32002 | Too Many Requests | Rate limited |
-| 4001 | User Rejected | User declined the request |
+| Code   | Name              | Meaning                       |
+| ------ | ----------------- | ----------------------------- |
+| -32700 | Parse Error       | Invalid JSON                  |
+| -32600 | Invalid Request   | Not a valid JSON-RPC request  |
+| -32601 | Method Not Found  | Unknown method name           |
+| -32602 | Invalid Params    | Wrong parameter types         |
+| -32603 | Internal Error    | Transaction simulation failed |
+| -32000 | Server Error      | Generic wallet error          |
+| -32001 | Not Authorized    | Call `authorize` first        |
+| -32002 | Too Many Requests | Rate limited                  |
+| 4001   | User Rejected     | User declined the request     |
 
 The most common error you'll handle is `4001`: the user pressed "Cancel" or "Reject" in the wallet UI.
 
@@ -332,10 +336,10 @@ await transact(async (wallet) => {
   //   Wallet app is foregrounded
   //   WebSocket connected
   //   Encryption established
-  
+
   await wallet.authorize(/* ... */);
   await wallet.signAndSendTransactions(/* ... */);
-  
+
   // ← Session ENDS when callback returns
 });
 // Wallet may background itself

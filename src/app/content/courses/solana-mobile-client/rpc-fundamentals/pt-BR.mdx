@@ -21,19 +21,13 @@ A biblioteca `@solana/web3.js` fornece a classe `Connection`: seu gateway para a
 import { Connection, clusterApiUrl } from "@solana/web3.js";
 
 // Para desenvolvimento
-const devnetConnection = new Connection(
-  clusterApiUrl("devnet"),
-  "confirmed"
-);
+const devnetConnection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
 // Para produção com um provedor RPC dedicado
-const mainnetConnection = new Connection(
-  "https://your-provider.com/rpc",
-  {
-    commitment: "confirmed",
-    confirmTransactionInitialTimeout: 60000, // 60 segundos para mobile
-  }
-);
+const mainnetConnection = new Connection("https://your-provider.com/rpc", {
+  commitment: "confirmed",
+  confirmTransactionInitialTimeout: 60000, // 60 segundos para mobile
+});
 ```
 
 ### Níveis de Commitment
@@ -87,10 +81,9 @@ if (accountInfo) {
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // Obtém todas as contas de token pertencentes a uma carteira
-const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-  walletPublicKey,
-  { programId: TOKEN_PROGRAM_ID }
-);
+const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPublicKey, {
+  programId: TOKEN_PROGRAM_ID,
+});
 
 tokenAccounts.value.forEach((account) => {
   const parsed = account.account.data.parsed.info;
@@ -104,8 +97,7 @@ tokenAccounts.value.forEach((account) => {
 Toda transação precisa de um blockhash recente; ele atua como timestamp e previne ataques de replay:
 
 ```typescript
-const { blockhash, lastValidBlockHeight } = 
-  await connection.getLatestBlockhash("confirmed");
+const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
 // Este blockhash é válido por ~60-90 segundos
 // Se sua transação demorar mais, você precisará de um novo
@@ -125,9 +117,7 @@ const balance3 = await connection.getBalance(addr3);
 // 3 ida-e-volta = lento em conexão celular
 
 // FAÇA isto em vez disso
-const balances = await connection.getMultipleAccountsInfo([
-  addr1, addr2, addr3
-]);
+const balances = await connection.getMultipleAccountsInfo([addr1, addr2, addr3]);
 // 1 ida-e-volta = muito mais rápido
 ```
 
@@ -135,24 +125,27 @@ const balances = await connection.getMultipleAccountsInfo([
 
 ```typescript
 // Cache simples para dados de conta
-const accountCache = new Map<string, {
-  data: AccountInfo<Buffer> | null;
-  timestamp: number;
-}>();
+const accountCache = new Map<
+  string,
+  {
+    data: AccountInfo<Buffer> | null;
+    timestamp: number;
+  }
+>();
 
 const CACHE_TTL = 5000; // 5 segundos
 
 async function getCachedAccountInfo(
   connection: Connection,
-  pubkey: PublicKey
+  pubkey: PublicKey,
 ): Promise<AccountInfo<Buffer> | null> {
   const key = pubkey.toBase58();
   const cached = accountCache.get(key);
-  
+
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.data;
   }
-  
+
   const data = await connection.getAccountInfo(pubkey);
   accountCache.set(key, { data, timestamp: Date.now() });
   return data;
@@ -167,32 +160,28 @@ Redes móveis são não confiáveis. Construa retentativas:
 async function withRetry<T>(
   operation: () => Promise<T>,
   maxAttempts = 3,
-  delayMs = 1000
+  delayMs = 1000,
 ): Promise<T> {
   let lastError: Error | undefined;
-  
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error as Error;
       console.log(`Tentativa ${attempt} falhou:`, error);
-      
+
       if (attempt < maxAttempts) {
-        await new Promise(resolve => 
-          setTimeout(resolve, delayMs * attempt)
-        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
       }
     }
   }
-  
+
   throw lastError;
 }
 
 // Uso
-const balance = await withRetry(() => 
-  connection.getBalance(publicKey)
-);
+const balance = await withRetry(() => connection.getBalance(publicKey));
 ```
 
 <ArticleSection name="Escolhendo um Provedor RPC" id="choosing-an-rpc-provider" level="h2" />
@@ -218,13 +207,13 @@ import Config from "react-native-config";
 
 export const getRpcEndpoint = () => {
   const endpoint = Config.SOLANA_RPC_URL;
-  
+
   if (!endpoint) {
     // Fallback apenas para desenvolvimento
     console.warn("URL de RPC não configurada, usando devnet");
     return clusterApiUrl("devnet");
   }
-  
+
   return endpoint;
 };
 
@@ -243,7 +232,7 @@ const subscriptionId = connection.onAccountChange(
   (accountInfo) => {
     console.log("Conta alterada:", accountInfo.lamports);
   },
-  "confirmed"
+  "confirmed",
 );
 
 // Inscreve-se em confirmações de transação
@@ -256,7 +245,7 @@ connection.onSignature(
       console.log("Transação confirmada!");
     }
   },
-  "confirmed"
+  "confirmed",
 );
 
 // IMPORTANTE: Limpe quando o componente for desmontado
@@ -276,26 +265,26 @@ WebSockets no mobile podem ser complicados:
 function useAccountBalance(publicKey: PublicKey | null) {
   const [balance, setBalance] = useState<number | null>(null);
   const connection = useConnection();
-  
+
   useEffect(() => {
     if (!publicKey) return;
-    
+
     // Busca inicial
     connection.getBalance(publicKey).then(setBalance);
-    
+
     // Inscreve-se em mudanças
     const subId = connection.onAccountChange(
       publicKey,
       (info) => setBalance(info.lamports),
-      "confirmed"
+      "confirmed",
     );
-    
+
     // Limpeza ao desmontar
     return () => {
       connection.removeAccountChangeListener(subId);
     };
   }, [publicKey, connection]);
-  
+
   return balance;
 }
 ```

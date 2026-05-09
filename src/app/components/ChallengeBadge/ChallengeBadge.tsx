@@ -18,18 +18,16 @@ export default function Badge({
       key={variant}
       className={classNames(
         "px-2.5 py-1.5 font-medium capitalize font-mono text-xs lg:text-[13px] flex items-center gap-x-2",
-        variant === "incomplete" &&
-          "bg-card-solid-foreground text-shade-secondary",
+        variant === "incomplete" && "bg-card-solid-foreground text-shade-secondary",
         variant === "passed" && "bg-success/8 text-success",
         variant === "failed" && "bg-error/8 text-error",
-        variant === "loading" &&
-          "pl-2 pr-3 bg-brand-primary/8 text-brand-primary",
+        variant === "loading" && "pl-2 pr-3 bg-brand-primary/8 text-brand-primary",
       )}
     >
       {variant === "loading" ? (
         <>
           <Loading className="text-brand-primary" />
-          <span className="text-brand-primary pt-[4px]">Testing</span>
+          <span className="pt-[4px] text-brand-primary">Testing</span>
         </>
       ) : (
         <span>{label}</span>

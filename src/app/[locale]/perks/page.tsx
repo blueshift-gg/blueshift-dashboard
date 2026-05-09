@@ -6,7 +6,7 @@ export default function PerksPage() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
+    <div className="flex w-full flex-col gap-y-0 px-3 sm:px-4">
       <PageHero badge={t("perks.subtitle")} title={t("perks.title")} />
       <Perks />
     </div>

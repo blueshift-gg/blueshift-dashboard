@@ -10,9 +10,7 @@ interface BackToCourseButtonProps {
   course: CourseMetadata;
 }
 
-export default function BackToCourseButton({
-  course,
-}: BackToCourseButtonProps) {
+export default function BackToCourseButton({ course }: BackToCourseButtonProps) {
   const lastLessonSlug = useCurrentLessonSlug(course);
   const t = useTranslations();
 

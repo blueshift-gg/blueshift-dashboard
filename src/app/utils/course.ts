@@ -1,9 +1,4 @@
-import {
-  difficulty,
-  difficultyColors,
-  languageColors,
-  languages,
-} from "./common";
+import { difficulty, difficultyColors, languageColors, languages } from "./common";
 
 // Re-export with course-specific names for backward compatibility
 export const courseLanguages = languages;
@@ -42,9 +37,7 @@ export type CourseDifficulty = keyof typeof courseDifficulty;
  * Adds a lesson number to each lesson in the course metadata.
  * @param courses
  */
-export function withCourseNumber(
-  courses: CourseMetadataWithoutLessonNumber[],
-): CourseMetadata[] {
+export function withCourseNumber(courses: CourseMetadataWithoutLessonNumber[]): CourseMetadata[] {
   return courses.map((course) => ({
     ...course,
     lessons: course.lessons.map((lesson, index) => ({

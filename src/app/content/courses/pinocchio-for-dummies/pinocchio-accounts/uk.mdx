@@ -31,6 +31,7 @@ if !account.is_owned_by(&pinocchio_system::ID) {
 Для нашого файлу `helper.rs` ми використали дві фундаментальні концепції Rust: **загальні інтерфейси** та **трейти**.
 
 Ми обрали цей підхід замість рішення на основі макросів (як в Anchor) з кількох ключових причин:
+
 - Трейти та інтерфейси надають чіткий, явний код, який читачі можуть відстежувати без необхідності подумки "розгортати" макроси
 - Компілятор може перевіряти реалізації трейтів, що забезпечує краще виявлення помилок, виведення типів, автодоповнення та інструменти рефакторингу
 - Трейти дозволяють створювати загальні реалізації, які можна повторно використовувати без дублювання коду, тоді як процедурні макроси зазвичай дублюють код для кожного використання
@@ -242,6 +243,7 @@ impl AccountInit for TokenAccount {
 Для Token2022 цей простий підхід не працює. Розмір `Mint` може зростати і потенційно перевищувати розмір `TokenAccount`, коли розширення токенів додаються безпосередньо до даних `Mint`. Це означає, що ми не можемо покладатися лише на розмір для розрізнення типів облікових записів.
 
 Для Token2022 ми можемо розрізняти `Mint` та `TokenAccount` двома способами:
+
 - **За розміром**: Подібно до програми Legacy Token (коли облікові записи мають стандартні розміри)
 - **За дискримінатором**: Спеціальний байт, розташований у позиції 165 (на один байт більше, ніж у застарілому TokenAccount, щоб уникнути конфліктів)
 
@@ -488,76 +490,76 @@ impl AssociatedTokenAccountInit for AssociatedTokenAccount {
 
 Атака реініціалізації відбувається, коли зловмисник намагається повторно використати закритий обліковий запис, реініціалізуючи його зловмисними даними. Встановлюючи перший байт на 255 і зменшуючи обліковий запис майже до нульового розміру, ми унеможливлюємо помилкове сприйняття облікового запису як будь-якого дійсного типу облікового запису в майбутньому. Це поширений шаблон безпеки в програмах Solana.
 
-  ```rust
-  pub struct ProgramAccount;
+```rust
+pub struct ProgramAccount;
 
-  impl AccountCheck for ProgramAccount {
-      fn check(account: &AccountInfo) -> Result<(), ProgramError> {
-          if !account.is_owned_by(&crate::ID) {
-              return Err(PinocchioError::InvalidOwner.into());
-          }
+impl AccountCheck for ProgramAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_owned_by(&crate::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
 
-          if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
-              return Err(PinocchioError::InvalidAccountData.into());
-          }
+        if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait ProgramAccountInit {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult;
-  }
+pub trait ProgramAccountInit {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult;
+}
 
-  impl ProgramAccountInit for ProgramAccount {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult {
-          // Get required lamports for rent
-          let lamports = Rent::get()?.minimum_balance(space);
+impl ProgramAccountInit for ProgramAccount {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(space);
 
-          // Create signer with seeds slice
-          let signer = [Signer::from(seeds)];
+        // Create signer with seeds slice
+        let signer = [Signer::from(seeds)];
 
-          // Create the account
-          CreateAccount {
-              from: payer,
-              to: account,
-              lamports,
-              space: space as u64,
-              owner: &crate::ID,
-          }
-          .invoke_signed(&signer)?;
+        // Create the account
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: space as u64,
+            owner: &crate::ID,
+        }
+        .invoke_signed(&signer)?;
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait AccountClose {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
-  }
+pub trait AccountClose {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
+}
 
-  impl AccountClose for ProgramAccount {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
-          {
-              let mut data = account.try_borrow_mut_data()?;
-              data[0] = 0xff;
-          }
+impl AccountClose for ProgramAccount {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
+        {
+            let mut data = account.try_borrow_mut_data()?;
+            data[0] = 0xff;
+        }
 
-          *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
-          account.realloc(1, true)?;
-          account.close()
-      }
-  }
-  ```
+        *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
+        account.realloc(1, true)?;
+        account.close()
+    }
+}
+```
 
 ### Оптимізація доступу до даних облікового запису
 
@@ -628,6 +630,7 @@ impl AccountExample {
 ```
 
 Ця реалізація надає три методи для доступу до даних облікового запису:
+
 1. `from_account_info`: Безпечний метод, який виконує повну валідацію та перевірку запозичення
 2. `from_account_info_unchecked`: Небезпечний метод, який пропускає перевірку запозичення, але все ще перевіряє властивості облікового запису
 3. `from_bytes`: Небезпечний метод для прямого доступу до байтів, який використовується внутрішньо іншими методами
@@ -698,6 +701,7 @@ pub fn set_seeds_unchecked(account_info: &AccountInfo, seed: u64) -> Result<(), 
 ```
 
 Ця реалізація забезпечує:
+
 1. Константу `SEED_OFFSET` для відстеження позиції даних seed
 2. Функцію валідації `check_program_id_and_discriminator`
 3. Безпечні та небезпечні версії гетерів і сетерів

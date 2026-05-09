@@ -12,13 +12,13 @@ Sự đánh đổi rất đơn giản: bạn chỉ có tổng cộng 11 ô, vì 
 
 sBPF gán vai trò cụ thể cho mỗi thanh ghi:
 
-| Thanh ghi | Vai trò                | Callee-saved?  | Ghi chú sử dụng                             |
-|----------|----------------------|----------------|---------------------------------------------|
-| `r0`     | Giá trị trả về        | Không          | Kết quả hàm, giá trị trả về syscall        |
-| `r1`     | Con trỏ buffer đầu vào | Không          | Trỏ đến 0x400000000 khi bắt đầu             |
-| `r2-r5`  | Tạm thời/đối số       | Không          | Đối số hàm trợ giúp, giá trị tạm thời      |
-| `r6-r9`  | Mục đích chung         | Có             | Phải bảo toàn qua các lời gọi               |
-| `r10`    | Con trỏ khung          | Có, chỉ đọc    | Cơ sở ngăn xếp, không thể sửa đổi trực tiếp |
+| Thanh ghi | Vai trò                | Callee-saved? | Ghi chú sử dụng                             |
+| --------- | ---------------------- | ------------- | ------------------------------------------- |
+| `r0`      | Giá trị trả về         | Không         | Kết quả hàm, giá trị trả về syscall         |
+| `r1`      | Con trỏ buffer đầu vào | Không         | Trỏ đến 0x400000000 khi bắt đầu             |
+| `r2-r5`   | Tạm thời/đối số        | Không         | Đối số hàm trợ giúp, giá trị tạm thời       |
+| `r6-r9`   | Mục đích chung         | Có            | Phải bảo toàn qua các lời gọi               |
+| `r10`     | Con trỏ khung          | Có, chỉ đọc   | Cơ sở ngăn xếp, không thể sửa đổi trực tiếp |
 
 Các thanh ghi `r6` đến `r9` là _callee-saved_, nghĩa là giá trị của chúng được duy trì qua các lời gọi hàm. Sử dụng chúng cho dữ liệu quan trọng cần tồn tại qua các lần gọi hàm.
 
@@ -30,12 +30,12 @@ Thanh ghi `r10` là "đặc biệt" vì nó đóng vai trò là con trỏ khung,
 
 Trong khi các thanh ghi lưu trữ các giá trị đang được sử dụng, bộ nhớ lưu trữ mọi thứ khác. sBPF tổ chức bộ nhớ thành các vùng cố định với bố cục giống nhau trên tất cả các chương trình:
 
-| Vùng   | Địa chỉ bắt đầu | Mục đích                | Kích thước/Ghi chú                                     |
-|--------|-----------------|-------------------------|--------------------------------------------------------|
-| Text   | 0x100000000     | Mã và dữ liệu chỉ đọc   | Tệp nhị phân chương trình                              |
-| Stack  | 0x200000000     | Biến cục bộ             | 4 KiB cho mỗi khung stack, với độ sâu gọi tối đa là 64 |
-| Heap   | 0x300000000     | Cấp phát động           | 32 KiB                                                 |
-| Input  | 0x400000000     | Tham số chương trình    | Dữ liệu tài khoản và hướng dẫn được tuần tự hóa       |
+| Vùng  | Địa chỉ bắt đầu | Mục đích              | Kích thước/Ghi chú                                     |
+| ----- | --------------- | --------------------- | ------------------------------------------------------ |
+| Text  | 0x100000000     | Mã và dữ liệu chỉ đọc | Tệp nhị phân chương trình                              |
+| Stack | 0x200000000     | Biến cục bộ           | 4 KiB cho mỗi khung stack, với độ sâu gọi tối đa là 64 |
+| Heap  | 0x300000000     | Cấp phát động         | 32 KiB                                                 |
+| Input | 0x400000000     | Tham số chương trình  | Dữ liệu tài khoản và hướng dẫn được tuần tự hóa        |
 
 - **Vùng text** chứa mã thực thi và dữ liệu chỉ đọc như các hằng số chuỗi. Dữ liệu được định nghĩa với các chỉ thị `.quad` thường nằm ở đây.
 - **Vùng stack** chứa các biến cục bộ. Với `r10` trỏ đến cơ sở stack, bạn truy cập các biến cục bộ bằng cách sử dụng offset âm: `[r10 - 16]`, `[r10 - 24]`, v.v.
@@ -53,17 +53,18 @@ Bố cục cố định này cung cấp ba lợi ích chính: bảo mật thông
 .globl entrypoint
 entrypoint:
     // On entry: r1 points to input data at 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Load first 8 bytes from input into r0
     mov64 r2, 42            // Put 42 in register r2
     add64 r0, r2            // Add them: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Store result on stack
     mov64 r0, 0             // Return success
     exit
 ```
 
 Chương trình này minh họa mẫu điển hình:
+
 - Sử dụng thanh ghi `r1` (con trỏ đầu vào) để đọc từ bộ nhớ
 - Sử dụng thanh ghi `r0` và `r2` cho các phép tính
 - Sử dụng thanh ghi `r10` (con trỏ khung) để truy cập bộ nhớ stack
@@ -105,7 +106,8 @@ entrypoint:
 ```
 
 Hành vi thoát phụ thuộc vào độ sâu của lời gọi:
-- Ở độ sâu lời gọi 0, lệnh thoát kết thúc chương trình với `r0` là mã kết quả. 
+
+- Ở độ sâu lời gọi 0, lệnh thoát kết thúc chương trình với `r0` là mã kết quả.
 - Ở các cấp độ gọi sâu hơn, lệnh thoát hoạt động như một câu lệnh return, khôi phục các thanh ghi được lưu bởi người gọi (`r6`-`r9`) và con trỏ khung của người gọi (`r10`) trước khi tiếp tục thực thi tại địa chỉ trả về.
 
 Runtime tự động xử lý việc thiết lập và dọn dẹp thông qua mã đầu và cuối ngầm định, bao gồm cấu hình trạng thái thanh ghi ban đầu và xử lý trả về cuối cùng.

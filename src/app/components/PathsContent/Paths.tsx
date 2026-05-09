@@ -10,7 +10,7 @@ async function PathsContent() {
 
 export default function Paths() {
   return (
-    <div className="relative content-wrapper">
+    <div className="content-wrapper relative">
       <Suspense fallback={<PathList isLoading={true} />}>
         <PathsContent />
       </Suspense>

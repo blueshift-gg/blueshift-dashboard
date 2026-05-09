@@ -6,24 +6,9 @@ import { courses } from "@/app/content/courses/courses";
 import { paths } from "@/app/content/paths/paths";
 import { generateBannerData } from "@/lib/banners/banner-generator";
 
-const COURSE_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "course-banners",
-);
-const CHALLENGE_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "challenge-banners",
-);
-const PATH_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "path-banners",
-);
+const COURSE_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "course-banners");
+const CHALLENGE_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "challenge-banners");
+const PATH_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "path-banners");
 
 async function generateBannersFor(
   items: Array<{ slug?: string }>,
@@ -46,9 +31,7 @@ async function generateBannersFor(
 
   for (const item of items) {
     if (!item.slug) {
-      console.warn(
-        `${type} with no slug found, skipping: ${JSON.stringify(item)}`,
-      );
+      console.warn(`${type} with no slug found, skipping: ${JSON.stringify(item)}`);
       continue;
     }
 
@@ -87,9 +70,7 @@ async function generateBannersFor(
       existingFiles.add(filename);
       console.log(`Successfully generated and saved: ${filePath}`);
     } else {
-      console.warn(
-        `Skipped banner for ${itemSlug} (generation failed or no data returned).`,
-      );
+      console.warn(`Skipped banner for ${itemSlug} (generation failed or no data returned).`);
     }
   }
 }

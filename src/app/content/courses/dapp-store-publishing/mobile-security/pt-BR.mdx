@@ -8,7 +8,11 @@ Isso não é teórico. Um desenvolvedor recentemente documentou como hackeou seu
 
 Esta lição aborda as realidades de segurança de apps cripto mobile e defesas práticas.
 
-<ArticleSection name="A Realidade da Engenharia Reversa" id="the-reverse-engineering-reality" level="h2" />
+<ArticleSection
+  name="A Realidade da Engenharia Reversa"
+  id="the-reverse-engineering-reality"
+  level="h2"
+/>
 
 Quando você envia um APK, está enviando toda a sua base de código para invasores. Veja o que eles podem fazer:
 
@@ -52,6 +56,7 @@ unzip -p yourapp.apk classes.dex | strings | grep -i "api\|key\|secret\|token"
 ```
 
 Este comando encontrará:
+
 - Chaves de API hardcoded
 - URLs de endpoints de API
 - Mensagens de erro que revelam estrutura interna
@@ -76,13 +81,18 @@ class a {
 
 Isso torna o **fluxo de controle** mais difícil de entender. Mas não faz **nada** por strings literais. Sua chave de API ainda está lá, apenas em uma classe chamada `a` em vez de `WalletManager`.
 
-<ArticleSection name="Quais Segredos Você Pode Realmente Proteger?" id="what-secrets-can-you-actually-protect" level="h2" />
+<ArticleSection
+  name="Quais Segredos Você Pode Realmente Proteger?"
+  id="what-secrets-can-you-actually-protect"
+  level="h2"
+/>
 
 Entender o que você pode e não pode proteger é crucial para projetar apps seguros.
 
 ### Não é possível proteger: Segredos estáticos
 
 Estes serão extraídos não importa o que você faça:
+
 - Chaves de API embutidas no código
 - URLs hardcoded
 - Valores de configuração estáticos
@@ -91,6 +101,7 @@ Estes serão extraídos não importa o que você faça:
 ### É possível proteger: Segredos específicos do usuário
 
 Com implementação adequada, você pode proteger:
+
 - Tokens de autenticação do usuário
 - Chaves privadas (com suporte de hardware)
 - Dados de sessão
@@ -101,6 +112,7 @@ Com implementação adequada, você pode proteger:
 **Não coloque segredos do servidor no código do cliente.**
 
 Se um segredo dá acesso a algo valioso, ele nunca deve existir no APK. Em vez disso:
+
 - Autentique usuários no seu backend
 - O backend mantém as chaves de API reais
 - O backend faz proxy das requisições ou emite tokens de escopo limitado
@@ -112,6 +124,7 @@ Plataformas mobile fornecem armazenamento seguro com suporte de hardware. Use-o.
 ### iOS: Keychain Services
 
 O Keychain do iOS é respaldado pelo Secure Enclave em dispositivos modernos. É projetado especificamente para armazenar segredos como:
+
 - Tokens de autenticação
 - Chaves privadas
 - Senhas
@@ -119,21 +132,22 @@ O Keychain do iOS é respaldado pelo Secure Enclave em dispositivos modernos. É
 Com React Native, use `expo-secure-store`:
 
 ```typescript
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from "expo-secure-store";
 
 // Armazenar um valor
-await SecureStore.setItemAsync('authToken', token, {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+await SecureStore.setItemAsync("authToken", token, {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 });
 
 // Recuperar um valor
-const token = await SecureStore.getItemAsync('authToken');
+const token = await SecureStore.getItemAsync("authToken");
 
 // Deletar um valor
-await SecureStore.deleteItemAsync('authToken');
+await SecureStore.deleteItemAsync("authToken");
 ```
 
 A opção `WHEN_UNLOCKED_THIS_DEVICE_ONLY` significa:
+
 - O valor só é acessível quando o dispositivo está desbloqueado
 - O valor não sincroniza com outros dispositivos via iCloud
 - O valor é deletado se o dispositivo for restaurado
@@ -143,13 +157,14 @@ A opção `WHEN_UNLOCKED_THIS_DEVICE_ONLY` significa:
 O Keystore do Android fornece armazenamento de chaves com suporte de hardware. Para segredos gerais, use EncryptedSharedPreferences:
 
 ```typescript
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from "expo-secure-store";
 
 // expo-secure-store usa o Android Keystore no Android
-await SecureStore.setItemAsync('authToken', token);
+await SecureStore.setItemAsync("authToken", token);
 ```
 
 Nos bastidores, o `expo-secure-store` no Android:
+
 1. Gera uma chave de criptografia no Android Keystore
 2. Usa essa chave para criptografar seu valor
 3. Armazena o valor criptografado no SharedPreferences
@@ -159,8 +174,8 @@ Nos bastidores, o `expo-secure-store` no Android:
 
 ```typescript
 // NUNCA armazene segredos nestes:
-import AsyncStorage from '@react-native-async-storage/async-storage';
-await AsyncStorage.setItem('authToken', token); // ❌ Não criptografado
+import AsyncStorage from "@react-native-async-storage/async-storage";
+await AsyncStorage.setItem("authToken", token); // ❌ Não criptografado
 
 // Ou em estado global em memória que persiste:
 global.authToken = token; // ❌ Pode ser extraído via memory dumps
@@ -173,35 +188,37 @@ Apps cripto têm um desafio único: eles lidam com chaves privadas que controlam
 ### Nunca armazene chaves privadas em formato bruto
 
 Se você está implementando uma carteira não-custodial, a chave privada deve:
+
 - Ser criptografada antes do armazenamento
 - Usar chaves de criptografia com suporte de hardware
 - Exigir autenticação do usuário para acessar
 
 ```typescript
-import * as SecureStore from 'expo-secure-store';
-import * as Crypto from 'expo-crypto';
+import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
 
 // Criptografar chave privada com chave derivada do PIN do usuário
 const encryptPrivateKey = async (privateKey: Uint8Array, userPin: string) => {
   // Derivar chave de criptografia do PIN
   const salt = await Crypto.getRandomBytesAsync(16);
   const derivedKey = await deriveKey(userPin, salt);
-  
+
   // Criptografar chave privada
   const encrypted = await encrypt(privateKey, derivedKey);
-  
+
   // Armazenar chave criptografada e salt
-  await SecureStore.setItemAsync('encryptedPrivateKey', 
+  await SecureStore.setItemAsync(
+    "encryptedPrivateKey",
     JSON.stringify({ encrypted, salt: Array.from(salt) }),
-    { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }
+    { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY },
   );
 };
 
 // Descriptografar quando necessário para assinatura
 const getPrivateKey = async (userPin: string): Promise<Uint8Array> => {
-  const stored = await SecureStore.getItemAsync('encryptedPrivateKey');
+  const stored = await SecureStore.getItemAsync("encryptedPrivateKey");
   const { encrypted, salt } = JSON.parse(stored);
-  
+
   const derivedKey = await deriveKey(userPin, new Uint8Array(salt));
   return await decrypt(encrypted, derivedKey);
 };
@@ -210,6 +227,7 @@ const getPrivateKey = async (userPin: string): Promise<Uint8Array> => {
 ### Prefira provedores de embedded wallet
 
 Serviços como Privy lidam com a complexidade do gerenciamento seguro de chaves:
+
 - Chaves são criptografadas e fragmentadas
 - Módulos de segurança de hardware no backend
 - Nenhuma chave bruta existe no seu código
@@ -225,21 +243,22 @@ Em vez de chamar APIs de terceiros diretamente do seu app:
 
 ```typescript
 // ❌ Chamada direta expõe a chave de API
-const response = await fetch('https://api.thirdparty.com/data', {
+const response = await fetch("https://api.thirdparty.com/data", {
   headers: {
-    'Authorization': 'Bearer sk_liv..._KEY' // Extraível!
-  }
+    Authorization: "Bearer sk_liv..._KEY", // Extraível!
+  },
 });
 
 // ✅ Fazer proxy pelo seu backend
-const response = await fetch('https://yourbackend.com/api/data', {
+const response = await fetch("https://yourbackend.com/api/data", {
   headers: {
-    'Authorization': `Bearer ${userAuthToken}` // Token específico do usuário
-  }
+    Authorization: `Bearer ${userAuthToken}`, // Token específico do usuário
+  },
 });
 ```
 
 Seu backend:
+
 1. Valida o token de autenticação do usuário
 2. Faz a requisição para a API de terceiros com a chave real
 3. Retorna o resultado para o app
@@ -251,8 +270,8 @@ Em vez de chaves de API de longa duração, use tokens de curta duração emitid
 ```typescript
 // Obter um token de curta duração (válido por 5 minutos)
 const getUploadToken = async () => {
-  const response = await fetch('https://yourbackend.com/upload-token', {
-    headers: { 'Authorization': `Bearer ${userAuthToken}` }
+  const response = await fetch("https://yourbackend.com/upload-token", {
+    headers: { Authorization: `Bearer ${userAuthToken}` },
   });
   return response.json(); // { token: 'short_lived_xxx', expires: 300 }
 };
@@ -260,9 +279,9 @@ const getUploadToken = async () => {
 // Usar o token de curta duração diretamente com o serviço
 const uploadFile = async (file: File) => {
   const { token } = await getUploadToken();
-  await fetch('https://storage.service.com/upload', {
-    headers: { 'Authorization': `Bearer ${token}` },
-    body: file
+  await fetch("https://storage.service.com/upload", {
+    headers: { Authorization: `Bearer ${token}` },
+    body: file,
   });
 };
 ```
@@ -274,25 +293,25 @@ Mesmo que o token de curta duração seja extraído, ele expira rapidamente e es
 Para operações sensíveis, assine requisições para provar que vieram do seu app:
 
 ```typescript
-import * as Crypto from 'expo-crypto';
+import * as Crypto from "expo-crypto";
 
 const signRequest = async (payload: object, timestamp: number) => {
   const message = JSON.stringify(payload) + timestamp.toString();
   const signature = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
-    message + APP_SECRET // Este segredo ainda é extraível, mas eleva a barra
+    message + APP_SECRET, // Este segredo ainda é extraível, mas eleva a barra
   );
   return signature;
 };
 
 // A requisição inclui a assinatura
-const response = await fetch('https://yourbackend.com/api/sensitive', {
-  method: 'POST',
+const response = await fetch("https://yourbackend.com/api/sensitive", {
+  method: "POST",
   headers: {
-    'X-Timestamp': timestamp.toString(),
-    'X-Signature': await signRequest(payload, timestamp)
+    "X-Timestamp": timestamp.toString(),
+    "X-Signature": await signRequest(payload, timestamp),
   },
-  body: JSON.stringify(payload)
+  body: JSON.stringify(payload),
 });
 ```
 
@@ -323,13 +342,13 @@ Certificados SSL podem ser forjados se um invasor controlar a rede (ex: WiFi mal
 
 ```typescript
 // Usando react-native-ssl-pinning
-import { fetch } from 'react-native-ssl-pinning';
+import { fetch } from "react-native-ssl-pinning";
 
-const response = await fetch('https://yourbackend.com/api/data', {
-  method: 'GET',
+const response = await fetch("https://yourbackend.com/api/data", {
+  method: "GET",
   sslPinning: {
-    certs: ['your-cert'] // Certificado armazenado no bundle do app
-  }
+    certs: ["your-cert"], // Certificado armazenado no bundle do app
+  },
 });
 ```
 
@@ -340,27 +359,31 @@ const response = await fetch('https://yourbackend.com/api/data', {
 Chamadas RPC da Solana também devem usar HTTPS:
 
 ```typescript
-import { Connection } from '@solana/web3.js';
+import { Connection } from "@solana/web3.js";
 
 // ✅ Sempre use HTTPS
-const connection = new Connection('https://api.mainnet-beta.solana.com');
+const connection = new Connection("https://api.mainnet-beta.solana.com");
 
 // Muitos provedores RPC privados exigem autenticação
-const connection = new Connection('https://your-rpc.example.com', {
+const connection = new Connection("https://your-rpc.example.com", {
   httpHeaders: {
-    'Authorization': `Bearer ${rpcToken}` // Deve ser específico do usuário ou de curta duração
-  }
+    Authorization: `Bearer ${rpcToken}`, // Deve ser específico do usuário ou de curta duração
+  },
 });
 ```
 
-<ArticleSection name="Proteção contra Ataques Comuns" id="protecting-against-common-attacks" level="h2" />
+<ArticleSection
+  name="Proteção contra Ataques Comuns"
+  id="protecting-against-common-attacks"
+  level="h2"
+/>
 
 ### Detecção de Jailbreak/Root
 
 Dispositivos com jailbreak (iOS) e root (Android) têm limites de segurança enfraquecidos. Considere detectar esses estados:
 
 ```typescript
-import JailMonkey from 'jail-monkey';
+import JailMonkey from "jail-monkey";
 
 const isDeviceCompromised = () => {
   return JailMonkey.isJailBroken() || JailMonkey.isOnExternalStorage();
@@ -369,10 +392,11 @@ const isDeviceCompromised = () => {
 // Decidir o que fazer
 if (isDeviceCompromised()) {
   // Opção 1: Alertar o usuário
-  Alert.alert('Aviso de Segurança', 
-    'Este dispositivo pode estar comprometido. Prossiga com cautela.'
+  Alert.alert(
+    "Aviso de Segurança",
+    "Este dispositivo pode estar comprometido. Prossiga com cautela.",
   );
-  
+
   // Opção 2: Restringir funcionalidades sensíveis
   // Opção 3: Recusar execução (pode frustrar power users legítimos)
 }
@@ -386,7 +410,7 @@ Apps podem ser anexados a debuggers para inspecionar comportamento em runtime. A
 
 ```typescript
 if (__DEV__) {
-  console.log('Build de desenvolvimento - não para produção');
+  console.log("Build de desenvolvimento - não para produção");
 } else {
   // Build de produção - desativar recursos de debug
   console.log = () => {}; // Desativar logging
@@ -397,7 +421,7 @@ Para proteção adicional, use detecção nativa de debug:
 
 ```typescript
 // Verificar se um debugger está anexado (Android)
-import { NativeModules } from 'react-native';
+import { NativeModules } from "react-native";
 
 const isDebuggerAttached = async () => {
   return await NativeModules.SecurityModule?.isDebuggerAttached();
@@ -416,7 +440,7 @@ import RNPreventScreenshot from 'react-native-prevent-screenshot';
 
 const SensitiveScreen = () => {
   const isFocused = useIsFocused();
-  
+
   useEffect(() => {
     if (isFocused) {
       if (Platform.OS === 'android') {
@@ -428,7 +452,7 @@ const SensitiveScreen = () => {
       RNPreventScreenshot.enabled(false);
     };
   }, [isFocused]);
-  
+
   return (
     // ... conteúdo sensível
   );
@@ -440,28 +464,33 @@ const SensitiveScreen = () => {
 Antes de publicar, verifique:
 
 ### Gerenciamento de segredos
+
 - [ ] Sem chaves de API hardcoded no código do cliente
 - [ ] Backend faz proxy de chamadas para APIs de terceiros
 - [ ] Tokens de curta duração quando possível
 - [ ] Armazenamento seguro usado para segredos do usuário
 
 ### Segurança de rede
+
 - [ ] Todas as conexões usam HTTPS
 - [ ] Certificate pinning para endpoints críticos (opcional mas recomendado)
 - [ ] Endpoints RPC autenticados ou com rate limit
 
 ### Gerenciamento de chaves
+
 - [ ] Chaves privadas criptografadas em repouso
 - [ ] Criptografia com suporte de hardware (Keychain/Keystore)
 - [ ] Autenticação do usuário necessária para assinatura
 
 ### Segurança de plataforma
+
 - [ ] ProGuard/R8 habilitado para builds de release
 - [ ] Logging de debug desativado em produção
 - [ ] Detecção de jailbreak/root (alertar ou restringir)
 - [ ] Prevenção de screenshots para telas sensíveis
 
 ### Segurança operacional
+
 - [ ] Monitoramento de padrões incomuns de uso de API
 - [ ] Plano de resposta a incidentes para comprometimento de chaves
 - [ ] Atualizações regulares de dependências para patches de segurança
@@ -482,6 +511,7 @@ Mesmo com boa segurança, incidentes acontecem. Tenha um plano.
 ### Rotação de credenciais
 
 Projete seu sistema para suportar rotação de credenciais sem quebrar o app:
+
 - Chaves de API de backend: rotacione no servidor, sem precisar atualizar o app
 - Endpoints RPC: suporte múltiplos endpoints, trocando via feature flag
 - Tokens de usuário: curta duração com renovação automática

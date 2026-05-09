@@ -34,9 +34,7 @@ export interface CompiledMDX {
  * developing locally (compiling on-the-fly) and falls back to pre-compiled
  * content from the CONTENT R2 bucket once deployed to Cloudflare.
  */
-export async function fetchCompiledContent(
-  relativePath: string,
-): Promise<CompiledMDX> {
+export async function fetchCompiledContent(relativePath: string): Promise<CompiledMDX> {
   if (!relativePath) {
     throw new Error("A relative content path is required");
   }
@@ -66,9 +64,7 @@ export async function fetchCompiledContent(
   );
 
   if (!bucket) {
-    throw new Error(
-      "CONTENT bucket binding is not available in production environment",
-    );
+    throw new Error("CONTENT bucket binding is not available in production environment");
   }
 
   // Convert .mdx path to .json path for compiled content

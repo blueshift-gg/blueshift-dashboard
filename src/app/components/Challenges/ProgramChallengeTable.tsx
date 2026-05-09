@@ -10,10 +10,7 @@ import { useEffect, useState } from "react";
 import type { ChallengeMetadata } from "@/app/utils/challenges";
 import { URLS } from "@/constants/urls";
 import { useAuth } from "@/hooks/useAuth";
-import type {
-  ChallengeRequirement,
-  VerificationApiResponse,
-} from "@/hooks/useChallengeVerifier";
+import type { ChallengeRequirement, VerificationApiResponse } from "@/hooks/useChallengeVerifier";
 import { Link } from "@/i18n/navigation";
 import { usePersistentStore } from "@/stores/store";
 import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
@@ -56,8 +53,7 @@ export default function ChallengeTable({
   const t = useTranslations();
   const searchParams = useSearchParams();
   const fromCourse = searchParams.get("fromCourse");
-  const [selectedRequirement, setSelectedRequirement] =
-    useState<ChallengeRequirement | null>(null);
+  const [selectedRequirement, setSelectedRequirement] = useState<ChallengeRequirement | null>(null);
 
   const [isCompletedModalOpen, setIsCompletedModalOpen] = useState(false);
   const [allowRedo, setAllowRedo] = useState(false);
@@ -70,17 +66,13 @@ export default function ChallengeTable({
 
   useEffect(() => {
     if (verificationData) {
-      const firstFailedRequirement = requirements.find(
-        (req) => req.status === "failed",
-      );
+      const firstFailedRequirement = requirements.find((req) => req.status === "failed");
       if (firstFailedRequirement) {
         setSelectedRequirement(firstFailedRequirement);
       }
 
       // Check if all requirements are successful
-      const allRequirementsPassed = requirements.every(
-        (req) => req.status === "passed",
-      );
+      const allRequirementsPassed = requirements.every((req) => req.status === "passed");
       if (allRequirementsPassed) {
         setTimeout(() => {
           if (challengeStatuses[challengeSlug] === "open") {
@@ -93,13 +85,7 @@ export default function ChallengeTable({
         setFailedAttempts(0);
       }
     }
-  }, [
-    verificationData,
-    requirements,
-    setChallengeStatus,
-    challengeSlug,
-    challengeStatuses,
-  ]);
+  }, [verificationData, requirements, setChallengeStatus, challengeSlug, challengeStatuses]);
 
   /**
    * Track failed attempts for upload/network errors
@@ -180,26 +166,22 @@ export default function ChallengeTable({
         animate={{ opacity: 1, height: "auto" }}
         exit={{ opacity: 0, height: 0 }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
-        className="mx-4 p-4 bg-gradient-to-r from-brand-primary/5 to-brand-secondary/5 border border-brand-primary/20"
+        className="mx-4 border border-brand-primary/20 bg-gradient-to-r from-brand-primary/5 to-brand-secondary/5 p-4"
       >
         <div className="flex items-start gap-x-2">
-          <Icon
-            name="Flag"
-            size={18}
-            className="text-brand-primary mt-0.5 flex-shrink-0"
-          />
+          <Icon name="Flag" size={18} className="mt-0.5 flex-shrink-0 text-brand-primary" />
           <div className="flex-1">
-            <h4 className="text-base font-medium text-shade-primary mb-1">
+            <h4 className="mb-1 text-base font-medium text-shade-primary">
               {t("ChallengePage.assistance_prompt.title")}
             </h4>
-            <p className="text-sm text-shade-secondary leading-relaxed">
+            <p className="text-sm leading-relaxed text-shade-secondary">
               {t("ChallengePage.assistance_prompt.body")}
             </p>
             <Link
               href={URLS.BLUESHIFT_DISCORD}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-x-1 mt-2 text-sm font-medium text-brand-secondary hover:text-brand-primary"
+              className="mt-2 inline-flex items-center gap-x-1 text-sm font-medium text-brand-secondary hover:text-brand-primary"
             >
               {t("ChallengePage.assistance_prompt.link_text")}
               <Icon name="Link" size={14} />
@@ -217,7 +199,7 @@ export default function ChallengeTable({
         onClose={() => setIsCompletedModalOpen(false)}
         challenge={challenge}
       />
-      <div className="relative flex flex-col gap-y-4 w-full overflow-hidden px-1.5 pt-1.5 pb-6 border border-border bg-card-solid">
+      <div className="relative flex w-full flex-col gap-y-4 overflow-hidden border border-border bg-card-solid px-1.5 pt-1.5 pb-6">
         {(challengeStatuses[challengeSlug] === "completed" ||
           challengeStatuses[challengeSlug] === "claimed") &&
           !allowRedo && (
@@ -225,7 +207,7 @@ export default function ChallengeTable({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute z-10 inset-0 w-full h-full bg-background/80 backdrop-blur gap-y-5 flex flex-col items-center justify-center"
+              className="absolute inset-0 z-10 flex h-full w-full flex-col items-center justify-center gap-y-5 bg-background/80 backdrop-blur"
             >
               <div className="flex flex-col items-center justify-center gap-y-1">
                 <span className="text-lg font-medium text-shade-primary">
@@ -248,12 +230,10 @@ export default function ChallengeTable({
                 />
               </Link>
               <div className="relative w-full">
-                <div className="font-mono absolute text-xs text-mute top-1/2 z-10 -translate-y-1/2 left-1/2 -translate-x-1/2 px-4 bg-background">
-                  {t(
-                    `ChallengePage.challenge_completed.divider_label`,
-                  ).toUpperCase()}
+                <div className="text-mute absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 bg-background px-4 font-mono text-xs">
+                  {t(`ChallengePage.challenge_completed.divider_label`).toUpperCase()}
                 </div>
-                <div className="w-full h-[1px] bg-border absolute"></div>
+                <div className="absolute h-[1px] w-full bg-border"></div>
               </div>
               <Button
                 variant="secondary"
@@ -273,7 +253,7 @@ export default function ChallengeTable({
             "gap-y-6 sm:gap-y-0 flex sm:flex-row flex-col items-center justify-between px-4 sm:px-6 py-4 sm:py-5 bg-card-solid-foreground",
           )}
         >
-          <div className="flex flex-col gap-y-4 w-full sm:w-1/2">
+          <div className="flex w-full flex-col gap-y-4 sm:w-1/2">
             <span className="font-medium">
               {completedRequirementsCount}/{requirements.length}{" "}
               {t("ChallengePage.num_tests_passed")}
@@ -314,7 +294,7 @@ export default function ChallengeTable({
                 ))
               ) : (
                 // Initial state when all are incomplete
-                <div className="w-4 h-1.5 [background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#ADB9D2]" />
+                <div className="h-1.5 w-4 [background:linear-gradient(180deg,rgba(255,255,255,0.5)_0%,rgba(255,255,255,0)_100%),#ADB9D2]" />
               )}
             </div>
           </div>
@@ -342,19 +322,13 @@ export default function ChallengeTable({
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="mx-4 p-4 bg-red-50 border border-red-200"
+            className="mx-4 border border-red-200 bg-red-50 p-4"
           >
             <div className="flex items-start gap-x-3">
-              <Icon
-                name="Warning"
-                size={18}
-                className="text-red-500 mt-0.5 flex-shrink-0"
-              />
+              <Icon name="Warning" size={18} className="mt-0.5 flex-shrink-0 text-red-500" />
               <div className="flex-1">
-                <h4 className="text-sm font-medium text-red-800 mb-1">
-                  Upload Error
-                </h4>
-                <p className="text-sm text-red-700 leading-relaxed">{error}</p>
+                <h4 className="mb-1 text-sm font-medium text-red-800">Upload Error</h4>
+                <p className="text-sm leading-relaxed text-red-700">{error}</p>
               </div>
             </div>
           </motion.div>
@@ -376,19 +350,13 @@ export default function ChallengeTable({
               type="button"
               className={classNames(
                 "flex flex-col gap-y-4 group sm:px-4 enabled:hover:cursor-pointer py-3 transition duration-200 enabled:hover:bg-card-solid-foreground/50",
-                selectedRequirement === requirement &&
-                  "pb-6 bg-card-solid-foreground/50",
-                selectedRequirement !== null &&
-                  selectedRequirement !== requirement &&
-                  "opacity-40",
+                selectedRequirement === requirement && "pb-6 bg-card-solid-foreground/50",
+                selectedRequirement !== null && selectedRequirement !== requirement && "opacity-40",
               )}
               key={requirement.instructionKey}
             >
-              <div
-                className="flex items-center justify-between"
-                key={requirement.instructionKey}
-              >
-                <span className="font-medium text-sm sm:text-base truncate max-w-[60%]">
+              <div className="flex items-center justify-between" key={requirement.instructionKey}>
+                <span className="max-w-[60%] truncate text-sm font-medium sm:text-base">
                   {t(
                     `challenges.${challengeSlug}.requirements.${requirement.instructionKey}.title`,
                   )}
@@ -400,9 +368,7 @@ export default function ChallengeTable({
                 ) : (
                   <div className="flex items-center gap-x-4">
                     <ChallengeBadge
-                      label={t(
-                        `ChallengePage.test_results.${requirement.status}`,
-                      )}
+                      label={t(`ChallengePage.test_results.${requirement.status}`)}
                       variant={requirement.status}
                     />
                     <Icon
@@ -429,12 +395,11 @@ export default function ChallengeTable({
                 >
                   <Divider />
                   {verificationData?.results?.find(
-                    (result) =>
-                      result.instruction === requirement.instructionKey,
+                    (result) => result.instruction === requirement.instructionKey,
                   ) && (
                     <div className="flex flex-col gap-y-2 text-sm">
-                      <div className="flex flex-col gap-y-4 items-start overflow-hidden bg-background pt-4 px-1 pb-1">
-                        <div className="flex items-center justify-between w-full px-3">
+                      <div className="flex flex-col items-start gap-y-4 overflow-hidden bg-background px-1 pt-4 pb-1">
+                        <div className="flex w-full items-center justify-between px-3">
                           <HeadingReveal
                             baseDelay={0.1}
                             text="PROGRAM LOGS"
@@ -460,22 +425,19 @@ export default function ChallengeTable({
                               className={classNames(
                                 "text-mute hover:text-shade-secondary transition cursor-pointer",
                                 {
-                                  "!text-brand-primary !cursor-default":
-                                    isCopied,
+                                  "!text-brand-primary !cursor-default": isCopied,
                                 },
                               )}
                             />
                           </motion.div>
                         </div>
-                        <div className="px-2 w-full">
+                        <div className="w-full px-2">
                           <Divider />
                         </div>
-                        <div className="flex gap-x-2 items-center w-full">
+                        <div className="flex w-full items-center gap-x-2">
                           <div className="flex flex-col gap-y-2 pt-1 pb-2">
                             {verificationData.results.find(
-                              (result) =>
-                                result.instruction ===
-                                requirement.instructionKey,
+                              (result) => result.instruction === requirement.instructionKey,
                             )?.message && (
                               <HeadingReveal
                                 baseDelay={0}
@@ -484,15 +446,11 @@ export default function ChallengeTable({
                                 splitBy="chars"
                                 speed={0.1}
                                 color="#FF5555"
-                                className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
+                                className="sticky left-0 w-max flex-shrink-0 px-3 font-mono"
                               />
                             )}
                             {verificationData.results
-                              .find(
-                                (result) =>
-                                  result.instruction ===
-                                  requirement.instructionKey,
-                              )
+                              .find((result) => result.instruction === requirement.instructionKey)
                               ?.program_logs?.map((_log, index) => (
                                 <HeadingReveal
                                   baseDelay={index * 0.1}
@@ -501,15 +459,13 @@ export default function ChallengeTable({
                                   key={`${requirement.instructionKey}-program-label-${_log}`}
                                   splitBy="chars"
                                   speed={0.1}
-                                  className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
+                                  className="sticky left-0 w-max flex-shrink-0 px-3 font-mono"
                                 />
                               ))}
                           </div>
-                          <div className="flex flex-col gap-y-2 items-start px-1 overflow-x-auto pr-5 pb-2">
+                          <div className="flex flex-col items-start gap-y-2 overflow-x-auto px-1 pr-5 pb-2">
                             {verificationData.results.find(
-                              (result) =>
-                                result.instruction ===
-                                requirement.instructionKey,
+                              (result) => result.instruction === requirement.instructionKey,
                             )?.message && (
                               <motion.span
                                 initial={{ opacity: 0 }}
@@ -520,23 +476,17 @@ export default function ChallengeTable({
                                   ease: anticipate,
                                   delay: 0.8,
                                 }}
-                                className="text-start w-full font-fira-code font-medium text-nowrap text-[#FF5555]"
+                                className="w-full text-start font-fira-code font-medium text-nowrap text-[#FF5555]"
                               >
                                 {
                                   verificationData.results.find(
-                                    (result) =>
-                                      result.instruction ===
-                                      requirement.instructionKey,
+                                    (result) => result.instruction === requirement.instructionKey,
                                   )?.message
                                 }
                               </motion.span>
                             )}
                             {verificationData.results
-                              .find(
-                                (result) =>
-                                  result.instruction ===
-                                  requirement.instructionKey,
-                              )
+                              .find((result) => result.instruction === requirement.instructionKey)
                               ?.program_logs?.map((log, index) => (
                                 <motion.span
                                   initial={{ opacity: 0 }}
@@ -556,37 +506,25 @@ export default function ChallengeTable({
                           </div>
                         </div>
 
-                        <div className="bg-card-solid/80 px-4 py-2 flex gap-x-4 text-sm font-medium w-full justify-between items-center">
-                          <Icon
-                            name="General"
-                            size={14}
-                            className="text-brand-primary"
-                          />
+                        <div className="flex w-full items-center justify-between gap-x-4 bg-card-solid/80 px-4 py-2 text-sm font-medium">
+                          <Icon name="General" size={14} className="text-brand-primary" />
                           <div className="flex items-center gap-x-2">
                             <div>
-                              <span className="text-text-shade-tertiary">
-                                Compute Units:{" "}
-                              </span>
+                              <span className="text-text-shade-tertiary">Compute Units: </span>
                               <span className="font-medium text-brand-secondary">
                                 {
                                   verificationData.results.find(
-                                    (result) =>
-                                      result.instruction ===
-                                      requirement.instructionKey,
+                                    (result) => result.instruction === requirement.instructionKey,
                                   )?.compute_units_consumed
                                 }
                               </span>
                             </div>
                             <div>
-                              <span className="text-text-shade-tertiary">
-                                Execution Time:{" "}
-                              </span>
+                              <span className="text-text-shade-tertiary">Execution Time: </span>
                               <span className="font-medium text-brand-secondary">
                                 {
                                   verificationData.results.find(
-                                    (result) =>
-                                      result.instruction ===
-                                      requirement.instructionKey,
+                                    (result) => result.instruction === requirement.instructionKey,
                                   )?.execution_time
                                 }
                                 ms

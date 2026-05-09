@@ -5,14 +5,7 @@ import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import type { PublicKey } from "@solana/web3.js";
 import { useMutation } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-} from "react";
+import { createContext, type ReactNode, useCallback, useEffect, useMemo, useReducer } from "react";
 import { toast } from "react-hot-toast";
 import { type AuthResponse, performSignIn } from "@/lib/auth/api";
 import {
@@ -22,17 +15,10 @@ import {
   UserRejectedSignatureError,
   WalletDisconnectError,
 } from "@/lib/auth/errors";
-import {
-  getPublicKeyFromToken,
-  isTokenExpired as isTokenExpiredUtil,
-} from "@/lib/auth/utils";
+import { getPublicKeyFromToken, isTokenExpired as isTokenExpiredUtil } from "@/lib/auth/utils";
 import { usePersistentStore } from "@/stores/store";
 
-export type AuthStatus =
-  | "signed-out"
-  | "signing-in"
-  | "signed-in"
-  | "signing-out";
+export type AuthStatus = "signed-out" | "signing-in" | "signed-in" | "signing-out";
 
 interface AuthContextType {
   login: () => void;
@@ -44,9 +30,7 @@ interface AuthContextType {
   error: AuthError | null;
 }
 
-export const AuthContext = createContext<AuthContextType | undefined>(
-  undefined,
-);
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // --- Reducer-based State Management ---
 
@@ -102,20 +86,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // --- Derived State and Memoized Calculations ---
 
-  const isTokenExpired = useCallback(
-    () => isTokenExpiredUtil(authToken),
-    [authToken],
-  );
+  const isTokenExpired = useCallback(() => isTokenExpiredUtil(authToken), [authToken]);
 
-  const tokenPublicKey = useMemo(
-    () => getPublicKeyFromToken(authToken),
-    [authToken],
-  );
+  const tokenPublicKey = useMemo(() => getPublicKeyFromToken(authToken), [authToken]);
 
-  const currentPublicKey = useMemo(
-    () => publicKey?.toBase58() || null,
-    [publicKey],
-  );
+  const currentPublicKey = useMemo(() => publicKey?.toBase58() || null, [publicKey]);
 
   const sessionState = useMemo(() => {
     if (!currentPublicKey || !tokenPublicKey) {
@@ -246,15 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         break;
     }
-  }, [
-    status,
-    connected,
-    isAuthenticated,
-    isWalletMismatched,
-    error,
-    doSignIn,
-    clearAuthToken,
-  ]);
+  }, [status, connected, isAuthenticated, isWalletMismatched, error, doSignIn, clearAuthToken]);
 
   // --- Context Value ---
 

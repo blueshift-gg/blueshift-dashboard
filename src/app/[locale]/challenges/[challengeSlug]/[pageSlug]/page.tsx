@@ -11,9 +11,7 @@ interface ChallengePageProps {
   }>;
 }
 
-export async function generateMetadata({
-  params,
-}: ChallengePageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: ChallengePageProps): Promise<Metadata> {
   const { challengeSlug, pageSlug, locale } = await params;
   const t = await getTranslations({ locale });
   const pathname = getPathname({

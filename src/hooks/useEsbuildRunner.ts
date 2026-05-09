@@ -77,9 +77,7 @@ export interface WsReceiveDecision {
 // End of new WebSocket types
 
 export interface UseEsbuildRunnerProps {
-  onRpcCallInterceptedForDecision?: (
-    rpcCallData: InterceptedRpcCallData,
-  ) => Promise<FetchDecision>;
+  onRpcCallInterceptedForDecision?: (rpcCallData: InterceptedRpcCallData) => Promise<FetchDecision>;
   onWsSendInterceptedForDecision?: (
     // New prop for ws.send()
     wsSendData: InterceptedWsSendData,
@@ -123,15 +121,9 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
   const runCode = useCallback(
     async (code: string) => {
       if (esBuildInitializationState === "uninitialized") {
-        addLog(
-          "SYSTEM",
-          `Run attempt failed: Build system is not initialized. Please wait.`,
-        );
+        addLog("SYSTEM", `Run attempt failed: Build system is not initialized. Please wait.`);
       } else if (esBuildInitializationState === "initializing") {
-        addLog(
-          "SYSTEM",
-          `Run attempt failed: Build system is still initializing. Please wait.`,
-        );
+        addLog("SYSTEM", `Run attempt failed: Build system is still initializing. Please wait.`);
       } else if (esBuildInitializationState === "failed") {
         addLog(
           "SYSTEM",
@@ -140,10 +132,7 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
       }
 
       if (isRunning) {
-        addLog(
-          "SYSTEM",
-          "Run attempt failed: Another process is already running.",
-        );
+        addLog("SYSTEM", "Run attempt failed: Another process is already running.");
         return;
       }
 
@@ -202,13 +191,10 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
                   path: args.path,
                   namespace: "custom-entry-ns",
                 }));
-                build.onLoad(
-                  { filter: /.*/, namespace: "custom-entry-ns" },
-                  () => ({
-                    contents: `${code}\n${mainHandlingSuffix}`, // User code + main handling logic
-                    loader: "ts",
-                  }),
-                );
+                build.onLoad({ filter: /.*/, namespace: "custom-entry-ns" }, () => ({
+                  contents: `${code}\n${mainHandlingSuffix}`, // User code + main handling logic
+                  loader: "ts",
+                }));
               },
             },
             createCdnPlugin("@solana/web3.js", "cdn-solana-web3-ns"),
@@ -219,9 +205,7 @@ export function useEsbuildRunner(props?: UseEsbuildRunnerProps) {
           format: "iife",
           platform: "browser",
           define: {
-            "process.env.SECRET": JSON.stringify(
-              process.env.NEXT_PUBLIC_CHALLENGE_SECRET,
-            ),
+            "process.env.SECRET": JSON.stringify(process.env.NEXT_PUBLIC_CHALLENGE_SECRET),
             "process.env.RPC_ENDPOINT": JSON.stringify(
               process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT,
             ),
@@ -470,41 +454,31 @@ self.WebSocket = WebSocketProxy;
               case "LOG":
                 addLog(
                   "LOG",
-                  ...(Array.isArray(message.payload)
-                    ? message.payload
-                    : [message.payload]),
+                  ...(Array.isArray(message.payload) ? message.payload : [message.payload]),
                 );
                 break;
               case "ERROR":
                 addLog(
                   "ERROR",
-                  ...(Array.isArray(message.payload)
-                    ? message.payload
-                    : [message.payload]),
+                  ...(Array.isArray(message.payload) ? message.payload : [message.payload]),
                 );
                 break;
               case "WARN":
                 addLog(
                   "WARN",
-                  ...(Array.isArray(message.payload)
-                    ? message.payload
-                    : [message.payload]),
+                  ...(Array.isArray(message.payload) ? message.payload : [message.payload]),
                 );
                 break;
               case "INFO":
                 addLog(
                   "INFO",
-                  ...(Array.isArray(message.payload)
-                    ? message.payload
-                    : [message.payload]),
+                  ...(Array.isArray(message.payload) ? message.payload : [message.payload]),
                 );
                 break;
               case "DEBUG":
                 addLog(
                   "DEBUG",
-                  ...(Array.isArray(message.payload)
-                    ? message.payload
-                    : [message.payload]),
+                  ...(Array.isArray(message.payload) ? message.payload : [message.payload]),
                 );
                 break;
               case "EXECUTION_ERROR":
@@ -528,8 +502,7 @@ self.WebSocket = WebSocketProxy;
                 // Note: Worker termination is handled by main try-catch or useEffect cleanup
                 break;
               case "INTERCEPTED_RPC_CALL_AWAIT_DECISION": {
-                const decisionPayload =
-                  message.payload as InterceptedRpcCallData;
+                const decisionPayload = message.payload as InterceptedRpcCallData;
 
                 if (props?.onRpcCallInterceptedForDecision) {
                   props
@@ -547,10 +520,7 @@ self.WebSocket = WebSocketProxy;
                       }
                     })
                     .catch((err) => {
-                      console.error(
-                        "Error in onRpcCallInterceptedForDecision callback:",
-                        err,
-                      );
+                      console.error("Error in onRpcCallInterceptedForDecision callback:", err);
                       if (workerRef.current) {
                         // Ensure worker is still active
                         workerRef.current.postMessage({
@@ -597,10 +567,7 @@ self.WebSocket = WebSocketProxy;
                       }
                     })
                     .catch((err) => {
-                      console.error(
-                        "Error in onWsSendInterceptedForDecision callback:",
-                        err,
-                      );
+                      console.error("Error in onWsSendInterceptedForDecision callback:", err);
                       if (workerRef.current) {
                         // Default to PROCEED on error
                         workerRef.current.postMessage({
@@ -627,8 +594,7 @@ self.WebSocket = WebSocketProxy;
                 break;
               }
               case "INTERCEPTED_WS_RECEIVE_AWAIT_DECISION": {
-                const wsReceiveData =
-                  message.payload as InterceptedWsReceiveData;
+                const wsReceiveData = message.payload as InterceptedWsReceiveData;
                 if (props?.onWsReceiveInterceptedForDecision) {
                   props
                     .onWsReceiveInterceptedForDecision(wsReceiveData)
@@ -645,10 +611,7 @@ self.WebSocket = WebSocketProxy;
                       }
                     })
                     .catch((err) => {
-                      console.error(
-                        "Error in onWsReceiveInterceptedForDecision callback:",
-                        err,
-                      );
+                      console.error("Error in onWsReceiveInterceptedForDecision callback:", err);
                       if (workerRef.current) {
                         // Default to PROCEED on error
                         workerRef.current.postMessage({
@@ -682,9 +645,7 @@ self.WebSocket = WebSocketProxy;
 
           workerInstance.onerror = (event) => {
             console.error("Worker uncaught error:", event);
-            setRunnerError(
-              `An error occurred in the Web Worker: ${event.message}`,
-            );
+            setRunnerError(`An error occurred in the Web Worker: ${event.message}`);
             addLog("SYSTEM", `Worker uncaught error: ${event.message}`);
             setIsRunning(false);
             if (workerRef.current) {
@@ -709,14 +670,7 @@ self.WebSocket = WebSocketProxy;
         }
       }
     },
-    [
-      esBuildInitializationState,
-      esbuildInitializationError,
-      isRunning,
-      addLog,
-      props,
-      esbuild,
-    ],
+    [esBuildInitializationState, esbuildInitializationError, isRunning, addLog, props, esbuild],
   );
 
   useEffect(() => {

@@ -19,6 +19,7 @@ import ArticleSection from "../../../../components/ArticleSection/ArticleSection
 我們的程式實現了一個簡單但至關重要的操作：在進行交易之前驗證代幣賬戶是否有足夠的餘額。這種模式在 DeFi 中隨處可見——從 AMM 交換到借貸協議。
 
 程式的預期：
+
 - 賬戶數組中包含一個單一的 SPL 代幣賬戶
 - 指令數據中包含一個 8 字節的金額
 - 如果餘額 ≥ 金額，則返回成功，否則返回錯誤
@@ -52,6 +53,7 @@ entrypoint:
 每個 sBPF 程式都從一個全域性的 `.entrypoint` 符號開始。Solana 執行環境通過暫存器 `r1` 提供帳戶和指令數據。
 
 `ldxdw` 指令從記憶體中載入 (`ldx`) 一個 8 字節（雙字，`dx`）的值到暫存器。以下是執行過程：
+
 - `ldxdw r3, [r1+MINIMUM_BALANCE]`：計算包含所需數值的記憶體地址。該值被載入到 `r3`。
 - `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`：指向代幣帳戶的餘額欄位。這個 64 位的值被載入到 `r4`。
 
@@ -71,12 +73,13 @@ jge r3, r4, end         // Skip to exit if balance is valid
 
 ```sbpf
 lddw r1, e              // Load error message address
-lddw r2, 17             // Load length of error message  
+lddw r2, 17             // Load length of error message
 call sol_log_           // Log out error message
 lddw r0, 1              // Return error code 1
 ```
 
 當驗證失敗時，我們會在終止前記錄一條可讀的錯誤信息：
+
 - `lddw` 載入立即值，在此例中為錯誤字串的地址（位於 `.rodata` 區段）及其長度（"Slippage exceeded" 的 17 字節）。
 - `call sol_log_` 調用 Solana 的日誌系統呼叫。執行環境從記憶體中讀取消息並將其添加到交易日誌中。
 - 然後我們將 `1` 載入到 `r0`，以表示程式失敗。執行環境將中止交易並返回此錯誤代碼。
@@ -102,8 +105,8 @@ end:
 `.rodata`（只讀數據）部分包含我們的錯誤訊息字串。
 
 <ArticleSection name="結論" id="conclusion" level="h2" />
-  
-這個小程式在成功情況下僅使用 `4 CUs`，在失敗情況下使用 `6 CUs`，或者在記錄錯誤訊息的失敗情況下使用 `106 CUs`，完成了可能需要 Rust 花費數十個 CUs 的工作。
+這個小程式在成功情況下僅使用 `4 CUs`，在失敗情況下使用 `6 CUs`，或者在記錄錯誤訊息的失敗情況下使用
+`106 CUs`，完成了可能需要 Rust 花費數十個 CUs 的工作。
 
 代價是我們必須在最低層次上理解記憶體佈局、調用約定和錯誤處理。但對於性能至關重要的操作，這種努力通常是值得的。
 

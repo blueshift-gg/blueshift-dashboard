@@ -10,16 +10,17 @@ While most Solana developers lean on Anchor, there are plenty of good reasons to
 
 Writing Solana programs without a framework like Anchor is known as **native development**. It is more demanding, yet in this course you'll learn to craft a Solana program from scratch with Pinocchio; a lightweight library that lets you skip external frameworks and own every byte of your code.
 
-Pinocchio is a minimalist Rust library that lets you craft Solana programs without pulling in the heavyweight `solana-program` crate. It works by treating the incoming transaction payload (accounts, instruction data, everything) as a single byte slice and reads it in-place via zero-copy techniques. 
+Pinocchio is a minimalist Rust library that lets you craft Solana programs without pulling in the heavyweight `solana-program` crate. It works by treating the incoming transaction payload (accounts, instruction data, everything) as a single byte slice and reads it in-place via zero-copy techniques.
 
 ### Key advantages
 
 The minimalist design unlocks three big benefits:
+
 - Fewer compute units. No extra deserialization or memory copies.
 - Smaller binaries. Leaner code paths mean a lighter `.so` on-chain.
 - Zero dependency drag. No external crates to update (or break).
 
-The project was started by [Febo](https://x.com/0x_febo) at [Anza](https://www.anza.xyz) with core contribution from the Solana ecosystem and the Blueshift team, and lives [here](https://github.com/anza-xyz/pinocchio). 
+The project was started by [Febo](https://x.com/0x_febo) at [Anza](https://www.anza.xyz) with core contribution from the Solana ecosystem and the Blueshift team, and lives [here](https://github.com/anza-xyz/pinocchio).
 
 Alongside the core crate, you'll find `pinocchio-system` and `pinocchio-token`, which provide zero-copy helpers and CPI utilities for Solana's native System and SPL-Token programs.
 
@@ -27,9 +28,10 @@ Alongside the core crate, you'll find `pinocchio-system` and `pinocchio-token`, 
 
 Native development might sound daunting, but it's exactly why this chapter exists. By the end you'll understand every byte that crosses the program boundary and how to keep your logic tight, secure, and fast.
 
-Anchor uses **Procedural and Derive Macros** to simplify the boilerplate of dealing with accounts, instruction data, and error handling that are the core of building Solana Programs. 
+Anchor uses **Procedural and Derive Macros** to simplify the boilerplate of dealing with accounts, instruction data, and error handling that are the core of building Solana Programs.
 
 Going Native means we don't have that luxury anymore and that we will need to:
+
 - Create our own Discriminator and Entrypoint for the different Instructions
 - Create our own Account, Instruction and deserialization logic
 - Implement all the security checks that Anchor was doing for us before
@@ -45,6 +47,7 @@ In Anchor, the `#[program]` macro hides a lot of wiring. Under the hood, it buil
 Native programs usually keep things leaner. A single-byte discriminator (values 0x01…0xFF) is enough for up to 255 instructions, which is sufficient for most use cases. If you need more, you can switch to a two-byte variant, expanding to 65,535 possible variants.
 
 The `entrypoint!` macro is where the program execution begins. It provides three raw slices:
+
 - **program_id**: the public key of the deployed program
 - **accounts**: every account passed in the instruction
 - **instruction_data**: an opaque byte array containing your discriminator plus any user-supplied data
@@ -58,7 +61,7 @@ fn process_instruction(
     _program_id: &Pubkey,
     accounts: &[AccountInfo],
     instruction_data: &[u8],
-) -> ProgramResult {    
+) -> ProgramResult {
     match instruction_data.split_first() {
         Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
         Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
@@ -68,6 +71,7 @@ fn process_instruction(
 ```
 
 Behind the scenes, this handler:
+
 1. Uses `split_first()` to extract the discriminator byte
 2. Uses `match` to determine which instruction struct to instantiate
 3. Each instruction's `try_from` implementation validates and deserializes its inputs
@@ -75,13 +79,14 @@ Behind the scenes, this handler:
 
 ### The difference between `solana-program` and `pinocchio`
 
-The main difference and optimization stand in how the `entrypoint()` behaves. 
+The main difference and optimization stand in how the `entrypoint()` behaves.
+
 - The Standard Solana entrypoints use traditional serialization patterns where the runtime deserializes input data upfront, creating owned data structures in memory. This approach uses Borsh serialization extensively, copies data during deserialization, and allocates memory for structured data types.
 - Pinocchio entrypoints implement zero-copy operations by reading data directly from the input byte array without copying. The framework defines zero-copy types that reference the original data, eliminates serialization/deserialization overhead, and uses direct memory access to avoid abstraction layers.
 
 <ArticleSection name="Accounts and Instructions" id="accounts-and-instructions" level="h2" />
 
-Since we don't have macros, and we want to avoid them to keep the program lean and efficient, every byte of instruction data and accounts must be validated manually. 
+Since we don't have macros, and we want to avoid them to keep the program lean and efficient, every byte of instruction data and accounts must be validated manually.
 
 To keep this process organized, we use a pattern that provides Anchor-style ergonomics without the macros, keeping the actual `process()` method nearly boilerplate-free by implementing Rust's `TryFrom` trait.
 
@@ -104,7 +109,7 @@ In a Solana program, we implement `TryFrom` to convert raw account slices (and, 
 
 We typically handle all specific checks that don't require a double borrow (borrowing both in the account validation and potentially in the process) in each `TryFrom` implementation. This keeps the `process()` function, where all the instruction logic happens, as clean as possible.
 
-We start by implementing the account struct needed for the instruction, similar to Anchor's `Context`. 
+We start by implementing the account struct needed for the instruction, similar to Anchor's `Context`.
 
 **Note**: Unlike Anchor, in this account struct we only include the accounts we want to use in the process, and we mark as `_` the remaining accounts that are needed in the instruction but won't be used (like the `SystemProgram`).
 
@@ -161,6 +166,7 @@ pub struct DepositInstructionData {
 ```
 
 We then implement `TryFrom` to validate the instruction data and convert it into our structured type. This involves:
+
 1. Verifying the data length matches our expected size
 2. Converting the byte slice into our concrete type
 3. Performing any necessary validation checks
@@ -191,6 +197,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 This pattern allows us to:
+
 - Validate instruction data before it reaches the business logic
 - Keep the validation logic separate from the core functionality
 - Provide clear error messages when validation fails

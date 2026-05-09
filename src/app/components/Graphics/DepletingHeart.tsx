@@ -482,38 +482,14 @@ export default function DepletingHeart({
             <motion.path d="M7 3h1v1H7z" className="Rectangle 92"></motion.path>
             <motion.path d="M8 2h1v1H8z" className="Rectangle 53"></motion.path>
             <motion.path d="M9 1h1v1H9z" className="Rectangle 54"></motion.path>
-            <motion.path
-              d="M10 1h1v1h-1z"
-              className="Rectangle 55"
-            ></motion.path>
-            <motion.path
-              d="M13 3h1v1h-1z"
-              className="Rectangle 58"
-            ></motion.path>
-            <motion.path
-              d="M13 7h1v1h-1z"
-              className="Rectangle 62"
-            ></motion.path>
-            <motion.path
-              d="M11 9h1v1h-1z"
-              className="Rectangle 64"
-            ></motion.path>
-            <motion.path
-              d="M7 13h1v1H7z"
-              className="Rectangle 68"
-            ></motion.path>
-            <motion.path
-              d="M6 12h1v1H6z"
-              className="Rectangle 69"
-            ></motion.path>
-            <motion.path
-              d="M5 11h1v1H5z"
-              className="Rectangle 71"
-            ></motion.path>
-            <motion.path
-              d="M4 10h1v1H4z"
-              className="Rectangle 70"
-            ></motion.path>
+            <motion.path d="M10 1h1v1h-1z" className="Rectangle 55"></motion.path>
+            <motion.path d="M13 3h1v1h-1z" className="Rectangle 58"></motion.path>
+            <motion.path d="M13 7h1v1h-1z" className="Rectangle 62"></motion.path>
+            <motion.path d="M11 9h1v1h-1z" className="Rectangle 64"></motion.path>
+            <motion.path d="M7 13h1v1H7z" className="Rectangle 68"></motion.path>
+            <motion.path d="M6 12h1v1H6z" className="Rectangle 69"></motion.path>
+            <motion.path d="M5 11h1v1H5z" className="Rectangle 71"></motion.path>
+            <motion.path d="M4 10h1v1H4z" className="Rectangle 70"></motion.path>
             <motion.path d="M3 9h1v1H3z" className="Rectangle 72"></motion.path>
             <motion.path d="M1 7h1v1H1z" className="Rectangle 74"></motion.path>
             <motion.path d="M1 4h1v1H1z" className="Rectangle 77"></motion.path>
@@ -526,42 +502,15 @@ export default function DepletingHeart({
             <motion.path d="M1 6h1v1H1z" className="Rectangle 76"></motion.path>
             <motion.path d="M1 5h1v1H1z" className="Rectangle 75"></motion.path>
             <motion.path d="M2 8h1v1H2z" className="Rectangle 73"></motion.path>
-            <motion.path
-              d="M8 12h1v1H8z"
-              className="Rectangle 67"
-            ></motion.path>
-            <motion.path
-              d="M9 11h1v1H9z"
-              className="Rectangle 66"
-            ></motion.path>
-            <motion.path
-              d="M10 10h1v1h-1z"
-              className="Rectangle 65"
-            ></motion.path>
-            <motion.path
-              d="M12 8h1v1h-1z"
-              className="Rectangle 63"
-            ></motion.path>
-            <motion.path
-              d="M13 6h1v1h-1z"
-              className="Rectangle 61"
-            ></motion.path>
-            <motion.path
-              d="M13 5h1v1h-1z"
-              className="Rectangle 60"
-            ></motion.path>
-            <motion.path
-              d="M13 4h1v1h-1z"
-              className="Rectangle 59"
-            ></motion.path>
-            <motion.path
-              d="M12 2h1v1h-1z"
-              className="Rectangle 57"
-            ></motion.path>
-            <motion.path
-              d="M11 2h1v1h-1z"
-              className="Rectangle 56"
-            ></motion.path>
+            <motion.path d="M8 12h1v1H8z" className="Rectangle 67"></motion.path>
+            <motion.path d="M9 11h1v1H9z" className="Rectangle 66"></motion.path>
+            <motion.path d="M10 10h1v1h-1z" className="Rectangle 65"></motion.path>
+            <motion.path d="M12 8h1v1h-1z" className="Rectangle 63"></motion.path>
+            <motion.path d="M13 6h1v1h-1z" className="Rectangle 61"></motion.path>
+            <motion.path d="M13 5h1v1h-1z" className="Rectangle 60"></motion.path>
+            <motion.path d="M13 4h1v1h-1z" className="Rectangle 59"></motion.path>
+            <motion.path d="M12 2h1v1h-1z" className="Rectangle 57"></motion.path>
+            <motion.path d="M11 2h1v1h-1z" className="Rectangle 56"></motion.path>
             <motion.path d="M7 3h1v1H7z" className="Rectangle 52"></motion.path>
           </motion.g>
         </g>

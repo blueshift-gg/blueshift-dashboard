@@ -6,13 +6,14 @@ Most dApps use TypeScript to interact with deployed Solana programs. Understandi
 
 <ArticleSection name="Anchor Client SDK" id="anchor-client-sdk" level="h2" />
 
-Anchor simplifies client interaction with Solana programs through an Interface Description Language (IDL) file that mirrors your program's structure. 
+Anchor simplifies client interaction with Solana programs through an Interface Description Language (IDL) file that mirrors your program's structure.
 
 When combined with Anchor's TypeScript library (@coral-xyz/anchor), the IDL provides a streamlined approach to building instructions and transactions.
 
 ### Setup
 
 The `@coral-xyz/anchor` package installs automatically when creating an Anchor program. After running anchor build, Anchor generates:
+
 - An IDL at `target/idl/<program-name>.json`
 - A TypeScript SDK at `target/types/<program-name>.ts`
 
@@ -56,10 +57,11 @@ setProvider(provider);
 ### Program
 
 Anchor's Program object creates a custom API for interacting with Solana programs. This API serves as the central interface for all onchain program communication:
-- Send transactions, 
-- Fetch deserialized accounts, 
-- Decode instruction data, 
-- Subscribe to account changes, 
+
+- Send transactions,
+- Fetch deserialized accounts,
+- Decode instruction data,
+- Subscribe to account changes,
 - Listen to events
 
 Create the Program object by importing the types and IDL:
@@ -83,11 +85,7 @@ Once configured, use the Anchor Methods Builder to construct instructions and tr
 The basic `MethodsBuilder` pattern:
 
 ```ts
-await program.methods
-  .instructionName(instructionDataInputs)
-  .accounts({})
-  .signers([])
-  .rpc();
+await program.methods.instructionName(instructionDataInputs).accounts({}).signers([]).rpc();
 ```
 
 > The API uses camelCase naming instead of Rust's snake_case convention. Call instructions using dot syntax with the instruction name, passing arguments as comma-separated values.
@@ -100,7 +98,7 @@ Use dot syntax to call `.accounts` on the `MethodsBuilder`, passing an object wi
 
 > From Anchor 0.30.0, accounts that can be resolved automatically (like PDAs or explicit addresses) are included in the IDL and aren't required in the `.accounts` call (`.accountPartial()` becomes the default). To pass all accounts manually, use `.accountsStrict()`.
 
-### Transactions 
+### Transactions
 
 The default method for sending transactions through Anchor is `.rpc()`, which sends the transaction directly to the blockchain.
 
@@ -185,6 +183,7 @@ const accounts = await program.account.counter.fetchMultiple([
 Rather than fetching onchain data every time users connect their wallets, set up systems that listen to the blockchain and store relevant data in a database.
 
 Two main approaches exist for listening to onchain events:
+
 - Polling: The client repeatedly checks for new data at intervals. The server responds with the latest data regardless of changes, potentially returning duplicate information.
 - Streaming: The server pushes data to the client only when updates occur. This provides more efficient, real-time data transfer since only relevant changes are transmitted.
 
@@ -193,6 +192,7 @@ For streaming Anchor instructions, use webhooks that listen to events and send t
 > For extremely low-latency applications where 5ms differences matter, webhooks may not provide sufficient speed.
 
 Anchor provides two macros for emitting events:
+
 - `emit!()`: Emits events directly to program logs using the `sol_log_data()` syscall, encoding event data as base64 strings prefixed with "Program Data"
 - `emit_cpi!()`: Emits events through Cross Program Invocations (CPIs). Event data is encoded and included in the CPI's instruction data instead of program logs
 
@@ -202,22 +202,22 @@ Program implementation:
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("8T7MsCZyzxboviPJg5Rc7d8iqEcDReYR2pkQKrmbg7dy");
- 
+
 #[program]
 pub mod event {
     use super::*;
- 
+
     pub fn emit_event(_ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -230,16 +230,16 @@ Client-side event listening with Anchor SDK helpers for base64 decoding:
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Event } from "../target/types/event";
- 
+
 describe("event", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
- 
+
   const program = anchor.workspace.Event as Program<Event>;
- 
+
   it("Emits custom event", async () => {
     // Set up listener before sending transaction
-    const listenerId = program.addEventListener("customEvent", event => {
+    const listenerId = program.addEventListener("customEvent", (event) => {
       // Process the event data
       console.log("Event Data:", event);
     });
@@ -253,23 +253,23 @@ Program implementation:
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("2cDQ2LxKwQ8fnFUz4LLrZ157QzBnhPNeQrTSmWcpVin1");
- 
+
 #[program]
 pub mod event_cpi {
     use super::*;
- 
+
     pub fn emit_event(ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit_cpi!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[event_cpi]
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -282,19 +282,18 @@ Client-side event decoding:
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { EventCpi } from "../target/types/event_cpi";
- 
+
 describe("event-cpi", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.EventCpi as Program<EventCpi>;
- 
-  it("Emits custom event", async () => { 
+
+  it("Emits custom event", async () => {
     // Fetch the transaction data
-    const transactionData = await program.provider.connection.getTransaction(
-      transactionSignature,
-      { commitment: "confirmed" },
-    );
- 
+    const transactionData = await program.provider.connection.getTransaction(transactionSignature, {
+      commitment: "confirmed",
+    });
+
     // Decode the event data from the CPI instruction data
     const eventIx = transactionData.meta.innerInstructions[0].instructions[0];
     const rawData = anchor.utils.bytes.bs58.decode(eventIx.data);

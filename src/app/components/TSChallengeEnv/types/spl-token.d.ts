@@ -376,10 +376,7 @@ export declare function calculateEpochFee(
 ): bigint;
 
 /** Calculate the transfer fee */
-export declare function calculateFee(
-  transferFee: TransferFee,
-  preFeeAmount: bigint,
-): bigint;
+export declare function calculateFee(transferFee: TransferFee, preFeeAmount: bigint): bigint;
 
 /**
  * Close a token account
@@ -3759,9 +3756,7 @@ export declare function getAccountLen(extensionTypes: ExtensionType[]): number;
 
 export declare function getAccountLenForMint(mint: Mint): number;
 
-export declare function getAccountTypeOfMintType(
-  e: ExtensionType,
-): ExtensionType;
+export declare function getAccountTypeOfMintType(e: ExtensionType): ExtensionType;
 
 /**
  * Async version of getAssociatedTokenAddressSync
@@ -3804,9 +3799,7 @@ export declare function getAssociatedTokenAddressSync(
 
 export declare function getCpiGuard(account: Account): CpiGuard | null;
 
-export declare function getDefaultAccountState(
-  mint: Mint,
-): DefaultAccountState | null;
+export declare function getDefaultAccountState(mint: Mint): DefaultAccountState | null;
 
 /** Get the fee for given epoch */
 export declare function getEpochFee(
@@ -3814,10 +3807,7 @@ export declare function getEpochFee(
   epoch: bigint,
 ): TransferFee;
 
-export declare function getExtensionData(
-  extension: ExtensionType,
-  tlvData: Buffer,
-): Buffer | null;
+export declare function getExtensionData(extension: ExtensionType, tlvData: Buffer): Buffer | null;
 
 export declare function getExtensionTypes(tlvData: Buffer): ExtensionType[];
 
@@ -3827,21 +3817,13 @@ export declare function getExtraAccountMetaAddress(
 ): PublicKey;
 
 /** Unpack an extra account metas account and parse the data into a list of ExtraAccountMetas */
-export declare function getExtraAccountMetas(
-  account: AccountInfo<Buffer>,
-): ExtraAccountMeta[];
+export declare function getExtraAccountMetas(account: AccountInfo<Buffer>): ExtraAccountMeta[];
 
-export declare function getGroupMemberPointerState(
-  mint: Mint,
-): Partial<GroupMemberPointer> | null;
+export declare function getGroupMemberPointerState(mint: Mint): Partial<GroupMemberPointer> | null;
 
-export declare function getGroupPointerState(
-  mint: Mint,
-): Partial<GroupPointer> | null;
+export declare function getGroupPointerState(mint: Mint): Partial<GroupPointer> | null;
 
-export declare function getImmutableOwner(
-  account: Account,
-): ImmutableOwner | null;
+export declare function getImmutableOwner(account: Account): ImmutableOwner | null;
 
 export declare function getInterestBearingMintConfigState(
   mint: Mint,
@@ -3849,9 +3831,7 @@ export declare function getInterestBearingMintConfigState(
 
 export declare function getMemoTransfer(account: Account): MemoTransfer | null;
 
-export declare function getMetadataPointerState(
-  mint: Mint,
-): Partial<MetadataPointer> | null;
+export declare function getMetadataPointerState(mint: Mint): Partial<MetadataPointer> | null;
 
 /** Get the minimum lamport balance for a base token account to be rent exempt
  *
@@ -3933,9 +3913,7 @@ export declare function getMint(
   programId?: PublicKey,
 ): Promise<Mint>;
 
-export declare function getMintCloseAuthority(
-  mint: Mint,
-): MintCloseAuthority | null;
+export declare function getMintCloseAuthority(mint: Mint): MintCloseAuthority | null;
 
 export declare function getMintLen(
   extensionTypes: ExtensionType[],
@@ -3988,9 +3966,7 @@ export declare function getNewAccountLenForExtensionLen(
 
 export declare function getNonTransferable(mint: Mint): NonTransferable | null;
 
-export declare function getNonTransferableAccount(
-  account: Account,
-): NonTransferableAccount | null;
+export declare function getNonTransferableAccount(account: Account): NonTransferableAccount | null;
 
 /**
  * Retrieve the associated token account, or create it if it doesn't exist
@@ -4019,27 +3995,17 @@ export declare function getOrCreateAssociatedTokenAccount(
   associatedTokenProgramId?: PublicKey,
 ): Promise<Account>;
 
-export declare function getPausableAccount(
-  account: Account,
-): PausableAccount | null;
+export declare function getPausableAccount(account: Account): PausableAccount | null;
 
 export declare function getPausableConfig(mint: Mint): PausableConfig | null;
 
-export declare function getPermanentDelegate(
-  mint: Mint,
-): PermanentDelegate | null;
+export declare function getPermanentDelegate(mint: Mint): PermanentDelegate | null;
 
-export declare function getScaledUiAmountConfig(
-  mint: Mint,
-): ScaledUiAmountConfig | null;
+export declare function getScaledUiAmountConfig(mint: Mint): ScaledUiAmountConfig | null;
 
-export declare function getTokenGroupMemberState(
-  mint: Mint,
-): Partial<TokenGroupMember> | null;
+export declare function getTokenGroupMemberState(mint: Mint): Partial<TokenGroupMember> | null;
 
-export declare function getTokenGroupState(
-  mint: Mint,
-): Partial<TokenGroup> | null;
+export declare function getTokenGroupState(mint: Mint): Partial<TokenGroup> | null;
 
 /**
  * Retrieve Token Metadata Information
@@ -4058,19 +4024,13 @@ export declare function getTokenMetadata(
   programId?: PublicKey,
 ): Promise<TokenMetadata | null>;
 
-export declare function getTransferFeeAmount(
-  account: Account,
-): TransferFeeAmount | null;
+export declare function getTransferFeeAmount(account: Account): TransferFeeAmount | null;
 
-export declare function getTransferFeeConfig(
-  mint: Mint,
-): TransferFeeConfig | null;
+export declare function getTransferFeeConfig(mint: Mint): TransferFeeConfig | null;
 
 export declare function getTransferHook(mint: Mint): TransferHook | null;
 
-export declare function getTransferHookAccount(
-  account: Account,
-): TransferHookAccount | null;
+export declare function getTransferHookAccount(account: Account): TransferHookAccount | null;
 
 export declare function getTypeLen(e: ExtensionType): number;
 
@@ -4775,9 +4735,7 @@ export declare interface PermanentDelegate {
 export declare const PermanentDelegateLayout: Structure<PermanentDelegate>;
 
 /** Check that the token program provided is not `Tokenkeg...`, useful when using extensions */
-export declare function programSupportsExtensions(
-  programId: PublicKey,
-): boolean;
+export declare function programSupportsExtensions(programId: PublicKey): boolean;
 
 /** Token account as stored by the program */
 export declare interface RawAccount {
@@ -5786,9 +5744,7 @@ export declare enum TransferFeeInstruction {
 }
 
 /** Buffer layout for de/serializing a transfer fee */
-export declare function transferFeeLayout(
-  property?: string,
-): Layout<TransferFee>;
+export declare function transferFeeLayout(property?: string): Layout<TransferFee>;
 
 /** TransferHook as stored by the program */
 export declare interface TransferHook {

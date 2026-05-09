@@ -38,9 +38,7 @@ export default function HeadingReveal({
 
       const headingElement = containerRef.current.querySelector(headingLevel);
       if (!headingElement) {
-        console.error(
-          `Heading element ${headingLevel} not found in HeadingReveal component.`,
-        );
+        console.error(`Heading element ${headingLevel} not found in HeadingReveal component.`);
         return;
       }
 
@@ -78,15 +76,9 @@ export default function HeadingReveal({
 
   return (
     <div ref={containerRef}>
-      {headingLevel === "h1" && (
-        <h1 className={classNames("h1", className)}>{text}</h1>
-      )}
-      {headingLevel === "h2" && (
-        <h2 className={classNames("h2", className)}>{text}</h2>
-      )}
-      {headingLevel === "h3" && (
-        <h3 className={classNames("h3", className)}>{text}</h3>
-      )}
+      {headingLevel === "h1" && <h1 className={classNames("h1", className)}>{text}</h1>}
+      {headingLevel === "h2" && <h2 className={classNames("h2", className)}>{text}</h2>}
+      {headingLevel === "h3" && <h3 className={classNames("h3", className)}>{text}</h3>}
     </div>
   );
 }

@@ -20,9 +20,7 @@ interface ChallengePageContainerProps {
   }>;
 }
 
-export default async function ChallengePageContainer({
-  params,
-}: ChallengePageContainerProps) {
+export default async function ChallengePageContainer({ params }: ChallengePageContainerProps) {
   const _t = await getTranslations();
   const { challengeSlug, pageSlug, locale } = await params;
 
@@ -35,9 +33,7 @@ export default async function ChallengePageContainer({
   let MdxComponent: JSX.Element;
   let challengeLocale = locale;
   if (pageSlug) {
-    const pageExists = challengeMetadata.pages?.some(
-      (p) => p.slug === pageSlug,
-    );
+    const pageExists = challengeMetadata.pages?.some((p) => p.slug === pageSlug);
     if (!pageExists) {
       notFound();
     }
@@ -47,9 +43,7 @@ export default async function ChallengePageContainer({
       );
     } catch (_error) {
       try {
-        MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`,
-        );
+        MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`);
         challengeLocale = "en";
       } catch (_error) {
         notFound();
@@ -57,14 +51,10 @@ export default async function ChallengePageContainer({
     }
   } else {
     try {
-      MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/challenge.mdx`,
-      );
+      MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/${locale}/challenge.mdx`);
     } catch (_error) {
       try {
-        MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/challenge.mdx`,
-        );
+        MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/en/challenge.mdx`);
         challengeLocale = "en";
       } catch (_error) {
         notFound();
@@ -87,32 +77,21 @@ export default async function ChallengePageContainer({
       if (accountInfo) {
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
-          console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`,
-          );
+          console.error(`Failed to decode num_minted for collection ${collectionMintAddress}`);
         }
       } else {
-        console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`,
-        );
+        console.error(`Failed to fetch account info for ${collectionMintAddress}`);
       }
     } catch (error) {
-      console.error(
-        `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error,
-      );
+      console.error(`Failed to fetch collection details for ${collectionMintAddress}:`, error);
     }
   }
 
   let nextPage: NonNullable<ChallengeMetadata["pages"]>[number] | null = null;
   if (pageSlug) {
-    const currentPageIndex = challengeMetadata.pages?.findIndex(
-      (p) => p.slug === pageSlug,
-    );
+    const currentPageIndex = challengeMetadata.pages?.findIndex((p) => p.slug === pageSlug);
     nextPage =
-      currentPageIndex !== undefined &&
-      currentPageIndex > -1 &&
-      challengeMetadata.pages
+      currentPageIndex !== undefined && currentPageIndex > -1 && challengeMetadata.pages
         ? challengeMetadata.pages[currentPageIndex + 1]
         : null;
   } else {
@@ -123,11 +102,7 @@ export default async function ChallengePageContainer({
   }
 
   const pagination = (
-    <ContentPagination
-      type="challenge"
-      challenge={challengeMetadata}
-      currentPageSlug={pageSlug}
-    />
+    <ContentPagination type="challenge" challenge={challengeMetadata} currentPageSlug={pageSlug} />
   );
 
   const footer = (
@@ -146,10 +121,7 @@ export default async function ChallengePageContainer({
       footer={footer}
     >
       <MdxLayout>
-        <ContentFallbackNotice
-          locale={locale}
-          originalLocale={challengeLocale}
-        />
+        <ContentFallbackNotice locale={locale} originalLocale={challengeLocale} />
         {MdxComponent}
       </MdxLayout>
     </ChallengeLayout>

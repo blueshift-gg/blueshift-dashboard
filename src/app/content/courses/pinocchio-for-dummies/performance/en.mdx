@@ -182,6 +182,7 @@ The Solana Virtual Machine (SVM) uses a three-tier memory architecture that stri
 Understanding this architecture is crucial for writing high-performance Solana programs.
 
 Programs operate within fixed virtual address spaces with predictable memory mapping:
+
 - **Program Code**: `0x100000000` - Where your compiled program bytecode lives
 - **Stack Data**: `0x200000000` - Local variables and function call frames
 - **Heap Data**: `0x300000000` - Dynamic allocations (expensive!)
@@ -201,38 +202,40 @@ Heap allocation isn't inherently bad, but on Solana it's expensive and complex b
 ### Zero-Allocation Techniques
 
 1. Reference-Based Data Structures - Transform owned data into borrowed references:
-    ```rust
-    // HEAP ALLOCATION:
-    struct AccountInfo {
-        key: Pubkey,        // Owned data - copied to heap
-        data: Vec<u8>,      // Vector - definitely heap allocated
-    }
 
-    // ZERO ALLOCATION:
-    struct AccountInfo<'a> {
-        key: &'a Pubkey,    // Reference - no allocation
-        data: &'a [u8],     // Slice reference - no allocation
-    }
-    ```
+   ```rust
+   // HEAP ALLOCATION:
+   struct AccountInfo {
+       key: Pubkey,        // Owned data - copied to heap
+       data: Vec<u8>,      // Vector - definitely heap allocated
+   }
+
+   // ZERO ALLOCATION:
+   struct AccountInfo<'a> {
+       key: &'a Pubkey,    // Reference - no allocation
+       data: &'a [u8],     // Slice reference - no allocation
+   }
+   ```
 
 2. Zero-Copy Data Access - Access data in-place without deserialization:
-    ```rust
-    // Instead of deserializing, access data in-place:
-    pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
-        // Parse accounts directly from byte slice - NO HEAP ALLOCATION
-        let source_account = &accounts[0..36];  // Just slice references
-        let dest_account = &accounts[36..72];
 
-        // Access fields through pointer arithmetic - NO ALLOCATION
-        let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
-    }
-    ```
+   ```rust
+   // Instead of deserializing, access data in-place:
+   pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
+       // Parse accounts directly from byte slice - NO HEAP ALLOCATION
+       let source_account = &accounts[0..36];  // Just slice references
+       let dest_account = &accounts[36..72];
+
+       // Access fields through pointer arithmetic - NO ALLOCATION
+       let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
+   }
+   ```
 
 3. No-Std Constraints - Prevent accidental heap usage at compile time:
-    ```rust
-    // Enforces no-std to prevents accidental heap usage:
-    #![no_std]
-    ```
+   ```rust
+   // Enforces no-std to prevents accidental heap usage:
+   #![no_std]
+   ```
 
 ### Pinocchio Memory Allocator
 

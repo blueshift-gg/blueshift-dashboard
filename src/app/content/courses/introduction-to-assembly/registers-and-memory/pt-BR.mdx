@@ -12,13 +12,13 @@ O tradeoff é simples: você tem apenas 11 slots no total, então precisa usá-l
 
 O sBPF atribui funções específicas a cada registrador:
 
-| Registrador | Função                 | Salvo pelo chamado?  | Notas de Uso                                 |
-|----------|----------------------|----------------|---------------------------------------------|
-| `r0`     | Valor de retorno         | Não             | Resultados de funções, valores de retorno de syscalls     |
-| `r1`     | Ponteiro do buffer de entrada | Não             | Aponta para 0x400000000 na entrada              |
-| `r2-r5`  | Scratch/argumentos    | Não             | Argumentos de funções auxiliares, valores temporários |
-| `r6-r9`  | Uso geral      | Sim            | Devem ser preservados entre chamadas                  |
-| `r10`    | Ponteiro de frame        | Sim, somente leitura | Base da pilha, não pode modificar diretamente          |
+| Registrador | Função                        | Salvo pelo chamado?  | Notas de Uso                                          |
+| ----------- | ----------------------------- | -------------------- | ----------------------------------------------------- |
+| `r0`        | Valor de retorno              | Não                  | Resultados de funções, valores de retorno de syscalls |
+| `r1`        | Ponteiro do buffer de entrada | Não                  | Aponta para 0x400000000 na entrada                    |
+| `r2-r5`     | Scratch/argumentos            | Não                  | Argumentos de funções auxiliares, valores temporários |
+| `r6-r9`     | Uso geral                     | Sim                  | Devem ser preservados entre chamadas                  |
+| `r10`       | Ponteiro de frame             | Sim, somente leitura | Base da pilha, não pode modificar diretamente         |
 
 Os registradores `r6` até `r9` são _callee-saved_ (salvos pelo chamado), significando que seus valores persistem entre chamadas de função. Use-os para dados importantes que devem sobreviver a invocações de funções.
 
@@ -30,12 +30,12 @@ O registrador `r10` é "especial" porque serve como seu ponteiro de frame, apont
 
 Enquanto os registradores armazenam valores ativamente usados, a memória armazena todo o resto. O sBPF organiza a memória em regiões fixas com layouts idênticos em todos os programas:
 
-| Região | Endereço Inicial | Propósito                 | Tamanho/Notas                                             |
-|--------|---------------|-------------------------|--------------------------------------------------------|
-| Text   | 0x100000000   | Código e dados somente leitura | Binário do programa                                         |
-| Stack  | 0x200000000   | Variáveis locais         | 4 KiB por frame de pilha, com profundidade máxima de chamada de 64 |
-| Heap   | 0x300000000   | Alocação dinâmica      | 32 KiB                                                 |
-| Input  | 0x400000000   | Parâmetros do programa      | Contas serializadas e dados de instrução               |
+| Região | Endereço Inicial | Propósito                      | Tamanho/Notas                                                      |
+| ------ | ---------------- | ------------------------------ | ------------------------------------------------------------------ |
+| Text   | 0x100000000      | Código e dados somente leitura | Binário do programa                                                |
+| Stack  | 0x200000000      | Variáveis locais               | 4 KiB por frame de pilha, com profundidade máxima de chamada de 64 |
+| Heap   | 0x300000000      | Alocação dinâmica              | 32 KiB                                                             |
+| Input  | 0x400000000      | Parâmetros do programa         | Contas serializadas e dados de instrução                           |
 
 - A **região de texto** contém seu código executável e dados somente leitura como constantes de string. Dados definidos com diretivas `.quad` tipicamente residem aqui.
 - A **região de pilha** abriga variáveis locais. Com `r10` apontando para a base da pilha, você acessa variáveis locais usando offsets negativos: `[r10 - 16]`, `[r10 - 24]`, etc.
@@ -53,17 +53,18 @@ Veja como registradores e memória trabalham juntos na prática:
 .globl entrypoint
 entrypoint:
     // Na entrada: r1 aponta para dados de entrada em 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Carregar primeiros 8 bytes da entrada em r0
     mov64 r2, 42            // Colocar 42 no registrador r2
     add64 r0, r2            // Somar: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Armazenar resultado na pilha
     mov64 r0, 0             // Retornar sucesso
     exit
 ```
 
 Este programa demonstra o padrão típico:
+
 - Usa o registrador `r1` (ponteiro de entrada) para ler da memória
 - Usa os registradores `r0` e `r2` para cálculos
 - Usa o registrador `r10` (ponteiro de frame) para acessar a memória da pilha
@@ -105,6 +106,7 @@ entrypoint:
 ```
 
 O comportamento de saída depende da profundidade de chamada:
+
 - Na profundidade de chamada 0, exit termina o programa com `r0` como código de resultado.
 - Em níveis de chamada mais profundos, exit atua como uma instrução de retorno, restaurando os registradores salvos pelo chamador (`r6`-`r9`) e o ponteiro de frame do chamador (`r10`) antes de continuar a execução no endereço de retorno.
 

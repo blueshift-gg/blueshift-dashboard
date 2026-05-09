@@ -16,10 +16,8 @@ const altTextMapping = {
     "Pinocchio course - Build native Solana programs with zero-copy framework",
   "create-your-sdk-with-codama.png":
     "Codama SDK course - Generate TypeScript SDKs for Solana programs",
-  "testing-with-mollusk.png":
-    "Mollusk testing course - Unit testing framework for Solana programs",
-  "testing-with-litesvm.png":
-    "LiteSVM testing course - Lightweight Solana VM for program testing",
+  "testing-with-mollusk.png": "Mollusk testing course - Unit testing framework for Solana programs",
+  "testing-with-litesvm.png": "LiteSVM testing course - Lightweight Solana VM for program testing",
   "testing-with-surfpool.png":
     "Surfpool testing course - Advanced testing strategies for Solana programs",
   "instruction-introspection.png":
@@ -32,10 +30,8 @@ const altTextMapping = {
     "SPL Token with Web3.js course - Build token programs with Solana Web3.js library",
   "introduction-to-assembly.png":
     "Assembly programming course - Low-level Solana program development",
-  "nfts-on-solana.png":
-    "NFTs on Solana course - Create and manage NFTs with Metaplex",
-  "solana-pay.png":
-    "Solana Pay course - Build payment solutions on Solana blockchain",
+  "nfts-on-solana.png": "NFTs on Solana course - Create and manage NFTs with Metaplex",
+  "solana-pay.png": "Solana Pay course - Build payment solutions on Solana blockchain",
   "token-2022-program.png":
     "Token-2022 Program course - Learn advanced token extensions and features",
   "token-2022-with-anchor.png":

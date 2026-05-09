@@ -34,8 +34,7 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
   const t = useTranslations();
   const { courseProgress, challengeStatuses } = usePersistentStore();
   const [isNFTViewerOpen, setIsNFTViewerOpen] = useState(false);
-  const [selectedChallenge, setSelectedChallenge] =
-    useState<ChallengeMetadata | null>(null);
+  const [selectedChallenge, setSelectedChallenge] = useState<ChallengeMetadata | null>(null);
   const [itemsPerRow, setItemsPerRow] = useState(1);
   const [isMounted, setIsMounted] = useState(false);
   const { width } = useWindowSize();
@@ -55,10 +54,7 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
   }, [width]);
 
   // Get current lesson slug for a course
-  const getCurrentLessonSlug = (
-    courseSlug: string,
-    course: CourseMetadata,
-  ): string | undefined => {
+  const getCurrentLessonSlug = (courseSlug: string, course: CourseMetadata): string | undefined => {
     const progress = courseProgress[courseSlug] || 0;
     if (progress === 0 && course.lessons?.length > 0) {
       return course.lessons[0].slug;
@@ -146,18 +142,11 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
 
   if (!isMounted || !width) {
     return (
-      <div className="min-h-[calc(100dvh-128px)] relative w-full p-6 pb-12 max-w-app mx-auto app:border-x app:border-border-light">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-y-12 gap-x-0 md:gap-x-24">
+      <div className="relative mx-auto min-h-[calc(100dvh-128px)] w-full max-w-app p-6 pb-12 app:border-x app:border-border-light">
+        <div className="grid grid-cols-1 gap-x-0 gap-y-12 md:grid-cols-2 md:gap-x-24 xl:grid-cols-3">
           {steps.map((step) => (
-            <div
-              key={step.slug}
-              className="w-full aspect-4/5 lg:aspect-square xl:aspect-5/6"
-            >
-              {step.type === "course" ? (
-                <CourseCardSkeleton />
-              ) : (
-                <ChallengeCardSkeleton />
-              )}
+            <div key={step.slug} className="aspect-4/5 w-full lg:aspect-square xl:aspect-5/6">
+              {step.type === "course" ? <CourseCardSkeleton /> : <ChallengeCardSkeleton />}
             </div>
           ))}
         </div>
@@ -171,14 +160,12 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
   const isMobile = itemsPerRow === 1;
 
   return (
-    <div className="min-h-[calc(100dvh-128px)] relative w-full p-6 pb-12 max-w-app mx-auto app:border-x app:border-border-light">
-      <div className="flex flex-col w-full gap-y-0 md:gap-y-24">
+    <div className="relative mx-auto min-h-[calc(100dvh-128px)] w-full max-w-app p-6 pb-12 app:border-x app:border-border-light">
+      <div className="flex w-full flex-col gap-y-0 md:gap-y-24">
         {chunks.map((rowSteps, rowIndex) => {
           // Only alternate direction on non-mobile
           const isReverseRow = !isMobile && rowIndex % 2 === 1;
-          const rowKey = rowSteps
-            .map((step) => `${step.type}-${step.slug}`)
-            .join("|");
+          const rowKey = rowSteps.map((step) => `${step.type}-${step.slug}`).join("|");
 
           return (
             <div
@@ -216,7 +203,7 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
 
                         {/* Desktop/Tablet Down Arrow (Only for last in chunk connecting to next row) */}
                         {isLastInChunk && !isLastOverall && !isMobile && (
-                          <div className="hidden md:flex absolute -bottom-[76px] left-1/2 -translate-x-1/2 items-center justify-center z-10">
+                          <div className="absolute -bottom-[76px] left-1/2 z-10 hidden -translate-x-1/2 items-center justify-center md:flex">
                             <PathItemDivider
                               status={isComplete ? "completed" : "incomplete"}
                               direction="down"
@@ -227,7 +214,7 @@ export default function PathStepsList({ path, steps }: PathStepsListProps) {
 
                       {/* Mobile Down Arrow */}
                       {!isLastOverall && isMobile && (
-                        <div className="md:hidden w-full flex justify-center py-5">
+                        <div className="flex w-full justify-center py-5 md:hidden">
                           <PathItemDivider
                             status={isComplete ? "completed" : "incomplete"}
                             direction="down"

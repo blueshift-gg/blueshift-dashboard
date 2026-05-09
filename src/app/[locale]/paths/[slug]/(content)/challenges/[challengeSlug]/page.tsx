@@ -1,4 +1,1 @@
-export {
-  default,
-  generateMetadata,
-} from "@/app/[locale]/challenges/[challengeSlug]/page";
+export { default, generateMetadata } from "@/app/[locale]/challenges/[challengeSlug]/page";

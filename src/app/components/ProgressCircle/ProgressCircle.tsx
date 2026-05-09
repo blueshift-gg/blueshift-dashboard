@@ -34,7 +34,7 @@ const ProgressCircle = ({
       <AnimatePresence mode="wait">
         {showTick ? (
           <motion.svg
-            className="will-change-contents absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 will-change-contents"
             key="tick"
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}

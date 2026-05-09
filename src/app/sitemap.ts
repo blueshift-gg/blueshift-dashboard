@@ -61,9 +61,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
             url: `${BASE_URL}/${locale}/challenges/${challenge.slug}/${page.slug}`,
             lastModified: new Date(),
             alternates: {
-              languages: getLanguageAlternates(
-                `/challenges/${challenge.slug}/${page.slug}`,
-              ),
+              languages: getLanguageAlternates(`/challenges/${challenge.slug}/${page.slug}`),
             },
           });
         }
@@ -87,9 +85,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
             url: `${BASE_URL}/${locale}/courses/${course.slug}/${lesson.slug}`,
             lastModified: new Date(),
             alternates: {
-              languages: getLanguageAlternates(
-                `/courses/${course.slug}/${lesson.slug}`,
-              ),
+              languages: getLanguageAlternates(`/courses/${course.slug}/${lesson.slug}`),
             },
           });
         }

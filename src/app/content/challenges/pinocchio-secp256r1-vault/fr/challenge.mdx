@@ -4,9 +4,9 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # Le Vault Secp256r1
 
-Un vault est un composant fondamental de la DeFi qui permet aux utilisateurs de stocker leurs actifs en toute sécurité. 
+Un vault est un composant fondamental de la DeFi qui permet aux utilisateurs de stocker leurs actifs en toute sécurité.
 
-Dans ce challenge, nous allons créer un vault qui utilise les signatures Secp256r1 pour vérifier les transactions. Ceci est particulièrement intéressant car Secp256r1 est la même courbe elliptique utilisée par les méthodes d'authentification modernes telles que les *passkeys*, qui permettent aux utilisateurs de signer des transactions à l'aide d'une authentification biométrique (comme Face ID ou Touch ID) au lieu des signatures traditionnelles basées sur un portefeuille.
+Dans ce challenge, nous allons créer un vault qui utilise les signatures Secp256r1 pour vérifier les transactions. Ceci est particulièrement intéressant car Secp256r1 est la même courbe elliptique utilisée par les méthodes d'authentification modernes telles que les _passkeys_, qui permettent aux utilisateurs de signer des transactions à l'aide d'une authentification biométrique (comme Face ID ou Touch ID) au lieu des signatures traditionnelles basées sur un portefeuille.
 
 La principale innovation ici réside dans le fait que nous dissocions le paiement des frais de transaction de l'authentification de l'utilisateur. Cela signifie que, pendant que les utilisateurs puissent authentifier les transactions à l'aide de leurs signatures Secp256r1 (qui peuvent être générées à l'aide de méthodes d'authentification modernes), les frais de transaction peuvent être payés par un prestataire de services. Cela permet d'offrir une expérience utilisateur plus fluide tout en garantissant la sécurité.
 
@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="Deposit" id="deposit" level="h2" />
 
 L'instruction `deposit` effectue les étapes suivantes :
+
 1. Vérifie que le vault est vide (contient zéro lamport) afin d'empêcher les doubles dépôts
 2. S'assure que le montant du dépôt dépasse la rente minimale pour qu'un compte de base soit exempt de rente
 3. Transfert des lamports du payeur au vault à l'aide d'un CPI au Programme Système
@@ -118,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 Détaillons chaque vérification de compte :
+
 1. `payer`: Il doit être un signataire car il doit autoriser le transfert de lamports
-2. `vault`: 
+2. `vault`:
    - Doit appartenir au Programme Système
    - Doit avoir zéro lamport (garantit un premier dépôt)
 
 Pour le `vault`, nous allons vérifier si :
+
 - Il est dérivé à partir des bonnes seeds
 - Il correspond à l'adresse de PDA attendue
-Puisqu'une partie des seeds se trouve dans `instruction_data` et que nous n'y avons pas accès pour le moment.
+  Puisqu'une partie des seeds se trouve dans `instruction_data` et que nous n'y avons pas accès pour le moment.
 
 Implémentons maintenant la structure des données d'instruction :
 
@@ -156,10 +159,11 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Nous désérialisons les données d'instruction dans une structure `DepositInstructionData` qui contient :
+
 - `pubkey`: La clé publique Secp256r1 de l'utilisateur effectuant le dépôt
 - `amount`: La quantité de lamports à déposer
 
-Bien que *unwrap* soit généralement déconseillé en production, dans ce cas précis il est utilisé en toute sécurité car nous avons déjà validé la taille des données dans la méthode `try_from`. Si la taille des données n'est pas correcte, une erreur sera renvoyée avant d'atteindre ce point.
+Bien que _unwrap_ soit généralement déconseillé en production, dans ce cas précis il est utilisé en toute sécurité car nous avons déjà validé la taille des données dans la méthode `try_from`. Si la taille des données n'est pas correcte, une erreur sera renvoyée avant d'atteindre ce point.
 
 Enfin, implémentons l'instruction `deposit` :
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 Comme mentionné précédemment, nous devons vérifier que le PDA du vault est dérivé à partir des bonnes seeds. Dans ce vault basé sur Secp256r1, nous utilisons `Secp256r1Pubkey` comme seed à la place de la clé publique du propriétaire. Il s'agit d'une mesure de sécurité cruciale qui garantit que seul le détenteur de la clé Secp256r1 correspondante peut accéder au vault.
 
 `Secp256r1Pubkey` a une taille de 33 octets car elle utilise une représentation par points compressés pour les clés publiques à courbe elliptique. Ce format comprend :
+
 - 1 octet pour la parité du point (indique si la coordonnée y est paire ou impaire)
 - 32 octets pour la coordonnée x
 
 Étant donné que la fonction `find_program_address` de Solana impose une limite de 32 octets pour chaque seed, nous devons diviser `Secp256r1Pubkey` en deux parties :
+
 1. L'octet de parité (`pubkey[..1]`)
 2. Les octets de la coordonnée x (`pubkey[1..33]`)
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 L'instruction `withdraw` effectue les étapes suivantes :
+
 1. Vérifie que le vault contient des lamports (n'est pas vide)
 2. Utilise le PDA du vault pour signer le transfert en son nom
 3. Transfère tous les lamports du vault au propriétaire
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 Le processus de retrait comprend plusieurs vérifications de sécurité afin de garantir la légitimité de la transaction. Voyons comment nous vérifions la signature Secp256r1 et comment nous nous protégeons contre de potentielles attaques :
 
 1. **Introspection des Instructions**
+
 - Nous utilisons l'instruction sysvar pour inspecter l'instruction suivante de la transaction
 - Cela nous permet de vérifier la signature Secp256r1 qui prouve la propriété de la clé de signature
 - La vérification de signature pour Secp256r1 s'effectue toujours dans une instruction distincte
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - Le message signé contient deux informations essentielles :
-    - L'adresse du destinataire prévu (32 octets)
-    - Une date d'expiration pour la signature (8 octets)
+  - L'adresse du destinataire prévu (32 octets)
+  - Une date d'expiration pour la signature (8 octets)
 - Cela empêche les attaques MEV dans lesquelles quelqu'un pourrait intercepter et réutiliser une signature valide en passant un autre `payer` et en réclamant le solde qui se trouve dans le vault
 
 4. **Vérification de l'Expiration**
@@ -433,6 +441,6 @@ Commencez par compiler votre programme en utilisant la commande suivante dans vo
 cargo build-sbf
 ```
 
-Cela générera un fichier `.so` directement dans votre dossier `target/deploy`. 
+Cela générera un fichier `.so` directement dans votre dossier `target/deploy`.
 
 Cliquez ensuite sur le bouton `Relever le challenge` et déposez le fichier !

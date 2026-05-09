@@ -63,7 +63,7 @@ export default function Modal({
                 opacity: 0,
                 transition: { duration: 0.2, delay: 0.05, ease: anticipate },
               }}
-              className="w-full fixed h-screen inset-0 bg-background/80 backdrop-blur-[3px]"
+              className="fixed inset-0 h-screen w-full bg-background/80 backdrop-blur-[3px]"
             />
           )}
           <motion.div

@@ -49,6 +49,7 @@ Based on Google's E-E-A-T (Experience, Expertise, Authoritativeness, Trustworthi
 ### Should we add team/contributor information?
 
 **Yes, strongly recommend adding:**
+
 - **Core team section**: Brief bios of primary maintainers with their Solana experience, previous projects, and expertise areas
 - **Contributors showcase**: Highlight notable contributors and their contributions (e.g., "50+ contributors have improved our content")
 - **Advisory/reviewer section**: If any Solana Foundation members, protocol developers, or recognized experts review content, mention them
@@ -58,6 +59,7 @@ This establishes **Expertise** and **Authoritativeness** by showing who's behind
 ### Should we link to GitHub/Discord/social?
 
 **Yes, absolutely essential:**
+
 - GitHub repo demonstrates **Trustworthiness** through open-source transparency
 - Discord shows active community and provides **Evidence of Experience**
 - Twitter/X (@blueshift) establishes **Authoritativeness** in the Solana ecosystem

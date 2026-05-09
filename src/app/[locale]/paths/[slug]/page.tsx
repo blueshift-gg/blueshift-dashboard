@@ -14,9 +14,7 @@ interface PathPageProps {
   }>;
 }
 
-export async function generateMetadata({
-  params,
-}: PathPageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: PathPageProps): Promise<Metadata> {
   const { slug, locale } = await params;
   const t = await getTranslations({ locale });
   const pathname = getPathname({
@@ -63,19 +61,10 @@ export default async function PathPage({ params }: PathPageProps) {
   const pathTitle = t(`paths.${slug}.title`);
 
   return (
-    <div className="flex flex-col w-full gap-y-0">
-      <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
-        <Breadcrumbs
-          items={[
-            { label: t("header.paths"), href: "/" },
-            { label: pathTitle },
-          ]}
-        />
-        <PathDetailHeader
-          slug={slug}
-          steps={stepsWithMetadata}
-          showBorder={false}
-        />
+    <div className="flex w-full flex-col gap-y-0">
+      <div className="relative mx-auto w-full max-w-app border-border-light app:border-x">
+        <Breadcrumbs items={[{ label: t("header.paths"), href: "/" }, { label: pathTitle }]} />
+        <PathDetailHeader slug={slug} steps={stepsWithMetadata} showBorder={false} />
       </div>
       <PathStepsList path={path} steps={stepsWithMetadata} />
     </div>

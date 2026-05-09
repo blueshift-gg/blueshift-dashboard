@@ -13,11 +13,7 @@ interface SearchInputProps {
   className?: string;
 }
 
-export default function SearchInput({
-  disabled,
-  onKeyDown,
-  className,
-}: SearchInputProps) {
+export default function SearchInput({ disabled, onKeyDown, className }: SearchInputProps) {
   const t = useTranslations();
   const { searchValue, setSearchValue } = useStore();
   return (
@@ -29,7 +25,7 @@ export default function SearchInput({
     >
       <Icon
         name="Search"
-        className="text-mute group-focus-within:text-shade-tertiary transition flex-shrink-0 w-max"
+        className="text-mute w-max flex-shrink-0 transition group-focus-within:text-shade-tertiary"
       />
       <input
         disabled={disabled}
@@ -38,7 +34,7 @@ export default function SearchInput({
         onKeyDown={onKeyDown}
         type="text"
         placeholder={t("ui.search_placeholder")}
-        className="w-full placeholder:text-mute transition leading-none h-full outline-none bg-transparent"
+        className="placeholder:text-mute h-full w-full bg-transparent leading-none transition outline-none"
       />
     </div>
   );

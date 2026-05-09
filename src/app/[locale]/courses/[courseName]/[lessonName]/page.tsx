@@ -24,9 +24,7 @@ interface LessonPageProps {
   }>;
 }
 
-export async function generateMetadata({
-  params,
-}: LessonPageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: LessonPageProps): Promise<Metadata> {
   const { courseName, lessonName, locale } = await params;
   const t = await getTranslations({ locale });
   const pathname = getPathname({
@@ -90,14 +88,10 @@ export default async function LessonPage({ params }: LessonPageProps) {
   let lessonLocale = locale;
 
   try {
-    Lesson = await getCompiledMdx(
-      `courses/${courseName}/${lessonName}/${locale}.mdx`,
-    );
+    Lesson = await getCompiledMdx(`courses/${courseName}/${lessonName}/${locale}.mdx`);
   } catch {
     try {
-      Lesson = await getCompiledMdx(
-        `courses/${courseName}/${lessonName}/en.mdx`,
-      );
+      Lesson = await getCompiledMdx(`courses/${courseName}/${lessonName}/en.mdx`);
       lessonLocale = "en";
     } catch {
       notFound();
@@ -128,27 +122,18 @@ export default async function LessonPage({ params }: LessonPageProps) {
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
 
         if (collectionSize === null) {
-          console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`,
-          );
+          console.error(`Failed to decode num_minted for collection ${collectionMintAddress}`);
         }
       } else {
-        console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`,
-        );
+        console.error(`Failed to fetch account info for ${collectionMintAddress}`);
       }
     } catch (error) {
-      console.error(
-        `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error,
-      );
+      console.error(`Failed to fetch collection details for ${collectionMintAddress}:`, error);
     }
   }
 
   const allLessons = courseMetadata.lessons;
-  const currentLessonIndex = allLessons.findIndex(
-    (lesson) => lesson.slug === lessonName,
-  );
+  const currentLessonIndex = allLessons.findIndex((lesson) => lesson.slug === lessonName);
   const nextLesson = allLessons[currentLessonIndex + 1];
   const nextLessonSlug = nextLesson ? nextLesson.slug : "";
 
@@ -187,9 +172,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
   };
 
   // Generate LearningResource JSON-LD Schema for the individual lesson
-  const lessonTitle = t(
-    `courses.${courseMetadata.slug}.lessons.${lessonName}.title`,
-  );
+  const lessonTitle = t(`courses.${courseMetadata.slug}.lessons.${lessonName}.title`);
   const learningResourceSchema = {
     "@context": "https://schema.org",
     "@type": "LearningResource",
@@ -247,20 +230,13 @@ export default async function LessonPage({ params }: LessonPageProps) {
       {/* JSON-LD Course Schema */}
       <script type="application/ld+json">{JSON.stringify(courseSchema)}</script>
       {/* JSON-LD LearningResource Schema for individual lesson */}
-      <script type="application/ld+json">
-        {JSON.stringify(learningResourceSchema)}
-      </script>
+      <script type="application/ld+json">{JSON.stringify(learningResourceSchema)}</script>
       {/* JSON-LD BreadcrumbList Schema */}
-      <script type="application/ld+json">
-        {JSON.stringify(breadcrumbSchema)}
-      </script>
-      <div className="flex flex-col w-full border-b border-b-border">
-        <div className="relative max-w-app mx-auto w-full app:border-x border-border-light">
+      <script type="application/ld+json">{JSON.stringify(breadcrumbSchema)}</script>
+      <div className="flex w-full flex-col border-b border-b-border">
+        <div className="relative mx-auto w-full max-w-app border-border-light app:border-x">
           <Breadcrumbs
-            items={[
-              { label: t("header.courses"), href: "/courses" },
-              { label: coursePageTitle },
-            ]}
+            items={[{ label: t("header.courses"), href: "/courses" }, { label: coursePageTitle }]}
           />
           <PageHero
             badge={courseMetadata.language}
@@ -272,19 +248,16 @@ export default async function LessonPage({ params }: LessonPageProps) {
           />
         </div>
 
-        <div className="max-w-app flex flex-col gap-y-8 h-full relative mx-auto w-full app:border-x border-border-light">
-          <div className="grid grid-cols-1 lg:grid-cols-10 xl:grid-cols-14 gap-x-0">
+        <div className="relative mx-auto flex h-full w-full max-w-app flex-col gap-y-8 border-border-light app:border-x">
+          <div className="grid grid-cols-1 gap-x-0 lg:grid-cols-10 xl:grid-cols-14">
             <ContentPagination
               type="course"
               course={courseMetadata}
               currentLesson={currentLessonIndex + 1}
             />
-            <div className="py-8 order-2 lg:order-1 col-span-1 md:col-span-7 xl:col-span-8 flex flex-col gap-y-8 lg:border-t-0 lg:border-r xl:border-x border-border-light px-5 lg:px-6">
+            <div className="order-2 col-span-1 flex flex-col gap-y-8 border-border-light px-5 py-8 md:col-span-7 lg:order-1 lg:border-t-0 lg:border-r lg:px-6 xl:col-span-8 xl:border-x">
               <MdxLayout>
-                <ContentFallbackNotice
-                  locale={locale}
-                  originalLocale={lessonLocale}
-                />
+                <ContentFallbackNotice locale={locale} originalLocale={lessonLocale} />
                 {Lesson}
               </MdxLayout>
 

@@ -3,9 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 async function syncEsbuildWasm() {
-  const sourcePath = fileURLToPath(
-    import.meta.resolve("esbuild-wasm/esbuild.wasm"),
-  );
+  const sourcePath = fileURLToPath(import.meta.resolve("esbuild-wasm/esbuild.wasm"));
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const projectRoot = path.resolve(scriptDir, "..");
   const destinationPath = path.join(projectRoot, "public", "esbuild.wasm");

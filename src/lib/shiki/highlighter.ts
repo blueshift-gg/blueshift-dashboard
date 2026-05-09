@@ -6,9 +6,7 @@ let highlighterPromise: Promise<HighlighterCore> | undefined;
 
 export async function createShikiHighlighter(): Promise<HighlighterCore> {
   return createHighlighterCore({
-    engine: await createOnigurumaEngine(
-      import("@shikijs/engine-oniguruma/wasm-inlined"),
-    ),
+    engine: await createOnigurumaEngine(import("@shikijs/engine-oniguruma/wasm-inlined")),
     langs: BUNDLED_LANGUAGES,
     themes: BUNDLED_THEMES,
   });

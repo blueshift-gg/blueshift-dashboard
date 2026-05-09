@@ -11,10 +11,12 @@ Implementasi ini sangat berharga untuk menyediakan keamanan tahan-kuantum untuk 
 Implementasi ini menggunakan `w = 8` untuk menyeimbangkan batasan Solana: batas ukuran transaksi dan pembatasan unit komputasi.
 
 Parameter Winternitz `w` menciptakan trade-off mendasar antara ukuran tanda tangan dan kebutuhan komputasi:
+
 - Nilai w yang lebih tinggi berarti tanda tangan lebih kecil tetapi komputasi lebih banyak karena verifikasi memerlukan lebih banyak operasi hash per komponen tanda tangan
 - Nilai w yang lebih rendah berarti tanda tangan lebih besar tetapi komputasi lebih sedikit karena verifikasi memerlukan lebih sedikit operasi hash per komponen tanda tangan
 
 Solana menerapkan dua batasan penting yang membentuk pilihan parameter:
+
 - Batasan Ukuran Transaksi (1024 byte): Dengan `w = 8`, implementasi penuh menghasilkan tanda tangan 1024-byte menggunakan hash 256-bit (32 byte × 32 komponen). Ini menghabiskan seluruh ruang transaksi, tidak menyisakan ruang untuk overhead transaksi dan data tambahan.
 - Batasan Unit Komputasi: Beralih ke `w = 16` akan mengurangi ukuran tanda tangan setengahnya tetapi akan melebihi batas unit komputasi (CU) Solana selama verifikasi, karena setiap komponen tanda tangan akan memerlukan operasi hash yang jauh lebih banyak.
 
@@ -63,6 +65,7 @@ Verifikasi merekonstruksi kunci publik dari tanda tangan dan pesan, kemudian mem
 <ArticleSection name="Implementation" id="implementation" level="h2" />
 
 Untuk mengimplementasikan verifikasi tanda tangan Winternitz dalam program Pinocchio Anda, Anda memerlukan:
+
 1. Crate `solana-winternitz`: Ini menyediakan fungsionalitas inti tanda tangan Winternitz
 2. Pembuatan dan verifikasi PDA menggunakan derivasi alamat yang aman secara kuantum
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### Optimasi Ukuran Tanda Tangan
 
 Implementasi ini menggunakan pendekatan terpotong untuk menyesuaikan dengan batasan transaksi Solana:
+
 - Tanda tangan lengkap (`WinternitzSignature`): 1024 byte (32 byte × 32 komponen).
 - Tanda tangan terpotong (`WinternitzCommitmentSignature`): 896 byte (32 byte × 28 komponen).
 - Ruang tersedia: 128 byte tersisa untuk overhead transaksi
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Create the quantum-secure PDA
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recover the public key from signature and message
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verify PDA ownership
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Execute the protected operation
         self.execute_protected_operation(accounts)
     }

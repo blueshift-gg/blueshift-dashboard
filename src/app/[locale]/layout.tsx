@@ -159,17 +159,13 @@ export default async function RootLayout({
             <WalletProvider>
               <AuthProvider>
                 {organizationSchema && (
-                  <script type="application/ld+json">
-                    {JSON.stringify(organizationSchema)}
-                  </script>
+                  <script type="application/ld+json">{JSON.stringify(organizationSchema)}</script>
                 )}
                 <GlobalModals />
                 {!pathname?.includes("/nft-generator") ? (
                   <>
                     <Header />
-                    <div className="pt-[74px] min-h-[calc(100dvh-74px)]">
-                      {children}
-                    </div>
+                    <div className="min-h-[calc(100dvh-74px)] pt-[74px]">{children}</div>
                     <Footer />
                   </>
                 ) : (

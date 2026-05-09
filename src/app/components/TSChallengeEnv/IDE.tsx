@@ -34,20 +34,13 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   const [editorCode, setEditorCode] = useState<string>(initialCode);
-  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] =
-    useState(false);
-  const [
-    verificationFailureMessageLogged,
-    setVerificationFailureMessageLogged,
-  ] = useState(false);
+  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] = useState(false);
+  const [verificationFailureMessageLogged, setVerificationFailureMessageLogged] = useState(false);
 
   const handleRpcCallForDecision = async (
     rpcData: InterceptedRpcCallData,
   ): Promise<FetchDecision> => {
-    console.log(
-      "[ClientChallengesContent] Intercepted RPC Call, Awaiting Decision:",
-      rpcData,
-    );
+    console.log("[ClientChallengesContent] Intercepted RPC Call, Awaiting Decision:", rpcData);
 
     if (rpcData.rpcMethod === "sendTransaction") {
       setWasSendTransactionIntercepted(true); // Keep this if useful for UI feedback
@@ -77,9 +70,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       };
     }
 
-    console.debug(
-      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`,
-    );
+    console.debug(`RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`);
 
     // For all other calls, or if rpcMethod is null, proceed as normal
     return { decision: "PROCEED" };
@@ -100,13 +91,8 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
     const targetHost = new URL(rpcEndpoint).host;
 
     if (wsSendData.url.includes(targetHost)) {
-      if (
-        typeof wsSendData.data === "string" &&
-        wsSendData.data.includes("signatureSubscribe")
-      ) {
-        console.log(
-          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe",
-        );
+      if (typeof wsSendData.data === "string" && wsSendData.data.includes("signatureSubscribe")) {
+        console.log("[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe");
 
         const data = JSON.parse(wsSendData.data);
 
@@ -147,10 +133,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       }
     }
 
-    console.log(
-      "[ClientChallengesContent] WebSocket send allowed to PROCEED:",
-      wsSendData,
-    );
+    console.log("[ClientChallengesContent] WebSocket send allowed to PROCEED:", wsSendData);
     return { decision: "PROCEED" };
   };
 
@@ -267,11 +250,11 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
           "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50",
       )}
     >
-      <div className="w-full h-full flex flex-col overflow-hidden border border-border">
-        <div className="flex flex-col relative w-full h-full">
-          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-card-solid flex items-center border-b border-border">
+      <div className="flex h-full w-full flex-col overflow-hidden border border-border">
+        <div className="relative flex h-full w-full flex-col">
+          <div className="relative z-30 flex h-[36px] w-full flex-shrink-0 items-center border-b border-border bg-card-solid px-4 py-2.5">
             <div className="flex items-center gap-x-2">
-              <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
+              <div className="bg-card-solid-foreground h-[12px] w-[12px]"></div>
               <button
                 type="button"
                 className={classNames(
@@ -283,8 +266,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
                 <Icon
                   className={classNames(
                     "opacity-0 transition-opacity duration-100",
-                    ideView === "expanded" &&
-                      "group-hover/minimize:opacity-100",
+                    ideView === "expanded" && "group-hover/minimize:opacity-100",
                   )}
                   name="Minimize"
                   size={8}
@@ -308,12 +290,12 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
                 />
               </button>
             </div>
-            <div className="text-sm font-medium text-shade-secondary absolute left-1/2 -translate-x-1/2 flex items-center gap-x-1.5">
+            <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-x-1.5 text-sm font-medium text-shade-secondary">
               <Icon name="Challenge" size={12} className="hidden sm:block" />
               <span className="flex-shrink-0">{title}</span>
             </div>
           </div>
-          <div className="w-[calc(100%-2px)] py-2 bg-card-solid/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
+          <div className="z-20 flex w-[calc(100%-2px)] items-center justify-between border-b border-border bg-card-solid/20 px-4 py-2 backdrop-blur-xl">
             <LogoGlyph width={16} />
             <div className="flex items-center gap-x-2.5">
               {!isPanelOpen ? (

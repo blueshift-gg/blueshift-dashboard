@@ -19,6 +19,7 @@ Wenn du nicht weißt, wie man Assembly-Programme schreibt, folge dem [Einführun
 Unser Programm implementiert eine einfache, aber entscheidende Operation: die Überprüfung, ob ein Token-Konto über ausreichendes Guthaben verfügt, bevor mit einer Transaktion fortgefahren wird. Dieses Muster taucht überall im DeFi-Bereich auf – von AMM-Swaps bis hin zu Lending-Protokollen.
 
 Das Programm erwartet:
+
 - Ein einzelnes SPL-Token-Konto im Kontoarray
 - Einen 8-Byte-Betrag in den Anweisungsdaten
 - Gibt Erfolg zurück, wenn Guthaben ≥ Betrag, sonst einen Fehler
@@ -40,7 +41,11 @@ sBPF-Programme erhalten Kontodaten als zusammenhängende Speicherbereiche. Diese
 
 Im Gegensatz zu höheren Programmiersprachen, die das Speicherlayout abstrahieren, erfordert Assembly, dass du genau weißt, wo jedes Datenelement gespeichert ist.
 
-<ArticleSection name="Entrypoint und erste Validierung" id="entrypoint-and-validations" level="h2" />
+<ArticleSection
+  name="Entrypoint und erste Validierung"
+  id="entrypoint-and-validations"
+  level="h2"
+/>
 
 ```sbpf
 .globl entrypoint
@@ -52,12 +57,17 @@ entrypoint:
 Jedes sBPF-Programm beginnt mit einem globalen `.entrypoint` Symbol. Die Solana-Laufzeitumgebung stellt Konto- und Anweisungsdaten über Register `r1` bereit.
 
 Die `ldxdw` Anweisung lädt (`ldx`) einen 8-Byte-Wert (Doppelwort, `dx`) aus dem Speicher in ein Register. Hier ist, was passiert:
+
 - `ldxdw r3, [r1+MINIMUM_BALANCE]`: berechnet die Speicheradresse, die unseren erforderlichen Betrag enthält. Der Wert wird in `r3` geladen.
 - `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]`: zeigt auf das Bilanzfeld des Token-Kontos. Dieser 64-Bit-Wert landet in `r4`.
 
 Beide Operationen sind Zero-Copy: Wir lesen direkt aus den Kontodaten ohne Deserialisierungs-Overhead.
 
-<ArticleSection name="Bedingte Logik und Verzweigung" id="conditional-logic-and-branching" level="h2" />
+<ArticleSection
+  name="Bedingte Logik und Verzweigung"
+  id="conditional-logic-and-branching"
+  level="h2"
+/>
 
 ```sbpf
 jge r3, r4, end         // Skip to exit if balance is valid
@@ -71,12 +81,13 @@ Wenn die Bedingung nicht erfüllt ist, wird die Ausführung mit dem Fehlerbehand
 
 ```sbpf
 lddw r1, e              // Load error message address
-lddw r2, 17             // Load length of error message  
+lddw r2, 17             // Load length of error message
 call sol_log_           // Log out error message
 lddw r0, 1              // Return error code 1
 ```
 
 Wenn die Validierung fehlschlägt, protokollieren wir einen menschenlesbaren Fehler, bevor wir beenden:
+
 - `lddw` lädt Direktwerte, in diesem Fall die Adresse unseres Fehlerstrings, der sich im `.rodata` Abschnitt befindet, und seine Länge (17 Bytes für "Slippage exceeded").
 - `call sol_log_` ruft Solanas Logging-Syscall auf. Die Laufzeitumgebung liest die Nachricht aus dem Speicher und fügt sie den Transaktionsprotokollen hinzu.
 - Dann laden wir `1` in `r0`, um einen Programmfehler zu signalisieren. Die Laufzeitumgebung bricht die Transaktion ab und gibt diesen Fehlercode zurück.
@@ -102,8 +113,8 @@ Im Gegensatz zu höheren Programmiersprachen mit automatischer Bereinigung müss
 Der Abschnitt `.rodata` (schreibgeschützte Daten) enthält unsere Fehlermeldung als String.
 
 <ArticleSection name="Fazit" id="conclusion" level="h2" />
-  
-Dieses kleine Programm erreicht mit nur `4 CUs` im Erfolgsfall, `6 CUs` im Fehlerfall oder `106 CUs` im Fehlerfall mit Protokollierung einer Fehlermeldung, was in Rust Dutzende von CUs benötigen würde.
+Dieses kleine Programm erreicht mit nur `4 CUs` im Erfolgsfall, `6 CUs` im Fehlerfall oder `106 CUs`
+im Fehlerfall mit Protokollierung einer Fehlermeldung, was in Rust Dutzende von CUs benötigen würde.
 
 Der Kompromiss besteht darin, dass wir Speicherlayouts, Aufrufkonventionen und Fehlerbehandlung auf niedrigster Ebene verstehen müssen. Aber für leistungskritische Operationen rechtfertigen die Vorteile oft den Aufwand.
 

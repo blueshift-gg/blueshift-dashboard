@@ -198,11 +198,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
     color: BRAND_COLOURS.rust,
     difficulty: 1,
     isFeatured: true,
-    lessons: [
-      { slug: "introduction" },
-      { slug: "token-extensions" },
-      { slug: "conclusion" },
-    ],
+    lessons: [{ slug: "introduction" }, { slug: "token-extensions" }, { slug: "conclusion" }],
   },
   {
     slug: "token-2022-with-web3js",

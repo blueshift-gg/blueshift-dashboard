@@ -38,18 +38,18 @@ Quando a carteira recebe esta URI (via Android Intent), inicia seu servidor WebS
 
 Durante o handshake WebSocket, cliente e servidor negociam um subprotocolo via o cabeçalho `Sec-WebSocket-Protocol`:
 
-| Nome do Subprotocolo | Tipo de Frame | Codificação |
-|---------------------|---------------|-------------|
-| `com.solana.mobilewalletadapter.v1` | Binário | Bytes brutos |
-| `com.solana.mobilewalletadapter.v1.base64` | Texto | Codificado em Base64 |
+| Nome do Subprotocolo                       | Tipo de Frame | Codificação          |
+| ------------------------------------------ | ------------- | -------------------- |
+| `com.solana.mobilewalletadapter.v1`        | Binário       | Bytes brutos         |
+| `com.solana.mobilewalletadapter.v1.base64` | Texto         | Codificado em Base64 |
 
 O subprotocolo binário é preferido por eficiência. A variante base64 existe para ambientes onde frames WebSocket binários são problemáticos.
 
 ```typescript
 // O SDK MWA negocia isso automaticamente
 const ws = new WebSocket(uri, [
-  'com.solana.mobilewalletadapter.v1',
-  'com.solana.mobilewalletadapter.v1.base64'
+  "com.solana.mobilewalletadapter.v1",
+  "com.solana.mobilewalletadapter.v1.base64",
 ]);
 ```
 
@@ -134,11 +134,11 @@ O refletor é transparente para todos os dados após o início do estabeleciment
 
 ### Timeouts do Refletor
 
-| Estado | Timeout | Ação |
-|--------|---------|------|
-| Aguardando carteira conectar | 30 segundos | Fechar conexão |
-| Sessão conectada | 90 segundos de inatividade | Fechar ambas conexões |
-| Limite de tamanho de mensagem | 4096 bytes | Fechar conexão |
+| Estado                        | Timeout                    | Ação                  |
+| ----------------------------- | -------------------------- | --------------------- |
+| Aguardando carteira conectar  | 30 segundos                | Fechar conexão        |
+| Sessão conectada              | 90 segundos de inatividade | Fechar ambas conexões |
+| Limite de tamanho de mensagem | 4096 bytes                 | Fechar conexão        |
 
 <ArticleSection name="Transporte no SDK" id="sdk-transport" level="h2" />
 
@@ -146,10 +146,11 @@ Olhando o código fonte real do SDK MWA, a lógica de transporte vive em `transa
 
 ```typescript
 type State =
-  | { __type: 'connecting' }
-  | { __type: 'connected'; ws: WebSocket }
-  | { __type: 'hello_req_sent'; ws: WebSocket }
-  | { __type: 'hello_rsp_received'; 
+  | { __type: "connecting" }
+  | { __type: "connected"; ws: WebSocket }
+  | { __type: "hello_req_sent"; ws: WebSocket }
+  | {
+      __type: "hello_rsp_received";
       associationPublicKey: CryptoKey;
       ecdhPrivateKey: CryptoKey;
       sessionKeyPair: Readonly<{
@@ -157,11 +158,11 @@ type State =
         hmac_key: Uint8Array;
       }>;
       sequenceNumber: number;
-      ws: WebSocket; 
+      ws: WebSocket;
     }
-  | { __type: 'connected_and_authorized'; /* ... */ }
-  | { __type: 'disconnected' }
-  | { __type: 'error'; message: string };
+  | { __type: "connected_and_authorized" /* ... */ }
+  | { __type: "disconnected" }
+  | { __type: "error"; message: string };
 ```
 
 Transições da máquina de estados:
@@ -193,6 +194,7 @@ const port = 49152 + Math.floor(Math.random() * 16383);
 WebSocket cuida do enquadramento, então MWA não precisa de prefixos de comprimento. Mas as mensagens têm estrutura:
 
 **Mensagens não criptografadas** (durante estabelecimento de sessão):
+
 ```
 +-----------------------------------------+
 |  Tipo de Mensagem (1 byte)  |  Payload   |
@@ -200,6 +202,7 @@ WebSocket cuida do enquadramento, então MWA não precisa de prefixos de comprim
 ```
 
 **Mensagens criptografadas** (após estabelecimento de sessão):
+
 ```
 +------------------------------------------------------+
 |  Número de Sequência (4 bytes)  |  Ciphertext AES-GCM |
@@ -214,16 +217,19 @@ O número de sequência previne ataques de replay. Cada lado mantém seu própri
 Problemas comuns no nível de transporte:
 
 **"Conexão recusada"**: A carteira ainda não iniciou seu servidor. Isso pode acontecer se:
+
 - O app da carteira demorou muito para iniciar
 - A carteira não suporta MWA
 - A porta já está em uso por outro processo
 
 **"Conexão resetada"**: A carteira fechou inesperadamente. Verifique se:
+
 - A carteira crashou
 - O usuário forçou o fechamento da carteira
 - A carteira rejeitou a conexão durante o estabelecimento de sessão
 
 **"Timeout WebSocket"**: Sem resposta da carteira. Causas possíveis:
+
 - A carteira está congelada ou extremamente lenta
 - Em conexões refletor, problemas de rede
 - A UI da carteira está bloqueando (usuário não interagiu)
@@ -239,6 +245,7 @@ A camada de transporte em si fornece segurança mínima:
 - **TLS para refletor**: Conexões remotas usam `wss://` para o refletor
 
 A verdadeira segurança vem da camada de sessão. Suposições de segurança do transporte:
+
 1. Tráfego localhost está razoavelmente isolado de outros apps (imposição do SO)
 2. A conexão refletor usa TLS para prevenir espionagem do ciphertext
 3. Todo conteúdo de mensagem é criptografado independentemente do transporte

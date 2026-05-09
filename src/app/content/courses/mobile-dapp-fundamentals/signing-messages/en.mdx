@@ -30,25 +30,25 @@ This is Ed25519 cryptography, the same scheme Solana uses for transaction signat
 The `signMessages` method takes an array of payloads (byte arrays) and returns signatures:
 
 ```typescript
-import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { toByteArray } from 'react-native-quick-base64';
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { toByteArray } from "react-native-quick-base64";
 
 async function signMessage(message: string): Promise<Uint8Array> {
   return await transact(async (wallet) => {
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:mainnet',
+      chain: "solana:mainnet",
     });
-    
+
     // Convert string to bytes
     const messageBytes = new TextEncoder().encode(message);
-    
+
     // Sign the message
     const signatures = await wallet.signMessages({
       addresses: [authResult.accounts[0].address],
       payloads: [messageBytes],
     });
-    
+
     // signatures[0] is Uint8Array (64 bytes)
     return signatures[0];
   });
@@ -56,6 +56,7 @@ async function signMessage(message: string): Promise<Uint8Array> {
 ```
 
 Key points:
+
 - `addresses`: Which account(s) should sign
 - `payloads`: The raw bytes to sign
 - Returns: Array of signatures matching the payloads
@@ -117,20 +118,20 @@ MWA 2.0 supports SIWS directly in the `authorize` method:
 await transact(async (wallet) => {
   const authResult = await wallet.authorize({
     identity: APP_IDENTITY,
-    chain: 'solana:mainnet',
+    chain: "solana:mainnet",
     sign_in_payload: {
-      domain: 'mydapp.com',
-      statement: 'Sign in to My dApp',
-      uri: 'https://mydapp.com',
-      version: '1',
+      domain: "mydapp.com",
+      statement: "Sign in to My dApp",
+      uri: "https://mydapp.com",
+      version: "1",
       nonce: generateSecureNonce(), // Server-generated
       issuedAt: new Date().toISOString(),
     },
   });
-  
+
   if (authResult.sign_in_result) {
     const { address, signature, signedMessage } = authResult.sign_in_result;
-    
+
     // Send to backend for verification
     await verifySignInOnServer(address, signature, signedMessage);
   }
@@ -166,16 +167,16 @@ This message is what the user signs. The wallet displays it clearly so users kno
 
 ```typescript
 type SignInPayload = {
-  domain: string;      // Your domain (e.g., "mydapp.com")
-  statement?: string;  // Human-readable description
-  uri: string;         // Full URI (e.g., "https://mydapp.com")
-  version: string;     // SIWS version, currently "1"
-  nonce: string;       // Server-generated random string
-  issuedAt: string;    // ISO 8601 timestamp
-  expirationTime?: string;  // When this sign-in expires
-  notBefore?: string;       // Don't accept before this time
-  requestId?: string;       // Your session identifier
-  resources?: string[];     // URIs the user is agreeing to access
+  domain: string; // Your domain (e.g., "mydapp.com")
+  statement?: string; // Human-readable description
+  uri: string; // Full URI (e.g., "https://mydapp.com")
+  version: string; // SIWS version, currently "1"
+  nonce: string; // Server-generated random string
+  issuedAt: string; // ISO 8601 timestamp
+  expirationTime?: string; // When this sign-in expires
+  notBefore?: string; // Don't accept before this time
+  requestId?: string; // Your session identifier
+  resources?: string[]; // URIs the user is agreeing to access
 };
 ```
 
@@ -188,13 +189,10 @@ Never trust client-side verification for authentication. Always verify SIWS sign
 ### Node.js Example
 
 ```typescript
-import { verifySignIn } from '@solana/wallet-standard-util';
-import type { SolanaSignInInput, SolanaSignInOutput } from '@solana/wallet-standard-features';
+import { verifySignIn } from "@solana/wallet-standard-util";
+import type { SolanaSignInInput, SolanaSignInOutput } from "@solana/wallet-standard-features";
 
-export function verifySIWS(
-  input: SolanaSignInInput,
-  output: SolanaSignInOutput
-): boolean {
+export function verifySIWS(input: SolanaSignInInput, output: SolanaSignInOutput): boolean {
   // Convert to format expected by verifySignIn
   const serializedOutput = {
     account: {
@@ -204,33 +202,33 @@ export function verifySIWS(
     signature: new Uint8Array(output.signature),
     signedMessage: new Uint8Array(output.signedMessage),
   };
-  
+
   return verifySignIn(input, serializedOutput);
 }
 
 // Express route example
-app.post('/api/auth/siws', async (req, res) => {
+app.post("/api/auth/siws", async (req, res) => {
   const { input, output } = req.body;
-  
+
   // Verify the nonce matches what we issued
   const expectedNonce = await redis.get(`siws:nonce:${req.sessionID}`);
   if (input.nonce !== expectedNonce) {
-    return res.status(400).json({ error: 'Invalid nonce' });
+    return res.status(400).json({ error: "Invalid nonce" });
   }
-  
+
   // Verify the signature
   const isValid = verifySIWS(input, output);
   if (!isValid) {
-    return res.status(401).json({ error: 'Invalid signature' });
+    return res.status(401).json({ error: "Invalid signature" });
   }
-  
+
   // Signature valid - create session
   const publicKey = output.account.address;
   req.session.wallet = publicKey;
-  
+
   // Clear the used nonce
   await redis.del(`siws:nonce:${req.sessionID}`);
-  
+
   res.json({ success: true, publicKey });
 });
 ```
@@ -238,14 +236,14 @@ app.post('/api/auth/siws', async (req, res) => {
 ### Nonce Generation
 
 ```typescript
-import crypto from 'crypto';
+import crypto from "crypto";
 
 export function generateSecureNonce(): string {
-  return crypto.randomBytes(32).toString('base64url');
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 // Store nonce before sending to client
-app.get('/api/auth/nonce', async (req, res) => {
+app.get("/api/auth/nonce", async (req, res) => {
   const nonce = generateSecureNonce();
   await redis.setex(`siws:nonce:${req.sessionID}`, 300, nonce); // 5 min expiry
   res.json({ nonce });
@@ -257,42 +255,45 @@ app.get('/api/auth/nonce', async (req, res) => {
 If a wallet doesn't support the `sign_in_payload` parameter, you can manually implement SIWS using `signMessages`:
 
 ```typescript
-import { createSignInMessage, SolanaSignInInput } from '@solana/wallet-standard-util';
+import { createSignInMessage, SolanaSignInInput } from "@solana/wallet-standard-util";
 
-async function manualSignIn(): Promise<{ input: SolanaSignInInput; output: any }> {
+async function manualSignIn(): Promise<{
+  input: SolanaSignInInput;
+  output: any;
+}> {
   // Fetch nonce from server
-  const { nonce } = await fetch('/api/auth/nonce').then(r => r.json());
-  
+  const { nonce } = await fetch("/api/auth/nonce").then((r) => r.json());
+
   const input: SolanaSignInInput = {
-    domain: 'mydapp.com',
-    statement: 'Sign in to My dApp',
-    uri: 'https://mydapp.com',
-    version: '1',
+    domain: "mydapp.com",
+    statement: "Sign in to My dApp",
+    uri: "https://mydapp.com",
+    version: "1",
     nonce,
     issuedAt: new Date().toISOString(),
   };
-  
+
   return await transact(async (wallet) => {
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:mainnet',
+      chain: "solana:mainnet",
     });
-    
+
     const account = authResult.accounts[0];
     const publicKey = new PublicKey(toByteArray(account.address));
-    
+
     // Create the standard SIWS message
     const messageBytes = createSignInMessage({
       ...input,
       address: publicKey.toBase58(),
     });
-    
+
     // Sign it
     const [signature] = await wallet.signMessages({
       addresses: [account.address],
       payloads: [messageBytes],
     });
-    
+
     return {
       input,
       output: {
@@ -317,16 +318,16 @@ Replace username/password with wallet signatures:
 ```typescript
 async function login(): Promise<void> {
   const { input, output } = await signInWithSolana();
-  
-  const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input, output }),
   });
-  
+
   if (response.ok) {
     const { token } = await response.json();
-    await AsyncStorage.setItem('auth_token', token);
+    await AsyncStorage.setItem("auth_token", token);
   }
 }
 ```
@@ -343,11 +344,11 @@ Timestamp: ${Date.now()}`;
 const signature = await signMessage(message);
 
 // Store signature as proof of agreement
-await fetch('/api/tos/agree', {
-  method: 'POST',
+await fetch("/api/tos/agree", {
+  method: "POST",
   body: JSON.stringify({
     wallet: publicKey.toBase58(),
-    signature: Buffer.from(signature).toString('base64'),
+    signature: Buffer.from(signature).toString("base64"),
     message,
   }),
 });
@@ -365,14 +366,14 @@ Timestamp: ${Date.now()}`;
 const signature = await signMessage(message);
 
 // Backend verifies wallet holds an NFT from the collection
-const { hasAccess } = await fetch('/api/verify-access', {
-  method: 'POST',
+const { hasAccess } = await fetch("/api/verify-access", {
+  method: "POST",
   body: JSON.stringify({
     wallet: publicKey.toBase58(),
-    signature: Buffer.from(signature).toString('base64'),
+    signature: Buffer.from(signature).toString("base64"),
     message,
   }),
-}).then(r => r.json());
+}).then((r) => r.json());
 ```
 
 <ArticleSection name="Security Considerations" id="security" level="h2" />
@@ -397,7 +398,7 @@ Users see the message before signing. Make it clear what they're approving:
 
 ```typescript
 // Bad: vague, could be anything
-const message = 'confirm action';
+const message = "confirm action";
 
 // Good: specific, includes context
 const message = `Sign in to MyApp

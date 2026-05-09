@@ -18,10 +18,7 @@ interface ChallengeContentProps {
   content: ReactNode;
 }
 
-export default function ChallengesContent({
-  currentChallenge,
-  content,
-}: ChallengeContentProps) {
+export default function ChallengesContent({ currentChallenge, content }: ChallengeContentProps) {
   const auth = useAuth();
   const isUserConnected = auth.status === "signed-in";
   // const { courseProgress } = usePersistentStore();
@@ -53,20 +50,20 @@ export default function ChallengesContent({
   };
 
   return (
-    <div className="w-full h-full">
+    <div className="h-full w-full">
       {!isUserConnected ? (
-        <div className="z-10 flex-col gap-y-8 flex py-12 items-center justify-center w-full min-h-[60vh]">
-          <div className="flex flex-col gap-y-0 max-w-[90dvw]">
+        <div className="z-10 flex min-h-[60vh] w-full flex-col items-center justify-center gap-y-8 py-12">
+          <div className="flex max-w-[90dvw] flex-col gap-y-0">
             <img
               src="/graphics/connect-wallet.svg"
               alt="Connect wallet"
-              className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
+              className="mx-auto w-full max-w-[80dvw] sm:w-[360px]"
             />
             <div className="flex flex-col gap-y-3">
-              <div className="text-center text-lg sm:text-xl font-medium leading-none font-mono text-shade-primary">
+              <div className="text-center font-mono text-lg leading-none font-medium text-shade-primary sm:text-xl">
                 {t("ChallengePage.connect_wallet")}
               </div>
-              <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
+              <div className="mx-auto w-full text-center text-shade-secondary sm:w-2/3">
                 {t("ChallengePage.connect_wallet_description")}
               </div>
             </div>
@@ -81,9 +78,9 @@ export default function ChallengesContent({
             transition: { duration: 0.4, ease: anticipate },
           }}
           exit={{ opacity: 0 }}
-          className="max-w-app mx-auto w-full min-h-[calc(100dvh-250px)] grid grid-cols-1 lg:grid-cols-5 lg:gap-x-10"
+          className="mx-auto grid min-h-[calc(100dvh-250px)] w-full max-w-app grid-cols-1 lg:grid-cols-5 lg:gap-x-10"
         >
-          <div className="hidden lg:block w-px h-full bg-border-light left-2/5 absolute top-0 -translate-x-1/2"></div>
+          <div className="absolute top-0 left-2/5 hidden h-full w-px -translate-x-1/2 bg-border-light lg:block"></div>
           <ChallengeRequirements content={content} />
           <ChallengeTable
             isLoading={isLoading}

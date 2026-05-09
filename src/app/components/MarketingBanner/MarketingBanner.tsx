@@ -9,8 +9,7 @@ import DepletingHeart from "../Graphics/DepletingHeart";
 
 export default function MarketingBanner() {
   const t = useTranslations();
-  const { setMarketingBannerViewed, _hasHydrated, marketingBannerViewed } =
-    usePersistentStore();
+  const { setMarketingBannerViewed, _hasHydrated, marketingBannerViewed } = usePersistentStore();
 
   const stakingUrl = URLS.BLUESHIFT_STAKING;
 
@@ -30,23 +29,20 @@ export default function MarketingBanner() {
           animate={{ opacity: 1 }}
           exit={{ opacity: [0.8, 0, 0.6, 0, 0.4, 0, 0.2, 0], height: 40 }}
           transition={{ duration: 1, ease: anticipate }}
-          className="h-[60px] sm:h-[40px] relative items-center justify-center w-full bg-[#102127] border-y border-brand-primary/15 backdrop-blur-xl"
+          className="relative h-[60px] w-full items-center justify-center border-y border-brand-primary/15 bg-[#102127] backdrop-blur-xl sm:h-[40px]"
         >
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: [0, 1, 0.2, 1, 0.4, 1, 0.6, 1, 0.8, 1] }}
             transition={{ duration: 1, ease: anticipate, delay: 0.3 }}
-            className="h-full px-4 w-full sm:w-max gap-y-1 sm:gap-y-0 gap-x-5 flex flex-col sm:flex-row md:items-center justify-center mx-auto relative"
+            className="relative mx-auto flex h-full w-full flex-col justify-center gap-x-5 gap-y-1 px-4 sm:w-max sm:flex-row sm:gap-y-0 md:items-center"
           >
-            <div className="flex sm:items-center gap-x-1.5 sm:gap-x-1.5 relative">
-              <DepletingHeart
-                closeHeart={closeHeart}
-                className="mt-[3px] sm:mt-0"
-              />
-              <span className="text-sm font-medium text-brand-secondary sm:block hidden">
+            <div className="relative flex gap-x-1.5 sm:items-center sm:gap-x-1.5">
+              <DepletingHeart closeHeart={closeHeart} className="mt-[3px] sm:mt-0" />
+              <span className="hidden text-sm font-medium text-brand-secondary sm:block">
                 {t("marketing_banner.title")}
               </span>
-              <span className="relative z-10 text-sm font-medium text-brand-secondary inline-block sm:hidden max-w-[80%]">
+              <span className="relative z-10 inline-block max-w-[80%] text-sm font-medium text-brand-secondary sm:hidden">
                 {t.rich("marketing_banner.mobile", {
                   link: (chunks) => (
                     <a
@@ -65,13 +61,13 @@ export default function MarketingBanner() {
             <a
               href={stakingUrl}
               target="_blank"
-              className="hidden sm:block text-brand-primary font-medium"
+              className="hidden font-medium text-brand-primary sm:block"
               rel="noopener"
             >
               <Button
                 size="xs"
                 crosshairProps={{ size: 0 }}
-                className="text-xs! font-medium! py-0.5! px-2!"
+                className="px-2! py-0.5! text-xs! font-medium!"
                 label={t("marketing_banner.button")}
               />
             </a>
@@ -79,12 +75,12 @@ export default function MarketingBanner() {
           <button
             type="button"
             onClick={() => handleCloseBanner()}
-            className="z-10 text-brand-secondary transition hover:text-brand-primary hover:cursor-pointer h-[32px] w-[32px] flex items-center justify-center absolute right-3 top-1/2 -translate-y-1/2 bg-background/60 sm:bg-transparent hover:bg-background/60"
+            className="absolute top-1/2 right-3 z-10 flex h-[32px] w-[32px] -translate-y-1/2 items-center justify-center bg-background/60 text-brand-secondary transition hover:cursor-pointer hover:bg-background/60 hover:text-brand-primary sm:bg-transparent"
           >
             <Icon name="Close" size={14 as 18} />
           </button>
           <motion.div
-            className="pointer-events-none w-full h-full absolute inset-0 flex items-center justify-center mx-auto"
+            className="pointer-events-none absolute inset-0 mx-auto flex h-full w-full items-center justify-center"
             initial={{ width: "0%", opacity: 0 }}
             animate={{ width: "100%", opacity: 1 }}
             transition={{ duration: 0.3, ease: anticipate }}

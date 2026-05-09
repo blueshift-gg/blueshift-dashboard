@@ -26,7 +26,7 @@ async function CoursesContent() {
 
 export default function Courses() {
   return (
-    <div className="relative content-wrapper">
+    <div className="content-wrapper relative">
       <Suspense fallback={<CourseList isLoading={true} />}>
         <CoursesContent />
       </Suspense>

@@ -14,7 +14,7 @@ MWA uses AES-128-GCM (Galois/Counter Mode) because it provides:
 
 **Authentication**: The authentication tag proves the message came from someone who knows the key.
 
-GCM is an *authenticated encryption with associated data* (AEAD) mode. It's efficient, widely supported in hardware, and available in the Web Crypto API.
+GCM is an _authenticated encryption with associated data_ (AEAD) mode. It's efficient, widely supported in hardware, and available in the Web Crypto API.
 
 <ArticleSection name="Encrypted Message Structure" id="message-structure" level="h2" />
 
@@ -54,7 +54,7 @@ To encrypt a message:
 async function encryptMessage(
   sessionKey: CryptoKey,
   sequenceNumber: number,
-  plaintext: Uint8Array
+  plaintext: Uint8Array,
 ): Promise<Uint8Array> {
   // Generate random IV
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -66,13 +66,13 @@ async function encryptMessage(
   // Encrypt with AES-GCM, using sequence number as AAD
   const encrypted = await crypto.subtle.encrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: iv,
-      additionalData: seqBytes,  // AAD: authenticates the sequence number
-      tagLength: 128  // 16 bytes
+      additionalData: seqBytes, // AAD: authenticates the sequence number
+      tagLength: 128, // 16 bytes
     },
     sessionKey,
-    plaintext
+    plaintext,
   );
 
   // Web Crypto returns ciphertext || tag
@@ -96,7 +96,7 @@ To decrypt:
 async function decryptMessage(
   sessionKey: CryptoKey,
   expectedSequenceNumber: number,
-  message: Uint8Array
+  message: Uint8Array,
 ): Promise<Uint8Array> {
   // Parse the wire format
   const seqBytes = message.slice(0, 4);
@@ -106,19 +106,21 @@ async function decryptMessage(
   // Verify sequence number
   const receivedSeq = new DataView(seqBytes.buffer).getUint32(0, false);
   if (receivedSeq !== expectedSequenceNumber) {
-    throw new Error(`Sequence number mismatch: expected ${expectedSequenceNumber}, got ${receivedSeq}`);
+    throw new Error(
+      `Sequence number mismatch: expected ${expectedSequenceNumber}, got ${receivedSeq}`,
+    );
   }
 
   // Decrypt with AES-GCM, using sequence number as AAD
   const decrypted = await crypto.subtle.decrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: iv,
-      additionalData: seqBytes,  // AAD must match what was used for encryption
-      tagLength: 128
+      additionalData: seqBytes, // AAD must match what was used for encryption
+      tagLength: 128,
     },
     sessionKey,
-    ciphertextAndTag
+    ciphertextAndTag,
   );
 
   return new Uint8Array(decrypted);
@@ -168,6 +170,7 @@ Understanding GCM helps debug issues:
 ### Counter Mode
 
 GCM builds on CTR (Counter) mode:
+
 1. Start with IV and a counter (initially 1)
 2. Encrypt counter blocks with AES: `E(K, IV || counter)`
 3. XOR the encrypted counter with plaintext blocks
@@ -177,6 +180,7 @@ This produces the ciphertext. The counter increments for each block.
 ### GHASH Authentication
 
 GCM adds authentication via GHASH:
+
 1. Hash the ciphertext with a special polynomial multiplication
 2. The result, combined with the encrypted counter, produces the tag
 
@@ -200,7 +204,9 @@ After decryption, the plaintext is a JSON-RPC message:
   "id": "1",
   "method": "authorize",
   "params": {
-    "identity": { /* ... */ },
+    "identity": {
+      /* ... */
+    },
     "cluster": "mainnet-beta"
   }
 }
@@ -213,7 +219,9 @@ Or a response:
   "jsonrpc": "2.0",
   "id": "1",
   "result": {
-    "accounts": [ /* ... */ ],
+    "accounts": [
+      /* ... */
+    ],
     "auth_token": "base64..."
   }
 }
@@ -229,6 +237,7 @@ The spec defines limits:
 - **Local**: Implementation-defined, typically much larger
 
 For practical purposes:
+
 - Transaction payloads can be large (multiple transactions, each up to 1232 bytes)
 - Base64 encoding inflates size by ~33%
 - Stay under 3KB for reflector compatibility
@@ -242,6 +251,7 @@ Encryption/decryption failures should be handled carefully:
 ### Decryption Failed
 
 The Web Crypto API throws an error if:
+
 - The auth tag doesn't match (message tampered or key mismatch)
 - The IV or ciphertext is malformed
 
@@ -292,14 +302,14 @@ const AUTH_TAG_SIZE_BYTES = 16;
 export async function encryptJsonRpcMessage(
   jsonRpcMessage: object,
   sharedSecret: CryptoKey,
-  sequenceNumber: number
+  sequenceNumber: number,
 ): Promise<Uint8Array> {
   const plaintext = new TextEncoder().encode(JSON.stringify(jsonRpcMessage));
   const iv = crypto.getRandomValues(new Uint8Array(INITIALIZATION_VECTOR_SIZE_BYTES));
-  
+
   const ciphertext = await crypto.subtle.encrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv,
       tagLength: AUTH_TAG_SIZE_BYTES * 8,
     },
@@ -310,16 +320,13 @@ export async function encryptJsonRpcMessage(
   // Build the complete encrypted message
   const seqNumBuffer = new ArrayBuffer(SEQUENCE_NUMBER_SIZE_BYTES);
   new DataView(seqNumBuffer).setUint32(0, sequenceNumber);
-  
-  return new Uint8Array([
-    ...new Uint8Array(seqNumBuffer),
-    ...iv,
-    ...new Uint8Array(ciphertext),
-  ]);
+
+  return new Uint8Array([...new Uint8Array(seqNumBuffer), ...iv, ...new Uint8Array(ciphertext)]);
 }
 ```
 
 Note how the SDK:
+
 1. JSON-encodes the RPC message
 2. Generates a fresh IV for each message
 3. Uses `AES-GCM` with 128-bit tag
@@ -346,9 +353,14 @@ const seq = encryptedMessage.slice(0, 4);
 const iv = encryptedMessage.slice(4, 16);
 const ciphertext = encryptedMessage.slice(16);
 
-console.log('Sequence:', new DataView(seq.buffer).getUint32(0, false));
-console.log('IV:', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''));
-console.log('Ciphertext length:', ciphertext.length);
+console.log("Sequence:", new DataView(seq.buffer).getUint32(0, false));
+console.log(
+  "IV:",
+  Array.from(iv)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(""),
+);
+console.log("Ciphertext length:", ciphertext.length);
 ```
 
 ### Common Mistakes
@@ -365,11 +377,11 @@ console.log('Ciphertext length:', ciphertext.length);
 
 AES-GCM is fast:
 
-| Operation | Time (typical mobile device) |
-|-----------|------------------------------|
-| Encrypt 1KB | < 0.1ms |
-| Decrypt 1KB | < 0.1ms |
-| IV generation | < 0.01ms |
+| Operation     | Time (typical mobile device) |
+| ------------- | ---------------------------- |
+| Encrypt 1KB   | < 0.1ms                      |
+| Decrypt 1KB   | < 0.1ms                      |
+| IV generation | < 0.01ms                     |
 
 The overhead is negligible compared to network latency or transaction processing.
 
@@ -382,6 +394,7 @@ From the MWA spec, encrypted messages:
 > "All JSON-RPC messages exchanged after the session is established are encrypted using AES-128-GCM. The shared secret derived from ECDH is used as the encryption key."
 
 Key spec points:
+
 - 12-byte IV (randomly generated)
 - 4-byte sequence number (big-endian)
 - 128-bit (16-byte) authentication tag

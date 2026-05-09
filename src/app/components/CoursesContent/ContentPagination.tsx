@@ -57,9 +57,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
       : `/courses/${courseSlug}/${lessonSlug}`;
 
   const getChallengeHref = (challengeSlug: string) =>
-    pathSlug
-      ? `/paths/${pathSlug}/challenges/${challengeSlug}`
-      : `/challenges/${challengeSlug}`;
+    pathSlug ? `/paths/${pathSlug}/challenges/${challengeSlug}` : `/challenges/${challengeSlug}`;
 
   const { marketingBannerViewed } = usePersistentStore();
 
@@ -77,15 +75,10 @@ export default function ContentPagination(props: ContentPaginationProps) {
           !marketingBannerViewed && "top-[calc(128px+1rem)]!",
         )}
       >
-        <CrosshairCorners
-          size={4}
-          variant="corners"
-          animationDelay={0}
-          animationDuration={0}
-        />
+        <CrosshairCorners size={4} variant="corners" animationDelay={0} animationDuration={0} />
         {props.type === "course" && (
           <>
-            <div className="flex xl:hidden items-center justify-between min-w-[80dvw] md:min-w-[250px] px-4">
+            <div className="flex min-w-[80dvw] items-center justify-between px-4 md:min-w-[250px] xl:hidden">
               <button
                 onClick={() => {
                   router.push(
@@ -128,8 +121,8 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 <Icon name="ArrowRight" />
               </button>
             </div>
-            <div className="flex-col hidden xl:flex gap-y-4">
-              <span className="font-mono text-sm text-shade-primary pl-4">
+            <div className="hidden flex-col gap-y-4 xl:flex">
+              <span className="pl-4 font-mono text-sm text-shade-primary">
                 {t("lessons.lessons")}
               </span>
               <div className="flex flex-col gap-y-1.5 pl-0">
@@ -139,17 +132,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                     <Link
                       href={getCourseLessonHref(lesson.slug, props.course.slug)}
                       key={lesson.slug}
-                      className={classNames(
-                        "flex items-center group relative pl-6 py-2",
-                        {
-                          "bg-brand-primary/5 !text-brand-primary hover:!text-brand-secondary":
-                            isActive,
-                          "text-shade-tertiary hover:!text-shade-primary":
-                            !isActive,
-                        },
-                      )}
+                      className={classNames("flex items-center group relative pl-6 py-2", {
+                        "bg-brand-primary/5 !text-brand-primary hover:!text-brand-secondary":
+                          isActive,
+                        "text-shade-tertiary hover:!text-shade-primary": !isActive,
+                      })}
                     >
-                      <div className="flex items-center max-w-[90%]">
+                      <div className="flex max-w-[90%] items-center">
                         {isActive && (
                           <motion.div
                             layoutId="lesson-pagination"
@@ -170,9 +159,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                             isActive && "pl-1",
                           )}
                         >
-                          {t(
-                            `courses.${props.course.slug}.lessons.${lesson.slug}.title`,
-                          )}
+                          {t(`courses.${props.course.slug}.lessons.${lesson.slug}.title`)}
                         </span>
                       </div>
                     </Link>
@@ -181,7 +168,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 {props.course.challenge && (
                   <Link
                     href={`${getChallengeHref(props.course.challenge)}?fromCourse=${props.course.slug}`}
-                    className="flex items-center gap-x-4 group mt-2"
+                    className="group mt-2 flex items-center gap-x-4"
                   >
                     <div
                       className={classNames(
@@ -205,14 +192,11 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         })}
                       />
                       <span
-                        className={classNames(
-                          "text-sm font-medium text-brand-tertiary",
-                          {
-                            "!text-success": ["completed", "claimed"].includes(
-                              challengeStatuses[props.course.challenge],
-                            ),
-                          },
-                        )}
+                        className={classNames("text-sm font-medium text-brand-tertiary", {
+                          "!text-success": ["completed", "claimed"].includes(
+                            challengeStatuses[props.course.challenge],
+                          ),
+                        })}
                       >
                         {["completed", "claimed"].includes(
                           challengeStatuses[props.course.challenge],
@@ -241,9 +225,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
               })) || []),
             ];
 
-            const currentPageIndex = allChallengePages.findIndex(
-              (p) => p.slug === currentPageSlug,
-            );
+            const currentPageIndex = allChallengePages.findIndex((p) => p.slug === currentPageSlug);
 
             if (currentPageIndex === -1) return null;
 
@@ -259,7 +241,7 @@ export default function ContentPagination(props: ContentPaginationProps) {
             return (
               <>
                 {/* Mobile Pagination */}
-                <div className="flex xl:hidden items-center justify-between min-w-[80dvw] md:min-w-[250px] px-4">
+                <div className="flex min-w-[80dvw] items-center justify-between px-4 md:min-w-[250px] xl:hidden">
                   <button
                     type="button"
                     onClick={() => prevPage && router.push(getLink(prevPage))}
@@ -284,8 +266,8 @@ export default function ContentPagination(props: ContentPaginationProps) {
                 </div>
 
                 {/* Desktop Pagination */}
-                <div className="flex-col hidden xl:flex gap-y-4">
-                  <span className="font-mono text-sm text-shade-primary pl-4">
+                <div className="hidden flex-col gap-y-4 xl:flex">
+                  <span className="pl-4 font-mono text-sm text-shade-primary">
                     {t("ChallengePage.pagination_header")}
                   </span>
                   <div className="flex flex-col gap-y-1.5 pl-0">
@@ -295,17 +277,13 @@ export default function ContentPagination(props: ContentPaginationProps) {
                         <Link
                           href={getLink(page)}
                           key={page.slug || "main"}
-                          className={classNames(
-                            "flex items-center group relative pl-6 py-2",
-                            {
-                              "bg-brand-primary/5 !text-brand-primary hover:!text-brand-secondary":
-                                isActive,
-                              "text-shade-tertiary hover:!text-shade-primary":
-                                !isActive,
-                            },
-                          )}
+                          className={classNames("flex items-center group relative pl-6 py-2", {
+                            "bg-brand-primary/5 !text-brand-primary hover:!text-brand-secondary":
+                              isActive,
+                            "text-shade-tertiary hover:!text-shade-primary": !isActive,
+                          })}
                         >
-                          <div className="flex items-center max-w-[90%]">
+                          <div className="flex max-w-[90%] items-center">
                             {isActive && (
                               <motion.div
                                 layoutId="requirement-pagination"

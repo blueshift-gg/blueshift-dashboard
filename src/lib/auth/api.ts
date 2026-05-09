@@ -57,9 +57,7 @@ export async function performSignIn(
     });
 
     if (!response.ok) {
-      throw new AuthenticationAPIError(
-        `API request failed with status ${response.status}`,
-      );
+      throw new AuthenticationAPIError(`API request failed with status ${response.status}`);
     }
     return response.json();
   } catch (err) {

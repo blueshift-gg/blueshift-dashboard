@@ -32,9 +32,7 @@ function getGithubSourceUrl(pathname: string): string {
 
 export default function TableOfContents() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [expandedOverrides, setExpandedOverrides] = useState<
-    Record<string, boolean>
-  >({});
+  const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
   const [sections, setSections] = useState<
     {
       id: string;
@@ -111,10 +109,8 @@ export default function TableOfContents() {
           const distanceA = Math.abs(rectA.top - viewportCenter);
           const distanceB = Math.abs(rectB.top - viewportCenter);
 
-          if (rectA.top < viewportCenter && rectB.top >= viewportCenter)
-            return -1;
-          if (rectB.top < viewportCenter && rectA.top >= viewportCenter)
-            return 1;
+          if (rectA.top < viewportCenter && rectB.top >= viewportCenter) return -1;
+          if (rectB.top < viewportCenter && rectA.top >= viewportCenter) return 1;
 
           return distanceA - distanceB;
         });
@@ -161,14 +157,14 @@ export default function TableOfContents() {
     >
       <div className="flex items-center space-x-2">
         <Icon name="Table" size={16} />
-        <span className="font-medium font-mono text-shade-primary text-sm">
+        <span className="font-mono text-sm font-medium text-shade-primary">
           {t("contents.contents")}
         </span>
       </div>
-      <div className="flex space-x-5 items-stretch">
+      <div className="flex items-stretch space-x-5">
         {/* Scroll Spy Background */}
         <div className="w-[1.5px] shrink-0 bg-card-solid"></div>
-        <div className="flex flex-col gap-y-5 w-max">
+        <div className="flex w-max flex-col gap-y-5">
           {sections.map((section) => {
             const isSectionActive = activeSection === section.id;
             const containsActiveSubsection = section.subsections.some(
@@ -179,8 +175,7 @@ export default function TableOfContents() {
               !shouldCollapse || isSectionActive || containsActiveSubsection;
 
             // Use override if present, otherwise use derived state
-            const isExpanded =
-              expandedOverrides[section.id] ?? isExpandedDerived;
+            const isExpanded = expandedOverrides[section.id] ?? isExpandedDerived;
 
             // Show indicator on parent if parent is active, or if a child is active when collapsed
             const shouldShowParentIndicator =
@@ -208,7 +203,7 @@ export default function TableOfContents() {
                       isManualScrollRef.current = false;
                     }, 1000);
                   }}
-                  className={`font-mono relative text-sm font-medium text-shade-primary transition hover:text-shade-primary flex items-center`}
+                  className={`relative flex items-center font-mono text-sm font-medium text-shade-primary transition hover:text-shade-primary`}
                 >
                   {shouldShowParentIndicator && (
                     <motion.div
@@ -223,7 +218,7 @@ export default function TableOfContents() {
                   {section.subsections.length > 0 && (
                     <button
                       type="button"
-                      className="relative w-[14px] h-[14px] flex items-center justify-center shrink-0 mr-2 cursor-pointer z-10"
+                      className="relative z-10 mr-2 flex h-[14px] w-[14px] shrink-0 cursor-pointer items-center justify-center"
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
@@ -272,9 +267,9 @@ export default function TableOfContents() {
                           },
                         },
                       }}
-                      className="overflow-hidden -ml-8 pl-8"
+                      className="-ml-8 overflow-hidden pl-8"
                     >
-                      <div className="pl-2 pt-4 flex flex-col gap-y-3">
+                      <div className="flex flex-col gap-y-3 pt-4 pl-2">
                         {section.subsections.map((subsection) => (
                           <div key={subsection.id} className="relative">
                             <a
@@ -290,15 +285,13 @@ export default function TableOfContents() {
                                   isManualScrollRef.current = false;
                                 }, 1000);
                               }}
-                              className={`font-mono relative flex font-medium text-shade-tertiary text-xs transition hover:text-shade-primary`}
+                              className={`relative flex font-mono text-xs font-medium text-shade-tertiary transition hover:text-shade-primary`}
                             >
-                              <span /*className="truncate max-w-[80%]"*/>
-                                {subsection.text}
-                              </span>
+                              <span /*className="truncate max-w-[80%]"*/>{subsection.text}</span>
                             </a>
                             {activeSection === subsection.id && (
                               <motion.div
-                                className="absolute -left-[calc(32px-2.5px)] top-0 w-[1.5px] bg-brand-secondary"
+                                className="absolute top-0 -left-[calc(32px-2.5px)] w-[1.5px] bg-brand-secondary"
                                 style={{ height: "20px" }}
                                 layoutId={`article`}
                                 transition={{ duration: 0.4, ease: anticipate }}
@@ -320,12 +313,10 @@ export default function TableOfContents() {
           href={githubUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center space-x-2 hover:text-shade-tertiary text-shade-primary"
+          className="flex items-center space-x-2 text-shade-primary hover:text-shade-tertiary"
         >
           <Icon name="Github" size={16} />
-          <span className="font-medium font-mono text-sm">
-            {t("contents.view_source")}
-          </span>
+          <span className="font-mono text-sm font-medium">{t("contents.view_source")}</span>
         </a>
       ) : null}
     </motion.div>

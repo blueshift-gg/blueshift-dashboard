@@ -10,6 +10,7 @@ import { ArticleSection } from "../../../../../components/ArticleSection/Article
 Transferências de tokens e operações com NFTs usam programas conhecidos com instruções padronizadas. Mas o poder da Solana vem de programas customizados: protocolos DeFi, sistemas de jogos, redes sociais, todos rodando on-chain.
 
 Todo programa Solana segue o mesmo padrão:
+
 1. Recebe uma instrução com contas e dados
 2. Valida as contas
 3. Processa os dados
@@ -27,16 +28,18 @@ import { TransactionInstruction, PublicKey } from "@solana/web3.js";
 const instruction = new TransactionInstruction({
   // 1. Qual programa chamar
   programId: new PublicKey("YourProgramAddress111111111111111111111111"),
-  
+
   // 2. Quais contas o programa precisa
   keys: [
     { pubkey: userWallet, isSigner: true, isWritable: true },
     { pubkey: dataAccount, isSigner: false, isWritable: true },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ],
-  
+
   // 3. O que fazer (dados binários específicos do programa)
-  data: Buffer.from([/* dados da instrução */])
+  data: Buffer.from([
+    /* dados da instrução */
+  ]),
 });
 ```
 
@@ -52,6 +55,7 @@ Erre nessas flags e a transação falha. O programa as valida.
 ### Dados da Instrução
 
 O campo `data` é específico do programa. Ele tipicamente contém:
+
 - Um discriminador (qual função chamar)
 - Argumentos serializados
 
@@ -67,10 +71,10 @@ import { PublicKey } from "@solana/web3.js";
 // Deriva um PDA
 const [pda, bump] = PublicKey.findProgramAddressSync(
   [
-    Buffer.from("user-profile"),    // Uma seed de string fixa
-    userWallet.toBuffer(),           // A chave pública do usuário
+    Buffer.from("user-profile"), // Uma seed de string fixa
+    userWallet.toBuffer(), // A chave pública do usuário
   ],
-  programId
+  programId,
 );
 
 // O bump garante que o endereço está fora da curva (não é um keypair válido)
@@ -84,23 +88,24 @@ console.log("Bump:", bump);
 // Dados específicos do usuário
 const [userProfile] = PublicKey.findProgramAddressSync(
   [Buffer.from("profile"), userWallet.toBuffer()],
-  programId
+  programId,
 );
 
 // Configuração global
-const [globalConfig] = PublicKey.findProgramAddressSync(
-  [Buffer.from("config")],
-  programId
-);
+const [globalConfig] = PublicKey.findProgramAddressSync([Buffer.from("config")], programId);
 
 // Item em uma coleção
 const [item] = PublicKey.findProgramAddressSync(
   [Buffer.from("item"), Buffer.from(itemId)],
-  programId
+  programId,
 );
 ```
 
-<ArticleSection name="Trabalhando com Programas Anchor" id="working-with-anchor-programs" level="h2" />
+<ArticleSection
+  name="Trabalhando com Programas Anchor"
+  id="working-with-anchor-programs"
+  level="h2"
+/>
 
 A maioria dos programas Solana usa [Anchor](https://www.anchor-lang.com/). O IDL (Interface Definition Language) descreve as instruções disponíveis.
 
@@ -155,13 +160,13 @@ const tx = new VersionedTransaction(
     payerKey: userWallet,
     recentBlockhash: blockhash,
     instructions: [ix],
-  }).compileToV0Message()
+  }).compileToV0Message(),
 );
 
 // Assina com MWA
 const signedTx = await transact(async (wallet) => {
   const [signed] = await wallet.signTransactions({
-    transactions: [tx]
+    transactions: [tx],
   });
   return signed;
 });
@@ -185,7 +190,7 @@ import * as borsh from "borsh";
 class MyInstruction {
   instruction: number;
   amount: bigint;
-  
+
   constructor(fields: { instruction: number; amount: bigint }) {
     this.instruction = fields.instruction;
     this.amount = fields.amount;
@@ -193,19 +198,22 @@ class MyInstruction {
 }
 
 const schema = new Map([
-  [MyInstruction, { 
-    kind: "struct", 
-    fields: [
-      ["instruction", "u8"],
-      ["amount", "u64"]
-    ] 
-  }]
+  [
+    MyInstruction,
+    {
+      kind: "struct",
+      fields: [
+        ["instruction", "u8"],
+        ["amount", "u64"],
+      ],
+    },
+  ],
 ]);
 
 // Codifica
 const instruction = new MyInstruction({
   instruction: 0, // Primeira instrução no programa
-  amount: BigInt(1_000_000_000) // 1 SOL em lamports
+  amount: BigInt(1_000_000_000), // 1 SOL em lamports
 });
 
 const data = borsh.serialize(schema, instruction);
@@ -225,23 +233,21 @@ function getAnchorDiscriminator(instructionName: string): Buffer {
 
 // Uso
 const discriminator = getAnchorDiscriminator("initialize");
-const fullData = Buffer.concat([
-  discriminator,
-  borsh.serialize(argsSchema, args)
-]);
+const fullData = Buffer.concat([discriminator, borsh.serialize(argsSchema, args)]);
 ```
 
-<ArticleSection name="Transações com Múltiplas Instruções" id="multi-instruction-transactions" level="h2" />
+<ArticleSection
+  name="Transações com Múltiplas Instruções"
+  id="multi-instruction-transactions"
+  level="h2"
+/>
 
 Operações reais frequentemente precisam de múltiplas instruções:
 
 ```typescript
-async function createAndInitialize(
-  connection: Connection,
-  userWallet: PublicKey
-): Promise<string> {
+async function createAndInitialize(connection: Connection, userWallet: PublicKey): Promise<string> {
   const newAccount = Keypair.generate();
-  
+
   const instructions = [
     // 1. Cria a conta
     SystemProgram.createAccount({
@@ -251,7 +257,7 @@ async function createAndInitialize(
       space: dataSize,
       programId: myProgramId,
     }),
-    
+
     // 2. Inicializa com nosso programa
     new TransactionInstruction({
       programId: myProgramId,
@@ -264,7 +270,7 @@ async function createAndInitialize(
   ];
 
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const message = new TransactionMessage({
     payerKey: userWallet,
     recentBlockhash: blockhash,
@@ -272,14 +278,14 @@ async function createAndInitialize(
   }).compileToV0Message();
 
   const tx = new VersionedTransaction(message);
-  
+
   // A nova conta também deve assinar
   tx.sign([newAccount]);
 
   // Usuário assina com MWA
   const signedTx = await transact(async (wallet) => {
     const [signed] = await wallet.signTransactions({
-      transactions: [tx]
+      transactions: [tx],
     });
     return signed;
   });
@@ -299,7 +305,7 @@ import { AddressLookupTableAccount } from "@solana/web3.js";
 const lookupTableAddress = new PublicKey("YourLookupTable...");
 const lookupTableAccount = await connection
   .getAddressLookupTable(lookupTableAddress)
-  .then(res => res.value);
+  .then((res) => res.value);
 
 if (!lookupTableAccount) {
   throw new Error("Lookup table não encontrada");
@@ -316,6 +322,7 @@ const tx = new VersionedTransaction(message);
 ```
 
 ALTs são especialmente úteis para:
+
 - Protocolos DeFi com muitas contas de token
 - Operações com NFTs entre coleções
 - Qualquer transação que envolva muitas contas
@@ -327,7 +334,7 @@ Sempre simule transações complexas:
 ```typescript
 async function simulateAndSend(
   connection: Connection,
-  transaction: VersionedTransaction
+  transaction: VersionedTransaction,
 ): Promise<{ signature: string; logs: string[] }> {
   // Simula primeiro
   const simulation = await connection.simulateTransaction(transaction, {
@@ -344,7 +351,7 @@ async function simulateAndSend(
 
   // Se a simulação passou, envia
   const signature = await connection.sendTransaction(transaction);
-  
+
   return {
     signature,
     logs: simulation.value.logs || [],
@@ -386,13 +393,10 @@ function parseSimulationLogs(logs: string[]): {
 ### Inicializar Conta de Usuário
 
 ```typescript
-async function initializeUserAccount(
-  program: Program,
-  userWallet: PublicKey
-): Promise<string> {
+async function initializeUserAccount(program: Program, userWallet: PublicKey): Promise<string> {
   const [userAccount] = PublicKey.findProgramAddressSync(
     [Buffer.from("user"), userWallet.toBuffer()],
-    program.programId
+    program.programId,
   );
 
   const ix = await program.methods
@@ -414,22 +418,16 @@ async function initializeUserAccount(
 async function depositToVault(
   program: Program,
   userWallet: PublicKey,
-  amount: number
+  amount: number,
 ): Promise<string> {
-  const [vault] = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault")],
-    program.programId
-  );
+  const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault")], program.programId);
 
-  const userTokenAccount = await getAssociatedTokenAddress(
-    tokenMint,
-    userWallet
-  );
+  const userTokenAccount = await getAssociatedTokenAddress(tokenMint, userWallet);
 
   const vaultTokenAccount = await getAssociatedTokenAddress(
     tokenMint,
     vault,
-    true // allowOwnerOffCurve - vault é um PDA
+    true, // allowOwnerOffCurve - vault é um PDA
   );
 
   const ix = await program.methods
@@ -459,18 +457,16 @@ try {
   if (error.message.includes("Transaction simulation failed")) {
     // Analisa os logs para o erro real
     const logs = error.logs || [];
-    const programError = logs.find(log => 
-      log.includes("Error") || log.includes("error")
-    );
+    const programError = logs.find((log) => log.includes("Error") || log.includes("error"));
     console.log("Erro do programa:", programError);
   }
-  
+
   // Códigos de erro Anchor
   if (error.error?.errorCode) {
     console.log("Erro Anchor:", error.error.errorCode.name);
     console.log("Mensagem:", error.error.errorMessage);
   }
-  
+
   // Erro de programa customizado
   if (error.message.includes("custom program error")) {
     const codeMatch = error.message.match(/custom program error: 0x([0-9a-f]+)/i);

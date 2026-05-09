@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="Deposit" id="deposit" level="h2" />
 
 Instruksi deposit melakukan langkah-langkah berikut:
+
 1. Memverifikasi bahwa vault kosong (memiliki nol lamport) untuk mencegah deposit ganda
 2. Memastikan jumlah deposit melebihi minimum bebas sewa untuk akun dasar
 3. Mentransfer lamport dari pembayar ke vault menggunakan CPI ke Program Sistem
@@ -118,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 Mari kita uraikan setiap pemeriksaan akun:
+
 1. `payer`: Harus menjadi penandatangan karena mereka perlu mengotorisasi transfer lamport
-2. `vault`: 
+2. `vault`:
    - Harus dimiliki oleh Program Sistem
    - Harus memiliki nol lamport (memastikan deposit "baru")
 
 Untuk `vault` kita akan memeriksa apakah:
+
 - Diturunkan dari seed yang benar
 - Cocok dengan alamat PDA yang diharapkan
-Karena sebagian dari seed ada di `instruction_data` yang tidak kita miliki aksesnya saat ini.
+  Karena sebagian dari seed ada di `instruction_data` yang tidak kita miliki aksesnya saat ini.
 
 Sekarang mari kita implementasikan struktur data instruksi:
 
@@ -156,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Kita mendeserialkan data instruksi menjadi struktur `DepositInstructionData` yang berisi:
+
 - `pubkey`: Kunci publik Secp256r1 dari pengguna yang melakukan deposit
 - `amount`: Jumlah lamport yang akan didepositkan
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 Seperti yang disebutkan sebelumnya, kita perlu memverifikasi bahwa PDA vault berasal dari seeds yang benar. Dalam vault berbasis Secp256r1 ini, kita menggunakan `Secp256r1Pubkey` sebagai bagian dari seeds alih-alih public key pemilik yang tradisional. Ini adalah langkah keamanan penting yang memastikan hanya pemegang kunci Secp256r1 yang sesuai yang dapat mengakses vault.
 
 `Secp256r1Pubkey` memiliki panjang 33 byte karena menggunakan representasi titik terkompresi untuk kunci publik kurva eliptik. Format ini terdiri dari:
+
 - 1 byte untuk paritas titik (menunjukkan apakah koordinat y genap atau ganjil)
 - 32 byte untuk koordinat x
 
 Karena fungsi `find_program_address` Solana memiliki batas 32 byte untuk setiap seed, kita perlu membagi `Secp256r1Pubkey` menjadi dua bagian:
+
 1. Byte paritas (`pubkey[..1]`)
 2. Byte koordinat x (`pubkey[1..33]`)
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 Instruksi withdraw melakukan langkah-langkah berikut:
+
 1. Memverifikasi vault berisi lamports (tidak kosong)
 2. Menggunakan PDA vault untuk menandatangani transfer atas namanya sendiri
 3. Mentransfer semua lamports dari vault kembali ke pemilik
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 Proses penarikan melibatkan beberapa pemeriksaan keamanan untuk memastikan transaksi sah. Mari kita uraikan bagaimana kita memverifikasi tanda tangan Secp256r1 dan melindungi dari potensi serangan:
 
 1. **Introspeksi Instruksi**
+
 - Kami menggunakan sysvar instruksi untuk memeriksa instruksi berikutnya dalam transaksi
 - Ini memungkinkan kami memverifikasi tanda tangan Secp256r1 yang membuktikan kepemilikan kunci penandatanganan
 - Verifikasi tanda tangan untuk Secp256r1 selalu terjadi dalam instruksi terpisah
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - Pesan yang ditandatangani berisi dua informasi penting:
-    - Alamat penerima yang dituju (32 byte)
-    - Stempel waktu untuk kapan tanda tangan kedaluwarsa (8 byte)
+  - Alamat penerima yang dituju (32 byte)
+  - Stempel waktu untuk kapan tanda tangan kedaluwarsa (8 byte)
 - Ini mencegah serangan MEV di mana seseorang dapat menangkap dan menggunakan kembali tanda tangan yang valid dengan meneruskan `payer` lain dan mengklaim jumlah yang ada di vault
 
 4. **Pemeriksaan Kedaluwarsa**

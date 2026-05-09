@@ -4,7 +4,7 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 # The Vault
 
-A vault  allows users to securely store their assets. A vault is a fundamental building block in DeFi that, at its core, allows users to securely store their assets (lamports in this case) that only that same user can withdraw later.
+A vault allows users to securely store their assets. A vault is a fundamental building block in DeFi that, at its core, allows users to securely store their assets (lamports in this case) that only that same user can withdraw later.
 
 In this challenge, we'll build a simple lamport vault that demonstrates how to work with basic accounts, Program Derived Addresses (PDAs), and Cross-Program Invocation (CPI). If you're not familiar with Anchor, you should start by reading the [Introduction to Anchor](/en/courses/introduction-to-anchor) to familiarize with the core concept that we're going to use in this program.
 
@@ -66,6 +66,7 @@ pub enum VaultError {
 Since both instruction use the same accounts, to make it easier and more readable, we can just create one context called `VaultAction` and use it for both `deposit` and `withdraw`.
 
 The `VaultAction` account struct will need to have:
+
 - `signer`: this is the owner of the vault, and the only person that can withdraw the lamports after creating the vault.
 - `vault`: a PDA derived from the following seeds: `[b"vault", signer.key().as_ref()]` that holds the lamports for the signer.
 - `system_program`: the system program account that needs to be included since we're going to use the transfer instruction CPI from the system program
@@ -89,16 +90,16 @@ pub struct VaultAction<'info> {
 
 Let's break down each account constraint:
 
-
 1. `signer`: The `mut` constraint is needed because we'll be modifying its lamports during transfers.
 2. `vault`:
-    - `mut` because we'll be modifying its lamports.
-    - `seeds` & `bumps` define how to derive a valid PDA from the seeds.
+   - `mut` because we'll be modifying its lamports.
+   - `seeds` & `bumps` define how to derive a valid PDA from the seeds.
 3. `system_program`: checks if the account is set to executable and that the address is the System Program one.
 
 <ArticleSection name="Errors" id="errors" level="h2" />
 
 We don't need a lot of errors for this small programs, so we're just going to create 2 enums:
+
 - `VaultAlreadyExists`: that let us know if there are already some lamports in the account since it would mean that the vault exists already.
 - `InvalidAmount`: we can't deposit an amount that is less than the minimum rent for a basic account, so we check that the amount is greater than that.
 
@@ -117,6 +118,7 @@ pub enum VaultError {
 <ArticleSection name="Deposit" id="deposit" level="h2" />
 
 The deposit instruction performs the following steps:
+
 1. Verifies the vault is empty (has zero lamports) to prevent double deposits
 2. Ensures the deposit amount exceeds the rent-exempt minimum for a `SystemAccount`
 3. Transfers lamports from the signer to the vault using a CPI to the System Program
@@ -132,6 +134,7 @@ require_gt!(amount, Rent::get()?.minimum_balance(0), VaultError::InvalidAmount);
 ```
 
 The two `require` macros act like custom guard clauses:
+
 - `require_eq!` confirms the vault is empty (preventing double deposits).
 - `require_gt!` checks the amount clears the rent-exempt threshold.
 
@@ -155,6 +158,7 @@ transfer(
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 The withdraw instruction performs the following steps:
+
 1. Verifies the vault contains lamports (is not empty)
 2. Uses the vault's PDA to sign the transfer on its own behalf
 3. Transfers all lamports from the vault back to the signer
@@ -188,6 +192,7 @@ transfer(
 ```
 
 The security of this withdrawal is guaranteed by two factors:
+
 1. The vault's PDA is derived using the signer's public key, ensuring only the original depositor can withdraw
 2. The PDA's ability to sign the transfer is verified through the seeds we provide to `CpiContext::new_with_signer`
 

@@ -6,7 +6,7 @@ export default function Home() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col w-full gap-y-0 px-3 sm:px-4">
+    <div className="flex w-full flex-col gap-y-0 px-3 sm:px-4">
       <PageHero badge={t("paths.subtitle")} title={t("paths.title")} />
       <Paths />
     </div>

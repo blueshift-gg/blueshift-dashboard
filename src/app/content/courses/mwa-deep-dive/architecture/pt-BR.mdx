@@ -39,9 +39,9 @@ O protocolo MWA opera em três camadas distintas:
 
 A especificação define dois papéis:
 
-**Endpoint dApp**: Seu aplicativo. Ele inicia conexões, envia requisições e processa respostas. Na camada de Transporte, atua como cliente WebSocket (para conexões locais) ou se conecta a um refletor. O endpoint dApp é sempre o *iniciador*.
+**Endpoint dApp**: Seu aplicativo. Ele inicia conexões, envia requisições e processa respostas. Na camada de Transporte, atua como cliente WebSocket (para conexões locais) ou se conecta a um refletor. O endpoint dApp é sempre o _iniciador_.
 
-**Endpoint Carteira**: O app da carteira (Phantom, Solflare, etc.). Ele aceita conexões, apresenta a interface de autorização aos usuários, assina transações e retorna resultados. Na camada de Transporte, atua como servidor WebSocket (localmente) ou se conecta ao mesmo refletor. O endpoint da carteira é sempre o *respondedor*.
+**Endpoint Carteira**: O app da carteira (Phantom, Solflare, etc.). Ele aceita conexões, apresenta a interface de autorização aos usuários, assina transações e retorna resultados. Na camada de Transporte, atua como servidor WebSocket (localmente) ou se conecta ao mesmo refletor. O endpoint da carteira é sempre o _respondedor_.
 
 ```
 +-----------------+                      +-----------------+
@@ -55,7 +55,7 @@ A especificação define dois papéis:
 
 <ArticleSection name="O Token de Associação" id="token-de-associacao" level="h2" />
 
-Toda sessão MWA começa com um *token de associação*. Este é uma chave pública de curva elíptica P-256 codificada em base64url gerada pelo dApp.
+Toda sessão MWA começa com um _token de associação_. Este é uma chave pública de curva elíptica P-256 codificada em base64url gerada pelo dApp.
 
 ```
 solana-wallet:/v1/associate/local?association=<TOKEN>&port=<PORT>
@@ -70,6 +70,7 @@ O token de associação serve a dois propósitos:
 Por que gerar um novo par de chaves para cada conexão? Porque as sessões MWA são efêmeras. Quando seu app chama `transact()`, ele cria um novo par de chaves de associação, abre uma sessão de carteira, realiza operações e fecha a sessão. O par de chaves é descartado. A próxima chamada `transact()` gera um novo.
 
 Isso significa:
+
 - Sessões não persistem entre reinicializações do app
 - Cada `transact()` é independente
 - Não há credenciais de longa duração para serem roubadas
@@ -84,11 +85,11 @@ Três motivos:
 
 **Proteção de integridade**: A criptografia (especificamente criptografia autenticada com AES-GCM) garante que as mensagens não possam ser adulteradas em trânsito. Uma transação modificada falharia na autenticação.
 
-**Uniformidade do protocolo**: O mesmo esquema de criptografia funciona para conexões locais e remotas. Conexões remotas passam por um servidor refletor, um terceiro que explicitamente *não* deve ver texto puro. Ao criptografar sempre, o protocolo não precisa de casos especiais.
+**Uniformidade do protocolo**: O mesmo esquema de criptografia funciona para conexões locais e remotas. Conexões remotas passam por um servidor refletor, um terceiro que explicitamente _não_ deve ver texto puro. Ao criptografar sempre, o protocolo não precisa de casos especiais.
 
 <ArticleSection name="O Papel do Refletor" id="papel-do-refletor" level="h2" />
 
-Para conexões remotas, onde o dApp executa em um laptop e a carteira em um celular, comunicação direta não é possível. O MWA usa um servidor *refletor* como intermediário.
+Para conexões remotas, onde o dApp executa em um laptop e a carteira em um celular, comunicação direta não é possível. O MWA usa um servidor _refletor_ como intermediário.
 
 O refletor é intencionalmente simples e não confiável:
 
@@ -115,34 +116,40 @@ O refletor impõe timeouts (30 segundos para conexões semi-abertas, 90 segundos
 Entender o ciclo de vida da sessão ajuda a depurar problemas:
 
 ### 1. Associação
+
 O dApp gera um par de chaves de associação e constrói uma URI `solana-wallet:`. No Android, abrir esta URI inicia o app da carteira via um Intent.
 
 ### 2. Estabelecimento de Transporte
+
 A carteira inicia um servidor WebSocket na porta especificada. O dApp se conecta e inicia o handshake.
 
 ### 3. Estabelecimento de Sessão
+
 Os apps trocam mensagens `HELLO_REQ` e `HELLO_RSP` contendo chaves públicas ECDH. Eles derivam uma chave AES compartilhada. A sessão agora está criptografada.
 
 ### 4. Autorização
+
 O dApp envia uma requisição JSON-RPC `authorize`. A carteira exibe uma interface solicitando aprovação do usuário. Se aprovado, a carteira retorna contas e um `auth_token`.
 
 ### 5. Operações Privilegiadas
+
 Com autorização, o dApp pode solicitar assinatura (`sign_and_send_transactions`, `sign_messages`).
 
 ### 6. Encerramento da Sessão
+
 Quando o callback `transact()` do dApp é concluído, o WebSocket fecha. Todas as chaves de sessão são descartadas.
 
 <ArticleSection name="O Que Torna o MWA Diferente" id="diferente" level="h2" />
 
 Comparando o MWA com outros protocolos de conexão de carteira:
 
-| Aspecto | Extensões de Navegador | WalletConnect | MWA |
-|---------|----------------------|---------------|-----|
-| Contexto de Execução | Compartilhado (injetado) | Separado | Separado |
-| Transporte | Memória direta | Relay remoto | WS local ou relay |
-| Duração da Sessão | Longa duração | Longa duração | Efêmera |
-| Criptografia | Opcional | Sim | Sim |
-| Verificação de Identidade | Baseada em domínio | Nenhum padrão | Digital Asset Links |
+| Aspecto                   | Extensões de Navegador   | WalletConnect | MWA                 |
+| ------------------------- | ------------------------ | ------------- | ------------------- |
+| Contexto de Execução      | Compartilhado (injetado) | Separado      | Separado            |
+| Transporte                | Memória direta           | Relay remoto  | WS local ou relay   |
+| Duração da Sessão         | Longa duração            | Longa duração | Efêmera             |
+| Criptografia              | Opcional                 | Sim           | Sim                 |
+| Verificação de Identidade | Baseada em domínio       | Nenhum padrão | Digital Asset Links |
 
 O modelo de sessão efêmera é a característica mais distintiva do MWA. Outros protocolos mantêm conexões persistentes. O MWA reconecta para cada lote de operações. Isso simplifica o gerenciamento de estado, mas significa que a autorização deve ser eficiente (daí o `auth_token` para reautorização silenciosa).
 

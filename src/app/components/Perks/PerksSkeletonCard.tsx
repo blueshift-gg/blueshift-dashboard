@@ -1,16 +1,16 @@
 export default function PerksSkeletonCard() {
   return (
-    <div className="flex flex-col gap-y-7 text-shade-tertiary p-px border border-border-light w-full bg-card-solid animate-pulse">
+    <div className="flex w-full animate-pulse flex-col gap-y-7 border border-border-light bg-card-solid p-px text-shade-tertiary">
       <div className="flex items-center gap-x-5 px-5 py-6">
-        <div className="w-[64px] h-[56px] bg-card-foreground"></div>
+        <div className="h-[56px] w-[64px] bg-card-foreground"></div>
         <div className="flex flex-col gap-y-1.5">
-          <div className="w-[100px] h-[22px] bg-card-foreground"></div>
-          <div className="w-[250px] md:h-[28px] h-[24px] bg-card-foreground"></div>
+          <div className="h-[22px] w-[100px] bg-card-foreground"></div>
+          <div className="h-[24px] w-[250px] bg-card-foreground md:h-[28px]"></div>
         </div>
       </div>
 
-      <div className="bg-background/40 p-3 w-full flex items-center justify-center">
-        <div className="w-full md:h-[48px] h-[40px] bg-card-foreground"></div>
+      <div className="flex w-full items-center justify-center bg-background/40 p-3">
+        <div className="h-[40px] w-full bg-card-foreground md:h-[48px]"></div>
       </div>
     </div>
   );

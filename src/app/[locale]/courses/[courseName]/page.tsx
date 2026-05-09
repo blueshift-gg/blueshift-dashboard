@@ -13,9 +13,7 @@ export default async function CoursePage({ params }: CoursePageProps) {
   const lessons = await getCourseLessons(courseName);
 
   // Sort lessons by lessonNumber and get the first one
-  const firstLesson = lessons.sort(
-    (a, b) => a.lessonNumber - b.lessonNumber,
-  )[0];
+  const firstLesson = lessons.sort((a, b) => a.lessonNumber - b.lessonNumber)[0];
 
   if (!firstLesson) {
     // Handle case where no lessons are found

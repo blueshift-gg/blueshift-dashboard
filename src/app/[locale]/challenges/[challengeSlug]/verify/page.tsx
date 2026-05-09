@@ -20,9 +20,7 @@ interface ChallengePageProps {
   }>;
 }
 
-export async function generateMetadata({
-  params,
-}: ChallengePageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: ChallengePageProps): Promise<Metadata> {
   const { challengeSlug, locale } = await params;
   const t = await getTranslations({ locale });
   const pathname = getPathname({
@@ -74,9 +72,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
     );
   } catch {
     try {
-      ChallengeContent = await getCompiledMdx(
-        `challenges/${challengeMetadata.slug}/en/verify.mdx`,
-      );
+      ChallengeContent = await getCompiledMdx(`challenges/${challengeMetadata.slug}/en/verify.mdx`);
       challengeLocale = "en";
     } catch {
       notFound();
@@ -98,20 +94,13 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
       if (accountInfo) {
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
-          console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`,
-          );
+          console.error(`Failed to decode num_minted for collection ${collectionMintAddress}`);
         }
       } else {
-        console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`,
-        );
+        console.error(`Failed to fetch account info for ${collectionMintAddress}`);
       }
     } catch (error) {
-      console.error(
-        `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error,
-      );
+      console.error(`Failed to fetch collection details for ${collectionMintAddress}:`, error);
     }
   }
 
@@ -123,16 +112,13 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
       footer={null}
       isTestPage={true}
     >
-      <div className="flex flex-col w-full">
+      <div className="flex w-full flex-col">
         {challengeMetadata.language === "Typescript" ? (
           <ClientChallengesContent
             currentChallenge={challengeMetadata}
             content={
               <MdxLayout>
-                <ContentFallbackNotice
-                  locale={locale}
-                  originalLocale={challengeLocale}
-                />
+                <ContentFallbackNotice locale={locale} originalLocale={challengeLocale} />
                 {ChallengeContent}
               </MdxLayout>
             }
@@ -142,10 +128,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
             currentChallenge={challengeMetadata}
             content={
               <MdxLayout>
-                <ContentFallbackNotice
-                  locale={locale}
-                  originalLocale={challengeLocale}
-                />
+                <ContentFallbackNotice locale={locale} originalLocale={challengeLocale} />
                 {ChallengeContent}
               </MdxLayout>
             }

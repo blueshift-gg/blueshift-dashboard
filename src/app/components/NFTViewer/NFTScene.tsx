@@ -1,29 +1,13 @@
 // Imperative Three.js, react-three-fiber, and dat.gui refs in this scene require loose handles and window bridges.
 "use client";
 
-import {
-  OrbitControls,
-  shaderMaterial,
-  Text,
-  useTexture,
-} from "@react-three/drei";
+import { OrbitControls, shaderMaterial, Text, useTexture } from "@react-three/drei";
 import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
 import classNames from "classnames";
-import React, {
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { resolveColorVar } from "@/app/utils/color-helper";
-import {
-  type CourseDifficulty,
-  type CourseLanguages,
-  courseColors,
-} from "@/app/utils/course";
+import { type CourseDifficulty, type CourseLanguages, courseColors } from "@/app/utils/course";
 
 // Custom shader material that combines all effects
 const NFTMaterial = shaderMaterial(
@@ -363,17 +347,13 @@ function NFTMesh({
   const materialRef = useRef<any>(null);
 
   // Load matcap textures
-  const [matcap1, matcap3] = useTexture([
-    "/textures/blur.webp",
-    "/textures/holographic.webp",
-  ]);
+  const [matcap1, matcap3] = useTexture(["/textures/blur.webp", "/textures/holographic.webp"]);
 
   // Calculate gradient color from course colors
   const gradientColor = useMemo(() => {
     const colorString =
-      courseColors[
-        challengeLanguage.toLowerCase() as keyof typeof courseColors
-      ] || courseColors.Typescript.toLowerCase();
+      courseColors[challengeLanguage.toLowerCase() as keyof typeof courseColors] ||
+      courseColors.Typescript.toLowerCase();
     const [r, g, b] = resolveColorVar(colorString);
     return new THREE.Vector3(r / 255, g / 255, b / 255);
   }, [challengeLanguage]);
@@ -408,10 +388,7 @@ function SVGImage({
   const { gl } = useThree();
 
   // Load matcap textures for iridescent effect
-  const [matcap1, matcap3] = useTexture([
-    "/textures/blur.webp",
-    "/textures/holographic.webp",
-  ]);
+  const [matcap1, matcap3] = useTexture(["/textures/blur.webp", "/textures/holographic.webp"]);
 
   // Enable anisotropic filtering if available for better quality at angles
   const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
@@ -437,12 +414,7 @@ function SVGImage({
           side: THREE.DoubleSide,
         })
       ) : (
-        <meshBasicMaterial
-          map={texture}
-          transparent={true}
-          alphaTest={0}
-          side={THREE.DoubleSide}
-        />
+        <meshBasicMaterial map={texture} transparent={true} alphaTest={0} side={THREE.DoubleSide} />
       )}
     </mesh>
   );
@@ -560,10 +532,7 @@ function Scene({
         const renderedCanvas = screenshotRenderer.domElement;
 
         // Calculate center crop area
-        const sourceSize = Math.min(
-          renderedCanvas.width,
-          renderedCanvas.height,
-        );
+        const sourceSize = Math.min(renderedCanvas.width, renderedCanvas.height);
         const sourceX = (renderedCanvas.width - sourceSize) / 2;
         const sourceY = (renderedCanvas.height - sourceSize) / 2;
 
@@ -651,14 +620,9 @@ function Scene({
           screenshotRenderer.setSize(targetSize * 2, targetSize * 2);
           screenshotRenderer.render(scene, camera);
 
-          const dataUrl = screenshotRenderer.domElement.toDataURL(
-            "image/png",
-            1.0,
-          );
+          const dataUrl = screenshotRenderer.domElement.toDataURL("image/png", 1.0);
           const link = document.createElement("a");
-          const backgroundSuffix = useTransparentBackground
-            ? "-transparent"
-            : "";
+          const backgroundSuffix = useTransparentBackground ? "-transparent" : "";
           link.download = `nft-fallback-${challengeName.replace(/\s+/g, "-").toLowerCase()}${backgroundSuffix}.png`;
           link.href = dataUrl;
           document.body.appendChild(link);
@@ -742,18 +706,11 @@ function Scene({
   useEffect(() => {
     if (onScreenshot) {
       // Store the function references with background state
-      (window as any).__nftSceneScreenshot = () =>
-        takeScreenshot(!showBackground);
+      (window as any).__nftSceneScreenshot = () => takeScreenshot(!showBackground);
       (window as any).__nftSceneResetRotation = resetRotation;
       (window as any).__nftSceneStartSpinAnimation = startSpinAnimation;
     }
-  }, [
-    takeScreenshot,
-    resetRotation,
-    startSpinAnimation,
-    onScreenshot,
-    showBackground,
-  ]);
+  }, [takeScreenshot, resetRotation, startSpinAnimation, onScreenshot, showBackground]);
 
   // Handle OrbitControls interaction events
   const handleControlsStart = useCallback(() => {
@@ -784,8 +741,7 @@ function Scene({
 
     // Handle special 1080-degree spin animation
     if (animationStateRef.current.specialAnimation.isRunning) {
-      const elapsed =
-        currentTime - animationStateRef.current.specialAnimation.startTime;
+      const elapsed = currentTime - animationStateRef.current.specialAnimation.startTime;
       const progress = Math.min(
         elapsed / (animationStateRef.current.specialAnimation.duration * 1000),
         1,
@@ -796,8 +752,7 @@ function Scene({
 
       // Interpolate rotation
       const startRot = animationStateRef.current.specialAnimation.startRotation;
-      const targetRot =
-        animationStateRef.current.specialAnimation.targetRotation;
+      const targetRot = animationStateRef.current.specialAnimation.targetRotation;
       const currentRotation = startRot + (targetRot - startRot) * easedProgress;
 
       meshRef.current.rotation.y = currentRotation;
@@ -817,8 +772,7 @@ function Scene({
     // Regular animation logic
     if (!useAnimation) return;
 
-    const timeSinceLastInteraction =
-      currentTime - animationStateRef.current.lastInteractionTime;
+    const timeSinceLastInteraction = currentTime - animationStateRef.current.lastInteractionTime;
 
     // Resume animation after delay if not interacting
     if (
@@ -838,8 +792,7 @@ function Scene({
       const oscillation = Math.sin(animationStateRef.current.time);
 
       // Apply strong easeInOut for damping effect
-      const easedValue =
-        easeInOut(Math.abs(oscillation)) * Math.sign(oscillation);
+      const easedValue = easeInOut(Math.abs(oscillation)) * Math.sign(oscillation);
 
       // Convert to rotation angle (±10 degrees in radians)
       const rotationAngle = (easedValue * 10 * Math.PI) / 180;
@@ -860,33 +813,13 @@ function Scene({
     // Start from bottom-left, going clockwise
     shape.moveTo(-width / 2 + radius, -height / 2);
     shape.lineTo(width / 2 - radius, -height / 2);
-    shape.quadraticCurveTo(
-      width / 2,
-      -height / 2,
-      width / 2,
-      -height / 2 + radius,
-    );
+    shape.quadraticCurveTo(width / 2, -height / 2, width / 2, -height / 2 + radius);
     shape.lineTo(width / 2, height / 2 - radius);
-    shape.quadraticCurveTo(
-      width / 2,
-      height / 2,
-      width / 2 - radius,
-      height / 2,
-    );
+    shape.quadraticCurveTo(width / 2, height / 2, width / 2 - radius, height / 2);
     shape.lineTo(-width / 2 + radius, height / 2);
-    shape.quadraticCurveTo(
-      -width / 2,
-      height / 2,
-      -width / 2,
-      height / 2 - radius,
-    );
+    shape.quadraticCurveTo(-width / 2, height / 2, -width / 2, height / 2 - radius);
     shape.lineTo(-width / 2, -height / 2 + radius);
-    shape.quadraticCurveTo(
-      -width / 2,
-      -height / 2,
-      -width / 2 + radius,
-      -height / 2,
-    );
+    shape.quadraticCurveTo(-width / 2, -height / 2, -width / 2 + radius, -height / 2);
 
     // Extrude settings for proper beveling
     const extrudeSettings = {
@@ -1067,12 +1000,7 @@ function GUIControls({
         });
 
       gui
-        .add(controls, "challengeLanguage", [
-          "Anchor",
-          "Rust",
-          "Typescript",
-          "Assembly",
-        ])
+        .add(controls, "challengeLanguage", ["Anchor", "Rust", "Typescript", "Assembly"])
         .name("Language")
         .onChange((value: string) => {
           latestValuesRef.current.onChallengeLanguageChange(value);
@@ -1105,9 +1033,7 @@ function GUIControls({
         });
 
       // Add screenshot button
-      gui
-        .add(controls, "takeScreenshot")
-        .name("📸 Take Screenshot (1600x1600)");
+      gui.add(controls, "takeScreenshot").name("📸 Take Screenshot (1600x1600)");
 
       // Add reset rotation button
       gui.add(controls, "resetRotation").name("🔄 Reset Rotation");
@@ -1193,15 +1119,10 @@ export default function NFTScene({
 }) {
   // State for controllable parameters
   const [challengeName, setChallengeName] = useState(initialChallengeName);
-  const [challengeLanguage, setChallengeLanguage] = useState(
-    initialChallengeLanguage,
-  );
-  const [challengeDifficulty, setChallengeDifficulty] = useState(
-    initialChallengeDifficulty,
-  );
+  const [challengeLanguage, setChallengeLanguage] = useState(initialChallengeLanguage);
+  const [challengeDifficulty, setChallengeDifficulty] = useState(initialChallengeDifficulty);
   const [useAnimation, setUseAnimation] = useState(initialUseAnimation);
-  const [showBackgroundValue, setShowBackgroundValue] =
-    useState(showBackground);
+  const [showBackgroundValue, setShowBackgroundValue] = useState(showBackground);
   // Properly typed callback functions
   const handleChallengeNameChange = useCallback((value: string) => {
     setChallengeName(value);

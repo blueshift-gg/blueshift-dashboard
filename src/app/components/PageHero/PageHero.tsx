@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  BRAND_COLOURS,
-  CrosshairCorners,
-  HeadingReveal,
-} from "@blueshift-gg/ui-components";
+import { BRAND_COLOURS, CrosshairCorners, HeadingReveal } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
@@ -39,12 +35,10 @@ export default function PageHero({
         className,
       )}
     >
-      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-dvw h-px bg-border-light"></div>
-      <div className="flex flex-col gap-y-2 px-6 py-8 lg:py-12 lg:px-12">
-        <div className="relative w-max py-0.5 px-1.5" style={{ color }}>
-          <span className="font-medium text-lg leading-none font-mono">
-            {badge}
-          </span>
+      <div className="absolute bottom-0 left-1/2 h-px w-dvw -translate-x-1/2 bg-border-light"></div>
+      <div className="flex flex-col gap-y-2 px-6 py-8 lg:px-12 lg:py-12">
+        <div className="relative w-max px-1.5 py-0.5" style={{ color }}>
+          <span className="font-mono text-lg leading-none font-medium">{badge}</span>
           <CrosshairCorners
             size={4}
             spacingY={0}
@@ -58,7 +52,7 @@ export default function PageHero({
         <HeadingReveal
           text={title}
           headingLevel="h1"
-          className="text-[28px] leading-[120%] sm:text-3xl font-semibold"
+          className="text-[28px] leading-[120%] font-semibold sm:text-3xl"
         />
         {collectionMintAddress && typeof collectionSize === "number" && (
           <Link
@@ -67,13 +61,12 @@ export default function PageHero({
             className="pt-2"
           >
             <p
-              className="text-shade-secondary text-sm font-mono"
+              className="font-mono text-sm text-shade-secondary"
               style={{
                 color: color,
               }}
             >
-              {collectionSize.toString()}{" "}
-              {collectionSize === 1 ? "Graduate" : "Graduates"}
+              {collectionSize.toString()} {collectionSize === 1 ? "Graduate" : "Graduates"}
             </p>
           </Link>
         )}

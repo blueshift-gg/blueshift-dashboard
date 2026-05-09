@@ -38,18 +38,18 @@ When the wallet receives this URI (via Android Intent), it starts its WebSocket 
 
 During the WebSocket handshake, the client and server negotiate a subprotocol via the `Sec-WebSocket-Protocol` header:
 
-| Subprotocol Name | Frame Type | Encoding |
-|-----------------|------------|----------|
-| `com.solana.mobilewalletadapter.v1` | Binary | Raw bytes |
-| `com.solana.mobilewalletadapter.v1.base64` | Text | Base64-encoded |
+| Subprotocol Name                           | Frame Type | Encoding       |
+| ------------------------------------------ | ---------- | -------------- |
+| `com.solana.mobilewalletadapter.v1`        | Binary     | Raw bytes      |
+| `com.solana.mobilewalletadapter.v1.base64` | Text       | Base64-encoded |
 
 The binary subprotocol is preferred for efficiency. The base64 variant exists for environments where binary WebSocket frames are problematic.
 
 ```typescript
 // The MWA SDK negotiates this automatically
 const ws = new WebSocket(uri, [
-  'com.solana.mobilewalletadapter.v1',
-  'com.solana.mobilewalletadapter.v1.base64'
+  "com.solana.mobilewalletadapter.v1",
+  "com.solana.mobilewalletadapter.v1.base64",
 ]);
 ```
 
@@ -134,11 +134,11 @@ The reflector is transparent for all data after session establishment begins.
 
 ### Reflector Timeouts
 
-| State | Timeout | Action |
-|-------|---------|--------|
-| Waiting for wallet to connect | 30 seconds | Close connection |
-| Connected session | 90 seconds of inactivity | Close both connections |
-| Message size limit | 4096 bytes | Close connection |
+| State                         | Timeout                  | Action                 |
+| ----------------------------- | ------------------------ | ---------------------- |
+| Waiting for wallet to connect | 30 seconds               | Close connection       |
+| Connected session             | 90 seconds of inactivity | Close both connections |
+| Message size limit            | 4096 bytes               | Close connection       |
 
 <ArticleSection name="Transport in the SDK" id="sdk-transport" level="h2" />
 
@@ -146,10 +146,11 @@ Looking at the actual MWA SDK source, the transport logic lives in `transact.ts`
 
 ```typescript
 type State =
-  | { __type: 'connecting' }
-  | { __type: 'connected'; ws: WebSocket }
-  | { __type: 'hello_req_sent'; ws: WebSocket }
-  | { __type: 'hello_rsp_received'; 
+  | { __type: "connecting" }
+  | { __type: "connected"; ws: WebSocket }
+  | { __type: "hello_req_sent"; ws: WebSocket }
+  | {
+      __type: "hello_rsp_received";
       associationPublicKey: CryptoKey;
       ecdhPrivateKey: CryptoKey;
       sessionKeyPair: Readonly<{
@@ -157,11 +158,11 @@ type State =
         hmac_key: Uint8Array;
       }>;
       sequenceNumber: number;
-      ws: WebSocket; 
+      ws: WebSocket;
     }
-  | { __type: 'connected_and_authorized'; /* ... */ }
-  | { __type: 'disconnected' }
-  | { __type: 'error'; message: string };
+  | { __type: "connected_and_authorized" /* ... */ }
+  | { __type: "disconnected" }
+  | { __type: "error"; message: string };
 ```
 
 The state machine transitions:
@@ -193,6 +194,7 @@ const port = 49152 + Math.floor(Math.random() * 16383);
 WebSocket handles framing, so MWA doesn't need length prefixes. But messages do have structure:
 
 **Unencrypted messages** (during session establishment):
+
 ```
 +-----------------------------------------+
 |  Message Type (1 byte)  |  Payload      |
@@ -200,6 +202,7 @@ WebSocket handles framing, so MWA doesn't need length prefixes. But messages do 
 ```
 
 **Encrypted messages** (after session establishment):
+
 ```
 +------------------------------------------------------+
 |  Sequence Number (4 bytes)  |  AES-GCM Ciphertext   |
@@ -214,16 +217,19 @@ The sequence number prevents replay attacks. Each side maintains their own count
 Common transport-level problems:
 
 **"Connection refused"**: The wallet hasn't started its server yet. This can happen if:
+
 - The wallet app took too long to launch
 - The wallet doesn't support MWA
 - The port is already in use by another process
 
 **"Connection reset"**: The wallet closed unexpectedly. Check if:
+
 - The wallet crashed
 - The user force-closed the wallet
 - The wallet rejected the connection during session establishment
 
 **"WebSocket timeout"**: No response from the wallet. Possible causes:
+
 - The wallet is frozen or extremely slow
 - On reflector connections, network issues
 - The wallet UI is blocking (user hasn't interacted)
@@ -239,6 +245,7 @@ The transport layer itself provides minimal security:
 - **TLS for reflector**: Remote connections use `wss://` to the reflector
 
 Real security comes from the session layer. Transport security assumptions:
+
 1. Localhost traffic is reasonably isolated from other apps (OS enforcement)
 2. The reflector connection uses TLS to prevent eavesdropping on ciphertext
 3. All message content is encrypted regardless of transport

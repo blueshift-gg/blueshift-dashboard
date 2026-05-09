@@ -3,13 +3,15 @@ import { ArticleSection } from "../../../../../components/ArticleSection/Article
 <ArticleSection name="Take" id="take" level="h2" />
 
 We can now move to the `take` instruction, that lives in the `take.rs` and will perform these actions:
+
 - Close the escrow record, sending its rent lamports back to the maker.
 - Move Token A from the vault to the taker, then close the vault.
 - Move the agreed amount of Token B from the taker to the maker.
 
-### Accounts 
+### Accounts
 
 The accounts needed in this context are:
+
 - `taker`: the user that accepts the terms of the `maker` and is making the exchange
 - `maker`: the user that initially set the terms
 - `escrow`: the account where all the terms of this exchange lives
@@ -25,66 +27,66 @@ The accounts needed in this context are:
 
 And with all the constraint it will look something like this:
 
-  ```rust
+```rust
 #[derive(Accounts)]
 pub struct Take<'info> {
-    #[account(mut)]
-    pub taker: Signer<'info>,
-    #[account(mut)]
-    pub maker: SystemAccount<'info>,
-    #[account(
-        mut,
-        close = maker,
-        seeds = [b"escrow", maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
-        bump = escrow.bump,
-        has_one = maker @ EscrowError::InvalidMaker,
-        has_one = mint_a @ EscrowError::InvalidMintA,
-        has_one = mint_b @ EscrowError::InvalidMintB,
-    )]
-    pub escrow: Box<Account<'info, Escrow>>,
+  #[account(mut)]
+  pub taker: Signer<'info>,
+  #[account(mut)]
+  pub maker: SystemAccount<'info>,
+  #[account(
+      mut,
+      close = maker,
+      seeds = [b"escrow", maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+      bump = escrow.bump,
+      has_one = maker @ EscrowError::InvalidMaker,
+      has_one = mint_a @ EscrowError::InvalidMintA,
+      has_one = mint_b @ EscrowError::InvalidMintB,
+  )]
+  pub escrow: Box<Account<'info, Escrow>>,
 
-    /// Token Accounts
-    pub mint_a: Box<InterfaceAccount<'info, Mint>>,
-    pub mint_b: Box<InterfaceAccount<'info, Mint>>,
-    #[account(
-        mut,
-        associated_token::mint = mint_a,
-        associated_token::authority = escrow,
-        associated_token::token_program = token_program
-    )]
-    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        init_if_needed,
-        payer = taker,
-        associated_token::mint = mint_a,
-        associated_token::authority = taker,
-        associated_token::token_program = token_program
-    )]
-    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        mut,
-        associated_token::mint = mint_b,
-        associated_token::authority = taker,
-        associated_token::token_program = token_program
-    )]
-    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        init_if_needed,
-        payer = taker,
-        associated_token::mint = mint_b,
-        associated_token::authority = maker,
-        associated_token::token_program = token_program
-    )]
-    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+  /// Token Accounts
+  pub mint_a: Box<InterfaceAccount<'info, Mint>>,
+  pub mint_b: Box<InterfaceAccount<'info, Mint>>,
+  #[account(
+      mut,
+      associated_token::mint = mint_a,
+      associated_token::authority = escrow,
+      associated_token::token_program = token_program
+  )]
+  pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+  #[account(
+      init_if_needed,
+      payer = taker,
+      associated_token::mint = mint_a,
+      associated_token::authority = taker,
+      associated_token::token_program = token_program
+  )]
+  pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
+  #[account(
+      mut,
+      associated_token::mint = mint_b,
+      associated_token::authority = taker,
+      associated_token::token_program = token_program
+  )]
+  pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+  #[account(
+      init_if_needed,
+      payer = taker,
+      associated_token::mint = mint_b,
+      associated_token::authority = maker,
+      associated_token::token_program = token_program
+  )]
+  pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Programs
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub token_program: Interface<'info, TokenInterface>,
-    pub system_program: Program<'info, System>,
+  /// Programs
+  pub associated_token_program: Program<'info, AssociatedToken>,
+  pub token_program: Interface<'info, TokenInterface>,
+  pub system_program: Program<'info, System>,
 }
-  ```
+```
 
-### Logic 
+### Logic
 
 In the logic we then start by transferring the tokens from the `taker_ata_b` to the `maker_ata_b`; we then move onto transferring the tokens from the `vault` to the `taker_ata_a` before closing the now empty vault like this:
 

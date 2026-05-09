@@ -51,9 +51,7 @@ export const generateBannerData = async ({
 
     let lessonMetaData: LessonMetadata | undefined;
     if (lessonSlug && "lessons" in item && Array.isArray(item.lessons)) {
-      lessonMetaData = item.lessons.find(
-        (l: LessonMetadata) => l.slug === lessonSlug,
-      );
+      lessonMetaData = item.lessons.find((l: LessonMetadata) => l.slug === lessonSlug);
       if (!lessonMetaData) {
         console.warn(
           `[BannerGenerator] Lesson slug '${lessonSlug}' not found in ${type} '${itemSlug}' lessons metadata. Skipping banner for this lesson.`,
@@ -64,16 +62,12 @@ export const generateBannerData = async ({
 
     // Load messages based on type - paths are in core.json, others have their own files
     const messagesFile = type === "path" ? "core" : `${type}s`;
-    const messages = await import(
-      `@/../messages/${locale}/${messagesFile}.json`
-    );
+    const messages = await import(`@/../messages/${locale}/${messagesFile}.json`);
     const t = createTranslator({ locale, messages });
 
     // Get title based on type - paths use a different key structure
     const itemTitle =
-      type === "path"
-        ? t(`paths.${itemSlug}.title`)
-        : t(`${type}s.${itemSlug}.title`);
+      type === "path" ? t(`paths.${itemSlug}.title`) : t(`${type}s.${itemSlug}.title`);
     const lessonTitle =
       lessonSlug && "lessons" in item
         ? type === "course"
@@ -166,12 +160,7 @@ export const generateBannerData = async ({
               width="1200"
               height="630"
             >
-              <rect
-                y="0"
-                width="1200"
-                height="630"
-                fill="url(#paint0_radial_394_223)"
-              />
+              <rect y="0" width="1200" height="630" fill="url(#paint0_radial_394_223)" />
             </mask>
             <g mask="url(#mask0_394_223)">
               <path
@@ -194,12 +183,7 @@ export const generateBannerData = async ({
               <stop offset="1" stopColor="#737373" stopOpacity="0" />
             </radialGradient>
             <clipPath id="clip0_394_223">
-              <rect
-                width="1200"
-                height="630"
-                fill="white"
-                transform="translate(0.125)"
-              />
+              <rect width="1200" height="630" fill="white" transform="translate(0.125)" />
             </clipPath>
           </defs>
         </svg>
@@ -1251,10 +1235,7 @@ export const generateBannerData = async ({
                 <feOffset dy="9.75003" />
                 <feGaussianBlur stdDeviation="4.87502" />
                 <feComposite in2="hardAlpha" operator="out" />
-                <feColorMatrix
-                  type="matrix"
-                  values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"
-                />
+                <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0" />
                 <feBlend
                   mode="normal"
                   in2="BackgroundImageFix"
@@ -1268,10 +1249,7 @@ export const generateBannerData = async ({
                 />
               </filter>
               <g data-figma-bg-blur-radius="91.4276"></g>
-              <clipPath
-                id="bgblur_0_379_158_clip_path"
-                transform="translate(78.077 83.7193)"
-              >
+              <clipPath id="bgblur_0_379_158_clip_path" transform="translate(78.077 83.7193)">
                 <rect
                   width="146.284"
                   height="146.284"
@@ -1602,8 +1580,7 @@ export const generateBannerData = async ({
       imageResponseOptions,
     );
 
-    const contentType =
-      imageResponse.headers.get("content-type") || "image/png";
+    const contentType = imageResponse.headers.get("content-type") || "image/png";
     const buffer = await imageResponse.arrayBuffer();
 
     return {
@@ -1624,9 +1601,7 @@ export const generateBannerData = async ({
 async function loadGoogleFont(font: string, text: string) {
   const url = `https://fonts.googleapis.com/css2?family=${font}:wght@500&text=${encodeURIComponent(text)}`;
   const css = await (await fetch(url)).text();
-  const resource = css.match(
-    /src: url\((.+)\) format\('(opentype|truetype)'\)/,
-  );
+  const resource = css.match(/src: url\((.+)\) format\('(opentype|truetype)'\)/);
 
   if (resource) {
     const response = await fetch(resource[1]);

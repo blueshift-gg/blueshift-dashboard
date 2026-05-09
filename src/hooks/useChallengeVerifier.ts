@@ -33,9 +33,7 @@ interface UseChallengeVerifierReturn {
   requirements: ChallengeRequirement[];
   setRequirements: React.Dispatch<React.SetStateAction<ChallengeRequirement[]>>;
   initialRequirements: ChallengeRequirement[];
-  setVerificationData: React.Dispatch<
-    React.SetStateAction<VerificationApiResponse | null>
-  >;
+  setVerificationData: React.Dispatch<React.SetStateAction<VerificationApiResponse | null>>;
   completedRequirementsCount: number;
   allIncomplete: boolean;
 }
@@ -43,8 +41,7 @@ interface UseChallengeVerifierReturn {
 export function useChallengeVerifier({
   challenge,
 }: useChallengeVerifierOptions): UseChallengeVerifierReturn {
-  const [verificationData, setVerificationData] =
-    useState<VerificationApiResponse | null>(null);
+  const [verificationData, setVerificationData] = useState<VerificationApiResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,8 +56,7 @@ export function useChallengeVerifier({
     }));
   }, [challenge]);
 
-  const [requirements, setRequirements] =
-    useState<ChallengeRequirement[]>(initialRequirements);
+  const [requirements, setRequirements] = useState<ChallengeRequirement[]>(initialRequirements);
 
   const { authToken, setCertificate } = usePersistentStore();
 
@@ -95,9 +91,7 @@ export function useChallengeVerifier({
       if (!verificationEndpoint) {
         setIsLoading(false);
         setError("Challenge API path not configured for this course.");
-        console.error(
-          "handleVerificationRequest: Verification endpoint is not defined.",
-        );
+        console.error("handleVerificationRequest: Verification endpoint is not defined.");
         return;
       }
 
@@ -135,8 +129,7 @@ export function useChallengeVerifier({
           setCertificate(challenge.slug, result.certificate);
         } else {
           if (response.status === 401) {
-            const errorMessage =
-              "Session expired. Please reconnect your wallet and try again.";
+            const errorMessage = "Session expired. Please reconnect your wallet and try again.";
             console.error("Session expired:", errorMessage);
             setError(errorMessage);
             setVerificationData(null);
@@ -155,8 +148,7 @@ export function useChallengeVerifier({
                   errorMessage =
                     "Unable to load program. Please make sure you upload the correct .so file from your `target/deploy` folder.";
                 } else {
-                  errorMessage =
-                    "Upload failed. Please check your program file and try again.";
+                  errorMessage = "Upload failed. Please check your program file and try again.";
                 }
               } else {
                 errorMessage = "Upload failed. Please try again.";
@@ -176,9 +168,7 @@ export function useChallengeVerifier({
         }
       } catch (err) {
         console.error("Error verifying:", err);
-        setError(
-          err instanceof Error ? err.message : "An unknown error occurred.",
-        );
+        setError(err instanceof Error ? err.message : "An unknown error occurred.");
         setVerificationData(null);
       } finally {
         setIsLoading(false);
@@ -189,12 +179,8 @@ export function useChallengeVerifier({
 
   const uploadProgram = useCallback(async () => {
     if (!verificationEndpoint) {
-      setError(
-        "Challenge or verification endpoint is not configured for this course.",
-      );
-      console.warn(
-        "Upload program aborted: Challenge or verification endpoint not configured.",
-      );
+      setError("Challenge or verification endpoint is not configured for this course.");
+      console.warn("Upload program aborted: Challenge or verification endpoint not configured.");
       return;
     }
 
@@ -212,9 +198,7 @@ export function useChallengeVerifier({
       const canProceed = !!verificationEndpoint; // Re-check, ensure it's still valid
 
       if (!canProceed) {
-        setError(
-          "Verification endpoint became unavailable during file selection.",
-        );
+        setError("Verification endpoint became unavailable during file selection.");
         console.error(
           "uploadProgram.onchange: Verification endpoint is not defined at time of file selection.",
         );
@@ -243,33 +227,25 @@ export function useChallengeVerifier({
         console.error(
           "Transaction upload aborted: Challenge or verification endpoint is not configured.",
         );
-        setError(
-          "Challenge or verification endpoint is not configured for this course.",
-        );
+        setError("Challenge or verification endpoint is not configured for this course.");
         return;
       }
-      console.log(
-        "Sending transaction verification request to:",
-        verificationEndpoint,
-      );
-      await handleVerificationRequest(
-        JSON.stringify({ transaction: base64EncodedTx }),
-        { "Content-Type": "application/json" },
-      );
+      console.log("Sending transaction verification request to:", verificationEndpoint);
+      await handleVerificationRequest(JSON.stringify({ transaction: base64EncodedTx }), {
+        "Content-Type": "application/json",
+      });
     },
     [verificationEndpoint, handleVerificationRequest],
   );
 
   const completedRequirementsCount = useMemo(() => {
-    return requirements.filter((requirement) => requirement.status === "passed")
-      .length;
+    return requirements.filter((requirement) => requirement.status === "passed").length;
   }, [requirements]);
 
   const allIncomplete = useMemo(() => {
     // Check if verificationData is null (initial state) OR if all requirements are 'incomplete'
     return (
-      !verificationData ||
-      requirements.every((requirement) => requirement.status === "incomplete")
+      !verificationData || requirements.every((requirement) => requirement.status === "incomplete")
     );
   }, [requirements, verificationData]);
 

@@ -12,13 +12,13 @@ Pertimbangannya sederhana: Anda hanya mendapatkan total 11 kotak, jadi Anda perl
 
 sBPF menetapkan peran spesifik untuk setiap register:
 
-| Register | Peran                 | Callee-saved?  | Catatan Penggunaan                           |
-|----------|----------------------|----------------|---------------------------------------------|
-| `r0`     | Nilai pengembalian    | Tidak          | Hasil fungsi, nilai pengembalian syscall    |
-| `r1`     | Pointer buffer input  | Tidak          | Menunjuk ke 0x400000000 saat masuk           |
-| `r2-r5`  | Scratch/argumen       | Tidak          | Argumen fungsi pembantu, nilai sementara    |
-| `r6-r9`  | Tujuan umum           | Ya             | Harus dipertahankan selama pemanggilan      |
-| `r10`    | Pointer frame         | Ya, hanya-baca | Basis stack, tidak dapat dimodifikasi langsung |
+| Register | Peran                | Callee-saved?  | Catatan Penggunaan                             |
+| -------- | -------------------- | -------------- | ---------------------------------------------- |
+| `r0`     | Nilai pengembalian   | Tidak          | Hasil fungsi, nilai pengembalian syscall       |
+| `r1`     | Pointer buffer input | Tidak          | Menunjuk ke 0x400000000 saat masuk             |
+| `r2-r5`  | Scratch/argumen      | Tidak          | Argumen fungsi pembantu, nilai sementara       |
+| `r6-r9`  | Tujuan umum          | Ya             | Harus dipertahankan selama pemanggilan         |
+| `r10`    | Pointer frame        | Ya, hanya-baca | Basis stack, tidak dapat dimodifikasi langsung |
 
 Register `r6` hingga `r9` adalah _callee-saved_, artinya nilai-nilainya tetap ada selama pemanggilan fungsi. Gunakan ini untuk data penting yang harus bertahan selama pemanggilan fungsi.
 
@@ -30,12 +30,12 @@ Register `r10` adalah "khusus" karena berfungsi sebagai pointer frame Anda, menu
 
 Sementara register menyimpan nilai yang aktif digunakan, memori menyimpan semua hal lainnya. sBPF mengatur memori ke dalam region tetap dengan tata letak yang identik di semua program:
 
-| Region | Alamat Awal   | Tujuan                  | Ukuran/Catatan                                          |
-|--------|---------------|-------------------------|--------------------------------------------------------|
-| Text   | 0x100000000   | Kode dan data read-only | Program biner                                          |
-| Stack  | 0x200000000   | Variabel lokal          | 4 KiB per frame stack, dengan kedalaman panggilan maksimum 64 |
-| Heap   | 0x300000000   | Alokasi dinamis         | 32 KiB                                                 |
-| Input  | 0x400000000   | Parameter program       | Akun dan data instruksi yang diserialisasi             |
+| Region | Alamat Awal | Tujuan                  | Ukuran/Catatan                                                |
+| ------ | ----------- | ----------------------- | ------------------------------------------------------------- |
+| Text   | 0x100000000 | Kode dan data read-only | Program biner                                                 |
+| Stack  | 0x200000000 | Variabel lokal          | 4 KiB per frame stack, dengan kedalaman panggilan maksimum 64 |
+| Heap   | 0x300000000 | Alokasi dinamis         | 32 KiB                                                        |
+| Input  | 0x400000000 | Parameter program       | Akun dan data instruksi yang diserialisasi                    |
 
 - **Region text** berisi kode yang dapat dieksekusi dan data read-only seperti konstanta string. Data yang didefinisikan dengan direktif `.quad` biasanya berada di sini.
 - **Region stack** menampung variabel lokal. Dengan `r10` yang menunjuk ke dasar stack, Anda mengakses variabel lokal menggunakan offset negatif: `[r10 - 16]`, `[r10 - 24]`, dll.
@@ -53,17 +53,18 @@ Berikut cara register dan memori bekerja bersama dalam praktiknya:
 .globl entrypoint
 entrypoint:
     // On entry: r1 points to input data at 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Load first 8 bytes from input into r0
     mov64 r2, 42            // Put 42 in register r2
     add64 r0, r2            // Add them: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Store result on stack
     mov64 r0, 0             // Return success
     exit
 ```
 
 Program ini menunjukkan pola yang umum:
+
 - Menggunakan register `r1` (pointer input) untuk membaca dari memori
 - Menggunakan register `r0` dan `r2` untuk perhitungan
 - Menggunakan register `r10` (pointer frame) untuk mengakses memori stack
@@ -105,7 +106,8 @@ entrypoint:
 ```
 
 Perilaku keluar bergantung pada kedalaman panggilan:
-- Pada kedalaman panggilan 0, exit mengakhiri program dengan `r0` sebagai kode hasil. 
+
+- Pada kedalaman panggilan 0, exit mengakhiri program dengan `r0` sebagai kode hasil.
 - Pada level panggilan yang lebih dalam, exit bertindak seperti pernyataan return, mengembalikan register yang disimpan pemanggil (`r6`-`r9`) dan pointer frame pemanggil (`r10`) sebelum melanjutkan eksekusi di alamat return.
 
 Runtime secara otomatis menangani setup dan teardown melalui kode prolog dan epilog implisit, termasuk konfigurasi keadaan register awal dan pemrosesan return akhir.

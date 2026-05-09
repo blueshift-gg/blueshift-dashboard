@@ -76,48 +76,45 @@ export const AnchorDiscriminatorCalculator = ({
   }, [seed]);
 
   return (
-    <div className="mx-auto p-6 bg-card-solid border border-border flex flex-col gap-y-4 group enabled:hover:cursor-pointer transition duration-200 enabled:hover:bg-card-solid-foreground/50">
+    <div className="group enabled:hover:bg-card-solid-foreground/50 mx-auto flex flex-col gap-y-4 border border-border bg-card-solid p-6 transition duration-200 enabled:hover:cursor-pointer">
       <div className="text-2xl font-bold">Anchor Discriminator Calculator</div>
-      <label
-        htmlFor="seed"
-        className="block text-md font-medium text-gray-400 mb-1"
-      >
+      <label htmlFor="seed" className="text-md mb-1 block font-medium text-gray-400">
         Account/Instruction Name
       </label>
-      <div className="w-full group focus-within:outline transition outline-transparent focus-within:outline-border-active relative h-[50px] px-3 bg-card border border-border bg-card-solid flex items-center gap-x-3">
+      <div className="group focus-within:outline-border-active bg-card relative flex h-[50px] w-full items-center gap-x-3 border border-border bg-card-solid px-3 outline-transparent transition focus-within:outline">
         <input
           id="seed"
           type="text"
           value={seed}
           onChange={(e) => setSeed(e.target.value)}
           placeholder="e.g., MyAccount, initialize, update_data"
-          className="w-full placeholder:text-mute transition leading-none h-full outline-none bg-transparent"
+          className="placeholder:text-mute h-full w-full bg-transparent leading-none transition outline-none"
         />
       </div>
-      <div className="flex justify-center items-center w-full">
+      <div className="flex w-full items-center justify-center">
         <div
-          className={`grid ${displayMode === "both" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"} gap-4 w-full max-w-4xl`}
+          className={`grid ${displayMode === "both" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"} w-full max-w-4xl gap-4`}
         >
           {(displayMode === "account" || displayMode === "both") && (
-            <div className="text-center border border-border p-2 py-4">
+            <div className="border border-border p-2 py-4 text-center">
               <div className="text-lg font-semibold">Account</div>
-              <div className="text-sm text-gray-400 mb-2">
+              <div className="mb-2 text-sm text-gray-400">
                 {" "}
                 {'sha256("account:" + PascalCase(seed))[0..8]'}
               </div>
-              <div className="font-mono text-brand-primary text-sm">
+              <div className="font-mono text-sm text-brand-primary">
                 {accountDiscriminator || "[0, 0, 0, 0, 0, 0, 0, 0]"}
               </div>
             </div>
           )}
 
           {(displayMode === "instruction" || displayMode === "both") && (
-            <div className="text-center border border-border p-2 py-4">
+            <div className="border border-border p-2 py-4 text-center">
               <div className="text-lg font-semibold">Instruction</div>
-              <div className="text-sm text-gray-400 mb-2">
+              <div className="mb-2 text-sm text-gray-400">
                 {'sha256("global:" + snake_case(seed))[0..8]'}
               </div>
-              <div className="font-mono text-brand-primary text-sm">
+              <div className="font-mono text-sm text-brand-primary">
                 {instructionDiscriminator || "[0, 0, 0, 0, 0, 0, 0, 0]"}
               </div>
             </div>

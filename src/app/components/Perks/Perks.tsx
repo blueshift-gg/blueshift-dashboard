@@ -20,9 +20,7 @@ export type Perk = {
 
 const FAUCET_API_CONFIG = {
   baseUrl: "https://faucet-api.blueshift.gg",
-  devnetRpc:
-    process.env.NEXT_PUBLIC_DEVNET_RPC_ENDPOINT ??
-    "https://api.devnet.solana.com",
+  devnetRpc: process.env.NEXT_PUBLIC_DEVNET_RPC_ENDPOINT ?? "https://api.devnet.solana.com",
   testnetRpc: "https://api.testnet.solana.com",
 };
 
@@ -51,13 +49,9 @@ export default function Perks() {
     claimAmounts: FAUCET_CLAIM_AMOUNTS,
   };
   const userAddress = publicKey?.toBase58();
-  const [faucetNetwork, setFaucetNetwork] = useState<"devnet" | "testnet">(
-    "devnet",
-  );
+  const [faucetNetwork, setFaucetNetwork] = useState<"devnet" | "testnet">("devnet");
 
-  const [activeTab, setActiveTab] = useState<"unlocked" | "claimed">(
-    "unlocked",
-  );
+  const [activeTab, setActiveTab] = useState<"unlocked" | "claimed">("unlocked");
 
   // Fake loading
   const [isLoading, setIsLoading] = useState(true);
@@ -70,20 +64,20 @@ export default function Perks() {
 
   const t = useTranslations();
   return (
-    <div className="relative content-wrapper border-x border-border-light">
+    <div className="content-wrapper relative border-x border-border-light">
       {!isUserConnected ? (
-        <div className="z-10 flex-col gap-y-8 flex py-12 items-center justify-center w-full min-h-[60vh]">
-          <div className="flex flex-col gap-y-0 max-w-[90dvw]">
+        <div className="z-10 flex min-h-[60vh] w-full flex-col items-center justify-center gap-y-8 py-12">
+          <div className="flex max-w-[90dvw] flex-col gap-y-0">
             <img
               src="/graphics/connect-wallet.svg"
-              className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
+              className="mx-auto w-full max-w-[80dvw] sm:w-[360px]"
               alt="Connect wallet"
             />
-            <div className="flex flex-col gap-y-3 max-w-[90dvw]">
-              <div className="text-center text-lg sm:text-xl font-medium leading-none font-mono text-shade-primary">
+            <div className="flex max-w-[90dvw] flex-col gap-y-3">
+              <div className="text-center font-mono text-lg leading-none font-medium text-shade-primary sm:text-xl">
                 {t("perks.connect_wallet")}
               </div>
-              <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
+              <div className="mx-auto w-full text-center text-shade-secondary sm:w-2/3">
                 {t("perks.connect_wallet_description")}
               </div>
             </div>
@@ -91,14 +85,12 @@ export default function Perks() {
           <WalletMultiButton />
         </div>
       ) : (
-        <div className="w-full grid grid-cols-1 lg:grid-cols-2 divide-x divide-border-light">
-          <div className="w-full flex flex-col">
+        <div className="grid w-full grid-cols-1 divide-x divide-border-light lg:grid-cols-2">
+          <div className="flex w-full flex-col">
             <div className="p-5">
-              <span className="font-mono text-shade-primary">
-                {t("perks.faucet_title")}
-              </span>
+              <span className="font-mono text-shade-primary">{t("perks.faucet_title")}</span>
             </div>
-            <div className="w-full h-px bg-border-light"></div>
+            <div className="h-px w-full bg-border-light"></div>
             <div className="p-5">
               <Faucet
                 config={faucetConfig}
@@ -112,12 +104,10 @@ export default function Perks() {
           </div>
           <div className="w-full">
             <div className="p-5">
-              <span className="font-mono text-shade-primary">
-                {t("perks.rewards_title")}
-              </span>
+              <span className="font-mono text-shade-primary">{t("perks.rewards_title")}</span>
             </div>
-            <div className="w-full h-px bg-border-light"></div>
-            <div className="p-5 flex flex-col gap-y-5">
+            <div className="h-px w-full bg-border-light"></div>
+            <div className="flex flex-col gap-y-5 p-5">
               <Tabs
                 variant="segmented"
                 theme="secondary"
@@ -140,44 +130,40 @@ export default function Perks() {
                 ]}
               />
               {isLoading ? (
-                PERKS_SKELETON_KEYS.map((skeletonKey) => (
-                  <PerksSkeletonCard key={skeletonKey} />
-                ))
+                PERKS_SKELETON_KEYS.map((skeletonKey) => <PerksSkeletonCard key={skeletonKey} />)
               ) : activeTab === "unlocked" ? (
                 perks.length > 0 ? (
-                  perks.map((perk) => (
-                    <PerksCard key={perk.productName} perk={perk} />
-                  ))
+                  perks.map((perk) => <PerksCard key={perk.productName} perk={perk} />)
                 ) : (
-                  <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] py-24">
+                  <div className="mx-auto flex w-[300px] flex-col items-center justify-center gap-y-3 py-24">
                     <div className="flex items-center gap-x-2">
                       <img
                         src="/graphics/sad-face.svg"
                         alt="Sad Face"
-                        className="w-[30px] h-[30px]"
+                        className="h-[30px] w-[30px]"
                       />
-                      <span className="text-lg font-mono font-medium text-brand-primary leading-none text-center">
+                      <span className="text-center font-mono text-lg leading-none font-medium text-brand-primary">
                         {t("perks.empty_title")}
                       </span>
                     </div>
-                    <span className="text-shade-secondary leading-[140%] text-center">
+                    <span className="text-center leading-[140%] text-shade-secondary">
                       {t("perks.empty_description")}
                     </span>
                   </div>
                 )
               ) : (
-                <div className="flex flex-col items-center justify-center gap-y-3 mx-auto w-[300px] py-24">
+                <div className="mx-auto flex w-[300px] flex-col items-center justify-center gap-y-3 py-24">
                   <div className="flex items-center gap-x-2">
                     <img
                       src="/graphics/sad-face.svg"
                       alt="Sad Face"
-                      className="w-[30px] h-[30px]"
+                      className="h-[30px] w-[30px]"
                     />
-                    <span className="text-lg font-mono font-medium text-brand-primary leading-none text-center">
+                    <span className="text-center font-mono text-lg leading-none font-medium text-brand-primary">
                       {t("perks.empty_title")}
                     </span>
                   </div>
-                  <span className="text-shade-secondary leading-[140%] text-center">
+                  <span className="text-center leading-[140%] text-shade-secondary">
                     {t("perks.empty_description")}
                   </span>
                 </div>
@@ -194,7 +180,7 @@ export default function Perks() {
         animationDelay={0}
         className="z-10"
       />
-      <div className="w-screen left-1/2 -translate-x-1/2 absolute h-px bg-border-light"></div>
+      <div className="absolute left-1/2 h-px w-screen -translate-x-1/2 bg-border-light"></div>
     </div>
   );
 }

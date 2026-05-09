@@ -10,7 +10,7 @@ async function ChallengesContent() {
 
 export default function Challenges() {
   return (
-    <div className="relative content-wrapper">
+    <div className="content-wrapper relative">
       <Suspense fallback={<ChallengesList isLoading={true} />}>
         <ChallengesContent />
       </Suspense>

@@ -6,26 +6,25 @@ Ekstensi `TransferFee` adalah ekstensi `Mint` yang memungkinkan pembuat menetapk
 
 Untuk memastikan bahwa penerima biaya tidak mendapatkan write-lock setiap kali seseorang melakukan pertukaran, dan untuk memastikan bahwa kita dapat memparalelkan transaksi yang berisi `Mint` dengan ekstensi ini, biaya disimpan dalam Akun Token penerima yang hanya dapat ditarik oleh `Withdraw Authority`.
 
-<ArticleSection name="Initializing the Mint Account" id="initializing-the-mint-account" level="h2" />
+<ArticleSection
+  name="Initializing the Mint Account"
+  id="initializing-the-mint-account"
+  level="h2"
+/>
 
 Untuk menginisialisasi ekstensi `TransferFee` pada akun `Mint` kita akan membutuhkan fungsi `createInitializeTransferFeeConfigInstruction()`.
 
 Berikut cara membuat mint dengan ekstensi Transfer Fee:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeTransferFeeConfigInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -37,47 +36,54 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Transfer Fee extension
 const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
-    mint.publicKey,
-    keypair.publicKey,
-    keypair.publicKey,
-    500,
-    BigInt(1e6),
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  keypair.publicKey,
+  keypair.publicKey,
+  500,
+  BigInt(1e6),
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the mint itself
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    null,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  null,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combine all instructions in the correct order
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeTransferFeeConfig,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeTransferFeeConfig,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
-<ArticleSection name="Transferring Tokens with the Fee" id="transferring-tokens-with-the-fee" level="h2" />
+<ArticleSection
+  name="Transferring Tokens with the Fee"
+  id="transferring-tokens-with-the-fee"
+  level="h2"
+/>
 
 Untuk mentransfer token untuk `Mint` yang memiliki ekstensi TransferFee` kita memiliki dua rute:
+
 - Kita dapat menggunakan instruksi `transferChecked()` normal dan dengan melakukan ini perhitungan biaya ditangani secara otomatis
 - Kita dapat menggunakan instruksi `transferCheckedWithFee()` dan menyediakan secara manual `fee` yang akan kita bayar dalam transfer tersebut. Ini sangat berguna jika kita ingin memastikan untuk tidak "ditipu" jika otoritas mengubah biaya dan membuat biaya yang sangat tinggi; ini seperti mengatur slippage untuk transfer.
 
@@ -87,22 +93,24 @@ Berikut cara membuat transfer menggunakan instruksi `transferCheckedWithFee()`:
 
 ```ts
 createTransferCheckedWithFeeInstruction(
-    sourceTokenAccount,
-    mint.publicKey, 
-    destinationTokenAccount, 
-    keypair.publicKey, 
-    BigInt(100e6), // transfer amount
-    6, // decimals
-    BigInt(1e6), // fee paid for the transfer
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
-)
+  sourceTokenAccount,
+  mint.publicKey,
+  destinationTokenAccount,
+  keypair.publicKey,
+  BigInt(100e6), // transfer amount
+  6, // decimals
+  BigInt(1e6), // fee paid for the transfer
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const transaction = new Transaction().add(transferInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="Harvesting the Fee" id="harvesting-the-fee" level="h2" />
@@ -114,15 +122,15 @@ Kita dapat melakukan ini dengan menetapkan filter dan mendapatkan semua akun yan
 ```ts
 // Retrieve all Token Accounts for the Mint Account
 const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
-    commitment: "confirmed",
-    filters: [
-        {
-            memcmp: {
-                offset: 0,
-                bytes: mint.publicKey.toString(), // Mint Account address
-            },
-        },
-    ],
+  commitment: "confirmed",
+  filters: [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: mint.publicKey.toString(), // Mint Account address
+      },
+    },
+  ],
 });
 ```
 
@@ -133,19 +141,15 @@ Dan mendapatkan daftar semua akun `Token` yang memiliki biaya di dalamnya dengan
 const accountsToWithdrawFrom: PublicKey[] = [];
 
 for (const accountInfo of allAccounts) {
-    const account = unpackAccount(
-        accountInfo.pubkey,
-        accountInfo.account,
-        TOKEN_2022_PROGRAM_ID,
-    );
+  const account = unpackAccount(accountInfo.pubkey, accountInfo.account, TOKEN_2022_PROGRAM_ID);
 
-    // Extract transfer fee data from each account
-    const transferFeeAmount = getTransferFeeAmount(account);
+  // Extract transfer fee data from each account
+  const transferFeeAmount = getTransferFeeAmount(account);
 
-    // Check if fees are available to be withdrawn
-    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
-        accountsToWithdrawFrom.push(accountInfo.pubkey);
-    }
+  // Check if fees are available to be withdrawn
+  if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+    accountsToWithdrawFrom.push(accountInfo.pubkey);
+  }
 }
 ```
 
@@ -153,26 +157,28 @@ Setelah itu kita dapat menggunakan instruksi `withdrawWithheldTokensFromAccounts
 
 ```ts
 const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
-    mint.publicKey,
-    sourceTokenAccount,
-    keypair.publicKey,
-    [],
-    accountsToWithdrawFrom,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  sourceTokenAccount,
+  keypair.publicKey,
+  [],
+  accountsToWithdrawFrom,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(harvestInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="Updating the Fee" id="updating-the-fee" level="h2" />
 
 Setelah menginisialisasi `Mint` kita dengan ekstensi `TranferFee`, kita mungkin perlu memperbarui biaya tersebut di masa depan. Dan untuk memastikan bahwa pembuat tidak "menipu" pemegang token mereka dengan "umpan dan jebakan" dengan menetapkan biaya yang sangat tinggi setiap kali transfer dijalankan, `TranferFee` yang baru akan diaktifkan setelah 2 epoch.
 
-Untuk mengakomodasi hal ini, beginilah tampilan data ekstensi `TransferFee`: 
+Untuk mengakomodasi hal ini, beginilah tampilan data ekstensi `TransferFee`:
 
 ```rust
 pub struct TransferFeeConfig {
@@ -182,7 +188,7 @@ pub struct TransferFeeConfig {
     pub older_transfer_fee: TransferFee,
     pub newer_transfer_fee: TransferFee,
 }
- 
+
 pub struct TransferFee {
     pub epoch: u64,
     pub maximum_fee: u64,

@@ -17,10 +17,7 @@ Nesta lição, você vai construir a lógica de conexão com a carteira. Ao fina
 Importe `transact` do pacote wrapper do web3.js (não do pacote base do protocolo):
 
 ```typescript
-import { 
-  transact, 
-  Web3MobileWallet 
-} from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { transact, Web3MobileWallet } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
 ```
 
 O padrão básico:
@@ -29,7 +26,7 @@ O padrão básico:
 const result = await transact(async (wallet: Web3MobileWallet) => {
   // wallet é sua interface com o app da carteira
   // Você pode chamar authorize, signTransactions, etc.
-  
+
   // O que você retornar torna-se o resultado de transact()
   return someValue;
 });
@@ -38,6 +35,7 @@ const result = await transact(async (wallet: Web3MobileWallet) => {
 ```
 
 Quando `transact()` é chamado:
+
 1. Seu app gera credenciais de associação
 2. Um URI intent inicia o app da carteira
 3. A carteira vem para o primeiro plano
@@ -52,28 +50,28 @@ O app da carteira fica visível durante o passo 4. Os usuários veem a identidad
 Antes que você possa assinar qualquer coisa, você precisa autorizar. Isso diz à carteira "Eu sou este app, e quero acesso às contas do usuário."
 
 ```typescript
-import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { PublicKey } from '@solana/web3.js';
-import { toByteArray } from 'react-native-quick-base64';
+import { transact, Web3MobileWallet } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { PublicKey } from "@solana/web3.js";
+import { toByteArray } from "react-native-quick-base64";
 
 const APP_IDENTITY = {
-  name: 'My Solana dApp',
-  uri: 'https://mydapp.com',
-  icon: 'favicon.ico',
+  name: "My Solana dApp",
+  uri: "https://mydapp.com",
+  icon: "favicon.ico",
 };
 
 async function connectWallet(): Promise<PublicKey> {
   return await transact(async (wallet: Web3MobileWallet) => {
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:devnet',
+      chain: "solana:devnet",
     });
-    
+
     // authResult.accounts contém as contas autorizadas
     // os endereços estão codificados em base64
     const firstAccount = authResult.accounts[0];
     const publicKey = new PublicKey(toByteArray(firstAccount.address));
-    
+
     return publicKey;
   });
 }
@@ -90,11 +88,11 @@ type AuthorizationResult = {
 };
 
 type Account = {
-  address: string;           // chave pública codificada em base64
-  display_address?: string;  // codificada em base58 (legível para humanos)
-  label?: string;            // Nome do usuário para esta conta
-  chains: string[];          // Chains suportadas
-  features: string[];        // Funcionalidades suportadas
+  address: string; // chave pública codificada em base64
+  display_address?: string; // codificada em base58 (legível para humanos)
+  label?: string; // Nome do usuário para esta conta
+  chains: string[]; // Chains suportadas
+  features: string[]; // Funcionalidades suportadas
 };
 ```
 
@@ -118,7 +116,11 @@ const display = authResult.accounts[0].display_address;
 // ex.: "7F9k..." (base58)
 ```
 
-<ArticleSection name="Armazenando Tokens de Autenticação em Cache" id="caching-auth-tokens" level="h2" />
+<ArticleSection
+  name="Armazenando Tokens de Autenticação em Cache"
+  id="caching-auth-tokens"
+  level="h2"
+/>
 
 Ninguém quer aprovar conexões de carteira repetidamente. O MWA fornece tokens de autenticação para reautorização silenciosa.
 
@@ -127,43 +129,43 @@ Na primeira conexão, você recebe um `auth_token`:
 ```typescript
 const authResult = await wallet.authorize({
   identity: APP_IDENTITY,
-  chain: 'solana:devnet',
+  chain: "solana:devnet",
 });
 
 // Salve este token
-await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
+await AsyncStorage.setItem("mwa_auth_token", authResult.auth_token);
 ```
 
 Em conexões subsequentes, inclua o token:
 
 ```typescript
 async function connectWithCachedToken(): Promise<PublicKey | null> {
-  const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
-  
+  const cachedToken = await AsyncStorage.getItem("mwa_auth_token");
+
   return await transact(async (wallet) => {
     try {
       const authResult = await wallet.authorize({
         identity: APP_IDENTITY,
-        chain: 'solana:devnet',
+        chain: "solana:devnet",
         auth_token: cachedToken ?? undefined,
       });
-      
+
       // Salve o token potencialmente atualizado
-      await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
-      
+      await AsyncStorage.setItem("mwa_auth_token", authResult.auth_token);
+
       return new PublicKey(toByteArray(authResult.accounts[0].address));
     } catch (error: any) {
       if (error.code === -32000 && cachedToken) {
         // Token expirado ou inválido, limpe e tente novamente
-        await AsyncStorage.removeItem('mwa_auth_token');
-        
+        await AsyncStorage.removeItem("mwa_auth_token");
+
         // Solicite uma nova autorização
         const freshResult = await wallet.authorize({
           identity: APP_IDENTITY,
-          chain: 'solana:devnet',
+          chain: "solana:devnet",
         });
-        
-        await AsyncStorage.setItem('mwa_auth_token', freshResult.auth_token);
+
+        await AsyncStorage.setItem("mwa_auth_token", freshResult.auth_token);
         return new PublicKey(toByteArray(freshResult.accounts[0].address));
       }
       throw error;
@@ -183,15 +185,16 @@ As carteiras diferem no que suportam. Antes de assumir que uma funcionalidade fu
 ```typescript
 await transact(async (wallet) => {
   const capabilities = await wallet.getCapabilities();
-  
-  console.log('Máximo de transações por solicitação:', capabilities.max_transactions_per_request);
-  console.log('Máximo de mensagens por solicitação:', capabilities.max_messages_per_request);
-  console.log('Versões de transação suportadas:', capabilities.supported_transaction_versions);
-  console.log('Funcionalidades opcionais:', capabilities.features);
+
+  console.log("Máximo de transações por solicitação:", capabilities.max_transactions_per_request);
+  console.log("Máximo de mensagens por solicitação:", capabilities.max_messages_per_request);
+  console.log("Versões de transação suportadas:", capabilities.supported_transaction_versions);
+  console.log("Funcionalidades opcionais:", capabilities.features);
 });
 ```
 
 A resposta informa:
+
 - **max_transactions_per_request**: Quantas transações podem ser assinadas de uma vez
 - **max_messages_per_request**: Quantas mensagens podem ser assinadas de uma vez
 - **supported_transaction_versions**: `['legacy', 0]` ou similar
@@ -205,15 +208,15 @@ Para "desconectar" uma carteira, invalidando quaisquer tokens de autenticação 
 
 ```typescript
 async function disconnect(): Promise<void> {
-  const authToken = await AsyncStorage.getItem('mwa_auth_token');
-  
+  const authToken = await AsyncStorage.getItem("mwa_auth_token");
+
   if (!authToken) return;
-  
+
   await transact(async (wallet) => {
     await wallet.deauthorize({ auth_token: authToken });
   });
-  
-  await AsyncStorage.removeItem('mwa_auth_token');
+
+  await AsyncStorage.removeItem("mwa_auth_token");
 }
 ```
 
@@ -228,14 +231,14 @@ Algumas carteiras suportam múltiplas contas. A resposta de `authorize` pode con
 ```typescript
 const authResult = await wallet.authorize({
   identity: APP_IDENTITY,
-  chain: 'solana:devnet',
+  chain: "solana:devnet",
 });
 
 // Podem ser múltiplas contas
 authResult.accounts.forEach((account, index) => {
   console.log(`Conta ${index}:`, account.display_address);
-  console.log(`  Rótulo: ${account.label ?? 'Sem rótulo'}`);
-  console.log(`  Chains: ${account.chains.join(', ')}`);
+  console.log(`  Rótulo: ${account.label ?? "Sem rótulo"}`);
+  console.log(`  Chains: ${account.chains.join(", ")}`);
 });
 ```
 
@@ -286,23 +289,23 @@ export function ConnectButton({ onConnect, onError }: ConnectButtonProps) {
   const handleConnect = useCallback(async () => {
     if (connecting) return;
     setConnecting(true);
-    
+
     try {
       const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
-      
+
       await transact(async (wallet: Web3MobileWallet) => {
         const authResult = await wallet.authorize({
           identity: APP_IDENTITY,
           chain: 'solana:devnet',
           auth_token: cachedToken ?? undefined,
         });
-        
+
         await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
-        
+
         const publicKey = new PublicKey(
           toByteArray(authResult.accounts[0].address)
         );
-        
+
         onConnect(publicKey, authResult.auth_token);
       });
     } catch (error: any) {
@@ -353,6 +356,7 @@ const styles = StyleSheet.create({
 ```
 
 Detalhes importantes:
+
 - **Estado de carregamento**: Previne toques duplos durante a conexão
 - **Token em cache**: Tenta reautenticação silenciosa primeiro
 - **Tratamento de erros**: Distingue cancelamento do usuário de erros reais
@@ -366,6 +370,7 @@ O protocolo MWA especifica timeouts:
 - **Timeout de solicitação**: 10 segundos para solicitações RPC individuais dentro de uma sessão
 
 Se a carteira não responder a tempo, você recebe um erro de timeout. Isso geralmente significa:
+
 - O app da carteira não está instalado
 - A carteira travou durante a inicialização
 - O dispositivo está sob carga pesada
@@ -375,14 +380,14 @@ Trate timeouts de forma elegante:
 ```typescript
 try {
   await transact(async (wallet) => {
-    await wallet.authorize({ identity: APP_IDENTITY, chain: 'solana:devnet' });
+    await wallet.authorize({ identity: APP_IDENTITY, chain: "solana:devnet" });
   });
 } catch (error: any) {
-  if (error.message?.includes('timeout')) {
+  if (error.message?.includes("timeout")) {
     Alert.alert(
-      'Timeout de Conexão',
-      'A carteira demorou muito para responder. Certifique-se de que você tem uma carteira Solana instalada.',
-      [{ text: 'OK' }]
+      "Timeout de Conexão",
+      "A carteira demorou muito para responder. Certifique-se de que você tem uma carteira Solana instalada.",
+      [{ text: "OK" }],
     );
   }
 }

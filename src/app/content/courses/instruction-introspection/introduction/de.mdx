@@ -61,37 +61,49 @@ fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
 Das bedeutet, dass Sie durch das Lesen des `Instructions` sysvar-Kontos innerhalb Ihres Programms auf alle Anweisungen zugreifen können, die in der aktuellen Transaktion enthalten sind.
 
 Sie müssen die Rohdaten nicht manuell parsen. Solana bietet Hilfsfunktionen:
+
 - `load_current_index_checked`: gibt den Index der aktuell ausgeführten Anweisung zurück.
 - `load_instruction_at_checked`: ermöglicht das Laden einer bestimmten Anweisung anhand ihres Index in einem geparsten, deserialisierten Format.
 
 <ArticleSection name="Wie funktioniert es?" id="how-does-it-work" level="h2" />
 
 Jede Solana-Anweisung enthält:
+
 - die Programm-ID, auf die sie abzielt,
 - die Konten, mit denen sie interagiert (einschließlich Metadaten wie Unterzeichner/beschreibbar),
 - und die Datennutzlast (typischerweise ein Diskriminator + Argumente).
 
 Und genau das liefert die Funktion `load_instruction_at_checked` vom Instructions-Sysvar:
+
 - program_id: das Programm, das diese Anweisung aufruft.
 - accounts: eine Liste der beteiligten Konten mit Metadaten.
 - data: die rohe Eingabenutzlast (wenn wir eine Anchor-Anweisung introspektieren, beginnt sie oft mit einem 8-Byte-Diskriminator gefolgt von Parametern).
 
 Um andere Anweisungen sicher und effizient zu untersuchen, folge diesen Schritten:
+
 - Bestimme den aktuellen Anweisungsindex: Verwende `load_current_index_checked`, um den Index der aktuell ausgeführten Anweisung zu finden.
-> Beachte: Deine Anweisung ist möglicherweise nicht die erste (Index 0) in der Transaktion.
+
+  > Beachte: Deine Anweisung ist möglicherweise nicht die erste (Index 0) in der Transaktion.
 
 - Lade eine Zielanweisung zur Analyse: Mit dem Index kannst du `load_instruction_at_checked(index)` verwenden, um eine andere Anweisung in derselben Transaktion zu laden – entweder die davor, danach oder an einer bestimmten Position.
-> Dies ist nützlich, um Verhalten zu validieren, erwartete Eingaben sicherzustellen oder Programme sicher miteinander zu verbinden.
+
+  > Dies ist nützlich, um Verhalten zu validieren, erwartete Eingaben sicherzustellen oder Programme sicher miteinander zu verbinden.
 
 - Erstelle Einschränkungen, um bösartiges Verhalten zu verhindern: Die Anweisungsinspektion ist mächtig, eröffnet aber auch neue Angriffsflächen. Stelle sicher, dass du: validierst, dass die untersuchte Anweisung das erwartete Programm anspricht, bestätigst, dass Kontoadressen und Daten den erwarteten Mustern entsprechen, und keine Annahmen über die Reihenfolge der Anweisungen triffst, es sei denn, diese wird explizit erzwungen.
 
 Durch diese Vorsichtsmaßnahmen kannst du die Anweisungsinspektion sicher nutzen, um leistungsstarke, komponierbare und sichere Solana-Programme zu erstellen.
 
-<ArticleSection name="Übliche Einschränkungen für die Inspektion" id="common-constraints-for-introspection" level="h2" />
+<ArticleSection
+  name="Übliche Einschränkungen für die Inspektion"
+  id="common-constraints-for-introspection"
+  level="h2"
+/>
 
 Bei der Verwendung der Anweisungsinspektion ist es wichtig, strenge Einschränkungen durchzusetzen, um bösartiges oder unerwartetes Verhalten zu verhindern. Die häufigsten Schutzmaßnahmen umfassen:
+
 - Anweisungsverifizierung: Validiere die Programm-ID und den Diskriminator der Anweisung, um sicherzustellen, dass es die richtige ist. Der Diskriminator (normalerweise die ersten 1, 4 oder 8 Bytes der Anweisungsdaten) identifiziert eindeutig, welche Funktion aufgerufen wird.
-> Dieser Schritt stellt sicher, dass du die beabsichtigte Anweisung untersuchst und nicht eine gefälschte oder fehlerhafte.
+
+  > Dieser Schritt stellt sicher, dass du die beabsichtigte Anweisung untersuchst und nicht eine gefälschte oder fehlerhafte.
 
 - Variablenvalidierung: Nach dem Diskriminator solltest du kritische Variablen, die von der Anweisung verwendet werden, analysieren und überprüfen. Diese können Beträge, Richtungen (z.B. long/short) oder IDs umfassen, und du solltest immer bestätigen, dass diese Felder mit der erwarteten Logik deiner Integration oder Schutzmaßnahme übereinstimmen.
 - Kontoverifizierung: Validiere die Struktur und Identität der Konten der Anweisung. Überprüfe, dass erwartete Konten an bestimmten Positionen erscheinen (z.B. Unterzeichner, Tresor, Sicherheit) und stelle sicher, dass Rollen wie Unterzeichner/beschreibbarer Status deinen Annahmen entsprechen.

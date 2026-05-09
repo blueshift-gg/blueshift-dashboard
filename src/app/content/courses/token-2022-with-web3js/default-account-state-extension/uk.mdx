@@ -4,26 +4,25 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 Розширення `DefaultAccountState` є розширенням Mint, яке дозволяє всім новоствореним обліковим записам `Token` для цього конкретного mint бути замороженими за замовчуванням. Потім `Freeze Authority` mint може розморозити ці облікові записи `Token`, щоб вони стали придатними для використання.
 
-<ArticleSection name="Initializing the Mint Account" id="initializing-the-mint-account" level="h2" />
+<ArticleSection
+  name="Initializing the Mint Account"
+  id="initializing-the-mint-account"
+  level="h2"
+/>
 
 Щоб ініціалізувати розширення `DefaultAccountState` на обліковому записі `Mint`, нам знадобиться функція `initializeDefaultAccountState()`.
 
 Ось як створити mint з розширенням Default Account State:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeDefaultAccountStateInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeDefaultAccountStateInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -35,39 +34,41 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Default Account State extension
 const initializeDefaultAccountState = createInitializeDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Frozen,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Frozen,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the mint itself
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    keypair.publicKey, // freeze authority is MANDATORY
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  keypair.publicKey, // freeze authority is MANDATORY
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combine all instructions in the correct order
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeDefaultAccountState,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeDefaultAccountState,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 > Пам'ятайте, що `Freeze Authority` на `Mint` є обов'язковим для цього розширення, інакше ми не зможемо розморозити жоден обліковий запис `Token` при створенні.
@@ -82,54 +83,61 @@ console.log(`Mint created! Check out your TX here: https://explorer.solana.com/t
 
 ```ts
 const ata = await getAssociatedTokenAddress(
-    mint.publicKey,
-    keypair.publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID
+  mint.publicKey,
+  keypair.publicKey,
+  false,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
-    keypair.publicKey, // payer
-    ata, // associated token account address
-    keypair.publicKey, // owner
-    mint.publicKey, // mint
-    TOKEN_2022_PROGRAM_ID
-)
+  keypair.publicKey, // payer
+  ata, // associated token account address
+  keypair.publicKey, // owner
+  mint.publicKey, // mint
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const thawAtaInstruction = createThawAccountInstruction(
-    ata,
-    mint.publicKey,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  ata,
+  mint.publicKey,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
-const transaction = new Transaction().add(
-    createAtaInstruction,
-    thawAtaInstruction,
+const transaction = new Transaction().add(createAtaInstruction, thawAtaInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+  skipPreflight: true,
+});
+
+console.log(
+  `Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
 );
-
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: true});
-
-console.log(`Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
 ```
 
-<ArticleSection name="Changing the Default Account State" id="changing-the-default-account-state" level="h2" />
+<ArticleSection
+  name="Changing the Default Account State"
+  id="changing-the-default-account-state"
+  level="h2"
+/>
 
 Коли нам більше не потрібен посилений контроль над розповсюдженням токенів і ми хочемо дозволити всім вільно торгувати нашим токеном, ми можемо змінити стан облікового запису за замовчуванням за допомогою інструкції `updateDefaultAccountState` таким чином:
 
 ```ts
 const updateDefaultAccountStateInstruction = createUpdateDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Initialized,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Initialized,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(updateDefaultAccountStateInstruction);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```

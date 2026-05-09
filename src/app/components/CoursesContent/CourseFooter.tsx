@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  CrosshairCorners,
-  Icon,
-} from "@blueshift-gg/ui-components";
+import { Badge, Button, CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useCallback } from "react";
@@ -43,14 +38,10 @@ export default function CourseFooter({
   // When in a path, find the next course/challenge to navigate to
   const currentPathIndex =
     pathSlug && steps
-      ? steps.findIndex(
-          (s) => s.type === "course" && s.slug === courseMetadata.slug,
-        )
+      ? steps.findIndex((s) => s.type === "course" && s.slug === courseMetadata.slug)
       : -1;
   const nextStep =
-    pathSlug && steps && currentPathIndex >= 0
-      ? steps[currentPathIndex + 1]
-      : undefined;
+    pathSlug && steps && currentPathIndex >= 0 ? steps[currentPathIndex + 1] : undefined;
 
   const nextPathUnit =
     pathSlug && nextStep
@@ -74,14 +65,11 @@ export default function CourseFooter({
         })()
       : null;
 
-  const isLastPathUnit =
-    !!pathSlug && !!steps && currentPathIndex >= 0 && !nextStep;
+  const isLastPathUnit = !!pathSlug && !!steps && currentPathIndex >= 0 && !nextStep;
   const handleArticleClick = useCallback(
     (articleId: string) => {
       const analytics =
-        typeof window !== "undefined"
-          ? (window as AnalyticsWindow).analytics
-          : undefined;
+        typeof window !== "undefined" ? (window as AnalyticsWindow).analytics : undefined;
 
       if (analytics) {
         analytics.track("research_link_clicked", {
@@ -105,8 +93,8 @@ export default function CourseFooter({
       : `/challenges/${challenge?.slug}`;
 
   return (
-    <div className="flex flex-col w-[calc(100%+42px)] -ml-[21px] lg:w-[calc(100%+50px)] lg:-ml-[25px]">
-      <div className="flex flex-col gap-y-6 bg-background relative">
+    <div className="-ml-[21px] flex w-[calc(100%+42px)] flex-col lg:-ml-[25px] lg:w-[calc(100%+50px)]">
+      <div className="relative flex flex-col gap-y-6 bg-background">
         <div className="h-px w-full bg-border"></div>
         <div className="h-px w-full bg-border"></div>
         <CrosshairCorners
@@ -119,35 +107,31 @@ export default function CourseFooter({
           spacingX={0}
         />
       </div>
-      <div className="w-full flex items-center flex-col gap-y-10">
+      <div className="flex w-full flex-col items-center gap-y-10">
         {nextLesson && (
           <Link
             href={getLessonHref(nextLessonSlug)}
-            className="flex justify-between items-center w-full bg-card-solid border-x border-border-light group py-5 px-5"
+            className="group flex w-full items-center justify-between border-x border-border-light bg-card-solid px-5 py-5"
           >
             <div className="flex items-center gap-x-2">
-              <span className="text-mute text-sm font-mono text-shade-tertiary">
-                Next Lesson
-              </span>
+              <span className="text-mute font-mono text-sm text-shade-tertiary">Next Lesson</span>
               <span className="font-medium text-shade-primary">
-                {t(
-                  `courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`,
-                )}
+                {t(`courses.${courseMetadata.slug}.lessons.${nextLessonSlug}.title`)}
               </span>
             </div>
             <Icon
               name="ArrowRight"
-              className="text-mute text-sm group-hover:text-shade-primary group-hover:translate-x-1 transition"
+              className="text-mute text-sm transition group-hover:translate-x-1 group-hover:text-shade-primary"
             />
           </Link>
         )}
 
         {!nextLesson && challenge && (
-          <div className="px-0 lg:px-0 w-full">
-            <div className="w-full bg-card-solid border-x border-border-light relative py-8 px-8">
-              <div className="max-w-[800px] mx-auto">
-                <div className="gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12">
-                  <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
+          <div className="w-full px-0 lg:px-0">
+            <div className="relative w-full border-x border-border-light bg-card-solid px-8 py-8">
+              <div className="mx-auto max-w-[800px]">
+                <div className="flex flex-col items-center justify-between gap-x-12 gap-y-6 md:flex-row md:gap-y-0">
+                  <span className="w-auto flex-shrink-0 font-mono text-shade-primary">
                     {t("lessons.take_challenge_cta")}
                   </span>
                   <Link
@@ -167,20 +151,15 @@ export default function CourseFooter({
           </div>
         )}
         {!nextLesson && !challenge && (
-          <div className="px-0 lg:px-0 w-full">
-            <div className="w-full bg-card-solid border-x border-border-light relative py-8 px-8">
-              <div className="max-w-[800px] mx-auto">
-                <div className="gap-y-6 md:gap-y-0 flex flex-col md:flex-row justify-between items-center gap-x-12">
-                  <span className="text-shade-primary w-auto flex-shrink-0 font-mono">
-                    {isLastPathUnit
-                      ? t("lessons.path_completed")
-                      : t("lessons.lesson_completed")}
+          <div className="w-full px-0 lg:px-0">
+            <div className="relative w-full border-x border-border-light bg-card-solid px-8 py-8">
+              <div className="mx-auto max-w-[800px]">
+                <div className="flex flex-col items-center justify-between gap-x-12 gap-y-6 md:flex-row md:gap-y-0">
+                  <span className="w-auto flex-shrink-0 font-mono text-shade-primary">
+                    {isLastPathUnit ? t("lessons.path_completed") : t("lessons.lesson_completed")}
                   </span>
                   <Link
-                    href={
-                      nextPathUnit?.href ??
-                      (isLastPathUnit ? "/paths" : "/courses")
-                    }
+                    href={nextPathUnit?.href ?? (isLastPathUnit ? "/paths" : "/courses")}
                     className="w-max"
                   >
                     <Button
@@ -193,11 +172,7 @@ export default function CourseFooter({
                           : t("lessons.explore_more_courses"))
                       }
                       iconPosition={nextPathUnit?.href ? "right" : "left"}
-                      icon={
-                        nextPathUnit?.href
-                          ? { name: "ArrowRight" }
-                          : { name: "Lessons" }
-                      }
+                      icon={nextPathUnit?.href ? { name: "ArrowRight" } : { name: "Lessons" }}
                     />
                   </Link>
                 </div>
@@ -207,7 +182,7 @@ export default function CourseFooter({
         )}
       </div>
 
-      <div className="flex flex-col gap-y-6 bg-background relative">
+      <div className="relative flex flex-col gap-y-6 bg-background">
         <CrosshairCorners
           corners={["bottom-left", "bottom-right"]}
           className="z-10 hidden xl:block"
@@ -224,7 +199,7 @@ export default function CourseFooter({
       {articles.length > 0 && !nextLesson && !challenge && (
         <div className="flex flex-col gap-y-6 px-5 py-8 lg:px-8 lg:py-10">
           <div className="flex items-center justify-between">
-            <div className="relative w-max px-3 hidden md:block">
+            <div className="relative hidden w-max px-3 md:block">
               <CrosshairCorners
                 className="text-shade-mute"
                 animationDelay={0}
@@ -233,26 +208,24 @@ export default function CourseFooter({
                 spacingX={0}
                 variant="bordered"
               />
-              <h3 className="font-medium font-mono text-shade-secondary">
-                Want more?
-              </h3>
+              <h3 className="font-mono font-medium text-shade-secondary">Want more?</h3>
             </div>
             <Badge label="Research" variant="brand" className="text-[15px]!" />
           </div>
           <div className="mx-auto w-full">
-            <div className="grid gap-4 lg:gap-4 grid-cols-1 mb-6 w-full">
+            <div className="mb-6 grid w-full grid-cols-1 gap-4 lg:gap-4">
               {articles.map((article) => (
                 <a
                   key={article.id}
                   href={article.url}
                   onClick={() => handleArticleClick(article.id)}
-                  className="group w-full border relative overflow-hidden border-border bg-card-solid hover:border-border-light transition-colors flex flex-col py-5 px-5"
+                  className="group relative flex w-full flex-col overflow-hidden border border-border bg-card-solid px-5 py-5 transition-colors hover:border-border-light"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
                   <CrosshairCorners
                     corners={["bottom-right"]}
-                    className="z-10 group-hover:translate-x-1 group-hover:translate-y-1 group-hover:text-brand-primary transition-transform duration-300"
+                    className="z-10 transition-transform duration-300 group-hover:translate-x-1 group-hover:translate-y-1 group-hover:text-brand-primary"
                     animationDelay={0}
                     size={8}
                     thickness={1.5}
@@ -262,10 +235,10 @@ export default function CourseFooter({
 
                   <div className="flex items-center">
                     <div className="flex flex-col items-start gap-2">
-                      <h4 className="leading-[130%] text-shade-primary font-medium transition-colors">
+                      <h4 className="leading-[130%] font-medium text-shade-primary transition-colors">
                         {article.title}
                       </h4>
-                      <p className="text-shade-tertiary leading-[160%] text-sm">
+                      <p className="text-sm leading-[160%] text-shade-tertiary">
                         {article.description}
                       </p>
                     </div>

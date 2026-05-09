@@ -31,9 +31,7 @@ const getSwooshAngle = (direction: Direction): number => {
   return angles[direction];
 };
 
-export const useDirectionalHover = (
-  elementRef: RefObject<HTMLElement | null>,
-) => {
+export const useDirectionalHover = (elementRef: RefObject<HTMLElement | null>) => {
   const [transform, setTransform] = useState<DirectionalTransform>({
     x: 0,
     y: 0,

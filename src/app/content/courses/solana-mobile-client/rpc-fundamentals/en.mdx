@@ -21,19 +21,13 @@ The `@solana/web3.js` library provides the `Connection` class: your gateway to S
 import { Connection, clusterApiUrl } from "@solana/web3.js";
 
 // For development
-const devnetConnection = new Connection(
-  clusterApiUrl("devnet"),
-  "confirmed"
-);
+const devnetConnection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
 // For production with a dedicated RPC provider
-const mainnetConnection = new Connection(
-  "https://your-provider.com/rpc",
-  {
-    commitment: "confirmed",
-    confirmTransactionInitialTimeout: 60000, // 60 seconds for mobile
-  }
-);
+const mainnetConnection = new Connection("https://your-provider.com/rpc", {
+  commitment: "confirmed",
+  confirmTransactionInitialTimeout: 60000, // 60 seconds for mobile
+});
 ```
 
 ### Commitment Levels
@@ -87,10 +81,9 @@ if (accountInfo) {
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // Get all token accounts owned by a wallet
-const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-  walletPublicKey,
-  { programId: TOKEN_PROGRAM_ID }
-);
+const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPublicKey, {
+  programId: TOKEN_PROGRAM_ID,
+});
 
 tokenAccounts.value.forEach((account) => {
   const parsed = account.account.data.parsed.info;
@@ -104,8 +97,7 @@ tokenAccounts.value.forEach((account) => {
 Every transaction needs a recent blockhash; it acts as a timestamp and prevents replay attacks:
 
 ```typescript
-const { blockhash, lastValidBlockHeight } = 
-  await connection.getLatestBlockhash("confirmed");
+const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
 // This blockhash is valid for ~60-90 seconds
 // If your transaction takes longer, you'll need a fresh one
@@ -125,9 +117,7 @@ const balance3 = await connection.getBalance(addr3);
 // 3 round trips = slow on cellular
 
 // DO this instead
-const balances = await connection.getMultipleAccountsInfo([
-  addr1, addr2, addr3
-]);
+const balances = await connection.getMultipleAccountsInfo([addr1, addr2, addr3]);
 // 1 round trip = much faster
 ```
 
@@ -135,24 +125,27 @@ const balances = await connection.getMultipleAccountsInfo([
 
 ```typescript
 // Simple cache for account data
-const accountCache = new Map<string, {
-  data: AccountInfo<Buffer> | null;
-  timestamp: number;
-}>();
+const accountCache = new Map<
+  string,
+  {
+    data: AccountInfo<Buffer> | null;
+    timestamp: number;
+  }
+>();
 
 const CACHE_TTL = 5000; // 5 seconds
 
 async function getCachedAccountInfo(
   connection: Connection,
-  pubkey: PublicKey
+  pubkey: PublicKey,
 ): Promise<AccountInfo<Buffer> | null> {
   const key = pubkey.toBase58();
   const cached = accountCache.get(key);
-  
+
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.data;
   }
-  
+
   const data = await connection.getAccountInfo(pubkey);
   accountCache.set(key, { data, timestamp: Date.now() });
   return data;
@@ -167,32 +160,28 @@ Mobile networks are unreliable. Build in retries:
 async function withRetry<T>(
   operation: () => Promise<T>,
   maxAttempts = 3,
-  delayMs = 1000
+  delayMs = 1000,
 ): Promise<T> {
   let lastError: Error | undefined;
-  
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error as Error;
       console.log(`Attempt ${attempt} failed:`, error);
-      
+
       if (attempt < maxAttempts) {
-        await new Promise(resolve => 
-          setTimeout(resolve, delayMs * attempt)
-        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
       }
     }
   }
-  
+
   throw lastError;
 }
 
 // Usage
-const balance = await withRetry(() => 
-  connection.getBalance(publicKey)
-);
+const balance = await withRetry(() => connection.getBalance(publicKey));
 ```
 
 <ArticleSection name="Choosing an RPC Provider" id="choosing-an-rpc-provider" level="h2" />
@@ -201,12 +190,12 @@ For production mobile apps, you need a dedicated RPC provider. The public endpoi
 
 ### Provider Options
 
-| Provider | Strengths | Mobile Consideration |
-|----------|-----------|---------------------|
-| **Helius** | Fast, DAS API for NFTs, webhooks | Excellent for NFT-heavy apps |
-| **QuickNode** | Global edge network, consistent | Good latency worldwide |
-| **Triton** | High throughput, competitive pricing | Great for high-volume apps |
-| **Alchemy** | Multi-chain, good debugging tools | If you need EVM too |
+| Provider      | Strengths                            | Mobile Consideration         |
+| ------------- | ------------------------------------ | ---------------------------- |
+| **Helius**    | Fast, DAS API for NFTs, webhooks     | Excellent for NFT-heavy apps |
+| **QuickNode** | Global edge network, consistent      | Good latency worldwide       |
+| **Triton**    | High throughput, competitive pricing | Great for high-volume apps   |
+| **Alchemy**   | Multi-chain, good debugging tools    | If you need EVM too          |
 
 ### Environment Configuration
 
@@ -218,13 +207,13 @@ import Config from "react-native-config";
 
 export const getRpcEndpoint = () => {
   const endpoint = Config.SOLANA_RPC_URL;
-  
+
   if (!endpoint) {
     // Fallback for development only
     console.warn("No RPC URL configured, using devnet");
     return clusterApiUrl("devnet");
   }
-  
+
   return endpoint;
 };
 
@@ -243,7 +232,7 @@ const subscriptionId = connection.onAccountChange(
   (accountInfo) => {
     console.log("Account changed:", accountInfo.lamports);
   },
-  "confirmed"
+  "confirmed",
 );
 
 // Subscribe to transaction confirmations
@@ -256,7 +245,7 @@ connection.onSignature(
       console.log("Transaction confirmed!");
     }
   },
-  "confirmed"
+  "confirmed",
 );
 
 // IMPORTANT: Clean up when component unmounts
@@ -276,26 +265,26 @@ WebSockets on mobile can be tricky:
 function useAccountBalance(publicKey: PublicKey | null) {
   const [balance, setBalance] = useState<number | null>(null);
   const connection = useConnection();
-  
+
   useEffect(() => {
     if (!publicKey) return;
-    
+
     // Initial fetch
     connection.getBalance(publicKey).then(setBalance);
-    
+
     // Subscribe to changes
     const subId = connection.onAccountChange(
       publicKey,
       (info) => setBalance(info.lamports),
-      "confirmed"
+      "confirmed",
     );
-    
+
     // Cleanup on unmount
     return () => {
       connection.removeAccountChangeListener(subId);
     };
   }, [publicKey, connection]);
-  
+
   return balance;
 }
 ```

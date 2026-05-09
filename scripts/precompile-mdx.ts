@@ -95,10 +95,7 @@ async function precompileMDX(
     // Pre-highlight all code blocks
     const highlightedCode: Record<string, HighlightedCode> = {};
 
-    function traverseNodes(
-      node: any,
-      currentIndex: { value: number } = { value: 0 },
-    ) {
+    function traverseNodes(node: any, currentIndex: { value: number } = { value: 0 }) {
       if (node.type === "code") {
         const lang = node.lang || "text";
 
@@ -156,10 +153,7 @@ async function precompileMDX(
   }
 }
 
-async function findMDXFiles(
-  dir: string,
-  baseDir: string = dir,
-): Promise<string[]> {
+async function findMDXFiles(dir: string, baseDir: string = dir): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
 
@@ -241,9 +235,7 @@ async function main() {
 
     // Log progress after each batch
     if (compiled % 100 === 0 || compiled === filesToCompile.length) {
-      console.log(
-        `Progress: ${compiled}/${filesToCompile.length} files compiled`,
-      );
+      console.log(`Progress: ${compiled}/${filesToCompile.length} files compiled`);
     }
   }
 

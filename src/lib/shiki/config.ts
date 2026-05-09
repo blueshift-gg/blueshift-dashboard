@@ -29,15 +29,7 @@ export const SBPF_LANG = {
 /**
  * Language configurations for Shiki
  */
-export const BUNDLED_LANGUAGES = [
-  typescript,
-  rust,
-  toml,
-  shellscript,
-  json,
-  python,
-  SBPF_LANG,
-];
+export const BUNDLED_LANGUAGES = [typescript, rust, toml, shellscript, json, python, SBPF_LANG];
 
 /**
  * Theme name used throughout the application

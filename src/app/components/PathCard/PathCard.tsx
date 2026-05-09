@@ -44,20 +44,14 @@ export default function PathCard({
 }: PathCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [_hasHovered, setHasHovered] = useState(false);
-  const {
-    isHovered,
-    direction,
-    swooshAngle,
-    handleMouseEnter,
-    handleMouseLeave,
-  } = useDirectionalHover(cardRef);
+  const { isHovered, direction, swooshAngle, handleMouseEnter, handleMouseLeave } =
+    useDirectionalHover(cardRef);
 
   const t = useTranslations();
 
   const _badgeDifficulty = difficultyMap[difficulty ?? 1];
 
-  const isCompleted =
-    completedStepsCount === totalStepsCount && totalStepsCount > 0;
+  const isCompleted = completedStepsCount === totalStepsCount && totalStepsCount > 0;
   const hasProgress = completedStepsCount > 0;
 
   return (
@@ -82,60 +76,47 @@ export default function PathCard({
         className,
       )}
     >
-      {link && (
-        <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
-      )}
-      <div
-        className={classNames(
-          "flex flex-col gap-y-24 grow justify-between px-4 py-5 pb-6",
-        )}
-      >
+      {link && <Link href={link} className="absolute inset-0 z-1 h-full w-full"></Link>}
+      <div className={classNames("flex flex-col gap-y-24 grow justify-between px-4 py-5 pb-6")}>
         <div className="flex flex-col gap-y-5">
           <img
             src={`/graphics/icons/${pathSlug || "path-test"}.svg`}
             alt={name}
-            className="w-12 h-12"
+            className="h-12 w-12"
           />
           <div className="flex flex-col gap-y-2">
             <motion.span
               transition={{ duration: 0.2, ease: "easeInOut" }}
-              className={classNames(
-                "text-xl font-medium text-shade-primary leading-[140%]",
-              )}
+              className={classNames("text-xl font-medium text-shade-primary leading-[140%]")}
             >
               {name}
             </motion.span>
-            <span className="flex leading-[160%] flex-wrap items-center gap-x-3  text-shade-tertiary">
+            <span className="flex flex-wrap items-center gap-x-3 leading-[160%] text-shade-tertiary">
               {description}
             </span>
           </div>
         </div>
         <div className="flex flex-col gap-y-5">
           {/* Path stats */}
-          <div className="w-full h-[28px] bg-background/50 absolute left-0"></div>
-          <div className="flex h-[28px] w-full items-center relative z-10 gap-x-4 text-xs text-shade-tertiary font-mono justify-center">
+          <div className="absolute left-0 h-[28px] w-full bg-background/50"></div>
+          <div className="relative z-10 flex h-[28px] w-full items-center justify-center gap-x-4 font-mono text-xs text-shade-tertiary">
             <div className="flex items-center gap-x-1.5">
               <Icon name="Lessons" size={14} />
               <span className="text-nowrap">
-                {courseCount}{" "}
-                {courseCount === 1 ? t("paths.course") : t("paths.courses")}
+                {courseCount} {courseCount === 1 ? t("paths.course") : t("paths.courses")}
               </span>
             </div>
-            {challengeCount > 0 && (
-              <div className="w-1 h-1 bg-border-light shrink-0"></div>
-            )}
+            {challengeCount > 0 && <div className="h-1 w-1 shrink-0 bg-border-light"></div>}
             {challengeCount > 0 && (
               <div className="flex items-center gap-x-1.5">
                 <Icon name="Challenge" size={14} />
                 <span className="text-nowrap">
                   {challengeCount}{" "}
-                  {challengeCount === 1
-                    ? t("paths.challenge")
-                    : t("paths.challenges")}
+                  {challengeCount === 1 ? t("paths.challenge") : t("paths.challenges")}
                 </span>
               </div>
             )}
-            <div className="w-1 h-1 bg-border-light shrink-0"></div>
+            <div className="h-1 w-1 shrink-0 bg-border-light"></div>
             {estimatedHours && (
               <div className="flex items-center gap-x-1.5">
                 <Icon name="Clock" size={14} />
@@ -158,21 +139,19 @@ export default function PathCard({
                 }
               >
                 {hasProgress ? (
-                  <div className="flex items-center gap-x-2 order-last ml-auto">
+                  <div className="order-last ml-auto flex items-center gap-x-2">
                     <ProgressCircle
                       percentFilled={
-                        totalStepsCount > 0
-                          ? (completedStepsCount / totalStepsCount) * 100
-                          : 0
+                        totalStepsCount > 0 ? (completedStepsCount / totalStepsCount) * 100 : 0
                       }
                     />
-                    <span className="text-sm text-shade-tertiary font-mono">
+                    <span className="font-mono text-sm text-shade-tertiary">
                       {completedStepsCount}/{totalStepsCount}
                     </span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-x-2 order-last ml-auto">
-                    <span className="text-sm font-medium bg-clip-text text-shade-tertiary">
+                  <div className="order-last ml-auto flex items-center gap-x-2">
+                    <span className="bg-clip-text text-sm font-medium text-shade-tertiary">
                       {totalStepsCount} {t("paths.units")}
                     </span>
                   </div>
@@ -194,21 +173,19 @@ export default function PathCard({
               }
             >
               {hasProgress ? (
-                <div className="flex items-center gap-x-2 order-last ml-auto">
+                <div className="order-last ml-auto flex items-center gap-x-2">
                   <ProgressCircle
                     percentFilled={
-                      totalStepsCount > 0
-                        ? (completedStepsCount / totalStepsCount) * 100
-                        : 0
+                      totalStepsCount > 0 ? (completedStepsCount / totalStepsCount) * 100 : 0
                     }
                   />
-                  <span className="text-sm text-shade-tertiary font-mono">
+                  <span className="font-mono text-sm text-shade-tertiary">
                     {completedStepsCount}/{totalStepsCount}
                   </span>
                 </div>
               ) : (
-                <div className="flex items-center gap-x-2 order-last ml-auto">
-                  <span className="text-sm font-medium bg-clip-text text-shade-tertiary">
+                <div className="order-last ml-auto flex items-center gap-x-2">
+                  <span className="bg-clip-text text-sm font-medium text-shade-tertiary">
                     {totalStepsCount} {t("paths.units")}
                   </span>
                 </div>

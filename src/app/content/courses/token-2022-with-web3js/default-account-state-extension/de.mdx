@@ -4,26 +4,25 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 Die `DefaultAccountState` Erweiterung ist eine Mint-Erweiterung, die es ermöglicht, dass alle neu erstellten `Token` Konten für diese spezifische Mint standardmäßig eingefroren werden. Der `Freeze Authority` der Mint kann dann diese `Token` Konten auftauen (entsperren), damit sie nutzbar werden.
 
-<ArticleSection name="Initialisierung des Mint-Kontos" id="initializing-the-mint-account" level="h2" />
+<ArticleSection
+  name="Initialisierung des Mint-Kontos"
+  id="initializing-the-mint-account"
+  level="h2"
+/>
 
 Um die `DefaultAccountState` Erweiterung auf einem `Mint` Konto zu initialisieren, benötigen wir die `initializeDefaultAccountState()` Funktion.
 
 Hier ist, wie man eine Mint mit der Default Account State Erweiterung erstellt:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeDefaultAccountStateInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeDefaultAccountStateInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -35,39 +34,41 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Default Account State extension
 const initializeDefaultAccountState = createInitializeDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Frozen,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Frozen,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the mint itself
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    keypair.publicKey, // freeze authority is MANDATORY
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  keypair.publicKey, // freeze authority is MANDATORY
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combine all instructions in the correct order
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeDefaultAccountState,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeDefaultAccountState,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 > Denken Sie daran, dass der `Freeze Authority` auf der `Mint` für diese Erweiterung obligatorisch ist, sonst können wir kein `Token` Konto bei der Erstellung auftauen.
@@ -82,54 +83,61 @@ Wir können ein `Token` Konto einfach mit der `thawAccount` Anweisung wie folgt 
 
 ```ts
 const ata = await getAssociatedTokenAddress(
-    mint.publicKey,
-    keypair.publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID
+  mint.publicKey,
+  keypair.publicKey,
+  false,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
-    keypair.publicKey, // payer
-    ata, // associated token account address
-    keypair.publicKey, // owner
-    mint.publicKey, // mint
-    TOKEN_2022_PROGRAM_ID
-)
+  keypair.publicKey, // payer
+  ata, // associated token account address
+  keypair.publicKey, // owner
+  mint.publicKey, // mint
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const thawAtaInstruction = createThawAccountInstruction(
-    ata,
-    mint.publicKey,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  ata,
+  mint.publicKey,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
-const transaction = new Transaction().add(
-    createAtaInstruction,
-    thawAtaInstruction,
+const transaction = new Transaction().add(createAtaInstruction, thawAtaInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+  skipPreflight: true,
+});
+
+console.log(
+  `Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
 );
-
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: true});
-
-console.log(`Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
 ```
 
-<ArticleSection name="Ändern des Default Account State" id="changing-the-default-account-state" level="h2" />
+<ArticleSection
+  name="Ändern des Default Account State"
+  id="changing-the-default-account-state"
+  level="h2"
+/>
 
 Sobald wir keine größere Kontrolle mehr über die Token-Verteilung benötigen und allen erlauben möchten, frei mit unserem Token zu handeln, können wir den Standard-Kontostatus mit der `updateDefaultAccountState` Anweisung wie folgt ändern:
 
 ```ts
 const updateDefaultAccountStateInstruction = createUpdateDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Initialized,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Initialized,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(updateDefaultAccountStateInstruction);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
