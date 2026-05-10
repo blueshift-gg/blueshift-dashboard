@@ -1,17 +1,16 @@
 "use client";
 
-import Modal from "./Modal";
-import { useTranslations } from "next-intl";
 import { Button } from "@blueshift-gg/ui-components";
-import DecryptedText from "../HeadingReveal/DecryptText";
-import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { anticipate } from "motion";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import useMintNFT from "@/hooks/useMintNFT";
-import { usePersistentStore } from "@/stores/store";
-import { Link } from "@/i18n/navigation";
-import { ChallengeMetadata } from "@/app/utils/challenges";
 import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
+import { Link } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
+import DecryptedText from "../HeadingReveal/DecryptText";
+import Modal from "./Modal";
 
 interface ChallengeCompletedProps {
   isOpen: boolean;
@@ -25,7 +24,7 @@ export default function ChallengeCompleted({
   challenge,
 }: ChallengeCompletedProps) {
   const t = useTranslations();
-  const [isAnimating, setIsAnimating] = useState(false);
+  const [_isAnimating, setIsAnimating] = useState(false);
   const { mint, isLoading } = useMintNFT();
   const { challengeStatuses } = usePersistentStore();
   const currentCourseStatus = challengeStatuses[challenge.slug];
@@ -62,27 +61,26 @@ export default function ChallengeCompleted({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.75, delay: 0.5 }}
-        className="w-[175px] relative z-10 mt-6"
+        className="relative z-10 mt-6 w-[175px]"
       >
         <img
           src={`/graphics/nft-${challenge.slug}.png`}
-          className="w-full animate-nft"
+          alt={`${challenge.slug} NFT preview`}
+          className="animate-nft w-full"
         ></img>
       </motion.div>
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.75 }}
-        className="overflow-hidden h-full absolute top-0"
+        className="absolute top-0 h-full overflow-hidden"
       >
-        <img src="/graphics/nft-stage.png"></img>
+        <img src="/graphics/nft-stage.png" alt=""></img>
       </motion.div>
-      <div className="flex flex-col gap-y-8 px-6 pt-16 relative z-10">
+      <div className="relative z-10 flex flex-col gap-y-8 px-6 pt-16">
         <div className="flex flex-col gap-y-2 text-center">
-          <div className="text-xl font-medium">
-            {t("ChallengePage.mint_modal_title")}
-          </div>
-          <span className="text-shade-secondary text-balance">
+          <div className="text-xl font-medium">{t("ChallengePage.mint_modal_title")}</div>
+          <span className="text-balance text-shade-secondary">
             {t("ChallengePage.mint_modal_description")}
           </span>
         </div>
@@ -92,9 +90,7 @@ export default function ChallengeCompleted({
             <>
               <Button
                 label={
-                  isLoading
-                    ? t("ChallengePage.minting")
-                    : t("ChallengePage.mint_modal_button")
+                  isLoading ? t("ChallengePage.minting") : t("ChallengePage.mint_modal_button")
                 }
                 variant="primary"
                 size="lg"
@@ -103,17 +99,15 @@ export default function ChallengeCompleted({
                 onClick={handleMint}
                 disabled={isLoading}
               />
-              <div
+              <button
+                type="button"
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
-                className="hover:text-shade-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
+                className="text-mute mx-auto w-2/3 cursor-pointer text-center text-sm font-medium transition hover:text-shade-primary"
               >
-                <DecryptedText
-                  text={t("ChallengePage.mint_modal_skip")}
-                  isHovering={isHovering}
-                />
-              </div>
+                <DecryptedText text={t("ChallengePage.mint_modal_skip")} isHovering={isHovering} />
+              </button>
             </>
           ) : (
             <>
@@ -126,17 +120,15 @@ export default function ChallengeCompleted({
                   className="!w-full !flex-shrink"
                 />
               </Link>
-              <div
+              <button
+                type="button"
                 onClick={closeModal}
                 onMouseEnter={() => setIsHovering(true)}
                 onMouseLeave={() => setIsHovering(false)}
-                className="hover:text-shade-primary text-mute transition w-2/3 text-center text-sm font-medium mx-auto cursor-pointer"
+                className="text-mute mx-auto w-2/3 cursor-pointer text-center text-sm font-medium transition hover:text-shade-primary"
               >
-                <DecryptedText
-                  text={t("ChallengePage.mint_modal_skip")}
-                  isHovering={isHovering}
-                />
-              </div>
+                <DecryptedText text={t("ChallengePage.mint_modal_skip")} isHovering={isHovering} />
+              </button>
             </>
           )}
         </div>

@@ -26,25 +26,25 @@ Antes de assinar qualquer coisa, você precisa de uma transação. O fluxo é o 
 Transações versionadas são o padrão moderno. Elas suportam tabelas de lookup de endereços e são necessárias para muitos protocolos DeFi.
 
 ```typescript
-import { 
-  Connection, 
-  PublicKey, 
+import {
+  Connection,
+  PublicKey,
   Keypair,
   SystemProgram,
   TransactionMessage,
   VersionedTransaction,
-} from '@solana/web3.js';
+} from "@solana/web3.js";
 
-const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
 async function buildTransferTransaction(
   fromPubkey: PublicKey,
   toPubkey: PublicKey,
-  lamports: number
+  lamports: number,
 ): Promise<VersionedTransaction> {
   // Obter blockhash recente
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  
+
   // Construir instruções
   const instructions = [
     SystemProgram.transfer({
@@ -53,14 +53,14 @@ async function buildTransferTransaction(
       lamports,
     }),
   ];
-  
+
   // Criar mensagem de transação versionada
   const messageV0 = new TransactionMessage({
     payerKey: fromPubkey,
     recentBlockhash: blockhash,
     instructions,
   }).compileToV0Message();
-  
+
   // Criar transação versionada não assinada
   return new VersionedTransaction(messageV0);
 }
@@ -71,28 +71,28 @@ async function buildTransferTransaction(
 Alguns programas ou carteiras mais antigos podem exigir o formato legacy:
 
 ```typescript
-import { Transaction, SystemProgram } from '@solana/web3.js';
+import { Transaction, SystemProgram } from "@solana/web3.js";
 
 async function buildLegacyTransfer(
   fromPubkey: PublicKey,
   toPubkey: PublicKey,
-  lamports: number
+  lamports: number,
 ): Promise<Transaction> {
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const transaction = new Transaction({
     recentBlockhash: blockhash,
     feePayer: fromPubkey,
   });
-  
+
   transaction.add(
     SystemProgram.transfer({
       fromPubkey,
       toPubkey,
       lamports,
-    })
+    }),
   );
-  
+
   return transaction;
 }
 ```
@@ -109,32 +109,29 @@ O método `signAndSendTransactions` pede à carteira para assinar suas transaç�
 - Lógica básica de retry
 
 ```typescript
-import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { toByteArray } from 'react-native-quick-base64';
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { toByteArray } from "react-native-quick-base64";
 
-async function sendSol(
-  recipientAddress: string,
-  amountInSol: number
-): Promise<string> {
+async function sendSol(recipientAddress: string, amountInSol: number): Promise<string> {
   return await transact(async (wallet) => {
     // Autorizar e obter a chave pública do usuário
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:devnet',
+      chain: "solana:devnet",
     });
-    
+
     const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
     const toPubkey = new PublicKey(recipientAddress);
     const lamports = amountInSol * 1_000_000_000; // SOL para lamports
-    
+
     // Construir a transação
     const transaction = await buildTransferTransaction(fromPubkey, toPubkey, lamports);
-    
+
     // Assinar e enviar
     const signatures = await wallet.signAndSendTransactions({
       transactions: [transaction],
     });
-    
+
     // signatures[0] é uma assinatura de transação em base58
     return signatures[0];
   });
@@ -142,6 +139,7 @@ async function sendSol(
 ```
 
 A assinatura retornada é uma string base58 (o ID da transação). Você pode usá-la para:
+
 - Mostrar ao usuário um link para um explorer
 - Acompanhar o status de confirmação
 - Armazenar para registros
@@ -151,23 +149,17 @@ A assinatura retornada é uma string base58 (o ID da transação). Você pode us
 Mesmo após `signAndSendTransactions` retornar, a transação pode não estar finalizada. Você deve confirmá-la:
 
 ```typescript
-async function sendAndConfirm(
-  recipientAddress: string,
-  amountInSol: number
-): Promise<string> {
+async function sendAndConfirm(recipientAddress: string, amountInSol: number): Promise<string> {
   const signature = await sendSol(recipientAddress, amountInSol);
-  
+
   // Aguardar confirmação
-  const confirmation = await connection.confirmTransaction(
-    signature,
-    'confirmed'
-  );
-  
+  const confirmation = await connection.confirmTransaction(signature, "confirmed");
+
   if (confirmation.value.err) {
     throw new Error(`Transação falhou: ${JSON.stringify(confirmation.value.err)}`);
   }
-  
-  console.log('Transação confirmada:', signature);
+
+  console.log("Transação confirmada:", signature);
   return signature;
 }
 ```
@@ -180,10 +172,10 @@ Controle o comportamento da transação com opções:
 const signatures = await wallet.signAndSendTransactions({
   transactions: [transaction],
   options: {
-    minContextSlot: slotNumber,          // Aguardar este slot antes do preflight
-    commitment: 'confirmed',              // Nível de confirmação a aguardar
-    skipPreflight: false,                 // Pular simulação (perigoso)
-    maxRetries: 3,                        // Tentativas de retry do RPC
+    minContextSlot: slotNumber, // Aguardar este slot antes do preflight
+    commitment: "confirmed", // Nível de confirmação a aguardar
+    skipPreflight: false, // Pular simulação (perigoso)
+    maxRetries: 3, // Tentativas de retry do RPC
     waitForCommitmentToSendNextTransaction: true, // Envio sequencial
   },
 });
@@ -205,17 +197,17 @@ async function signWithoutSending(): Promise<VersionedTransaction> {
   return await transact(async (wallet) => {
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:devnet',
+      chain: "solana:devnet",
     });
-    
+
     const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
     const transaction = await buildTransferTransaction(fromPubkey, someRecipient, 1000);
-    
+
     // Assinar mas não enviar
     const signedTransactions = await wallet.signTransactions({
       transactions: [transaction],
     });
-    
+
     // signedTransactions[0] agora está assinada
     return signedTransactions[0];
   });
@@ -268,10 +260,10 @@ Consulte as capacidades para evitar enviar muitas de uma vez:
 await transact(async (wallet) => {
   const caps = await wallet.getCapabilities();
   const maxBatch = caps.max_transactions_per_request ?? 10;
-  
+
   // Dividir em lotes se necessário
   const batches = chunk(allTransactions, maxBatch);
-  
+
   for (const batch of batches) {
     await wallet.signAndSendTransactions({ transactions: batch });
   }
@@ -290,7 +282,7 @@ try {
 } catch (error: any) {
   if (error.code === 4001) {
     // Usuário clicou em "Rejeitar" na interface da carteira
-    console.log('Usuário recusou assinar');
+    console.log("Usuário recusou assinar");
     return;
   }
   throw error;
@@ -307,7 +299,7 @@ try {
 } catch (error: any) {
   if (error.code === -32603) {
     // A simulação da transação falhou
-    console.error('A transação falharia:', error.message);
+    console.error("A transação falharia:", error.message);
     // Causas comuns: saldo insuficiente, instrução inválida, contas erradas
     return;
   }
@@ -321,17 +313,19 @@ Após a assinatura, a transação pode falhar ao ser enviada ou confirmada:
 
 ```typescript
 try {
-  const [signature] = await wallet.signAndSendTransactions({ transactions: [tx] });
-  
+  const [signature] = await wallet.signAndSendTransactions({
+    transactions: [tx],
+  });
+
   // Assinada e enviada com sucesso
-  const result = await connection.confirmTransaction(signature, 'confirmed');
-  
+  const result = await connection.confirmTransaction(signature, "confirmed");
+
   if (result.value.err) {
-    console.error('Transação falhou on-chain:', result.value.err);
+    console.error("Transação falhou on-chain:", result.value.err);
   }
 } catch (error: any) {
   // Pode ser erro da carteira, erro de rede ou timeout
-  console.error('Erro na transação:', error);
+  console.error("Erro na transação:", error);
 }
 ```
 
@@ -341,27 +335,33 @@ try {
 async function safeSignAndSend(tx: VersionedTransaction): Promise<string | null> {
   try {
     return await transact(async (wallet) => {
-      await wallet.authorize({ identity: APP_IDENTITY, chain: 'solana:devnet' });
-      
+      await wallet.authorize({
+        identity: APP_IDENTITY,
+        chain: "solana:devnet",
+      });
+
       const [signature] = await wallet.signAndSendTransactions({
         transactions: [tx],
       });
-      
+
       return signature;
     });
   } catch (error: any) {
     switch (error.code) {
       case 4001:
-        Alert.alert('Cancelada', 'Você recusou assinar a transação.');
+        Alert.alert("Cancelada", "Você recusou assinar a transação.");
         break;
       case -32603:
-        Alert.alert('Transação Falhou', 'Esta transação falharia. Por favor, verifique seu saldo e tente novamente.');
+        Alert.alert(
+          "Transação Falhou",
+          "Esta transação falharia. Por favor, verifique seu saldo e tente novamente.",
+        );
         break;
       case -32602:
-        Alert.alert('Transação Inválida', 'A transação estava malformada.');
+        Alert.alert("Transação Inválida", "A transação estava malformada.");
         break;
       default:
-        Alert.alert('Erro', error.message ?? 'Ocorreu um erro inesperado.');
+        Alert.alert("Erro", error.message ?? "Ocorreu um erro inesperado.");
     }
     return null;
   }
@@ -378,10 +378,10 @@ Boa prática: busque o blockhash dentro de `transact()`, logo antes de assinar:
 await transact(async (wallet) => {
   const authResult = await wallet.authorize({...});
   const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
-  
+
   // Buscar blockhash APÓS a autorização, logo antes de construir a tx
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const tx = new VersionedTransaction(
     new TransactionMessage({
       payerKey: fromPubkey,
@@ -389,7 +389,7 @@ await transact(async (wallet) => {
       instructions: [/* ... */],
     }).compileToV0Message()
   );
-  
+
   await wallet.signAndSendTransactions({ transactions: [tx] });
 });
 ```
@@ -401,44 +401,44 @@ Isso minimiza a janela entre buscar o blockhash e assinar.
 Aqui está uma função completa combinando tudo:
 
 ```typescript
-import { 
-  Connection, 
-  PublicKey, 
-  SystemProgram, 
-  TransactionMessage, 
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  TransactionMessage,
   VersionedTransaction,
   LAMPORTS_PER_SOL,
-} from '@solana/web3.js';
-import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { toByteArray } from 'react-native-quick-base64';
-import { Alert } from 'react-native';
+} from "@solana/web3.js";
+import { transact, Web3MobileWallet } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { toByteArray } from "react-native-quick-base64";
+import { Alert } from "react-native";
 
-const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
 const APP_IDENTITY = {
-  name: 'Meu dApp Solana',
-  uri: 'https://mydapp.com',
-  icon: 'favicon.ico',
+  name: "Meu dApp Solana",
+  uri: "https://mydapp.com",
+  icon: "favicon.ico",
 };
 
 export async function transferSol(
   recipientAddress: string,
-  amountInSol: number
+  amountInSol: number,
 ): Promise<string | null> {
   try {
     return await transact(async (wallet: Web3MobileWallet) => {
       // Passo 1: Autorizar
       const authResult = await wallet.authorize({
         identity: APP_IDENTITY,
-        chain: 'solana:devnet',
+        chain: "solana:devnet",
       });
-      
+
       const fromPubkey = new PublicKey(toByteArray(authResult.accounts[0].address));
       const toPubkey = new PublicKey(recipientAddress);
-      
+
       // Passo 2: Obter blockhash fresco
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-      
+
       // Passo 3: Construir transação
       const instructions = [
         SystemProgram.transfer({
@@ -447,39 +447,39 @@ export async function transferSol(
           lamports: amountInSol * LAMPORTS_PER_SOL,
         }),
       ];
-      
+
       const messageV0 = new TransactionMessage({
         payerKey: fromPubkey,
         recentBlockhash: blockhash,
         instructions,
       }).compileToV0Message();
-      
+
       const transaction = new VersionedTransaction(messageV0);
-      
+
       // Passo 4: Assinar e enviar
       const [signature] = await wallet.signAndSendTransactions({
         transactions: [transaction],
       });
-      
+
       // Passo 5: Confirmar
       const confirmation = await connection.confirmTransaction(
         { signature, blockhash, lastValidBlockHeight },
-        'confirmed'
+        "confirmed",
       );
-      
+
       if (confirmation.value.err) {
-        throw new Error('Transação falhou on-chain');
+        throw new Error("Transação falhou on-chain");
       }
-      
+
       return signature;
     });
   } catch (error: any) {
     if (error.code === 4001) {
-      Alert.alert('Cancelada', 'A transação foi cancelada.');
+      Alert.alert("Cancelada", "A transação foi cancelada.");
     } else if (error.code === -32603) {
-      Alert.alert('Falhou', 'A simulação da transação falhou. Verifique seu saldo.');
+      Alert.alert("Falhou", "A simulação da transação falhou. Verifique seu saldo.");
     } else {
-      Alert.alert('Erro', error.message);
+      Alert.alert("Erro", error.message);
     }
     return null;
   }
@@ -489,9 +489,12 @@ export async function transferSol(
 Uso:
 
 ```typescript
-const signature = await transferSol('EnderecoDoDestinatarioAqui', 0.1);
+const signature = await transferSol("EnderecoDoDestinatarioAqui", 0.1);
 if (signature) {
-  console.log('Sucesso! Veja no explorer:', `https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+  console.log(
+    "Sucesso! Veja no explorer:",
+    `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+  );
 }
 ```
 

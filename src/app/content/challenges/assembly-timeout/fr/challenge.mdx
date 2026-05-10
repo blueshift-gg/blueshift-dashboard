@@ -9,6 +9,7 @@ Dans cette unité, nous utiliserons l'assemblage sBPF pour créer une instructio
 En incluant cette instruction dans votre transaction, vous créez un mécanisme de sécurité qui empêche l'exécution après un temps blockchain spécifié, protégeant ainsi contre l'exécution retardée de transactions ou les rejeux d'instructions obsolètes.
 
 Plusieurs propriétés rendent les vérifications de délai idéales pour l'assemblage :
+
 - Cas d'utilisation unique et contraint
 - Utilisation efficace des variables système
 - Aucune validation complexe de compte requise
@@ -21,6 +22,7 @@ Si vous n'êtes pas familier avec la programmation en assemblage, suivez le [cou
 Notre programme implémente une opération temporelle cruciale : valider que la hauteur actuelle du slot de la blockchain n'a pas dépassé une échéance prédéterminée. Ce modèle est essentiel pour les opérations DeFi sensibles au temps — de la prévention des tentatives d'arbitrage obsolètes à l'application des délais d'enchères.
 
 Le programme attend :
+
 - Une hauteur maximale de slot de 8 octets dans les données d'instruction.
 - Accès à la sysvar Clock de Solana via `sol_get_clock_sysvar`.
 - Retourne un succès si le slot actuel ≤ slot max, une erreur dans le cas contraire.
@@ -45,7 +47,11 @@ Ces constantes définissent notre disposition mémoire :
 
 Contrairement aux langages de haut niveau qui abstraient la disposition de la mémoire, l'assembleur nécessite de savoir exactement où se trouve chaque élément de données.
 
-<ArticleSection name="Point d'entrée et validation initiale" id="entrypoint-and-validations" level="h2" />
+<ArticleSection
+  name="Point d'entrée et validation initiale"
+  id="entrypoint-and-validations"
+  level="h2"
+/>
 
 ```sbpf
 .globl entrypoint
@@ -57,6 +63,7 @@ entrypoint:
 Chaque programme sBPF commence par un symbole global `.entrypoint`. L'environnement d'exécution Solana fournit les données de compte et d'instruction via le registre `r1`.
 
 L'instruction `ldxdw` charge (`ldx`) une valeur de 8 octets (double mot, `dx`) depuis la mémoire vers un registre. Voici ce qui se passe :
+
 - `ldxdw r0, [r1+NUM_ACCOUNTS]` : charge le nombre de comptes dans `r0`. Comme `r0` est le registre que la VM lit à la sortie, toute valeur non nulle fait automatiquement échouer le programme (exactement ce que nous voulons si des comptes sont transmis).
 - `ldxdw r2, [r1+MAX_SLOT_HEIGHT]` : pointe vers la hauteur maximale de slot autorisée que nous avons passée dans les données d'instruction. Cette valeur de 64 bits arrive dans `r2`.
 
@@ -81,7 +88,11 @@ Ensuite, nous ajoutons `CURRENT_SLOT_HEIGHT` (-0x0028) à `r1`. Comme cette cons
 
 Après avoir appelé la fonction `sol_get_clock_sysvar`, `r1` contient l'adresse mémoire où les données Clock ont été écrites, et non la valeur du slot elle-même. Pour cette raison, nous procédons au chargement de la valeur réelle du slot en utilisant `ldxdw r1, [r1+0x0000]`.
 
-<ArticleSection name="Logique de comparaison temporelle" id="temporal-comparison-logic" level="h2" />
+<ArticleSection
+  name="Logique de comparaison temporelle"
+  id="temporal-comparison-logic"
+  level="h2"
+/>
 
 ```sbpf
 jle r1, r2, end    // If current slot <= max slot, success
@@ -89,6 +100,7 @@ lddw r0, 1         // Otherwise, set error code
 ```
 
 La logique de temporisation principale utilise un seul saut conditionnel :
+
 - Validation temporelle : `jle` (saut si inférieur ou égal) compare le slot actuel (`r1`) à notre date limite (`r2`). Si nous sommes dans la fenêtre temporelle, saut vers `exit`
 - Gestion du délai d'attente : Si la date limite est dépassée, l'exécution continue pour charger (`lddw`) le code d'erreur 1 dans le registre de retour `r0`
 

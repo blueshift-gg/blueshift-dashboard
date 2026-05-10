@@ -1,8 +1,8 @@
 "use client";
 
-import { anticipate, motion } from "motion/react";
-import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
+import classNames from "classnames";
+import { anticipate, motion } from "motion/react";
 import { usePersistentStore } from "@/stores/store";
 
 type ViewToggleProps = {
@@ -16,11 +16,12 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
     <div
       className={classNames(
         "hidden md:flex w-max items-center gap-x-2  bg-card-solid p-1 relative",
-        className
+        className,
       )}
     >
       <button
-        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
+        type="button"
+        className="relative cursor-pointer p-3 text-shade-tertiary transition hover:!text-shade-primary"
         onClick={() => setView("grid")}
       >
         <Icon
@@ -31,14 +32,15 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "grid" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
+            className="absolute top-0 left-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />
         )}
       </button>
       <button
-        className="p-3 relative cursor-pointer text-shade-tertiary hover:!text-shade-primary transition"
+        type="button"
+        className="relative cursor-pointer p-3 text-shade-tertiary transition hover:!text-shade-primary"
         onClick={() => setView("list")}
       >
         <Icon
@@ -49,7 +51,7 @@ export default function ViewToggle({ className, layoutName }: ViewToggleProps) {
         />
         {view === "list" && (
           <motion.div
-            className="absolute left-0 top-0 h-[42px] w-[42px] bg-brand-primary/5"
+            className="absolute top-0 left-0 h-[42px] w-[42px] bg-brand-primary/5"
             layoutId={`${layoutName}`}
             transition={{ duration: 0.4, ease: anticipate }}
           />

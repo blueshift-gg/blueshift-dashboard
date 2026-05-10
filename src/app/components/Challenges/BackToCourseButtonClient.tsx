@@ -2,9 +2,9 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import BackToCourseButton from "./BackToCourseButton";
 import { getCourse } from "@/app/utils/content";
-import { CourseMetadata } from "@/app/utils/course";
+import type { CourseMetadata } from "@/app/utils/course";
+import BackToCourseButton from "./BackToCourseButton";
 
 export default function BackToCourseButtonClient() {
   const searchParams = useSearchParams();

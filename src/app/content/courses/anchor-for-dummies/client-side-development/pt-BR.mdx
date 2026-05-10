@@ -13,6 +13,7 @@ Quando combinado com a biblioteca TypeScript do Anchor (@coral-xyz/anchor), o ID
 ### Configuração
 
 O pacote `@coral-xyz/anchor` é instalado automaticamente ao criar um programa Anchor. Após executar o anchor build, o Anchor gera:
+
 - Um IDL em `target/idl/<program-name>.json`
 - Um SDK TypeScript em `target/types/<program-name>.ts`
 
@@ -56,6 +57,7 @@ setProvider(provider);
 ### Program
 
 O objeto Program do Anchor cria uma API personalizada para interagir com programas Solana. Esta API serve como a interface central para toda a comunicação com o program onchain:
+
 - Enviar transações,
 - Buscar accounts desserializadas,
 - Decodificar dados de instruction,
@@ -83,11 +85,7 @@ Uma vez configurado, use o Anchor Methods Builder para construir instructions e 
 O padrão básico do `MethodsBuilder`:
 
 ```ts
-await program.methods
-  .instructionName(instructionDataInputs)
-  .accounts({})
-  .signers([])
-  .rpc();
+await program.methods.instructionName(instructionDataInputs).accounts({}).signers([]).rpc();
 ```
 
 > A API usa nomenclatura camelCase em vez da convenção snake_case do Rust. Chame as instructions usando sintaxe de ponto com o nome da instruction, passando argumentos como valores separados por vírgula.
@@ -185,6 +183,7 @@ const accounts = await program.account.counter.fetchMultiple([
 Em vez de buscar dados onchain toda vez que os usuários conectam suas wallets, configure sistemas que ouvem a blockchain e armazenam dados relevantes em um banco de dados.
 
 Existem duas abordagens principais para ouvir eventos onchain:
+
 - Polling: O cliente verifica repetidamente por novos dados em intervalos. O servidor responde com os dados mais recentes independentemente de mudanças, potencialmente retornando informações duplicadas.
 - Streaming: O servidor envia dados ao cliente apenas quando ocorrem atualizações. Isso proporciona transferência de dados mais eficiente e em tempo real, pois apenas mudanças relevantes são transmitidas.
 
@@ -193,6 +192,7 @@ Para fazer streaming de instructions do Anchor, use webhooks que ouvem eventos e
 > Para aplicações com latência extremamente baixa onde diferenças de 5ms importam, webhooks podem não fornecer velocidade suficiente.
 
 O Anchor fornece duas macros para emitir eventos:
+
 - `emit!()`: Emite eventos diretamente para os logs do program usando a syscall `sol_log_data()`, codificando dados do evento como strings base64 prefixadas com "Program Data"
 - `emit_cpi!()`: Emite eventos através de Cross Program Invocations (CPIs). Os dados do evento são codificados e incluídos nos dados da instruction da CPI em vez dos logs do program
 
@@ -202,22 +202,22 @@ Implementação no program:
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("8T7MsCZyzxboviPJg5Rc7d8iqEcDReYR2pkQKrmbg7dy");
- 
+
 #[program]
 pub mod event {
     use super::*;
- 
+
     pub fn emit_event(_ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -230,16 +230,16 @@ Escuta de eventos no lado do cliente com helpers do SDK do Anchor para decodific
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Event } from "../target/types/event";
- 
+
 describe("event", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
- 
+
   const program = anchor.workspace.Event as Program<Event>;
- 
+
   it("Emits custom event", async () => {
     // Set up listener before sending transaction
-    const listenerId = program.addEventListener("customEvent", event => {
+    const listenerId = program.addEventListener("customEvent", (event) => {
       // Process the event data
       console.log("Event Data:", event);
     });
@@ -253,23 +253,23 @@ Implementação no program:
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("2cDQ2LxKwQ8fnFUz4LLrZ157QzBnhPNeQrTSmWcpVin1");
- 
+
 #[program]
 pub mod event_cpi {
     use super::*;
- 
+
     pub fn emit_event(ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit_cpi!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[event_cpi]
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -282,19 +282,18 @@ Decodificação de eventos no lado do cliente:
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { EventCpi } from "../target/types/event_cpi";
- 
+
 describe("event-cpi", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.EventCpi as Program<EventCpi>;
- 
-  it("Emits custom event", async () => { 
+
+  it("Emits custom event", async () => {
     // Fetch the transaction data
-    const transactionData = await program.provider.connection.getTransaction(
-      transactionSignature,
-      { commitment: "confirmed" },
-    );
- 
+    const transactionData = await program.provider.connection.getTransaction(transactionSignature, {
+      commitment: "confirmed",
+    });
+
     // Decode the event data from the CPI instruction data
     const eventIx = transactionData.meta.innerInstructions[0].instructions[0];
     const rawData = anchor.utils.bytes.bs58.decode(eventIx.data);

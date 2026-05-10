@@ -15,6 +15,7 @@ Pinocchio é uma biblioteca Rust minimalista que permite criar programas Solana 
 ### Vantagens principais
 
 O design minimalista desbloqueia três grandes benefícios:
+
 - Menos unidades de compute. Sem desserialização extra ou cópias de memória.
 - Binários menores. Caminhos de código mais enxutos significam um `.so` mais leve on-chain.
 - Zero dependência externa. Sem crates externos para atualizar (ou quebrar).
@@ -30,6 +31,7 @@ Desenvolvimento nativo pode parecer intimidador, mas é exatamente por isso que 
 Anchor usa **Macros Procedurais e de Derivação** para simplificar o boilerplate de lidar com contas, dados de instrução e tratamento de erros que são o núcleo da construção de Programas Solana.
 
 Ir Nativo significa que não temos mais esse luxo e precisaremos:
+
 - Criar nosso próprio Discriminador e Entrypoint para as diferentes Instruções
 - Criar nossa própria lógica de Account, Instruction e desserialização
 - Implementar todas as verificações de segurança que o Anchor fazia por nós antes
@@ -45,6 +47,7 @@ No Anchor, a macro `#[program]` esconde muita ligação. Nos bastidores, ela con
 Programas nativos geralmente mantêm as coisas mais enxutas. Um discriminador de byte único (valores 0x01…0xFF) é suficiente para até 255 instruções, o que é adequado para a maioria dos casos de uso. Se precisar de mais, pode mudar para uma variante de dois bytes, expandindo para 65.535 variantes possíveis.
 
 A macro `entrypoint!` é onde a execução do programa começa. Ela fornece três slices brutos:
+
 - **program_id**: a chave pública do programa implantado
 - **accounts**: toda conta passada na instrução
 - **instruction_data**: um array de bytes opaco contendo seu discriminador mais quaisquer dados fornecidos pelo usuário
@@ -58,7 +61,7 @@ fn process_instruction(
     _program_id: &Pubkey,
     accounts: &[AccountInfo],
     instruction_data: &[u8],
-) -> ProgramResult {    
+) -> ProgramResult {
     match instruction_data.split_first() {
         Some((Instruction1::DISCRIMINATOR, data)) => Instruction1::try_from((data, accounts))?.process(),
         Some((Instruction2::DISCRIMINATOR, _)) => Instruction2::try_from(accounts)?.process(),
@@ -68,6 +71,7 @@ fn process_instruction(
 ```
 
 Nos bastidos, este handler:
+
 1. Usa `split_first()` para extrair o byte discriminador
 2. Usa `match` para determinar qual struct de instrução instanciar
 3. A implementação `try_from` de cada instrução valida e desserializa suas entradas
@@ -76,6 +80,7 @@ Nos bastidos, este handler:
 ### A diferença entre `solana-program` e `pinocchio`
 
 A principal diferença e otimização está em como o `entrypoint()` se comporta.
+
 - Os entrypoints padrão da Solana usam padrões tradicionais de serialização onde o runtime desserializa os dados de entrada antecipadamente, criando estruturas de dados owned na memória. Esta abordagem usa serialização Borsh extensivamente, copia dados durante a desserialização e aloca memória para tipos de dados estruturados.
 - Entrypoints do Pinocchio implementam operações zero-copy lendo dados diretamente do array de bytes de entrada sem copiar. O framework define tipos zero-copy que referenciam os dados originais, elimina overhead de serialização/desserialização e usa acesso direto à memória para evitar camadas de abstração.
 
@@ -161,6 +166,7 @@ pub struct DepositInstructionData {
 ```
 
 Implementamos então `TryFrom` para validar os dados da instrução e convertê-los em nosso tipo estruturado. Isso envolve:
+
 1. Verificar se o comprimento dos dados corresponde ao tamanho esperado
 2. Converter o slice de bytes em nosso tipo concreto
 3. Realizar quaisquer verificações de validação necessárias
@@ -191,6 +197,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Este padrão nos permite:
+
 - Validar dados de instrução antes que cheguem à lógica de negócios
 - Manter a lógica de validação separada da funcionalidade principal
 - Fornecer mensagens de erro claras quando a validação falha

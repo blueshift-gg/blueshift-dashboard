@@ -1,9 +1,10 @@
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
-import { join, dirname, relative } from "node:path";
+// safe-mdx and shiki expose loosely typed AST structures in this build script.
 import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { mdxParse } from "safe-mdx/parse";
+import { SKIP_HIGHLIGHT_LANGS, THEME_NAME } from "../src/lib/shiki/config";
 import { createShikiHighlighter } from "../src/lib/shiki/highlighter";
-import { THEME_NAME, SKIP_HIGHLIGHT_LANGS } from "../src/lib/shiki/config";
 
 const CONTENT_DIR = join(process.cwd(), "src/app/content");
 const OUTPUT_DIR = join(process.cwd(), ".compiled-mdx");
@@ -54,7 +55,7 @@ async function needsRecompilation(
   inputPath: string,
   outputPath: string,
   cache: Cache,
-  relativePath: string
+  relativePath: string,
 ): Promise<boolean> {
   try {
     // Check if output exists
@@ -85,7 +86,7 @@ async function precompileMDX(
   outputPath: string,
   highlighter: Awaited<ReturnType<typeof createShikiHighlighter>>,
   cache: Cache,
-  relativePath: string
+  relativePath: string,
 ) {
   try {
     const raw = await readFile(inputPath, "utf-8");
@@ -94,10 +95,7 @@ async function precompileMDX(
     // Pre-highlight all code blocks
     const highlightedCode: Record<string, HighlightedCode> = {};
 
-    function traverseNodes(
-      node: any,
-      currentIndex: { value: number } = { value: 0 }
-    ) {
+    function traverseNodes(node: any, currentIndex: { value: number } = { value: 0 }) {
       if (node.type === "code") {
         const lang = node.lang || "text";
 
@@ -118,16 +116,16 @@ async function precompileMDX(
           } catch (error) {
             console.error(
               `Warning: Failed to highlight code block in ${inputPath} (lang: ${lang})`,
-              error
+              error,
             );
           }
         }
       }
 
       if (node.children) {
-        node.children.forEach((child: any) =>
-          traverseNodes(child, currentIndex)
-        );
+        node.children.forEach((child: any) => {
+          traverseNodes(child, currentIndex);
+        });
       }
     }
 
@@ -155,10 +153,7 @@ async function precompileMDX(
   }
 }
 
-async function findMDXFiles(
-  dir: string,
-  baseDir: string = dir
-): Promise<string[]> {
+async function findMDXFiles(dir: string, baseDir: string = dir): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
 
@@ -232,17 +227,15 @@ async function main() {
         try {
           await precompileMDX(inputPath, outputPath, highlighter, cache, file);
           compiled++;
-        } catch (error) {
+        } catch (_error) {
           failed++;
         }
-      })
+      }),
     );
 
     // Log progress after each batch
     if (compiled % 100 === 0 || compiled === filesToCompile.length) {
-      console.log(
-        `Progress: ${compiled}/${filesToCompile.length} files compiled`
-      );
+      console.log(`Progress: ${compiled}/${filesToCompile.length} files compiled`);
     }
   }
 

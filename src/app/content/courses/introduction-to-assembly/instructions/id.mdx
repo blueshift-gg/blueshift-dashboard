@@ -9,6 +9,7 @@ Instruksi adalah operasi fundamental yang dilakukan program Anda—menambahkan a
 <ArticleSection name="Apa itu Instruksi?" id="what-are-instructions" level="h2" />
 
 Instruksi adalah blok dasar pembangun program Anda. Anggap saja sebagai perintah yang memberi tahu prosesor persis apa yang harus dilakukan:
+
 - `add64 r1, r2`: "Tambahkan nilai dalam register `r1` dan `r2`, simpan hasilnya di `r1`"
 - `ldxdw r0, [r10 - 8]`: "Muat 8 byte dari memori stack ke dalam register `r0`"
 - `jeq r1, 42, +3`: "Jika `r1` sama dengan 42, lompat maju 3 instruksi"
@@ -16,14 +17,19 @@ Instruksi adalah blok dasar pembangun program Anda. Anggap saja sebagai perintah
 Setiap instruksi melakukan tepat satu operasi dan dikodekan sebagai data 8 byte yang tepat untuk dekoding VM secara instan.
 
 Instruksi sBPF bekerja dengan ukuran data yang berbeda:
+
 - byte = 8 bit (1 byte)
-- halfword = 16 bit (2 byte) 
+- halfword = 16 bit (2 byte)
 - word = 32 bit (4 byte)
 - doubleword = 64 bit (8 byte)
 
 Sebagian besar operasi sBPF menggunakan nilai 64-bit (doubleword) karena register berukuran 64 bit, tetapi Anda dapat memuat dan menyimpan ukuran yang lebih kecil saat diperlukan untuk efisiensi.
 
-<ArticleSection name="Kategori dan Format Instruksi" id="instruction-categories-and-format" level="h2" />
+<ArticleSection
+  name="Kategori dan Format Instruksi"
+  id="instruction-categories-and-format"
+  level="h2"
+/>
 
 Ketika Anda mengompilasi kode Rust, C, atau assembly, toolchain menghasilkan aliran instruksi lebar-tetap 8-byte yang dikemas ke dalam bagian `.text` ELF Anda.
 
@@ -52,7 +58,7 @@ Jenis instruksi yang berbeda menggunakan bidang-bidang ini dengan cara spesifik:
 mov64 r1, 42           // Put immediate value 42 into r1
                        // opcode=move_imm, dst=1, src=unused, imm=42
 
-ldxdw r0, [r10 - 8]    // Load 8 bytes from stack into r0  
+ldxdw r0, [r10 - 8]    // Load 8 bytes from stack into r0
                        // opcode=load64, dst=0, src=10, offset=-8, imm=unused
 
 stxdw [r1 + 16], r0    // Store r0 to memory at [r1 + 16]
@@ -65,7 +71,7 @@ stxdw [r1 + 16], r0    // Store r0 to memory at [r1 + 16]
 add64 r1, r2           // r1 = r1 + r2
                        // opcode=add_reg, dst=1, src=2, offset=unused, imm=unused
 
-add64 r1, 100          // r1 = r1 + 100  
+add64 r1, 100          // r1 = r1 + 100
                        // opcode=add_imm, dst=1, src=unused, offset=unused, imm=100
 ```
 
@@ -78,13 +84,14 @@ ja +5                  // Jump forward 5 instructions unconditionally
 jeq r1, r2, +3         // If r1 == r2, jump forward 3 instructions
                        // opcode=jump_eq_reg, dst=1, src=2, offset=3, imm=unused
 
-jeq r1, 42, +3         // If r1 == 42, jump forward 3 instructions  
+jeq r1, 42, +3         // If r1 == 42, jump forward 3 instructions
                        // opcode=jump_eq_imm, dst=1, src=unused, offset=3, imm=42
 ```
 
 ### Pengkodean Opcode
 
 Pengkodean opcode menangkap beberapa informasi di luar jenis operasi:
+
 - Kelas instruksi: Aritmatika, memori, lompatan, panggilan, dll.
 - Ukuran operasi: Operasi 32-bit vs 64-bit
 - Jenis sumber: Register vs nilai langsung
@@ -108,7 +115,7 @@ Operasi memori menggabungkan beberapa bidang secara bermakna:
 
 Untuk `ldxdw r1, [r2+8]`, opcode menunjukkan pemuatan memori 64-bit, `dst` menerima nilai yang dimuat, `src` menyediakan alamat dasar, dan `offset` (8) ditambahkan untuk membuat alamat akhir `r2 + 8`.
 
-Instruksi aliran kontrol mengikuti pola yang sama: 
+Instruksi aliran kontrol mengikuti pola yang sama:
 
 Ketika Anda menulis `jeq r1, r2, +5`, opcode mengenkode lompatan bersyarat yang membandingkan dua register. Jika `r1` sama dengan `r2`, VM akan menambahkan `offset` (5) ke program counter, melompat maju 5 instruksi.
 
@@ -116,7 +123,7 @@ Ketika Anda menulis `jeq r1, r2, +5`, opcode mengenkode lompatan bersyarat yang 
 
 ### Pemanggilan Fungsi dan Syscall
 
-Mekanisme pemanggilan sBPF berkembang di berbagai versi untuk kejelasan dan keamanan yang lebih baik. Hingga sBPF v3, `call imm` memiliki dua tujuan: nilai immediate menentukan apakah Anda memanggil fungsi internal atau menggunakan syscall. 
+Mekanisme pemanggilan sBPF berkembang di berbagai versi untuk kejelasan dan keamanan yang lebih baik. Hingga sBPF v3, `call imm` memiliki dua tujuan: nilai immediate menentukan apakah Anda memanggil fungsi internal atau menggunakan syscall.
 
 Runtime membedakan antara keduanya berdasarkan rentang nilai immediate, dengan nomor syscall biasanya berupa bilangan bulat positif kecil seperti 16 untuk `sol_log`.
 
@@ -128,19 +135,19 @@ Pemanggilan tidak langsung melalui `callx` juga berkembang. Versi sebelumnya men
 
 ### Operasi Load Memory
 
-| opcode | Mnemonic                 | Deskripsi                           |
-|--------|--------------------------|-------------------------------------|
-| lddw   | `lddw dst, imm`          | Load immediate 64-bit (slot pertama)  |
-| lddw   | `lddw dst, imm`          | Load immediate 64-bit (slot kedua) |
-| ldxw   | `ldxw dst, [src + off]`  | Load word dari memory               |
-| ldxh   | `ldxh dst, [src + off]`  | Load halfword dari memory           |
-| ldxb   | `ldxb dst, [src + off]`  | Load byte dari memory               |
-| ldxdw  | `ldxdw dst, [src + off]` | Load doubleword dari memory         |
+| opcode | Mnemonic                 | Deskripsi                            |
+| ------ | ------------------------ | ------------------------------------ |
+| lddw   | `lddw dst, imm`          | Load immediate 64-bit (slot pertama) |
+| lddw   | `lddw dst, imm`          | Load immediate 64-bit (slot kedua)   |
+| ldxw   | `ldxw dst, [src + off]`  | Load word dari memory                |
+| ldxh   | `ldxh dst, [src + off]`  | Load halfword dari memory            |
+| ldxb   | `ldxb dst, [src + off]`  | Load byte dari memory                |
+| ldxdw  | `ldxdw dst, [src + off]` | Load doubleword dari memory          |
 
 ### Operasi Penyimpanan Memori
 
-| opcode | Mnemonic                 | Deskripsi                    |
-|--------|--------------------------|--------------------------------|
+| opcode | Mnemonic                 | Deskripsi                       |
+| ------ | ------------------------ | ------------------------------- |
 | stw    | `stw [dst + off], imm`   | Simpan word immediate           |
 | sth    | `sth [dst + off], imm`   | Simpan halfword immediate       |
 | stb    | `stb [dst + off], imm`   | Simpan byte immediate           |
@@ -152,124 +159,124 @@ Pemanggilan tidak langsung melalui `callx` juga berkembang. Versi sebelumnya men
 
 ### Operasi Aritmatika (64-bit)
 
-| opcode | Mnemonic          | Deskripsi                    |
-|--------|-------------------|--------------------------------|
-| add64  | `add64 dst, imm`  | Tambah immediate                  |
-| add64  | `add64 dst, src`  | Tambah register                   |
-| sub64  | `sub64 dst, imm`  | Kurang immediate             |
-| sub64  | `sub64 dst, src`  | Kurang register              |
-| mul64  | `mul64 dst, imm`  | Kali immediate             |
-| mul64  | `mul64 dst, src`  | Kali register              |
-| div64  | `div64 dst, imm`  | Bagi immediate (unsigned)    |
-| div64  | `div64 dst, src`  | Bagi register (unsigned)     |
-| sdiv64 | `sdiv64 dst, imm` | Bagi immediate (signed)      |
-| sdiv64 | `sdiv64 dst, src` | Bagi register (signed)       |
-| mod64  | `mod64 dst, imm`  | Modulo immediate (unsigned)    |
-| mod64  | `mod64 dst, src`  | Modulo register (unsigned)     |
-| smod64 | `smod64 dst, imm` | Modulo immediate (signed)      |
-| smod64 | `smod64 dst, src` | Modulo register (signed)       |
-| neg64  | `neg64 dst`       | Negasi                         |
+| opcode | Mnemonic          | Deskripsi                   |
+| ------ | ----------------- | --------------------------- |
+| add64  | `add64 dst, imm`  | Tambah immediate            |
+| add64  | `add64 dst, src`  | Tambah register             |
+| sub64  | `sub64 dst, imm`  | Kurang immediate            |
+| sub64  | `sub64 dst, src`  | Kurang register             |
+| mul64  | `mul64 dst, imm`  | Kali immediate              |
+| mul64  | `mul64 dst, src`  | Kali register               |
+| div64  | `div64 dst, imm`  | Bagi immediate (unsigned)   |
+| div64  | `div64 dst, src`  | Bagi register (unsigned)    |
+| sdiv64 | `sdiv64 dst, imm` | Bagi immediate (signed)     |
+| sdiv64 | `sdiv64 dst, src` | Bagi register (signed)      |
+| mod64  | `mod64 dst, imm`  | Modulo immediate (unsigned) |
+| mod64  | `mod64 dst, src`  | Modulo register (unsigned)  |
+| smod64 | `smod64 dst, imm` | Modulo immediate (signed)   |
+| smod64 | `smod64 dst, src` | Modulo register (signed)    |
+| neg64  | `neg64 dst`       | Negasi                      |
 
 ### Operasi Aritmatika (32-bit)
 
-| opcode | Mnemonic          | Deskripsi                    |
-|--------|-------------------|--------------------------------|
-| add32  | `add32 dst, imm`  | Tambah immediate (32-bit)         |
-| add32  | `add32 dst, src`  | Tambah register (32-bit)          |
-| sub32  | `sub32 dst, imm`  | Kurang immediate (32-bit)    |
-| sub32  | `sub32 dst, src`  | Kurang register (32-bit)     |
-| mul32  | `mul32 dst, imm`  | Kali immediate (32-bit)    |
-| mul32  | `mul32 dst, src`  | Kali register (32-bit)     |
-| div32  | `div32 dst, imm`  | Bagi immediate (32-bit)      |
-| div32  | `div32 dst, src`  | Bagi register (32-bit)       |
-| sdiv32 | `sdiv32 dst, imm` | Bagi immediate (signed 32-bit) |
-| sdiv32 | `sdiv32 dst, src` | Bagi register (signed 32-bit)  |
-| mod32  | `mod32 dst, imm`  | Modulo immediate (32-bit)      |
-| mod32  | `mod32 dst, src`  | Modulo register (32-bit)       |
+| opcode | Mnemonic          | Deskripsi                        |
+| ------ | ----------------- | -------------------------------- |
+| add32  | `add32 dst, imm`  | Tambah immediate (32-bit)        |
+| add32  | `add32 dst, src`  | Tambah register (32-bit)         |
+| sub32  | `sub32 dst, imm`  | Kurang immediate (32-bit)        |
+| sub32  | `sub32 dst, src`  | Kurang register (32-bit)         |
+| mul32  | `mul32 dst, imm`  | Kali immediate (32-bit)          |
+| mul32  | `mul32 dst, src`  | Kali register (32-bit)           |
+| div32  | `div32 dst, imm`  | Bagi immediate (32-bit)          |
+| div32  | `div32 dst, src`  | Bagi register (32-bit)           |
+| sdiv32 | `sdiv32 dst, imm` | Bagi immediate (signed 32-bit)   |
+| sdiv32 | `sdiv32 dst, src` | Bagi register (signed 32-bit)    |
+| mod32  | `mod32 dst, imm`  | Modulo immediate (32-bit)        |
+| mod32  | `mod32 dst, src`  | Modulo register (32-bit)         |
 | smod32 | `smod32 dst, imm` | Modulo immediate (signed 32-bit) |
 | smod32 | `smod32 dst, src` | Modulo register (signed 32-bit)  |
 
 ### Operasi Logika (64-bit)
 
-| opcode | Mnemonic          | Deskripsi                      |
-|--------|-------------------|--------------------------------|
-| or64   | `or64 dst, imm`   | Bitwise OR langsung            |
-| or64   | `or64 dst, src`   | Bitwise OR register            |
-| and64  | `and64 dst, imm`  | Bitwise AND langsung           |
-| and64  | `and64 dst, src`  | Bitwise AND register           |
-| lsh64  | `lsh64 dst, imm`  | Geser kiri langsung            |
-| lsh64  | `lsh64 dst, src`  | Geser kiri register            |
-| rsh64  | `rsh64 dst, imm`  | Geser kanan langsung           |
-| rsh64  | `rsh64 dst, src`  | Geser kanan register           |
-| xor64  | `xor64 dst, imm`  | Bitwise XOR langsung           |
-| xor64  | `xor64 dst, src`  | Bitwise XOR register           |
-| mov64  | `mov64 dst, imm`  | Pindah langsung                |
-| mov64  | `mov64 dst, src`  | Pindah register                |
-| arsh64 | `arsh64 dst, imm` | Geser kanan aritmatika langsung|
-| arsh64 | `arsh64 dst, src` | Geser kanan aritmatika register|
+| opcode | Mnemonic          | Deskripsi                       |
+| ------ | ----------------- | ------------------------------- |
+| or64   | `or64 dst, imm`   | Bitwise OR langsung             |
+| or64   | `or64 dst, src`   | Bitwise OR register             |
+| and64  | `and64 dst, imm`  | Bitwise AND langsung            |
+| and64  | `and64 dst, src`  | Bitwise AND register            |
+| lsh64  | `lsh64 dst, imm`  | Geser kiri langsung             |
+| lsh64  | `lsh64 dst, src`  | Geser kiri register             |
+| rsh64  | `rsh64 dst, imm`  | Geser kanan langsung            |
+| rsh64  | `rsh64 dst, src`  | Geser kanan register            |
+| xor64  | `xor64 dst, imm`  | Bitwise XOR langsung            |
+| xor64  | `xor64 dst, src`  | Bitwise XOR register            |
+| mov64  | `mov64 dst, imm`  | Pindah langsung                 |
+| mov64  | `mov64 dst, src`  | Pindah register                 |
+| arsh64 | `arsh64 dst, imm` | Geser kanan aritmatika langsung |
+| arsh64 | `arsh64 dst, src` | Geser kanan aritmatika register |
 
 ### Operasi Logika (32-bit)
 
-| opcode | Mnemonic          | Deskripsi                      |
-|--------|-------------------|--------------------------------|
-| or32   | `or32 dst, imm`   | Bitwise OR langsung (32-bit)   |
-| or32   | `or32 dst, src`   | Bitwise OR register (32-bit)   |
-| and32  | `and32 dst, imm`  | Bitwise AND langsung (32-bit)  |
-| and32  | `and32 dst, src`  | Bitwise AND register (32-bit)  |
-| lsh32  | `lsh32 dst, imm`  | Geser kiri langsung (32-bit)   |
-| lsh32  | `lsh32 dst, src`  | Geser kiri register (32-bit)   |
-| rsh32  | `rsh32 dst, imm`  | Geser kanan langsung (32-bit)  |
-| rsh32  | `rsh32 dst, src`  | Geser kanan register (32-bit)  |
-| xor32  | `xor32 dst, imm`  | Bitwise XOR langsung (32-bit)  |
-| xor32  | `xor32 dst, src`  | Bitwise XOR register (32-bit)  |
-| mov32  | `mov32 dst, imm`  | Pindah langsung (32-bit)       |
-| mov32  | `mov32 dst, src`  | Pindah register (32-bit)       |
-| arsh32 | `arsh32 dst, imm` | Geser kanan arit langsung (32-bit)|
-| arsh32 | `arsh32 dst, src` | Geser kanan arit register (32-bit)|
+| opcode | Mnemonic          | Deskripsi                          |
+| ------ | ----------------- | ---------------------------------- |
+| or32   | `or32 dst, imm`   | Bitwise OR langsung (32-bit)       |
+| or32   | `or32 dst, src`   | Bitwise OR register (32-bit)       |
+| and32  | `and32 dst, imm`  | Bitwise AND langsung (32-bit)      |
+| and32  | `and32 dst, src`  | Bitwise AND register (32-bit)      |
+| lsh32  | `lsh32 dst, imm`  | Geser kiri langsung (32-bit)       |
+| lsh32  | `lsh32 dst, src`  | Geser kiri register (32-bit)       |
+| rsh32  | `rsh32 dst, imm`  | Geser kanan langsung (32-bit)      |
+| rsh32  | `rsh32 dst, src`  | Geser kanan register (32-bit)      |
+| xor32  | `xor32 dst, imm`  | Bitwise XOR langsung (32-bit)      |
+| xor32  | `xor32 dst, src`  | Bitwise XOR register (32-bit)      |
+| mov32  | `mov32 dst, imm`  | Pindah langsung (32-bit)           |
+| mov32  | `mov32 dst, src`  | Pindah register (32-bit)           |
+| arsh32 | `arsh32 dst, imm` | Geser kanan arit langsung (32-bit) |
+| arsh32 | `arsh32 dst, src` | Geser kanan arit register (32-bit) |
 
 ### Operasi Alur Kontrol
 
-| opcode | Mnemonic             | Description                                   |
-|--------|----------------------|-----------------------------------------------|
-| ja     | `ja off`             | Lompatan tanpa syarat (jump 0 = lompat ke berikutnya)    |
-| jeq    | `jeq dst, imm, off`  | Lompat jika sama dengan nilai langsung                    |
-| jeq    | `jeq dst, src, off`  | Lompat jika sama dengan register                     |
-| jgt    | `jgt dst, imm, off`  | Lompat jika lebih besar dari nilai langsung (unsigned)     |
-| jgt    | `jgt dst, src, off`  | Lompat jika lebih besar dari register (unsigned)      |
+| opcode | Mnemonic             | Description                                                        |
+| ------ | -------------------- | ------------------------------------------------------------------ |
+| ja     | `ja off`             | Lompatan tanpa syarat (jump 0 = lompat ke berikutnya)              |
+| jeq    | `jeq dst, imm, off`  | Lompat jika sama dengan nilai langsung                             |
+| jeq    | `jeq dst, src, off`  | Lompat jika sama dengan register                                   |
+| jgt    | `jgt dst, imm, off`  | Lompat jika lebih besar dari nilai langsung (unsigned)             |
+| jgt    | `jgt dst, src, off`  | Lompat jika lebih besar dari register (unsigned)                   |
 | jge    | `jge dst, imm, off`  | Lompat jika lebih besar atau sama dengan nilai langsung (unsigned) |
-| jge    | `jge dst, src, off`  | Lompat jika lebih besar atau sama dengan register (unsigned)  |
-| jset   | `jset dst, imm, off` | Lompat jika bit diatur (mask nilai langsung)              |
-| jset   | `jset dst, src, off` | Lompat jika bit diatur (mask register)               |
-| jne    | `jne dst, imm, off`  | Lompat jika tidak sama dengan nilai langsung                |
-| jne    | `jne dst, src, off`  | Lompat jika tidak sama dengan register                 |
-| jsgt   | `jsgt dst, imm, off` | Lompat jika lebih besar dari nilai langsung (signed)       |
-| jsgt   | `jsgt dst, src, off` | Lompat jika lebih besar dari register (signed)        |
+| jge    | `jge dst, src, off`  | Lompat jika lebih besar atau sama dengan register (unsigned)       |
+| jset   | `jset dst, imm, off` | Lompat jika bit diatur (mask nilai langsung)                       |
+| jset   | `jset dst, src, off` | Lompat jika bit diatur (mask register)                             |
+| jne    | `jne dst, imm, off`  | Lompat jika tidak sama dengan nilai langsung                       |
+| jne    | `jne dst, src, off`  | Lompat jika tidak sama dengan register                             |
+| jsgt   | `jsgt dst, imm, off` | Lompat jika lebih besar dari nilai langsung (signed)               |
+| jsgt   | `jsgt dst, src, off` | Lompat jika lebih besar dari register (signed)                     |
 | jsge   | `jsge dst, imm, off` | Lompat jika lebih besar atau sama dengan nilai langsung (signed)   |
-| jsge   | `jsge dst, src, off` | Lompat jika lebih besar atau sama dengan register (signed)    |
-| jlt    | `jlt dst, imm, off`  | Lompat jika kurang dari nilai langsung (unsigned)        |
-| jlt    | `jlt dst, src, off`  | Lompat jika kurang dari register (unsigned)         |
-| jle    | `jle dst, imm, off`  | Lompat jika kurang dari atau sama dengan nilai langsung (unsigned)    |
-| jle    | `jle dst, src, off`  | Lompat jika kurang dari atau sama dengan register (unsigned)     |
-| jslt   | `jslt dst, imm, off` | Lompat jika kurang dari nilai langsung (signed)          |
-| jslt   | `jslt dst, src, off` | Lompat jika kurang dari register (signed)           |
-| jsle   | `jsle dst, imm, off` | Lompat jika kurang dari atau sama dengan nilai langsung (signed)      |
-| jsle   | `jsle dst, src, off` | Lompat jika kurang dari atau sama dengan register (signed)       |
+| jsge   | `jsge dst, src, off` | Lompat jika lebih besar atau sama dengan register (signed)         |
+| jlt    | `jlt dst, imm, off`  | Lompat jika kurang dari nilai langsung (unsigned)                  |
+| jlt    | `jlt dst, src, off`  | Lompat jika kurang dari register (unsigned)                        |
+| jle    | `jle dst, imm, off`  | Lompat jika kurang dari atau sama dengan nilai langsung (unsigned) |
+| jle    | `jle dst, src, off`  | Lompat jika kurang dari atau sama dengan register (unsigned)       |
+| jslt   | `jslt dst, imm, off` | Lompat jika kurang dari nilai langsung (signed)                    |
+| jslt   | `jslt dst, src, off` | Lompat jika kurang dari register (signed)                          |
+| jsle   | `jsle dst, imm, off` | Lompat jika kurang dari atau sama dengan nilai langsung (signed)   |
+| jsle   | `jsle dst, src, off` | Lompat jika kurang dari atau sama dengan register (signed)         |
 
 ### Operasi Pemanggilan Fungsi
 
-| opcode | Mnemonic                    | Deskripsi                            |
-|--------|-----------------------------|---------------------------------------|
-| call   | `call imm` atau `syscall imm` | Memanggil fungsi atau syscall        |
-| callx  | `callx imm`                 | Panggilan tidak langsung (register di bidang imm) |
-| exit   | `exit` atau `return`          | Kembali dari fungsi                  |
+| opcode | Mnemonic                      | Deskripsi                                         |
+| ------ | ----------------------------- | ------------------------------------------------- |
+| call   | `call imm` atau `syscall imm` | Memanggil fungsi atau syscall                     |
+| callx  | `callx imm`                   | Panggilan tidak langsung (register di bidang imm) |
+| exit   | `exit` atau `return`          | Kembali dari fungsi                               |
 
 ### Operasi Byte Swap
 
-| opcode   | Mnemonic      | Deskripsi                          |
-|----------|---------------|------------------------------------|
-| be16     | `be16 dst`    | Byte swap (16-bit)                 |
-| be32     | `be32 dst`    | Byte swap (32-bit)                 |
-| be64     | `be64 dst`    | Byte swap (64-bit)                 |
-| le16     | `le16 dst`    | Bit mask (16-bit)                  |
-| le32     | `le32 dst`    | Bit mask (32-bit)                  |
-| le64     | `le64 dst`    | No op (64-bit)                     |
+| opcode | Mnemonic   | Deskripsi          |
+| ------ | ---------- | ------------------ |
+| be16   | `be16 dst` | Byte swap (16-bit) |
+| be32   | `be32 dst` | Byte swap (32-bit) |
+| be64   | `be64 dst` | Byte swap (64-bit) |
+| le16   | `le16 dst` | Bit mask (16-bit)  |
+| le32   | `le32 dst` | Bit mask (32-bit)  |
+| le64   | `le64 dst` | No op (64-bit)     |

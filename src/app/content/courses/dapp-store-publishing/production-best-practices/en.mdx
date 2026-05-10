@@ -46,33 +46,33 @@ For crypto apps, you need visibility into blockchain interactions:
 // Log transaction attempts with context
 const executeTransaction = async (tx: Transaction, type: string) => {
   const startTime = Date.now();
-  
+
   try {
     const signature = await connection.sendTransaction(tx, [wallet]);
     await connection.confirmTransaction(signature);
-    
+
     // Log success
-    analytics.track('transaction_success', {
+    analytics.track("transaction_success", {
       type,
       duration: Date.now() - startTime,
       signature,
     });
-    
+
     return signature;
   } catch (error) {
     // Log failure with details
-    analytics.track('transaction_failure', {
+    analytics.track("transaction_failure", {
       type,
       duration: Date.now() - startTime,
       error: error.message,
       errorCode: error.code,
     });
-    
+
     Sentry.captureException(error, {
       tags: { transaction_type: type },
-      extra: { tx: tx.serialize().toString('base64') }
+      extra: { tx: tx.serialize().toString("base64") },
     });
-    
+
     throw error;
   }
 };
@@ -80,14 +80,14 @@ const executeTransaction = async (tx: Transaction, type: string) => {
 
 ### Key metrics to track
 
-| Metric | Why It Matters |
-|--------|----------------|
-| Crash-free rate | Target 99.5%+ |
-| Transaction success rate | Identify RPC or network issues |
-| Transaction latency | User experience indicator |
-| Wallet connection success | Authentication health |
-| API error rate | Backend health |
-| Session duration | Engagement indicator |
+| Metric                    | Why It Matters                 |
+| ------------------------- | ------------------------------ |
+| Crash-free rate           | Target 99.5%+                  |
+| Transaction success rate  | Identify RPC or network issues |
+| Transaction latency       | User experience indicator      |
+| Wallet connection success | Authentication health          |
+| API error rate            | Backend health                 |
+| Session duration          | Engagement indicator           |
 
 ### Alerting thresholds
 
@@ -108,15 +108,15 @@ Don't depend on a single provider:
 
 ```typescript
 const RPC_ENDPOINTS = [
-  'https://your-primary.rpc.com',
-  'https://your-backup.rpc.com',
-  'https://api.mainnet-beta.solana.com', // Public fallback
+  "https://your-primary.rpc.com",
+  "https://your-backup.rpc.com",
+  "https://api.mainnet-beta.solana.com", // Public fallback
 ];
 
 let currentEndpointIndex = 0;
 
 const getConnection = () => {
-  return new Connection(RPC_ENDPOINTS[currentEndpointIndex], 'confirmed');
+  return new Connection(RPC_ENDPOINTS[currentEndpointIndex], "confirmed");
 };
 
 const rotateEndpoint = () => {
@@ -126,23 +126,23 @@ const rotateEndpoint = () => {
 
 const executeWithRetry = async <T>(
   operation: (connection: Connection) => Promise<T>,
-  maxRetries = 3
+  maxRetries = 3,
 ): Promise<T> => {
   let lastError;
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation(getConnection());
     } catch (error) {
       lastError = error;
-      
+
       // Rotate on connection errors
-      if (error.message.includes('429') || error.message.includes('timeout')) {
+      if (error.message.includes("429") || error.message.includes("timeout")) {
         rotateEndpoint();
       }
     }
   }
-  
+
   throw lastError;
 };
 ```
@@ -153,14 +153,14 @@ RPC providers have rate limits. Handle them gracefully:
 
 ```typescript
 // Implement exponential backoff
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const fetchWithBackoff = async (fetchFn: () => Promise<any>, maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fetchFn();
     } catch (error) {
-      if (error.message.includes('429') && attempt < maxRetries - 1) {
+      if (error.message.includes("429") && attempt < maxRetries - 1) {
         const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
         console.log(`Rate limited, waiting ${delay}ms`);
         await sleep(delay);
@@ -180,34 +180,31 @@ For real-time updates, WebSocket connections can silently fail:
 const setupAccountSubscription = (publicKey: PublicKey) => {
   let ws: number;
   let heartbeatInterval: NodeJS.Timeout;
-  
+
   const connect = () => {
-    ws = connection.onAccountChange(
-      publicKey,
-      (accountInfo) => {
-        handleAccountUpdate(accountInfo);
-      }
-    );
-    
+    ws = connection.onAccountChange(publicKey, (accountInfo) => {
+      handleAccountUpdate(accountInfo);
+    });
+
     // Heartbeat to detect silent disconnections
     heartbeatInterval = setInterval(async () => {
       try {
         await connection.getSlot();
       } catch {
-        console.log('WebSocket health check failed, reconnecting...');
+        console.log("WebSocket health check failed, reconnecting...");
         cleanup();
         connect();
       }
     }, 30000);
   };
-  
+
   const cleanup = () => {
     if (ws) connection.removeAccountChangeListener(ws);
     if (heartbeatInterval) clearInterval(heartbeatInterval);
   };
-  
+
   connect();
-  
+
   return cleanup;
 };
 ```
@@ -222,16 +219,16 @@ Your app will have multiple versions in the wild simultaneously. Design for this
 
 ```typescript
 // API versioning
-const API_VERSION = '2024.1';
+const API_VERSION = "2024.1";
 
 const apiRequest = async (endpoint: string, options: RequestInit) => {
   return fetch(`https://api.yourapp.com/v1/${endpoint}`, {
     ...options,
     headers: {
       ...options.headers,
-      'X-App-Version': APP_VERSION,
-      'X-API-Version': API_VERSION,
-    }
+      "X-App-Version": APP_VERSION,
+      "X-API-Version": API_VERSION,
+    },
   });
 };
 
@@ -244,39 +241,35 @@ Sometimes you need users on the latest version (security fix, breaking API chang
 
 ```typescript
 const checkForceUpdate = async () => {
-  const response = await fetch('https://api.yourapp.com/app-config');
+  const response = await fetch("https://api.yourapp.com/app-config");
   const config = await response.json();
-  
+
   const currentVersion = DeviceInfo.getVersion();
-  
+
   if (compareVersions(currentVersion, config.minimumVersion) < 0) {
     // Force update required
     Alert.alert(
-      'Update Required',
-      'Please update to the latest version to continue.',
+      "Update Required",
+      "Please update to the latest version to continue.",
       [
         {
-          text: 'Update',
-          onPress: () => Linking.openURL(config.storeUrl)
-        }
+          text: "Update",
+          onPress: () => Linking.openURL(config.storeUrl),
+        },
       ],
-      { cancelable: false }
+      { cancelable: false },
     );
     return false;
   }
-  
+
   if (compareVersions(currentVersion, config.latestVersion) < 0) {
     // Soft prompt for update
-    Alert.alert(
-      'Update Available',
-      'A new version is available with improvements.',
-      [
-        { text: 'Later', style: 'cancel' },
-        { text: 'Update', onPress: () => Linking.openURL(config.storeUrl) }
-      ]
-    );
+    Alert.alert("Update Available", "A new version is available with improvements.", [
+      { text: "Later", style: "cancel" },
+      { text: "Update", onPress: () => Linking.openURL(config.storeUrl) },
+    ]);
   }
-  
+
   return true;
 };
 ```
@@ -313,11 +306,11 @@ const fetchFeatureFlags = async (): Promise<FeatureFlags> => {
 // Usage
 const FeatureFlagProvider: React.FC = ({ children }) => {
   const [flags, setFlags] = useState<FeatureFlags>(defaultFlags);
-  
+
   useEffect(() => {
     fetchFeatureFlags().then(setFlags);
   }, []);
-  
+
   return (
     <FeatureFlagContext.Provider value={flags}>
       {children}
@@ -331,7 +324,7 @@ const FeatureFlagProvider: React.FC = ({ children }) => {
 For React Native, tools like CodePush allow JavaScript updates without App Store review:
 
 ```typescript
-import CodePush from 'react-native-code-push';
+import CodePush from "react-native-code-push";
 
 // Check for updates on app launch
 const codePushOptions = {
@@ -347,6 +340,7 @@ export default CodePush(codePushOptions)(App);
 ```
 
 **Limitations:**
+
 - Cannot update native code (only JavaScript bundle)
 - Apple and Google have policies about OTA updates
 - Don't use to bypass review with policy-violating content
@@ -372,14 +366,14 @@ const reportIssue = async (userDescription: string) => {
     recentTransactions: await getRecentTransactionLogs(),
     timestamp: new Date().toISOString(),
   };
-  
-  await fetch('https://api.yourapp.com/support/issue', {
-    method: 'POST',
+
+  await fetch("https://api.yourapp.com/support/issue", {
+    method: "POST",
     body: JSON.stringify({
       description: userDescription,
       diagnostics,
       userId: currentUser?.id,
-    })
+    }),
   });
 };
 ```
@@ -399,21 +393,21 @@ const logTransaction = async (tx: {
 }) => {
   const history = await getTransactionHistory();
   history.unshift(tx);
-  
+
   // Keep last 100 transactions
   if (history.length > 100) history.pop();
-  
+
   await AsyncStorage.setItem('txHistory', JSON.stringify(history));
 };
 
 // Expose in support/debug screen
 const TransactionHistory = () => {
   const [history, setHistory] = useState([]);
-  
+
   useEffect(() => {
     getTransactionHistory().then(setHistory);
   }, []);
-  
+
   return (
     <FlatList
       data={history}
@@ -464,8 +458,10 @@ connection.onAccountChange(publicKey, (accountInfo) => {
 // Even better: Batch requests when possible
 const [balance, tokenAccounts, recentTx] = await Promise.all([
   connection.getBalance(publicKey),
-  connection.getParsedTokenAccountsByOwner(publicKey, { programId: TOKEN_PROGRAM_ID }),
-  connection.getSignaturesForAddress(publicKey, { limit: 5 })
+  connection.getParsedTokenAccountsByOwner(publicKey, {
+    programId: TOKEN_PROGRAM_ID,
+  }),
+  connection.getSignaturesForAddress(publicKey, { limit: 5 }),
 ]);
 ```
 
@@ -522,24 +518,28 @@ Many apps simply block certain jurisdictions to avoid regulatory exposure.
 Ongoing tasks to keep your app healthy:
 
 ### Weekly
+
 - [ ] Review crash reports and prioritize fixes
 - [ ] Check transaction success rates
 - [ ] Monitor RPC health and costs
 - [ ] Review user feedback/support tickets
 
 ### Monthly
+
 - [ ] Update dependencies (check for security patches)
 - [ ] Review analytics for usage patterns
 - [ ] Test critical flows on latest OS versions
 - [ ] Review App Store/Play Store policy updates
 
 ### Quarterly
+
 - [ ] Audit third-party dependencies for vulnerabilities
 - [ ] Review and rotate API keys/credentials
 - [ ] Test disaster recovery (can you restore from backups?)
 - [ ] Update documentation (API, user guides)
 
 ### Yearly
+
 - [ ] Renew certificates (push notifications, SSL pins)
 - [ ] Review overall architecture for scaling needs
 - [ ] Audit security practices
@@ -550,28 +550,33 @@ Ongoing tasks to keep your app healthy:
 You've completed the final course in the Solana mobile development curriculum. Let's recap what we covered:
 
 **Lesson 1: Distribution landscape**
+
 - Three channels: Play Store, App Store, Solana dApp Store
 - Each has different policies and trade-offs
 - Crypto apps face unique challenges on traditional stores
 
 **Lesson 2: Solana dApp Store publishing**
+
 - NFT-based registry (Publisher → App → Release)
 - CLI tooling for minting and submission
 - Asset requirements and review process
 
 **Lesson 3: App Store review strategies**
+
 - Apple's 3.1.5 cryptocurrency guidelines
 - Google Play's blockchain content policy
 - Test accounts and demo modes for review
 - Handling rejections and appeals
 
 **Lesson 4: Mobile security**
+
 - Reverse engineering reality (everything can be extracted)
 - Secure storage with Keychain/Keystore
 - API security patterns (proxy, short-lived tokens)
 - Private key protection
 
 **Lesson 5: Production operations**
+
 - Monitoring and alerting
 - RPC management and fallbacks
 - Update strategies and feature flags
@@ -584,6 +589,7 @@ You now have the knowledge to build, secure, publish, and maintain a Solana mobi
 The best next step is to build something. Pick a problem you care about, apply what you've learned, and ship it.
 
 Some ideas to explore:
+
 - A simple wallet UI with Privy embedded wallets
 - A token-gated mobile experience
 - An NFT gallery app

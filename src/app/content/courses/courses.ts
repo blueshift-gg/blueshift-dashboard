@@ -1,5 +1,5 @@
-import { CourseMetadata, withCourseNumber } from "@/app/utils/course";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
+import { type CourseMetadata, withCourseNumber } from "@/app/utils/course";
 
 export const courses: CourseMetadata[] = withCourseNumber([
   {
@@ -198,11 +198,7 @@ export const courses: CourseMetadata[] = withCourseNumber([
     color: BRAND_COLOURS.rust,
     difficulty: 1,
     isFeatured: true,
-    lessons: [
-      { slug: "introduction" },
-      { slug: "token-extensions" },
-      { slug: "conclusion" },
-    ],
+    lessons: [{ slug: "introduction" }, { slug: "token-extensions" }, { slug: "conclusion" }],
   },
   {
     slug: "token-2022-with-web3js",

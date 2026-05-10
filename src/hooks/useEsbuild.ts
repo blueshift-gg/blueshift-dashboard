@@ -3,11 +3,7 @@
 import * as esbuild from "esbuild-wasm";
 import { useSyncExternalStore } from "react";
 
-type EsbuildInitializationState =
-  | "uninitialized"
-  | "initializing"
-  | "initialized"
-  | "failed";
+type EsbuildInitializationState = "uninitialized" | "initializing" | "initialized" | "failed";
 
 let listeners: (() => void)[] = [];
 
@@ -51,7 +47,7 @@ if (typeof window !== "undefined") {
       state = {
         ...state,
         initError: error,
-      }
+      };
     });
 }
 

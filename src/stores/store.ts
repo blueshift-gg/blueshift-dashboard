@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { CourseLanguages, courseLanguages } from "@/app/utils/course";
-import { Certificate } from "@/lib/challenges/types";
-import { challengeStatus, ChallengeStatus } from "@/app/utils/challenges";
+import { type ChallengeStatus, challengeStatus } from "@/app/utils/challenges";
+import { type CourseLanguages, courseLanguages } from "@/app/utils/course";
+import type { Certificate } from "@/lib/challenges/types";
 
 export type ChallengeStatuses = "open" | "completed" | "claimed";
 
@@ -82,10 +82,7 @@ interface PersistentStore {
   clearAutoSavedCode: (challengeSlug: string) => void;
 }
 
-type V0PersistentStore = Omit<
-  PersistentStore,
-  "challengeStatuses" | "setNewChallengeStatus"
-> & {
+type V0PersistentStore = Omit<PersistentStore, "challengeStatuses" | "setNewChallengeStatus"> & {
   courseStatus?: Record<string, "Locked" | "Unlocked" | "Claimed">;
 };
 
@@ -93,10 +90,7 @@ type V1PersistentStore = Omit<PersistentStore, "selectedLanguages"> & {
   selectedLanguages: string[];
 };
 
-const migrate = (
-  persistedState: unknown,
-  version: number
-): Partial<PersistentStore> => {
+const migrate = (persistedState: unknown, version: number): Partial<PersistentStore> => {
   if (version === 0) {
     const oldState = persistedState as V0PersistentStore;
     const newChallengeStatuses: Record<string, ChallengeStatuses> = {};
@@ -117,13 +111,13 @@ const migrate = (
     return { ...rest, challengeStatuses: newChallengeStatuses };
   }
 
-    if (version === 1) {
+  if (version === 1) {
     const oldState = persistedState as V1PersistentStore;
     // Migrate any "Research" language filters to "General"
     const migratedLanguages = oldState.selectedLanguages
       .map((lang) => (lang === "Research" ? "General" : lang))
       .filter((lang): lang is CourseLanguages =>
-        Object.keys(courseLanguages).includes(lang as string)
+        Object.keys(courseLanguages).includes(lang as string),
       );
 
     return {
@@ -155,8 +149,7 @@ export const usePersistentStore = create<PersistentStore>()(
 
       // Marketing Banner
       marketingBannerViewed: false,
-      setMarketingBannerViewed: (viewed) =>
-        set({ marketingBannerViewed: viewed }),
+      setMarketingBannerViewed: (viewed) => set({ marketingBannerViewed: viewed }),
 
       // Store hydration state
       _hasHydrated: false,
@@ -190,17 +183,14 @@ export const usePersistentStore = create<PersistentStore>()(
             ? state.selectedDifficulties.filter((d) => d !== difficulty)
             : [...state.selectedDifficulties, difficulty],
         })),
-      setDifficulties: (difficulties) =>
-        set({ selectedDifficulties: difficulties }),
+      setDifficulties: (difficulties) => set({ selectedDifficulties: difficulties }),
       clearDifficulties: () => set({ selectedDifficulties: [] }),
 
       // Challenge Center
       selectedChallengeStatus: challengeStatus,
       toggleChallengeStatus: (status) =>
         set((state) => ({
-          selectedChallengeStatus: state.selectedChallengeStatus.includes(
-            status
-          )
+          selectedChallengeStatus: state.selectedChallengeStatus.includes(status)
             ? state.selectedChallengeStatus.filter((s) => s !== status)
             : [...state.selectedChallengeStatus, status],
         })),
@@ -208,8 +198,7 @@ export const usePersistentStore = create<PersistentStore>()(
 
       // Wallet Connection Recommended Viewed
       connectionRecommendedViewed: false,
-      setConnectionRecommendedViewed: (viewed) =>
-        set({ connectionRecommendedViewed: viewed }),
+      setConnectionRecommendedViewed: (viewed) => set({ connectionRecommendedViewed: viewed }),
 
       // Authentication
       authToken: null,
@@ -234,7 +223,7 @@ export const usePersistentStore = create<PersistentStore>()(
       claimChallenges: (slugs) =>
         set((state) => {
           const statusesToUpdate = Object.fromEntries(
-            slugs.map((slug) => [slug, "claimed" as const])
+            slugs.map((slug) => [slug, "claimed" as const]),
           );
           return {
             challengeStatuses: {
@@ -259,7 +248,7 @@ export const usePersistentStore = create<PersistentStore>()(
               }
               return acc;
             },
-            {} as Record<string, string>
+            {} as Record<string, string>,
           ),
         })),
     }),
@@ -270,6 +259,6 @@ export const usePersistentStore = create<PersistentStore>()(
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },
-    }
-  )
+    },
+  ),
 );

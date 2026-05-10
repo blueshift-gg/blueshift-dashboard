@@ -1,34 +1,33 @@
 "use client";
 
-import { ReactNode, useEffect, useState, useRef } from "react";
-import { Button } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import ClientChallengeTable from "./ClientChallengeTable";
-import { motion, useDragControls } from "motion/react";
-import { anticipate } from "motion";
-import {
-  useEsbuildRunner,
-  FetchDecision,
-  InterceptedRpcCallData,
-  InterceptedWsSendData,
-  WsSendDecision,
-  InterceptedWsReceiveData,
-  WsReceiveDecision,
-} from "@/hooks/useEsbuildRunner";
-import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
+import { Button, Icon } from "@blueshift-gg/ui-components";
 import { Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
-import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
-import LogoGlyph from "../Logo/LogoGlyph";
-import { useAuth } from "@/hooks/useAuth";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import { useAutoSave } from "@/hooks/useAutoSave";
 import classNames from "classnames";
+import { anticipate } from "motion";
+import { motion, type PanInfo, useDragControls } from "motion/react";
+import { useTranslations } from "next-intl";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import ChallengeCompleted from "../Modals/ChallengeComplete";
+import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { useAuth } from "@/hooks/useAuth";
+import { useAutoSave } from "@/hooks/useAutoSave";
+import { useChallengeVerifier } from "@/hooks/useChallengeVerifier";
+import {
+  type FetchDecision,
+  type InterceptedRpcCallData,
+  type InterceptedWsReceiveData,
+  type InterceptedWsSendData,
+  useEsbuildRunner,
+  type WsReceiveDecision,
+  type WsSendDecision,
+} from "@/hooks/useEsbuildRunner";
 import { usePersistentStore } from "@/stores/store";
+import LogoGlyph from "../Logo/LogoGlyph";
+import ChallengeCompleted from "../Modals/ChallengeComplete";
+import ClientChallengeTable from "./ClientChallengeTable";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
 const rpcEndpoint = process.env.NEXT_PUBLIC_MAINNET_RPC_ENDPOINT;
@@ -47,9 +46,7 @@ interface ChallengesContentProps {
  * Main component for displaying and interacting with coding challenges
  * Includes code editor, auto-save functionality, and challenge verification
  */
-export default function ChallengesContent({
-  currentChallenge,
-}: ChallengesContentProps) {
+export default function ChallengesContent({ currentChallenge }: ChallengesContentProps) {
   const auth = useAuth();
   const isUserConnected = auth.status === "signed-in";
   const t = useTranslations();
@@ -57,12 +54,8 @@ export default function ChallengesContent({
   const [editorCode, setEditorCode] = useState<string>("");
   const [initialEditorCode, setInitialEditorCode] = useState<string>("");
   const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false);
-  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] =
-    useState(false);
-  const [
-    verificationFailureMessageLogged,
-    setVerificationFailureMessageLogged,
-  ] = useState(false);
+  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] = useState(false);
+  const [verificationFailureMessageLogged, setVerificationFailureMessageLogged] = useState(false);
 
   // Modal state
   const [isCompletedModalOpen, setIsCompletedModalOpen] = useState(false);
@@ -85,7 +78,7 @@ export default function ChallengesContent({
   });
 
   const handleRpcCallForDecision = async (
-    rpcData: InterceptedRpcCallData
+    rpcData: InterceptedRpcCallData,
   ): Promise<FetchDecision> => {
     if (rpcData.rpcMethod === "sendTransaction") {
       setWasSendTransactionIntercepted(true);
@@ -120,15 +113,16 @@ export default function ChallengesContent({
   };
 
   const handleWsSendForDecision = async (
-    wsSendData: InterceptedWsSendData
+    wsSendData: InterceptedWsSendData,
   ): Promise<WsSendDecision> => {
-    const targetHost = new URL(rpcEndpoint!).host;
+    if (!rpcEndpoint) {
+      return { decision: "PROCEED" };
+    }
+
+    const targetHost = new URL(rpcEndpoint).host;
 
     if (wsSendData.url.includes(targetHost)) {
-      if (
-        typeof wsSendData.data === "string" &&
-        wsSendData.data.includes("signatureSubscribe")
-      ) {
+      if (typeof wsSendData.data === "string" && wsSendData.data.includes("signatureSubscribe")) {
         const data = JSON.parse(wsSendData.data);
 
         // Generate random subscription id and slot
@@ -167,7 +161,7 @@ export default function ChallengesContent({
   };
 
   const handleWsReceiveForDecision = async (
-    _wsReceiveData: InterceptedWsReceiveData
+    _wsReceiveData: InterceptedWsReceiveData,
   ): Promise<WsReceiveDecision> => {
     return { decision: "PROCEED" };
   };
@@ -188,19 +182,22 @@ export default function ChallengesContent({
 
   useEffect(() => {
     if (!apiBaseUrl) {
-      console.error(
-        "API Base URL is not defined in the environment variables."
-      );
+      console.error("API Base URL is not defined in the environment variables.");
     }
   }, []);
 
   useEffect(() => {
     const fetchSolutionsTemplate = async () => {
       try {
-        const codeModule = await import(
-          `@/app/content/challenges/${currentChallenge.slug}/challenge.ts.template?raw`
+        const response = await fetch(
+          `/editor-assets/challenge-templates/${currentChallenge.slug}/challenge.ts.template`,
         );
-        const template = codeModule.default;
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch challenge template for ${currentChallenge.slug}`);
+        }
+
+        const template = await response.text();
 
         setInitialEditorCode(template);
 
@@ -217,8 +214,7 @@ export default function ChallengesContent({
         }
       } catch (err) {
         console.error("Failed to load challenge template:", err);
-        const errorTemplate =
-          "// Failed to load challenge template. Please check console.";
+        const errorTemplate = "// Failed to load challenge template. Please check console.";
         setEditorCode(errorTemplate);
         setInitialEditorCode(errorTemplate);
         if (!hasInitiallyLoaded) {
@@ -230,18 +226,13 @@ export default function ChallengesContent({
     if (currentChallenge.slug) {
       fetchSolutionsTemplate();
     }
-  }, [
-    currentChallenge.slug,
-    hasInitiallyLoaded,
-    getAutoSavedCode,
-    markAsLoadedFromAutoSave,
-  ]);
+  }, [currentChallenge.slug, hasInitiallyLoaded, getAutoSavedCode, markAsLoadedFromAutoSave]);
 
   // Reset initial load flag when challenge changes
   useEffect(() => {
     setHasInitiallyLoaded(false);
     clearLoadedFromAutoSave();
-  }, [currentChallenge.slug, clearLoadedFromAutoSave]);
+  }, [clearLoadedFromAutoSave]);
 
   // Effect to check for missing sendTransaction after code execution
   useEffect(() => {
@@ -251,7 +242,7 @@ export default function ChallengesContent({
       (log) =>
         log.type === "SYSTEM" &&
         Array.isArray(log.payload) &&
-        log.payload[0] === "Execution complete."
+        log.payload[0] === "Execution complete.",
     );
 
     if (
@@ -290,9 +281,7 @@ export default function ChallengesContent({
   // Effect to handle challenge completion modal
   useEffect(() => {
     if (verificationData) {
-      const allRequirementsPassed = requirements.every(
-        (req) => req.status === "passed"
-      );
+      const allRequirementsPassed = requirements.every((req) => req.status === "passed");
       if (allRequirementsPassed) {
         setTimeout(() => {
           if (challengeStatuses[currentChallenge.slug] === "open") {
@@ -314,10 +303,7 @@ export default function ChallengesContent({
   const handleRunCode = () => {
     if (esBuildInitializationState !== "initialized") {
       // Show user-friendly error without blocking alert
-      addLog(
-        "SYSTEM",
-        "Code runner is still initializing. Please wait a moment and try again."
-      );
+      addLog("SYSTEM", "Code runner is still initializing. Please wait a moment and try again.");
       return;
     }
     clearLogs();
@@ -326,10 +312,7 @@ export default function ChallengesContent({
 
     runCode(editorCode).catch((error) => {
       console.error("Error running code:", error);
-      addLog(
-        "SYSTEM",
-        "An error occurred while running your code. Please try again."
-      );
+      addLog("SYSTEM", "An error occurred while running your code. Please try again.");
     });
   };
 
@@ -360,7 +343,7 @@ export default function ChallengesContent({
     setIsDragging(true);
   };
 
-  const handleDrag = (_event: any, info: any) => {
+  const handleDrag = (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
     if (!isMobile || !editorRef.current) return;
 
     // Calculate height constraints in dvh
@@ -369,10 +352,7 @@ export default function ChallengesContent({
 
     const currentHeight = editorHeight;
     const dragDelta = -info.delta.y; // Invert because dragging up should increase height
-    const newHeight = Math.min(
-      Math.max(currentHeight + dragDelta, minHeight),
-      maxHeight
-    );
+    const newHeight = Math.min(Math.max(currentHeight + dragDelta, minHeight), maxHeight);
 
     setEditorHeight(newHeight);
   };
@@ -416,9 +396,8 @@ export default function ChallengesContent({
           const progress = Math.min(elapsed / duration, 1);
 
           // Ease out cubic function for smooth animation
-          const easeOut = 1 - Math.pow(1 - progress, 3);
-          const currentHeight =
-            startHeight + (targetHeight - startHeight) * easeOut;
+          const easeOut = 1 - (1 - progress) ** 3;
+          const currentHeight = startHeight + (targetHeight - startHeight) * easeOut;
 
           setEditorHeight(currentHeight);
 
@@ -464,24 +443,25 @@ export default function ChallengesContent({
   }, [isMobile, editorHeight]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative h-full w-full">
       <ChallengeCompleted
         isOpen={isCompletedModalOpen && !allowRedo}
         onClose={() => setIsCompletedModalOpen(false)}
         challenge={currentChallenge}
       />
       {!isUserConnected ? (
-        <div className="z-10 flex-col gap-y-8 flex py-12 items-center justify-center w-full min-h-[60vh]">
-          <div className="flex flex-col gap-y-0 max-w-[90dvw]">
+        <div className="z-10 flex min-h-[60vh] w-full flex-col items-center justify-center gap-y-8 py-12">
+          <div className="flex max-w-[90dvw] flex-col gap-y-0">
             <img
               src="/graphics/connect-wallet.svg"
-              className="sm:w-[360px] max-w-[80dvw] w-full mx-auto"
+              alt="Connect wallet"
+              className="mx-auto w-full max-w-[80dvw] sm:w-[360px]"
             />
             <div className="flex flex-col gap-y-3">
-              <div className="text-center text-lg sm:text-xl font-medium leading-none font-mono text-shade-primary">
+              <div className="text-center font-mono text-lg leading-none font-medium text-shade-primary sm:text-xl">
                 {t("ChallengePage.connect_wallet")}
               </div>
-              <div className="text-center text-shade-secondary mx-auto sm:w-2/3 w-full">
+              <div className="mx-auto w-full text-center text-shade-secondary sm:w-2/3">
                 {t("ChallengePage.connect_wallet_description")}
               </div>
             </div>
@@ -496,9 +476,9 @@ export default function ChallengesContent({
             transition: { duration: 0.4, ease: anticipate },
           }}
           exit={{ opacity: 0 }}
-          className="lg:pb-20 max-w-app grid grid-cols-1 mx-auto w-full gap-y-12 lg:gap-x-12"
+          className="mx-auto grid w-full max-w-app grid-cols-1 gap-y-12 lg:gap-x-12 lg:pb-20"
         >
-          <div className="flex flex-col relative w-full h-full">
+          <div className="relative flex h-full w-full flex-col">
             <motion.div
               ref={editorRef}
               style={{
@@ -508,10 +488,10 @@ export default function ChallengesContent({
               className={classNames(
                 "flex flex-col w-full z-10 fixed left-0 bottom-0",
                 "lg:relative lg:h-full lg:min-h-[65dvh]",
-                isDragging && "select-none"
+                isDragging && "select-none",
               )}
             >
-              <div className="w-full h-full flex flex-col overflow-hidden border border-border">
+              <div className="flex h-full w-full flex-col overflow-hidden border border-border">
                 <motion.div
                   drag={isMobile ? "y" : false}
                   dragControls={dragControls}
@@ -521,23 +501,23 @@ export default function ChallengesContent({
                   dragMomentum={true}
                   dragConstraints={{ top: 0, bottom: 0 }}
                   dragElastic={0}
-                  className="z-10 w-full py-3 relative px-4 bg-card-solid flex gap-y-4 lg:gap-y-0 flex-col lg:flex-row items-center justify-center lg:justify-start border-b border-border"
+                  className="relative z-10 flex w-full flex-col items-center justify-center gap-y-4 border-b border-border bg-card-solid px-4 py-3 lg:flex-row lg:justify-start lg:gap-y-0"
                 >
                   {/* Mobile Thumb */}
-                  <div className="h-[8px] w-[72px]  bg-card-solid-foreground mx-auto flex lg:hidden" />
-                  <div className="items-center gap-x-2 hidden lg:flex">
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
-                    <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
+                  <div className="bg-card-solid-foreground mx-auto flex h-[8px] w-[72px] lg:hidden" />
+                  <div className="hidden items-center gap-x-2 lg:flex">
+                    <div className="bg-card-solid-foreground h-[12px] w-[12px]"></div>
+                    <div className="bg-card-solid-foreground h-[12px] w-[12px]"></div>
+                    <div className="bg-card-solid-foreground h-[12px] w-[12px]"></div>
                   </div>
-                  <div className="text-sm font-medium text-shade-secondary lg:absolute lg:left-1/2 lg:-translate-x-1/2 flex items-center gap-x-1.5">
+                  <div className="flex items-center gap-x-1.5 text-sm font-medium text-shade-secondary lg:absolute lg:left-1/2 lg:-translate-x-1/2">
                     <Icon name="Challenge" size={12} />
                     <span className="flex-shrink-0">
                       {t(`challenges.${currentChallenge.slug}.title`)}
                     </span>
                   </div>
                 </motion.div>
-                <div className="lg:left-[1px] w-full lg:w-[calc(100%-2px)] py-2 bg-card-solid/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
+                <div className="z-20 flex w-full items-center justify-between border-b border-border bg-card-solid/20 px-4 py-2 backdrop-blur-xl lg:left-[1px] lg:w-[calc(100%-2px)]">
                   <LogoGlyph width={16} />
                   <div className="flex items-center gap-x-2.5">
                     <Button
@@ -562,7 +542,7 @@ export default function ChallengesContent({
                       label={t("ChallengePage.view_logs_btn")}
                       className={classNames(
                         "w-max !text-brand-primary lg:hidden flex",
-                        tab === "logs" && "hidden"
+                        tab === "logs" && "hidden",
                       )}
                       onClick={() => {
                         setTab("logs");
@@ -577,7 +557,7 @@ export default function ChallengesContent({
                       label={t("ChallengePage.back_to_editor_btn")}
                       className={classNames(
                         "w-max !text-brand-primary lg:hidden flex",
-                        tab === "editor" && "hidden"
+                        tab === "editor" && "hidden",
                       )}
                       onClick={() => {
                         setTab("editor");
@@ -585,7 +565,7 @@ export default function ChallengesContent({
                     />
                   </div>
                 </div>
-                <div className="flex flex-col lg:grid lg:grid-cols-3 w-full h-full">
+                <div className="flex h-full w-full flex-col lg:grid lg:grid-cols-3">
                   <BlueshiftEditor
                     initialCode={editorCode}
                     onCodeChange={setEditorCode}
@@ -609,9 +589,7 @@ export default function ChallengesContent({
                     challenge={currentChallenge}
                     isCodeRunning={isCodeRunning}
                     runnerLogs={runnerLogs}
-                    isEsbuildReady={
-                      esBuildInitializationState === "initialized"
-                    }
+                    isEsbuildReady={esBuildInitializationState === "initialized"}
                     onRedoChallenge={handleRedoChallenge}
                     allowRedo={allowRedo}
                   />

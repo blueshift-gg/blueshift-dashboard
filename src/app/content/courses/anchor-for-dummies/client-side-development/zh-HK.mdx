@@ -13,6 +13,7 @@ Anchor 通過一個界面描述語言 (IDL) 文件簡化了與 Solana 程式的�
 ### 設置
 
 在創建 Anchor 程式時，`@coral-xyz/anchor` 套件會自動安裝。運行 anchor build 後，Anchor 會生成：
+
 - 位於 `target/idl/<program-name>.json` 的 IDL
 - 位於 `target/types/<program-name>.ts` 的 TypeScript SDK
 
@@ -56,6 +57,7 @@ setProvider(provider);
 ### 程式
 
 Anchor 的 Program 對象為與 Solana 程式互動創建了一個自定義 API。此 API 作為所有鏈上程式通信的核心接口：
+
 - 發送交易，
 - 獲取反序列化的帳戶，
 - 解碼指令數據，
@@ -83,11 +85,7 @@ const program = new Program(<program-name> as <Program-Type>, provider);
 基本的`MethodsBuilder`模式：
 
 ```ts
-await program.methods
-  .instructionName(instructionDataInputs)
-  .accounts({})
-  .signers([])
-  .rpc();
+await program.methods.instructionName(instructionDataInputs).accounts({}).signers([]).rpc();
 ```
 
 > API使用camelCase命名方式，而非Rust的snake_case慣例。使用點語法調用指令名稱，並以逗號分隔的值傳遞參數。
@@ -185,6 +183,7 @@ const accounts = await program.account.counter.fetchMultiple([
 與其每次用戶連接錢包時提取鏈上數據，不如設置系統來監聽區塊鏈並將相關數據存儲在數據庫中。
 
 有兩種主要方法來監聽鏈上事件：
+
 - 輪詢：客戶端以一定間隔反覆檢查新數據。服務器無論是否有更改都會回應最新數據，可能會返回重複的信息。
 - 流式傳輸：服務器僅在有更新時將數據推送到客戶端。由於僅傳輸相關更改，這提供了更高效的實時數據傳輸。
 
@@ -193,6 +192,7 @@ const accounts = await program.account.counter.fetchMultiple([
 > 對於極低延遲的應用程序（例如 5 毫秒的差異很重要），webhooks 可能無法提供足夠的速度。
 
 Anchor 提供了兩個用於發出事件的宏：
+
 - `emit!()`：使用 `sol_log_data()` 系統調用直接將事件發送到程序日誌，將事件數據編碼為以 "Program Data" 為前綴的 base64 字符串
 - `emit_cpi!()`：通過跨程序調用（CPI）發出事件。事件數據被編碼並包含在 CPI 的指令數據中，而不是程序日誌中
 
@@ -202,22 +202,22 @@ Anchor 提供了兩個用於發出事件的宏：
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("8T7MsCZyzxboviPJg5Rc7d8iqEcDReYR2pkQKrmbg7dy");
- 
+
 #[program]
 pub mod event {
     use super::*;
- 
+
     pub fn emit_event(_ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -230,16 +230,16 @@ pub struct CustomEvent {
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Event } from "../target/types/event";
- 
+
 describe("event", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
- 
+
   const program = anchor.workspace.Event as Program<Event>;
- 
+
   it("Emits custom event", async () => {
     // Set up listener before sending transaction
-    const listenerId = program.addEventListener("customEvent", event => {
+    const listenerId = program.addEventListener("customEvent", (event) => {
       // Process the event data
       console.log("Event Data:", event);
     });
@@ -253,23 +253,23 @@ describe("event", () => {
 
 ```rust
 use anchor_lang::prelude::*;
- 
+
 declare_id!("2cDQ2LxKwQ8fnFUz4LLrZ157QzBnhPNeQrTSmWcpVin1");
- 
+
 #[program]
 pub mod event_cpi {
     use super::*;
- 
+
     pub fn emit_event(ctx: Context<EmitEvent>, input: String) -> Result<()> {
         emit_cpi!(CustomEvent { message: input });
         Ok(())
     }
 }
- 
+
 #[event_cpi]
 #[derive(Accounts)]
 pub struct EmitEvent {}
- 
+
 #[event]
 pub struct CustomEvent {
     pub message: String,
@@ -282,19 +282,18 @@ pub struct CustomEvent {
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { EventCpi } from "../target/types/event_cpi";
- 
+
 describe("event-cpi", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.EventCpi as Program<EventCpi>;
- 
-  it("Emits custom event", async () => { 
+
+  it("Emits custom event", async () => {
     // Fetch the transaction data
-    const transactionData = await program.provider.connection.getTransaction(
-      transactionSignature,
-      { commitment: "confirmed" },
-    );
- 
+    const transactionData = await program.provider.connection.getTransaction(transactionSignature, {
+      commitment: "confirmed",
+    });
+
     // Decode the event data from the CPI instruction data
     const eventIx = transactionData.meta.innerInstructions[0].instructions[0];
     const rawData = anchor.utils.bytes.bs58.decode(eventIx.data);

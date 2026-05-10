@@ -1,23 +1,13 @@
+// Imperative Three.js, react-three-fiber, and dat.gui refs in this scene require loose handles and window bridges.
 "use client";
 
-import React, {
-  Suspense,
-  useMemo,
-  useRef,
-  useState,
-  useCallback,
-  useEffect,
-} from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, useTexture, shaderMaterial } from "@react-three/drei";
-import * as THREE from "three";
-import { extend } from "@react-three/fiber";
-import { courseColors, CourseDifficulty } from "@/app/utils/course";
-import { Text } from "@react-three/drei";
-import { useWindowSize } from "usehooks-ts";
-import { CourseLanguages } from "@/app/utils/course";
+import { OrbitControls, shaderMaterial, Text, useTexture } from "@react-three/drei";
+import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
 import classNames from "classnames";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
 import { resolveColorVar } from "@/app/utils/color-helper";
+import { type CourseDifficulty, type CourseLanguages, courseColors } from "@/app/utils/course";
 
 // Custom shader material that combines all effects
 const NFTMaterial = shaderMaterial(
@@ -224,7 +214,7 @@ const NFTMaterial = shaderMaterial(
       
       gl_FragColor = vec4(finalColor, 1.0);
     }
-  `
+  `,
 );
 
 // Extend the material so we can use it as JSX
@@ -339,7 +329,7 @@ const IridescentSVGMaterial = shaderMaterial(
       
       gl_FragColor = vec4(finalColor, baseColor.a);
     }
-  `
+  `,
 );
 
 // Extend the iridescent material
@@ -357,17 +347,13 @@ function NFTMesh({
   const materialRef = useRef<any>(null);
 
   // Load matcap textures
-  const [matcap1, matcap3] = useTexture([
-    "/textures/blur.webp",
-    "/textures/holographic.webp",
-  ]);
+  const [matcap1, matcap3] = useTexture(["/textures/blur.webp", "/textures/holographic.webp"]);
 
   // Calculate gradient color from course colors
   const gradientColor = useMemo(() => {
     const colorString =
-      courseColors[
-        challengeLanguage.toLowerCase() as keyof typeof courseColors
-      ] || courseColors.Typescript.toLowerCase();
+      courseColors[challengeLanguage.toLowerCase() as keyof typeof courseColors] ||
+      courseColors.Typescript.toLowerCase();
     const [r, g, b] = resolveColorVar(colorString);
     return new THREE.Vector3(r / 255, g / 255, b / 255);
   }, [challengeLanguage]);
@@ -402,10 +388,7 @@ function SVGImage({
   const { gl } = useThree();
 
   // Load matcap textures for iridescent effect
-  const [matcap1, matcap3] = useTexture([
-    "/textures/blur.webp",
-    "/textures/holographic.webp",
-  ]);
+  const [matcap1, matcap3] = useTexture(["/textures/blur.webp", "/textures/holographic.webp"]);
 
   // Enable anisotropic filtering if available for better quality at angles
   const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
@@ -431,12 +414,7 @@ function SVGImage({
           side: THREE.DoubleSide,
         })
       ) : (
-        <meshBasicMaterial
-          map={texture}
-          transparent={true}
-          alphaTest={0}
-          side={THREE.DoubleSide}
-        />
+        <meshBasicMaterial map={texture} transparent={true} alphaTest={0} side={THREE.DoubleSide} />
       )}
     </mesh>
   );
@@ -460,7 +438,7 @@ function Scene({
 }) {
   const orbitControlsRef = useRef<any>(null);
   const meshRef = useRef<any>(null);
-  const light = useRef<any>(null);
+  const _light = useRef<any>(null);
   const { gl, scene, camera } = useThree();
 
   // Animation state for the entire group
@@ -554,10 +532,7 @@ function Scene({
         const renderedCanvas = screenshotRenderer.domElement;
 
         // Calculate center crop area
-        const sourceSize = Math.min(
-          renderedCanvas.width,
-          renderedCanvas.height
-        );
+        const sourceSize = Math.min(renderedCanvas.width, renderedCanvas.height);
         const sourceX = (renderedCanvas.width - sourceSize) / 2;
         const sourceY = (renderedCanvas.height - sourceSize) / 2;
 
@@ -584,7 +559,7 @@ function Scene({
               0,
               0,
               intermediateSize,
-              intermediateSize
+              intermediateSize,
             );
 
             // Final downsampling pass
@@ -597,7 +572,7 @@ function Scene({
               0,
               0,
               targetSize,
-              targetSize
+              targetSize,
             );
           } else {
             // Fallback to direct downsampling
@@ -610,7 +585,7 @@ function Scene({
               0,
               0,
               targetSize,
-              targetSize
+              targetSize,
             );
           }
         } else {
@@ -624,7 +599,7 @@ function Scene({
             0,
             0,
             targetSize,
-            targetSize
+            targetSize,
           );
         }
 
@@ -645,14 +620,9 @@ function Scene({
           screenshotRenderer.setSize(targetSize * 2, targetSize * 2);
           screenshotRenderer.render(scene, camera);
 
-          const dataUrl = screenshotRenderer.domElement.toDataURL(
-            "image/png",
-            1.0
-          );
+          const dataUrl = screenshotRenderer.domElement.toDataURL("image/png", 1.0);
           const link = document.createElement("a");
-          const backgroundSuffix = useTransparentBackground
-            ? "-transparent"
-            : "";
+          const backgroundSuffix = useTransparentBackground ? "-transparent" : "";
           link.download = `nft-fallback-${challengeName.replace(/\s+/g, "-").toLowerCase()}${backgroundSuffix}.png`;
           link.href = dataUrl;
           document.body.appendChild(link);
@@ -673,7 +643,7 @@ function Scene({
         (camera as THREE.PerspectiveCamera).updateProjectionMatrix();
       }
     },
-    [gl, scene, camera, challengeName, challengeLanguage, challengeDifficulty]
+    [gl, scene, camera, challengeName, challengeLanguage, challengeDifficulty],
   );
 
   // Start 1080-degree rotation animation
@@ -736,18 +706,11 @@ function Scene({
   useEffect(() => {
     if (onScreenshot) {
       // Store the function references with background state
-      (window as any).__nftSceneScreenshot = () =>
-        takeScreenshot(!showBackground);
+      (window as any).__nftSceneScreenshot = () => takeScreenshot(!showBackground);
       (window as any).__nftSceneResetRotation = resetRotation;
       (window as any).__nftSceneStartSpinAnimation = startSpinAnimation;
     }
-  }, [
-    takeScreenshot,
-    resetRotation,
-    startSpinAnimation,
-    onScreenshot,
-    showBackground,
-  ]);
+  }, [takeScreenshot, resetRotation, startSpinAnimation, onScreenshot, showBackground]);
 
   // Handle OrbitControls interaction events
   const handleControlsStart = useCallback(() => {
@@ -767,22 +730,21 @@ function Scene({
 
   // Ease-out cubic function for smooth deceleration
   const easeOutCubic = useCallback((t: number) => {
-    return 1 - Math.pow(1 - t, 3);
+    return 1 - (1 - t) ** 3;
   }, []);
 
   // Animation loop for the entire group
-  useFrame((state, delta) => {
+  useFrame((_state, delta) => {
     if (!meshRef.current) return;
 
     const currentTime = Date.now();
 
     // Handle special 1080-degree spin animation
     if (animationStateRef.current.specialAnimation.isRunning) {
-      const elapsed =
-        currentTime - animationStateRef.current.specialAnimation.startTime;
+      const elapsed = currentTime - animationStateRef.current.specialAnimation.startTime;
       const progress = Math.min(
         elapsed / (animationStateRef.current.specialAnimation.duration * 1000),
-        1
+        1,
       );
 
       // Use ease-out cubic for smooth deceleration
@@ -790,8 +752,7 @@ function Scene({
 
       // Interpolate rotation
       const startRot = animationStateRef.current.specialAnimation.startRotation;
-      const targetRot =
-        animationStateRef.current.specialAnimation.targetRotation;
+      const targetRot = animationStateRef.current.specialAnimation.targetRotation;
       const currentRotation = startRot + (targetRot - startRot) * easedProgress;
 
       meshRef.current.rotation.y = currentRotation;
@@ -811,8 +772,7 @@ function Scene({
     // Regular animation logic
     if (!useAnimation) return;
 
-    const timeSinceLastInteraction =
-      currentTime - animationStateRef.current.lastInteractionTime;
+    const timeSinceLastInteraction = currentTime - animationStateRef.current.lastInteractionTime;
 
     // Resume animation after delay if not interacting
     if (
@@ -832,8 +792,7 @@ function Scene({
       const oscillation = Math.sin(animationStateRef.current.time);
 
       // Apply strong easeInOut for damping effect
-      const easedValue =
-        easeInOut(Math.abs(oscillation)) * Math.sign(oscillation);
+      const easedValue = easeInOut(Math.abs(oscillation)) * Math.sign(oscillation);
 
       // Convert to rotation angle (±10 degrees in radians)
       const rotationAngle = (easedValue * 10 * Math.PI) / 180;
@@ -854,33 +813,13 @@ function Scene({
     // Start from bottom-left, going clockwise
     shape.moveTo(-width / 2 + radius, -height / 2);
     shape.lineTo(width / 2 - radius, -height / 2);
-    shape.quadraticCurveTo(
-      width / 2,
-      -height / 2,
-      width / 2,
-      -height / 2 + radius
-    );
+    shape.quadraticCurveTo(width / 2, -height / 2, width / 2, -height / 2 + radius);
     shape.lineTo(width / 2, height / 2 - radius);
-    shape.quadraticCurveTo(
-      width / 2,
-      height / 2,
-      width / 2 - radius,
-      height / 2
-    );
+    shape.quadraticCurveTo(width / 2, height / 2, width / 2 - radius, height / 2);
     shape.lineTo(-width / 2 + radius, height / 2);
-    shape.quadraticCurveTo(
-      -width / 2,
-      height / 2,
-      -width / 2,
-      height / 2 - radius
-    );
+    shape.quadraticCurveTo(-width / 2, height / 2, -width / 2, height / 2 - radius);
     shape.lineTo(-width / 2, -height / 2 + radius);
-    shape.quadraticCurveTo(
-      -width / 2,
-      -height / 2,
-      -width / 2 + radius,
-      -height / 2
-    );
+    shape.quadraticCurveTo(-width / 2, -height / 2, -width / 2 + radius, -height / 2);
 
     // Extrude settings for proper beveling
     const extrudeSettings = {
@@ -995,8 +934,21 @@ function GUIControls({
 }) {
   const guiRef = useRef<any>(null);
   const controlsRef = useRef<any>(null);
+  const latestValuesRef = useRef({
+    challengeName,
+    challengeLanguage,
+    challengeDifficulty,
+    useAnimation,
+    showBackground,
+    onChallengeNameChange,
+    onChallengeLanguageChange,
+    onChallengeDifficultyChange,
+    onUseAnimationChange,
+    onShowBackgroundChange,
+  });
 
   // Initialize GUI once on mount
+  // This GUI must be created once and the follow-up effect syncs prop changes without destroying user controller state.
   useEffect(() => {
     // Dynamically import dat.gui only on client side
     const initializeGUI = async () => {
@@ -1010,11 +962,12 @@ function GUIControls({
       guiRef.current = gui;
 
       // Control object for dat.gui
+      const initialValues = latestValuesRef.current;
       const controls = {
-        challengeName: challengeName,
-        challengeLanguage: challengeLanguage,
-        challengeDifficulty: challengeDifficulty,
-        useAnimation: useAnimation,
+        challengeName: initialValues.challengeName,
+        challengeLanguage: initialValues.challengeLanguage,
+        challengeDifficulty: initialValues.challengeDifficulty,
+        useAnimation: initialValues.useAnimation,
         takeScreenshot: () => {
           // Call the screenshot function exposed on window
           if ((window as any).__nftSceneScreenshot) {
@@ -1033,7 +986,7 @@ function GUIControls({
             (window as any).__nftSceneStartSpinAnimation();
           }
         },
-        showBackground: showBackground,
+        showBackground: initialValues.showBackground,
       };
 
       controlsRef.current = controls;
@@ -1043,19 +996,14 @@ function GUIControls({
         .add(controls, "challengeName")
         .name("Challenge Name")
         .onChange((value: string) => {
-          onChallengeNameChange(value);
+          latestValuesRef.current.onChallengeNameChange(value);
         });
 
       gui
-        .add(controls, "challengeLanguage", [
-          "Anchor",
-          "Rust",
-          "Typescript",
-          "Assembly",
-        ])
+        .add(controls, "challengeLanguage", ["Anchor", "Rust", "Typescript", "Assembly"])
         .name("Language")
         .onChange((value: string) => {
-          onChallengeLanguageChange(value);
+          latestValuesRef.current.onChallengeLanguageChange(value);
         });
 
       gui
@@ -1067,27 +1015,25 @@ function GUIControls({
         })
         .name("Difficulty")
         .onChange((value: number) => {
-          onChallengeDifficultyChange(value);
+          latestValuesRef.current.onChallengeDifficultyChange(value);
         });
 
       gui
         .add(controls, "useAnimation")
         .name("Enable Animation")
         .onChange((value: boolean) => {
-          onUseAnimationChange(value);
+          latestValuesRef.current.onUseAnimationChange(value);
         });
 
       gui
         .add(controls, "showBackground")
         .name("Show Background")
         .onChange((value: boolean) => {
-          onShowBackgroundChange(value);
+          latestValuesRef.current.onShowBackgroundChange(value);
         });
 
       // Add screenshot button
-      gui
-        .add(controls, "takeScreenshot")
-        .name("📸 Take Screenshot (1600x1600)");
+      gui.add(controls, "takeScreenshot").name("📸 Take Screenshot (1600x1600)");
 
       // Add reset rotation button
       gui.add(controls, "resetRotation").name("🔄 Reset Rotation");
@@ -1108,6 +1054,19 @@ function GUIControls({
 
   // Update GUI controls when props change (without recreating the GUI)
   useEffect(() => {
+    latestValuesRef.current = {
+      challengeName,
+      challengeLanguage,
+      challengeDifficulty,
+      useAnimation,
+      showBackground,
+      onChallengeNameChange,
+      onChallengeLanguageChange,
+      onChallengeDifficultyChange,
+      onUseAnimationChange,
+      onShowBackgroundChange,
+    };
+
     if (controlsRef.current) {
       // Update the control object values to sync with props
       controlsRef.current.challengeName = challengeName;
@@ -1130,6 +1089,11 @@ function GUIControls({
     challengeDifficulty,
     useAnimation,
     showBackground,
+    onChallengeNameChange,
+    onChallengeLanguageChange,
+    onChallengeDifficultyChange,
+    onUseAnimationChange,
+    onShowBackgroundChange,
   ]);
 
   return null;
@@ -1153,19 +1117,12 @@ export default function NFTScene({
   showControls?: boolean;
   showBackground?: boolean;
 }) {
-  const { width } = useWindowSize();
-
   // State for controllable parameters
   const [challengeName, setChallengeName] = useState(initialChallengeName);
-  const [challengeLanguage, setChallengeLanguage] = useState(
-    initialChallengeLanguage
-  );
-  const [challengeDifficulty, setChallengeDifficulty] = useState(
-    initialChallengeDifficulty
-  );
+  const [challengeLanguage, setChallengeLanguage] = useState(initialChallengeLanguage);
+  const [challengeDifficulty, setChallengeDifficulty] = useState(initialChallengeDifficulty);
   const [useAnimation, setUseAnimation] = useState(initialUseAnimation);
-  const [showBackgroundValue, setShowBackgroundValue] =
-    useState(showBackground);
+  const [showBackgroundValue, setShowBackgroundValue] = useState(showBackground);
   // Properly typed callback functions
   const handleChallengeNameChange = useCallback((value: string) => {
     setChallengeName(value);
@@ -1191,7 +1148,7 @@ export default function NFTScene({
     <div
       className={classNames(
         "h-full w-full overflow-hidden",
-        showBackgroundValue && "bg-gradient-to-b from-[#0D0E14] to-black"
+        showBackgroundValue && "bg-gradient-to-b from-[#0D0E14] to-black",
       )}
     >
       {showControls && (

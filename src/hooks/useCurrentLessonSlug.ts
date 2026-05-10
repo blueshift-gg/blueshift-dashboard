@@ -1,5 +1,5 @@
+import type { CourseMetadata } from "@/app/utils/course";
 import { usePersistentStore } from "@/stores/store";
-import { CourseMetadata } from "@/app/utils/course";
 
 /**
  * Custom hook to get the current lesson slug based on course progress.
@@ -16,9 +16,7 @@ export function useCurrentLessonSlug(course: CourseMetadata): string {
     return "";
   }
 
-  const currentLesson = courseLessons.find(
-    (lesson) => lesson.lessonNumber === progress,
-  );
+  const currentLesson = courseLessons.find((lesson) => lesson.lessonNumber === progress);
 
   return currentLesson?.slug || "";
 }

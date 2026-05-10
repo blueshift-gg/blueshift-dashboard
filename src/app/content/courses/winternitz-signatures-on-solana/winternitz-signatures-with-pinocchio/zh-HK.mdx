@@ -11,10 +11,12 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 此實現使用 `w = 8` 來平衡 Solana 的限制：交易大小限制和計算單元限制。
 
 Winternitz 參數 `w` 在簽名大小和計算需求之間創造了一個基本的權衡：
+
 - 較高的 w 值意味著簽名較小，但需要更多的計算，因為驗證每個簽名組件需要更多的雜湊操作
 - 較低的 w 值意味著簽名較大，但需要較少的計算，因為驗證每個簽名組件需要較少的雜湊操作
 
 Solana 強加了兩個關鍵限制，影響了參數的選擇：
+
 - 交易大小限制（1024 字節）：使用 `w = 8`，完整實現會生成正好 1024 字節的簽名，使用 256 位元雜湊（32 字節 × 32 個組件）。這會佔用整個交易空間，沒有餘地容納交易開銷和額外數據。
 - 計算單元限制：切換到 `w = 16` 雖然可以將簽名大小減半，但在驗證過程中會超出 Solana 的計算單元（CU）限制，因為每個簽名組件需要顯著更多的雜湊操作。
 
@@ -63,6 +65,7 @@ assert_eq!(recovered_pubkey, pubkey);
 <ArticleSection name="Implementation" id="implementation" level="h2" />
 
 要在你的 Pinocchio 程式中實現 Winternitz 簽名驗證，你需要：
+
 1. `solana-winternitz` crate：提供核心的 Winternitz 簽名功能
 2. 使用量子安全地址推導進行 PDA 的創建和驗證
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### 簽名大小優化
 
 該實現使用截斷方法以適應 Solana 的交易限制：
+
 - 完整簽名 (`WinternitzSignature`)：1024 字節（32 字節 × 32 個組件）。
 - 截斷簽名 (`WinternitzCommitmentSignature`)：896 字節（32 字節 × 28 個組件）。
 - 可用空間：剩餘 128 字節用於交易開銷
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Create the quantum-secure PDA
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recover the public key from signature and message
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verify PDA ownership
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Execute the protected operation
         self.execute_protected_operation(accounts)
     }

@@ -1,48 +1,42 @@
 import "server-only";
 
-import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
-import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
-import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
 import { Icon } from "@blueshift-gg/ui-components";
-import IDE from "@/app/components/TSChallengeEnv/IDE";
-import { Requirement } from "@/app/components/Challenges/Requirement";
-import { RequirementList } from "@/app/components/Challenges/RequirementList";
-import { FurtherReading } from "@/app/components/FurtherReading";
+import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import { Fragment, type JSX, jsx, jsxs } from "react/jsx-runtime";
 import { SafeMdxRenderer } from "safe-mdx";
 import { mdxParse } from "safe-mdx/parse";
+import { AnchorDiscriminatorCalculator } from "@/app/components/AnchorDiscriminatorCalculator/AnchorDiscriminatorCalculator";
+import ArticleSection from "@/app/components/ArticleSection/ArticleSection";
+import { Requirement } from "@/app/components/Challenges/Requirement";
+import { RequirementList } from "@/app/components/Challenges/RequirementList";
+import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
+import { FurtherReading } from "@/app/components/FurtherReading";
+import IDE from "@/app/components/TSChallengeEnv/IDE";
+import { SKIP_HIGHLIGHT_LANGS, THEME_NAME } from "@/lib/shiki/config";
 import { getSingletonHighlighter } from "@/lib/shiki/highlighter";
-import { THEME_NAME, SKIP_HIGHLIGHT_LANGS } from "@/lib/shiki/config";
-import { toJsxRuntime } from "hast-util-to-jsx-runtime";
-import { Fragment, jsxs, jsx } from "react/jsx-runtime";
-import { fetchCompiledContent, CompiledMDX } from "./content-source";
+import { type CompiledMDX, fetchCompiledContent } from "./content-source";
 
 export async function renderSafeMdx(compiled: CompiledMDX) {
   // In production, mdast is already compiled and included
   // Only parse in development mode when mdast is null
   const isDevelopment = process.env.NODE_ENV === "development";
 
-  const mdast =
-    compiled.mdast || (isDevelopment ? mdxParse(compiled.raw) : null);
+  const mdast = compiled.mdast || (isDevelopment ? mdxParse(compiled.raw) : null);
   if (!mdast) {
-    throw new Error(
-      "MDX AST is missing and runtime parsing is not available in production"
-    );
+    throw new Error("MDX AST is missing and runtime parsing is not available in production");
   }
 
   // In production, all code should be pre-highlighted, so we never need the runtime highlighter
   // This avoids WebAssembly issues in Cloudflare Workers
   const highlighter =
     isDevelopment &&
-    (!compiled.highlightedCode ||
-      Object.keys(compiled.highlightedCode).length === 0)
+    (!compiled.highlightedCode || Object.keys(compiled.highlightedCode).length === 0)
       ? await getSingletonHighlighter()
       : null;
 
   // In production with pre-compiled mdast, we don't need to pass the raw markdown
   // This avoids any potential WebAssembly parsing in SafeMdxRenderer
-  const rendererProps = isDevelopment
-    ? { markdown: compiled.raw, mdast }
-    : { mdast };
+  const rendererProps = isDevelopment ? { markdown: compiled.raw, mdast } : { mdast };
 
   return (
     <SafeMdxRenderer
@@ -55,22 +49,17 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
         AnchorDiscriminatorCalculator,
         FurtherReading,
         blockquote: ({ children }: { children: React.ReactNode }) => (
-          <blockquote className="bg-brand-primary/5 flex items-start gap-x-2 py-4 px-6">
+          <blockquote className="flex items-start gap-x-2 bg-brand-primary/5 px-6 py-4">
             <Icon
               name="Warning"
-              className="text-brand-secondary flex-shrink-0 top-1.5 relative"
+              className="relative top-1.5 flex-shrink-0 text-brand-secondary"
               size={18}
             />
-            <div className="overflow-x-auto custom-scrollbar min-w-0">
-              {children}
-            </div>
+            <div className="custom-scrollbar min-w-0 overflow-x-auto">{children}</div>
           </blockquote>
         ),
-        table: ({
-          children,
-          ...props
-        }: React.ComponentPropsWithoutRef<"table">) => (
-          <div className="w-full overflow-x-auto custom-scrollbar min-w-0">
+        table: ({ children, ...props }: React.ComponentPropsWithoutRef<"table">) => (
+          <div className="custom-scrollbar w-full min-w-0 overflow-x-auto">
             <table {...props}>{children}</table>
           </div>
         ),
@@ -85,16 +74,12 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
           }
 
           // Use pre-highlighted code if available
-          if (
-            compiled.highlightedCode &&
-            node.data &&
-            "highlightId" in node.data
-          ) {
+          if (compiled.highlightedCode && node.data && "highlightId" in node.data) {
             const highlightId = node.data.highlightId as string;
             const highlighted = compiled.highlightedCode[highlightId];
             if (highlighted) {
               return (
-                <CodeblockWrapper data-language={highlighted.lang}>
+                <CodeblockWrapper clipboardText={node.value} data-language={highlighted.lang}>
                   {toJsxRuntime(highlighted.hast, { Fragment, jsxs, jsx })}
                 </CodeblockWrapper>
               );
@@ -109,7 +94,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
             });
 
             return (
-              <CodeblockWrapper data-language={lang}>
+              <CodeblockWrapper clipboardText={node.value} data-language={lang}>
                 {toJsxRuntime(codeHtml, { Fragment, jsxs, jsx })}
               </CodeblockWrapper>
             );
@@ -126,7 +111,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
 /**
  * Fetches and renders pre-compiled MDX content.
  */
-export async function getCompiledMdx(relativePath: string) {
+export async function getCompiledMdx(relativePath: string): Promise<JSX.Element> {
   const compiled = await fetchCompiledContent(relativePath);
   return renderSafeMdx(compiled);
 }

@@ -4,11 +4,12 @@ import ArticleSection from "../../../../components/ArticleSection/ArticleSection
 
 ![Assembly Timeout Challenge](/graphics/challenge-banners/assembly-timeout.png)
 
-Trong bài học này, chúng ta sẽ sử dụng sBPF Assembly để tạo một instruction kiểm tra dựa trên thời gian để đảm bảo rằng một giao dịch chỉ được thực hiện trước một thời điểm nhất định. 
+Trong bài học này, chúng ta sẽ sử dụng sBPF Assembly để tạo một instruction kiểm tra dựa trên thời gian để đảm bảo rằng một giao dịch chỉ được thực hiện trước một thời điểm nhất định.
 
 Bằng cách chèn instruction này vào trong giao dịch của bạn, bạn sẽ tạo ra một cơ chế an toàn để ngăn chặn việc thực hiện giao dịch sau một thời điểm nhất định, bảo vệ trước trường hợp thực hiện giao dịch bị trễ hoặc phát lại các lệnh cũ.
 
 Một số lý do khiến kiểm tra timeout trở thành một ứng cử viên lý tưởng cho assembly:
+
 - Các trường hợp đơn hoặc bị ràng buộc
 - Sử dụng hiệu quả các biến hệ thống
 - Không cần thực hiện các kiểm tra signer/account
@@ -21,6 +22,7 @@ Nếu bạn không quen thuộc với việc viết chương trình assembly, b�
 Chương trình của chúng ta sẽ triển khai việc kiểm tra một hoạt động quan trọng: xác minh rằng slot hiện tại không vượt quá một deadline nhất định. Mô hình này rất cần thiết cho các hoạt động DeFi nhạy cảm với thời gian - từ việc ngăn chặn các nỗ lực sử dụng chênh lệnh giá cũ đến việc thực thi thời hạn của một đấu giá.
 
 Chương trình của chúng ta sẽ cần:
+
 - Một số 8-byte thể hiện độ cao slot-height trong dữ liệu instruction.
 - Truy cập vào biến hệ thống Clock của Solana thông qua `sol_get_clock_sysvar`.
 - Trả về thành công nếu slot hiện tại ≤ slot tối đa, ngược lại trả về lỗi.
@@ -31,7 +33,7 @@ Chương trình sBPF nhận dữ liệu tài khoản dưới dạng các vùng n
 
 Vì chương trình của chúng ta không nhận bất kỳ tài khoản nào, chúng ta có thể tính toán vị trí của `MAX_SLOT_HEIGHT` (được truyền trong dữ liệu của instruction). Chúng ta cũng sẽ lưu trữ dữ liệu của biến hệ thống `Clock` trên stack, vì lý do này `CURRENT_SLOT_HEIGHT` sẽ là số âm.
 
-Các hằng số định nghĩa bố cục bộ nhớ của chúng ta như sau: 
+Các hằng số định nghĩa bố cục bộ nhớ của chúng ta như sau:
 
 ```sbpf
 .equ NUM_ACCOUNTS, 0x0000
@@ -43,9 +45,13 @@ Các hằng số định nghĩa bố cục bộ nhớ của chúng ta như sau:
 - `MAX_SLOT_HEIGHT` (0x0010): Xác định vị trí của 8-byte slot-height tối đa trong dữ liệu của instruction.
 - `CURRENT_SLOT_HEIGHT` (-0x0028): Xác định độ lệch stack của trường dữ liệu slot được lưu trong Clock sysvar. Vì slot là trường đầu tiên trong cấu trúc Clock, độ lệch này trỏ trực tiếp đến nó.
 
-Không giống như những ngôn ngữ bậc cao khác trừu tượng hóa bố cục bộ nhớ, assembly yêu cầu bạn phải biết chính xác vị trí của từng dữ liệu. 
+Không giống như những ngôn ngữ bậc cao khác trừu tượng hóa bố cục bộ nhớ, assembly yêu cầu bạn phải biết chính xác vị trí của từng dữ liệu.
 
-<ArticleSection name="Điểm đầu vào và Xác thực ban đầu" id="entrypoint-and-validations" level="h2" />
+<ArticleSection
+  name="Điểm đầu vào và Xác thực ban đầu"
+  id="entrypoint-and-validations"
+  level="h2"
+/>
 
 ```sbpf
 .globl entrypoint
@@ -57,6 +63,7 @@ entrypoint:
 Mỗi chương trình sBPF bắt đầu bởi một ký hiệu toàn cục `.entrypoint`. Runtime Solana cung cấp các tài khoản và dữ liệu instruction thông qua thanh ghi `r1`.
 
 instruction `ldxdw` tải lên (`ldx`) một giá trị 8-byte (double word, `dw`) từ bộ nhớ vào thanh ghi. Đây là những gì xảy ra:
+
 - `ldxdw r0, [r1+NUM_ACCOUNTS]`: tải số lượng tài khoản vào `r0`. Vì `r0` là thanh ghi mà máy ảo đọc khi thoát, bất kỳ giá trị khác không phải 0 sẽ tự động làm thất bại chương trình (chính xác như chúng ta muốn nếu có tài khoản được truyền).
 - `ldxdw r2, [r1+MAX_SLOT_HEIGHT]`: trỏ đến slot-height tối đa được truyền trong dữ liệu của instruction. Giá trị 64-bit này được lưu trong `r2`.
 
@@ -89,6 +96,7 @@ lddw r0, 1         // Otherwise, set error code
 ```
 
 Logic chính của chúng ta là một lệnh nhảy:
+
 - Temporal validation: lệnh `jle` (jump if less or equal) (nhảy nếu nhỏ hơn hoặc bằng) so sánh slot hiện tại ở thanh ghi (`r1`) với deadline của chúng ta ở thanh ghi (`r2`). Nếu chúng ta còn trong cửa sổ thời gian, chúng ta nhảy đến nhãn `end`.
 - Timeout handling: Nếu deadline đã qua, thực thi tiếp tục (`lddw`) để tải mã lỗi 1 vào thanh ghi `r0` để trả về lỗi.
 

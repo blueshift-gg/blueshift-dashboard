@@ -31,6 +31,7 @@ Namun, menulis pemeriksaan ini untuk setiap instruksi bisa menjadi berulang-ulan
 Untuk file `helper.rs` kami, kami memanfaatkan dua konsep dasar Rust: **Antarmuka Umum** dan **Trait**.
 
 Kami memilih pendekatan ini daripada solusi berbasis makro (seperti Anchor) karena beberapa alasan utama:
+
 - Trait dan Antarmuka menyediakan kode yang jelas dan eksplisit yang dapat diikuti pembaca tanpa harus "mengembangkan" makro secara mental
 - Kompiler dapat memverifikasi implementasi trait, memungkinkan deteksi kesalahan yang lebih baik, inferensi tipe, pelengkapan otomatis, dan alat refaktorisasi
 - Trait memungkinkan implementasi generik yang dapat digunakan kembali tanpa duplikasi kode, sementara makro Prosedural menduplikasi kode untuk setiap penggunaan
@@ -242,6 +243,7 @@ Anda mungkin telah memperhatikan bahwa untuk Program SPL Token Legacy, kita hany
 Untuk Token2022, pendekatan sederhana ini tidak berfungsi. Ukuran `Mint` dapat bertambah dan berpotensi melebihi ukuran `TokenAccount` ketika ekstensi token ditambahkan langsung ke data `Mint`. Ini berarti kita tidak dapat hanya mengandalkan ukuran untuk membedakan antara jenis akun.
 
 Untuk Token2022, kita dapat membedakan antara `Mint` dan `TokenAccount` dengan dua cara:
+
 - **Berdasarkan ukuran**: Mirip dengan Program Token Legacy (ketika akun memiliki ukuran standar)
 - **Berdasarkan diskriminator**: Byte khusus yang terletak pada posisi 165 (satu byte lebih besar dari TokenAccount legacy untuk menghindari konflik)
 
@@ -488,76 +490,76 @@ Anda mungkin memperhatikan sesuatu yang menarik dalam implementasi `close` kita:
 
 Serangan reinisialisasi terjadi ketika penyerang mencoba menggunakan kembali akun yang sudah ditutup dengan menginisialisasi ulang menggunakan data berbahaya. Dengan menetapkan byte pertama ke 255 dan mengecilkan ukuran akun hingga mendekati nol, kita membuat akun tersebut tidak mungkin dianggap sebagai tipe akun yang valid di masa depan. Ini adalah pola keamanan umum dalam program Solana.
 
-  ```rust
-  pub struct ProgramAccount;
+```rust
+pub struct ProgramAccount;
 
-  impl AccountCheck for ProgramAccount {
-      fn check(account: &AccountInfo) -> Result<(), ProgramError> {
-          if !account.is_owned_by(&crate::ID) {
-              return Err(PinocchioError::InvalidOwner.into());
-          }
+impl AccountCheck for ProgramAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_owned_by(&crate::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
 
-          if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
-              return Err(PinocchioError::InvalidAccountData.into());
-          }
+        if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait ProgramAccountInit {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult;
-  }
+pub trait ProgramAccountInit {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult;
+}
 
-  impl ProgramAccountInit for ProgramAccount {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult {
-          // Get required lamports for rent
-          let lamports = Rent::get()?.minimum_balance(space);
+impl ProgramAccountInit for ProgramAccount {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(space);
 
-          // Create signer with seeds slice
-          let signer = [Signer::from(seeds)];
+        // Create signer with seeds slice
+        let signer = [Signer::from(seeds)];
 
-          // Create the account
-          CreateAccount {
-              from: payer,
-              to: account,
-              lamports,
-              space: space as u64,
-              owner: &crate::ID,
-          }
-          .invoke_signed(&signer)?;
+        // Create the account
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: space as u64,
+            owner: &crate::ID,
+        }
+        .invoke_signed(&signer)?;
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait AccountClose {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
-  }
+pub trait AccountClose {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
+}
 
-  impl AccountClose for ProgramAccount {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
-          {
-              let mut data = account.try_borrow_mut_data()?;
-              data[0] = 0xff;
-          }
+impl AccountClose for ProgramAccount {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
+        {
+            let mut data = account.try_borrow_mut_data()?;
+            data[0] = 0xff;
+        }
 
-          *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
-          account.realloc(1, true)?;
-          account.close()
-      }
-  }
-  ```
+        *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
+        account.realloc(1, true)?;
+        account.close()
+    }
+}
+```
 
 ### Mengoptimalkan Akses Data Akun
 
@@ -628,6 +630,7 @@ impl AccountExample {
 ```
 
 Implementasi ini menyediakan tiga metode untuk mengakses data akun:
+
 1. `from_account_info`: Metode aman yang melakukan validasi penuh dan pemeriksaan peminjaman
 2. `from_account_info_unchecked`: Metode tidak aman yang melewati pemeriksaan peminjaman tetapi masih memvalidasi properti akun
 3. `from_bytes`: Metode tidak aman untuk akses byte langsung, digunakan secara internal oleh metode lain
@@ -698,6 +701,7 @@ pub fn set_seeds_unchecked(account_info: &AccountInfo, seed: u64) -> Result<(), 
 ```
 
 Implementasi ini menyediakan:
+
 1. Konstanta `SEED_OFFSET` untuk melacak posisi data seed
 2. Fungsi validasi `check_program_id_and_discriminator`
 3. Versi aman dan tidak aman dari getter dan setter

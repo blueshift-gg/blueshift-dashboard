@@ -11,19 +11,14 @@ Phần mở rộng `DefaultAccountState` là một Mint extension cho phép tấ
 Đây là cách tạo mint với phần mở rộng Default Account State:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeDefaultAccountStateInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeDefaultAccountStateInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -35,39 +30,41 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Default Account State extension
 const initializeDefaultAccountState = createInitializeDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Frozen,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Frozen,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the mint itself
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    keypair.publicKey, // freeze authority is MANDATORY
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  keypair.publicKey, // freeze authority is MANDATORY
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combine all instructions in the correct order
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeDefaultAccountState,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeDefaultAccountState,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 > Nhớ rằng `Freeze Authority` trên `Mint` là bắt buộc đối với phần mở rộng này hoặc chúng ta sẽ không thể thaw bất kỳ `Token` account nào sau khi chúng được tạo.
@@ -82,54 +79,61 @@ Chúng ta có thể dễ dàng thaw `Token` account bằng cách sử dụng ins
 
 ```ts
 const ata = await getAssociatedTokenAddress(
-    mint.publicKey,
-    keypair.publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID
+  mint.publicKey,
+  keypair.publicKey,
+  false,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const createAtaInstruction = createAssociatedTokenAccountIdempotentInstruction(
-    keypair.publicKey, // payer
-    ata, // associated token account address
-    keypair.publicKey, // owner
-    mint.publicKey, // mint
-    TOKEN_2022_PROGRAM_ID
-)
+  keypair.publicKey, // payer
+  ata, // associated token account address
+  keypair.publicKey, // owner
+  mint.publicKey, // mint
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const thawAtaInstruction = createThawAccountInstruction(
-    ata,
-    mint.publicKey,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  ata,
+  mint.publicKey,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
-const transaction = new Transaction().add(
-    createAtaInstruction,
-    thawAtaInstruction,
+const transaction = new Transaction().add(createAtaInstruction, thawAtaInstruction);
+
+const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+  skipPreflight: true,
+});
+
+console.log(
+  `Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
 );
-
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {skipPreflight: true});
-
-console.log(`Token accounts created and thawed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
 ```
 
-<ArticleSection name="Thay đổi Default Account State" id="changing-the-default-account-state" level="h2" />
+<ArticleSection
+  name="Thay đổi Default Account State"
+  id="changing-the-default-account-state"
+  level="h2"
+/>
 
 Khi chúng ta không cần có kiểm soát lớn hơn đối với phân phối token và chúng ta muốn để mọi người tự do giao dịch token, chúng ta có thể thay đổi default account state bằng cách sử dụng instruction `updateDefaultAccountState` như thế này:
 
 ```ts
 const updateDefaultAccountStateInstruction = createUpdateDefaultAccountStateInstruction(
-    mint.publicKey,
-    AccountState.Initialized,
-    keypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  AccountState.Initialized,
+  keypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(updateDefaultAccountStateInstruction);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Default account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```

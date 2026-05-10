@@ -54,6 +54,7 @@ pub struct Escrow { … }
 ```
 
 **Notas importantes sobre Discriminators**:
+
 - Devem ser únicos em todo o seu program
 - Usar `[1]` impede o uso de `[1, 2, …]` pois estes também começam com `1`
 - `[0]` não pode ser usado pois conflita com accounts não inicializadas
@@ -73,6 +74,7 @@ pub struct CustomAccountType {
 ```
 
 Pontos-chave sobre program accounts:
+
 - O tamanho máximo é de 10.240 bytes (10 KiB)
 - Para accounts maiores, você precisará de `zero_copy` e escrita em blocos
 - A macro derive `InitSpace` calcula automaticamente o espaço necessário
@@ -94,6 +96,7 @@ pub account: Account<'info, CustomAccountType>,
 ```
 
 Aqui estão alguns dos campos usados na macro `#[account]`, além dos campos `seeds` e `bump` que já cobrimos, e o que eles fazem:
+
 - `init`: diz ao Anchor para criar a account
 - `payer`: qual signer financia o rent (aqui, o maker)
 - `space`: quantos bytes alocar. É aqui que o cálculo do rent também acontece
@@ -182,7 +185,7 @@ pub fn handler(ctx: Context<MyInstruction>) -> Result<()> {
     // Load specific field
     let balance = ctx.accounts.account.get_balance()?;
     let metadata = ctx.accounts.account.get_metadata()?;
-    
+
     Ok(())
 }
 ```
@@ -209,6 +212,7 @@ let updated_value = ctx.accounts.my_account.unload()?.load_field()?;
 O Token Program, parte da Solana Program Library (SPL), é o toolkit integrado para fazer mint e mover qualquer ativo que não seja SOL nativo. Ele possui instructions para criar tokens, fazer mint de novo supply, transferir saldos, queimar, congelar e mais.
 
 Este program é owner de dois tipos principais de account:
+
 - **Mint Account**: armazena os metadados de um token específico: supply, decimals, mint authority, freeze authority, etc.
 - **Token Account**: mantém um saldo dessa mint para um proprietário específico. Apenas o proprietário pode reduzir o saldo (transferir, queimar, etc.), mas qualquer um pode enviar tokens para a account, aumentando seu saldo.
 
@@ -217,6 +221,7 @@ Este program é owner de dois tipos principais de account:
 Nativamente, o crate principal do Anchor apenas inclui helpers de CPI e Accounts para o System Program. Se você quiser o mesmo nível de assistência para tokens SPL, importe o crate `anchor_spl`.
 
 `anchor_spl` adiciona:
+
 - Builders auxiliares para cada instruction nos programas SPL Token e Token-2022
 - Wrappers de tipo que tornam indolor verificar e desserializar Mint e Token accounts
 
@@ -241,6 +246,7 @@ pub maker_ata_a: Account<'info, TokenAccount>,
 ```
 
 `Account<'info, Mint>` e `Account<'info, TokenAccount>` dizem ao Anchor para:
+
 - confirmar que a account realmente é uma Mint ou Token account
 - desserializar seus dados para que você possa ler campos diretamente
 - aplicar quaisquer restrições adicionais que você especificar (`authority`, `decimals`, `mint`, `token_program`, etc.)
@@ -301,6 +307,7 @@ O tipo `Signer` verifica automaticamente se a account assinou a transação. Se 
 `AccountInfo` e `UncheckedAccount` são tipos de account de baixo nível que fornecem acesso direto aos dados da account sem validação automática. São idênticos em funcionalidade, mas `UncheckedAccount` é a escolha preferida, pois seu nome reflete melhor seu propósito.
 
 Esses tipos são úteis em três cenários principais:
+
 1. Trabalhar com accounts que não possuem uma estrutura definida
 2. Implementar lógica de validação personalizada
 3. Interagir com accounts de outros programas que não possuem definições de tipo no Anchor
@@ -323,6 +330,7 @@ pub struct InstructionAccounts<'info> {
 ### Option
 
 O tipo `Option` no Anchor permite tornar accounts opcionais na sua instruction. Quando uma account é envolvida em `Option`, ela pode ser fornecida ou omitida na transação. Isso é particularmente útil para:
+
 - Construir instructions flexíveis que podem funcionar com ou sem certas accounts
 - Implementar parâmetros opcionais que podem nem sempre ser necessários
 - Criar instructions com compatibilidade reversa que funcionam com estruturas de account novas ou antigas
@@ -341,6 +349,7 @@ pub struct InstructionAccounts<'info> {
 ### Box
 
 O tipo `Box` é usado para armazenar accounts no heap em vez da stack. Isso é necessário em vários cenários:
+
 - Ao lidar com estruturas de account grandes que seriam ineficientes de armazenar na stack
 - Ao trabalhar com estruturas de dados recursivas
 - Quando você precisa trabalhar com accounts cujo tamanho não pode ser determinado em tempo de compilação
@@ -365,6 +374,7 @@ O tipo `Program` é usado para validar e interagir com outros programas Solana. 
 Existem duas formas principais de usar o tipo `Program`:
 
 1. Usando tipos de program integrados (recomendado quando disponível):
+
 ```rust
 use anchor_spl::token::Token;
 
@@ -376,6 +386,7 @@ pub struct InstructionAccounts<'info> {
 ```
 
 2. Usando um endereço de program personalizado quando o tipo de program não está disponível:
+
 ```rust
 // Address of the Program
 const PROGRAM_ADDRESS: Pubkey = pubkey!("22222222222222222222222222222222222222222222")
@@ -520,7 +531,7 @@ pub struct BatchTransfer<'info> {
 pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<()> {
     // Handle the first transfer using fixed accounts
     transfer_tokens(&ctx.accounts.from, &ctx.accounts.to, amounts[0])?;
-    
+
     let remaining_accounts = &ctx.remaining_accounts;
 
     // CRITICAL: Validate remaining accounts schema
@@ -535,16 +546,17 @@ pub fn batch_transfer(ctx: Context<BatchTransfer>, amounts: Vec<u64>) -> Result<
         let from_account = &chunk[0];
         let to_account = &chunk[1];
         let amount = amounts[i + 1];
-        
+
         // Apply the same transfer logic to remaining accounts
         transfer_tokens(from_account, to_account, amount)?;
     }
-    
+
     Ok(())
 }
 ```
 
 Agrupar instructions significa:
+
 - Tamanho menor de instruction: as accounts e dados repetitivos não precisam ser incluídos
 - Eficiência: cada CPI custa 1000 CU, significando que alguém que usa seu program poderia invocá-lo apenas uma vez em vez de 3 vezes se precisar fazer instructions em lote
 
@@ -555,15 +567,17 @@ Agrupar instructions significa:
 Podemos facilmente passar remaining accounts usando o SDK do Anchor gerado ao fazermos `anchor build`. Como essas são accounts "raw", precisaremos especificar se precisam ser passadas como signer e/ou mutáveis, assim:
 
 ```ts
-await program.methods.someMethod().accounts({
-  // some accounts
-})
-.remainingAccounts([
-  {
-    isSigner: false,
-    isWritable: true,
-    pubkey: new Pubkey().default
-  }
-])
-.rpc();
+await program.methods
+  .someMethod()
+  .accounts({
+    // some accounts
+  })
+  .remainingAccounts([
+    {
+      isSigner: false,
+      isWritable: true,
+      pubkey: new Pubkey().default,
+    },
+  ])
+  .rpc();
 ```

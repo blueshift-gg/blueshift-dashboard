@@ -64,37 +64,49 @@ fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
 Ini berarti dengan membaca akun sysvar `Instructions` di dalam program Anda, Anda dapat mengakses semua instruksi yang termasuk dalam transaksi saat ini.
 
 Anda tidak perlu mengurai byte mentah secara manual. Solana menyediakan fungsi pembantu:
+
 - `load_current_index_checked`: mengembalikan indeks dari instruksi yang sedang dieksekusi.
 - `load_instruction_at_checked`: memungkinkan Anda memuat instruksi tertentu berdasarkan indeksnya dalam format yang sudah diurai dan dideserialkan.
 
 <ArticleSection name="Bagaimana cara kerjanya?" id="how-does-it-work" level="h2" />
 
 Setiap instruksi Solana berisi:
+
 - ID program yang ditargetkan,
 - akun yang berinteraksi dengannya (termasuk metadata seperti penandatangan/dapat ditulis),
 - dan muatan data (biasanya diskriminator + argumen).
 
 Dan inilah yang diberikan oleh fungsi `load_instruction_at_checked` dari sysvar Instructions:
+
 - program_id: program yang dipanggil oleh instruksi ini.
 - accounts: daftar akun yang terlibat dengan metadata.
 - data: muatan input mentah (jika kita melakukan introspeksi instruksi anchor, sering dimulai dengan diskriminator 8-byte diikuti oleh parameter).
 
 Untuk melakukan introspeksi instruksi lain dengan aman dan efisien, ikuti langkah-langkah berikut:
+
 - Tentukan Indeks Instruksi Saat Ini: Gunakan `load_current_index_checked` untuk menemukan indeks dari instruksi yang sedang dijalankan.
-> Perlu diingat: instruksi Anda mungkin bukan yang pertama (indeks 0) dalam transaksi.
+
+  > Perlu diingat: instruksi Anda mungkin bukan yang pertama (indeks 0) dalam transaksi.
 
 - Muat Instruksi Target untuk Dianalisis: Dengan indeks yang sudah didapat, gunakan `load_instruction_at_checked(index)` untuk memuat instruksi lain dalam transaksi yang sama—baik yang sebelumnya, sesudahnya, atau pada posisi tertentu.
-> Ini berguna untuk memvalidasi perilaku, memastikan input yang diharapkan, atau menyusun program secara aman.
+
+  > Ini berguna untuk memvalidasi perilaku, memastikan input yang diharapkan, atau menyusun program secara aman.
 
 - Bangun Batasan untuk Mencegah Perilaku Berbahaya: Introspeksi instruksi sangat kuat, tetapi juga memperkenalkan permukaan serangan baru. Pastikan untuk: memvalidasi bahwa instruksi yang diintrospeksi menargetkan program yang diharapkan, konfirmasi bahwa alamat akun dan data sesuai dengan pola yang diharapkan, dan hindari asumsi tentang urutan instruksi kecuali secara eksplisit ditegakkan.
 
 Dengan mengambil tindakan pencegahan ini, Anda dapat memanfaatkan introspeksi instruksi dengan aman untuk membangun program Solana yang kuat, dapat dikomposisi, dan aman.
 
-<ArticleSection name="Batasan Umum untuk Introspeksi" id="common-constraints-for-introspection" level="h2" />
+<ArticleSection
+  name="Batasan Umum untuk Introspeksi"
+  id="common-constraints-for-introspection"
+  level="h2"
+/>
 
 Saat menggunakan introspeksi instruksi, penting untuk menerapkan batasan ketat untuk mencegah perilaku berbahaya atau tidak terduga. Perlindungan yang paling umum meliputi:
+
 - Verifikasi Instruksi: Validasi ID program instruksi dan diskriminator untuk memastikan itu adalah yang benar. Diskriminator (biasanya 1, 4, atau 8 byte pertama dari data instruksi) secara unik mengidentifikasi fungsi mana yang dipanggil.
-> Langkah ini memastikan Anda memeriksa instruksi yang dimaksud dan bukan yang palsu atau cacat.
+
+  > Langkah ini memastikan Anda memeriksa instruksi yang dimaksud dan bukan yang palsu atau cacat.
 
 - Validasi Variabel: Setelah diskriminator, parse dan periksa variabel penting yang digunakan oleh instruksi. Ini mungkin termasuk jumlah, arah (misalnya, long/short), atau ID, dan Anda harus selalu mengonfirmasi bahwa bidang-bidang ini selaras dengan logika yang diharapkan dari integrasi atau perlindungan Anda.
 - Verifikasi Akun: Validasi struktur dan identitas akun instruksi. Periksa bahwa akun yang diharapkan muncul pada posisi tertentu (misalnya, penandatangan, vault, jaminan) dan pastikan bahwa peran seperti status penandatangan/dapat ditulis sesuai dengan asumsi Anda.

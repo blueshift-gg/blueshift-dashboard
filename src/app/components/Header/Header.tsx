@@ -1,21 +1,19 @@
 "use client";
 
-import classNames from "classnames";
-import { Icon, Logo } from "@blueshift-gg/ui-components";
-import { AnimatePresence, anticipate, motion } from "motion/react";
-import { useState, useRef, useEffect } from "react";
-import { useOnClickOutside, useWindowSize } from "usehooks-ts";
-import { useTranslations, useLocale } from "next-intl";
-import { useRouter, usePathname, Link } from "@/i18n/navigation";
-import { localeNames, routing } from "@/i18n/routing";
-import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
-import { usePersistentStore } from "@/stores/store";
-
 // import Logo from "../Logo/Logo";
-import { Button, Tabs, DropdownMenu } from "@blueshift-gg/ui-components";
+import { Button, DropdownMenu, Icon, Logo, Tabs } from "@blueshift-gg/ui-components";
+import classNames from "classnames";
+import { AnimatePresence, anticipate, motion } from "motion/react";
+import { useLocale, useTranslations } from "next-intl";
+import { useEffect, useRef, useState } from "react";
+import { useOnClickOutside, useWindowSize } from "usehooks-ts";
+import WalletMultiButton from "@/app/components/Wallet/WalletMultiButton";
+import { URLS } from "@/constants/urls";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
+import { localeNames, routing } from "@/i18n/routing";
+import { usePersistentStore } from "@/stores/store";
 // import LogoGlyph from "../Logo/LogoGlyph";
 import MarketingBanner from "../MarketingBanner/MarketingBanner";
-import { URLS } from "@/constants/urls";
 
 export default function HeaderContent() {
   const [isOpen, setIsOpen] = useState(false);
@@ -40,12 +38,10 @@ export default function HeaderContent() {
   };
 
   const isCourses =
-    pathname.startsWith("/courses") ||
-    pathname.startsWith(`/${currentLocale}/courses`);
+    pathname.startsWith("/courses") || pathname.startsWith(`/${currentLocale}/courses`);
 
   const isChallenges =
-    pathname.startsWith("/challenges") ||
-    pathname.startsWith(`/${currentLocale}/challenges`);
+    pathname.startsWith("/challenges") || pathname.startsWith(`/${currentLocale}/challenges`);
 
   const isPaths =
     pathname === "/" ||
@@ -70,14 +66,11 @@ export default function HeaderContent() {
         "pb-[60px]! sm:pb-[40px]!": _hasHydrated && !marketingBannerViewed,
       })}
     >
-      <div className="fixed w-full flex flex-col z-40">
-        <div className="bg-background/80 backdrop-blur-lg z-40 w-full border-b border-b-border-light">
-          <div className="flex w-full items-center justify-between max-w-app mx-auto py-4 pl-4 pr-2.5 lg:pr-5 lg:pl-5">
-            <div className="flex gap-x-8 xl:gap-x-12 items-center">
-              <Link
-                href="/"
-                className="sm:hidden flex overflow-hidden w-[25px]"
-              >
+      <div className="fixed z-40 flex w-full flex-col">
+        <div className="z-40 w-full border-b border-b-border-light bg-background/80 backdrop-blur-lg">
+          <div className="mx-auto flex w-full max-w-app items-center justify-between py-4 pr-2.5 pl-4 lg:pr-5 lg:pl-5">
+            <div className="flex items-center gap-x-8 xl:gap-x-12">
+              <Link href="/" className="flex w-[25px] overflow-hidden sm:hidden">
                 <Logo hideText height={18} />
               </Link>
 
@@ -123,12 +116,9 @@ export default function HeaderContent() {
               />
             </div>
 
-            <div className="flex gap-x-2 md:gap-x-3 items-center">
+            <div className="flex items-center gap-x-2 md:gap-x-3">
               {/* Language Switcher */}
-              <div
-                className="relative hidden lg:block"
-                ref={languageDropdownRef}
-              >
+              <div className="relative hidden lg:block" ref={languageDropdownRef}>
                 <Button
                   variant="outline"
                   icon={{ name: "Globe", size: 18 }}
@@ -146,10 +136,7 @@ export default function HeaderContent() {
                   handleChange={(item) => {
                     if (typeof item === "string") {
                       handleLanguageChange(item);
-                    } else if (
-                      Array.isArray(item) &&
-                      typeof item[0] === "string"
-                    ) {
+                    } else if (Array.isArray(item) && typeof item[0] === "string") {
                       handleLanguageChange(item[0]);
                     }
                     setIsLanguageOpen(false);
@@ -164,7 +151,7 @@ export default function HeaderContent() {
               <Button
                 variant="outline"
                 icon={{ name: isOpen ? "Cross" : "Table", size: 18 }}
-                className="p-3! flex lg:hidden"
+                className="flex p-3! lg:hidden"
                 onClick={() => setIsOpen(!isOpen)}
                 crosshairProps={{
                   size: 0,
@@ -174,7 +161,7 @@ export default function HeaderContent() {
               <AnimatePresence>
                 {isOpen && (
                   <motion.div
-                    className="no-scroll bg-background flex flex-col justify-between h-[calc(100dvh-75px)] fixed pb-8 left-0 top-[75px] z-50 w-full"
+                    className="no-scroll fixed top-[75px] left-0 z-50 flex h-[calc(100dvh-75px)] w-full flex-col justify-between bg-background pb-8"
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: "calc(100dvh - 75px)" }}
                     exit={{ opacity: 0, height: 0 }}
@@ -184,7 +171,7 @@ export default function HeaderContent() {
                       variant="tab"
                       theme="primary"
                       size="lg"
-                      className="flex-col! w-full! gap-y-1.5!"
+                      className="w-full! flex-col! gap-y-1.5!"
                       items={[
                         {
                           label: t("header.paths"),
@@ -232,21 +219,14 @@ export default function HeaderContent() {
                         },
                       ]}
                     />
-                    <div className="flex flex-col gap-y-8 px-4 items-center w-full">
-                      <div
-                        className="relative w-full"
-                        ref={languageDropdownRef}
-                      >
+                    <div className="flex w-full flex-col items-center gap-y-8 px-4">
+                      <div className="relative w-full" ref={languageDropdownRef}>
                         <Button
                           variant="outline"
                           icon={{ name: "Globe", size: 18 }}
                           size="lg"
                           className="w-full!"
-                          label={
-                            localeNames[
-                              currentLocale as keyof typeof localeNames
-                            ]
-                          }
+                          label={localeNames[currentLocale as keyof typeof localeNames]}
                           onClick={() => setIsLanguageOpen(!isLanguageOpen)}
                         />
                         <DropdownMenu
@@ -260,10 +240,7 @@ export default function HeaderContent() {
                           handleChange={(item) => {
                             if (typeof item === "string") {
                               handleLanguageChange(item);
-                            } else if (
-                              Array.isArray(item) &&
-                              typeof item[0] === "string"
-                            ) {
+                            } else if (Array.isArray(item) && typeof item[0] === "string") {
                               handleLanguageChange(item[0]);
                             }
                             setIsLanguageOpen(false);
@@ -273,19 +250,19 @@ export default function HeaderContent() {
                       <div className="flex items-center gap-x-8">
                         <Link
                           href={twitterLink}
-                          className="text-shade-tertiary hover:text-shade-primary transition"
+                          className="text-shade-tertiary transition hover:text-shade-primary"
                         >
                           <Icon name="X"></Icon>
                         </Link>
                         <Link
                           href={githubLink}
-                          className="text-shade-tertiary hover:text-shade-primary transition"
+                          className="text-shade-tertiary transition hover:text-shade-primary"
                         >
                           <Icon name="Github"></Icon>
                         </Link>
                         <Link
                           href={discordLink}
-                          className="text-shade-tertiary hover:text-shade-primary transition"
+                          className="text-shade-tertiary transition hover:text-shade-primary"
                         >
                           <Icon name="Discord"></Icon>
                         </Link>

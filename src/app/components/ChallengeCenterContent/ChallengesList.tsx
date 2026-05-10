@@ -1,22 +1,21 @@
 "use client";
 
-import { usePersistentStore, useStore } from "@/stores/store";
-import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import { getChallengeDropdownItems } from "@/app/utils/dropdownItems";
-import { useEffect, useState, useMemo, useRef, forwardRef } from "react";
-import { ChallengeMetadata } from "@/app/utils/challenges";
-import ChallengeCard from "../ChallengeCard/ChallengeCard";
-import NFTViewer from "../NFTViewer/NFTViewer";
-import { useNftOwnership } from "@/hooks/useNftOwnership";
-import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
-import ChallengesEmpty from "./ChallengesEmpty";
-import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import { useWindowSize } from "usehooks-ts";
-import { CourseLanguages } from "@/app/utils/course";
+import { Banner, Dropdown, Icon, type IconName, Input, Tabs } from "@blueshift-gg/ui-components";
 import { PaginationButton } from "@blueshift-gg/ui-components/Pagination";
+import classNames from "classnames";
+import { useTranslations } from "next-intl";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useWindowSize } from "usehooks-ts";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { CourseLanguages } from "@/app/utils/course";
+import { getChallengeDropdownItems } from "@/app/utils/dropdownItems";
 import { recommendChallenges } from "@/app/utils/recommendations";
+import { useNftOwnership } from "@/hooks/useNftOwnership";
+import { usePersistentStore, useStore } from "@/stores/store";
+import ChallengeCard from "../ChallengeCard/ChallengeCard";
+import ChallengeCardSkeleton from "../ChallengeCard/ChallengeCardSkeleton";
+import NFTViewer from "../NFTViewer/NFTViewer";
+import ChallengesEmpty from "./ChallengesEmpty";
 
 const challengeSections = {
   Anchor: {
@@ -46,18 +45,24 @@ type ChallengesListProps = {
   isLoading?: boolean;
 };
 
+const CHALLENGE_SKELETON_KEYS = [
+  "challenge-skeleton-1",
+  "challenge-skeleton-2",
+  "challenge-skeleton-3",
+] as const;
+
 const ScrollableSection = forwardRef<
   HTMLDivElement,
   { children: React.ReactNode; className?: string; onScroll?: () => void }
 >(({ children, className, onScroll }, ref) => {
   return (
-    <div className="relative group/scroll p-2">
+    <div className="group/scroll relative p-2">
       <div
         ref={ref}
         onScroll={onScroll}
         className={classNames(
           "flex gap-3 overflow-x-auto snap-x snap-mandatory hide-scrollbar--always -mx-3 px-3",
-          className
+          className,
         )}
       >
         {children}
@@ -70,11 +75,11 @@ ScrollableSection.displayName = "ScrollableSection";
 
 type ChallengeSectionProps = {
   language: string;
-  section: { icon: string; title: string };
+  section: { icon: IconName; title: string };
   challenges: ChallengeMetadata[];
   setIsNFTViewerOpen: (isOpen: boolean) => void;
   setSelectedChallenge: (challenge: ChallengeMetadata) => void;
-  t: any;
+  t: (key: string) => string;
   completedCount: number;
   totalCount: number;
 };
@@ -95,7 +100,7 @@ function ChallengeSection({
     isAtEnd: false,
   });
 
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (scrollRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
       // Use a small threshold for floating point comparisons
@@ -105,13 +110,13 @@ function ChallengeSection({
         isAtEnd: isAtEnd,
       });
     }
-  };
+  }, []);
 
   useEffect(() => {
     updateScrollState();
     window.addEventListener("resize", updateScrollState);
     return () => window.removeEventListener("resize", updateScrollState);
-  }, [challenges]);
+  }, [updateScrollState]);
 
   const handleScroll = (direction: "left" | "right") => {
     if (scrollRef.current) {
@@ -124,14 +129,15 @@ function ChallengeSection({
   };
 
   return (
-    <div className="flex flex-col group/section border border-border-light">
+    <div className="group/section flex flex-col border border-border-light">
       <div className="flex flex-col gap-y-1 p-1">
         <Banner
-          icon={{ name: section.icon as any, size: 16 }}
+          icon={{ name: section.icon, size: 16 }}
           title={t(section.title)}
-          variant={language as any}
+          // Banner variant is typed too narrowly upstream for the supported challenge language variants.
+          variant={language.toLowerCase() as any}
         >
-          <span className="text-current ml-auto">
+          <span className="ml-auto text-current">
             {completedCount}/{totalCount} completed
           </span>
         </Banner>
@@ -140,7 +146,7 @@ function ChallengeSection({
             <ChallengeCard
               key={challenge.slug}
               challenge={challenge}
-              className="shrink-0 w-full sm:w-[calc(50%-12px)] lg:w-[calc(25%-6px)] snap-center"
+              className="w-full shrink-0 snap-center sm:w-[calc(50%-12px)] lg:w-[calc(25%-6px)]"
               setIsNFTViewerOpen={setIsNFTViewerOpen}
               setSelectedChallenge={setSelectedChallenge}
             />
@@ -148,9 +154,9 @@ function ChallengeSection({
         </ScrollableSection>
       </div>
 
-      <div className="relative bottom-0 w-full h-px bg-border-light left-1/2 -translate-x-1/2" />
+      <div className="relative bottom-0 left-1/2 h-px w-full -translate-x-1/2 bg-border-light" />
 
-      <div className="p-3 flex gap-x-1">
+      <div className="flex gap-x-1 p-3">
         <PaginationButton
           isControl={true}
           label="Previous"
@@ -199,7 +205,7 @@ export default function ChallengesList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -207,7 +213,7 @@ export default function ChallengesList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -222,7 +228,7 @@ export default function ChallengesList({
       // Cleanup
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   const handleScrollLeft = () => {
     if (carouselRef.current) {
@@ -242,8 +248,7 @@ export default function ChallengesList({
     }
   };
 
-  const { ownership, error: ownershipError } =
-    useNftOwnership(initialChallenges);
+  const { ownership, error: ownershipError } = useNftOwnership(initialChallenges);
 
   useEffect(() => {
     setIsMobile(width < 768);
@@ -257,22 +262,14 @@ export default function ChallengesList({
 
     const challengesToUpdate = initialChallenges
       .filter(
-        (challenge) =>
-          ownership[challenge.slug] &&
-          challengeStatuses[challenge.slug] !== "claimed"
+        (challenge) => ownership[challenge.slug] && challengeStatuses[challenge.slug] !== "claimed",
       )
       .map((challenge) => challenge.slug);
 
     if (challengesToUpdate.length > 0) {
       claimChallenges(challengesToUpdate);
     }
-  }, [
-    ownership,
-    ownershipError,
-    initialChallenges,
-    claimChallenges,
-    challengeStatuses,
-  ]);
+  }, [ownership, ownershipError, initialChallenges, claimChallenges, challengeStatuses]);
 
   const filteredChallenges = useMemo(
     () =>
@@ -281,17 +278,12 @@ export default function ChallengesList({
           // 1. Search
           const searchLower = (searchValue || "").toLowerCase();
           const matchesSearch =
-            t(`challenges.${challenge.slug}.title`)
-              .toLowerCase()
-              .includes(searchLower) ||
-            (challenge.tags || []).some((tag) =>
-              tag.toLowerCase().includes(searchLower)
-            );
+            t(`challenges.${challenge.slug}.title`).toLowerCase().includes(searchLower) ||
+            (challenge.tags || []).some((tag) => tag.toLowerCase().includes(searchLower));
 
           // 2. Language Filter (Empty = All)
           const matchesLanguage =
-            selectedLanguages.length === 0 ||
-            selectedLanguages.includes(challenge.language);
+            selectedLanguages.length === 0 || selectedLanguages.includes(challenge.language);
 
           // 3. Difficulty Filter (Empty = All)
           const matchesDifficulty =
@@ -310,9 +302,7 @@ export default function ChallengesList({
             matchesTab = status === "claimed";
           }
 
-          return (
-            matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
-          );
+          return matchesSearch && matchesLanguage && matchesDifficulty && matchesTab;
         })
         .sort((a, b) => a.difficulty - b.difficulty),
     [
@@ -323,7 +313,7 @@ export default function ChallengesList({
       activeTab,
       challengeStatuses,
       t,
-    ]
+    ],
   );
 
   const countsByLanguage = useMemo(() => {
@@ -347,30 +337,25 @@ export default function ChallengesList({
   }, [initialChallenges, challengeStatuses]);
 
   const hasNoResults = filteredChallenges.length === 0;
-  const hasNoFilters =
+  const _hasNoFilters =
     !searchValue &&
     selectedLanguages.length === 0 &&
     selectedDifficulties.length === 0 &&
     activeTab === "open";
 
   const [isNFTViewerOpen, setIsNFTViewerOpen] = useState(false);
-  const [selectedChallenge, setSelectedChallenge] = useState<ChallengeMetadata>(
-    {
-      unitName: "",
-      language: "Typescript",
-      difficulty: 1,
-      slug: "",
-      color: "",
-      isFeatured: false,
-      apiPath: "",
-      requirements: [],
-    }
-  );
+  const [selectedChallenge, setSelectedChallenge] = useState<ChallengeMetadata>({
+    unitName: "",
+    language: "Typescript",
+    difficulty: 1,
+    slug: "",
+    color: "",
+    isFeatured: false,
+    apiPath: "",
+    requirements: [],
+  });
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedChallenges = useMemo(
     () =>
@@ -381,13 +366,7 @@ export default function ChallengesList({
         seed,
         limit: 3,
       }),
-    [
-      initialChallenges,
-      challengeStatuses,
-      selectedLanguages,
-      selectedDifficulties,
-      seed,
-    ]
+    [initialChallenges, challengeStatuses, selectedLanguages, selectedDifficulties, seed],
   );
 
   const difficultyMap: Record<string, number> = {
@@ -462,12 +441,7 @@ export default function ChallengesList({
   const dropdownItems = getChallengeDropdownItems(isMobile);
 
   return (
-    <div
-      className={classNames(
-        "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
-      )}
-    >
+    <div className={classNames("flex flex-col gap-y-12", isLoading && "animate-pulse")}>
       <NFTViewer
         isOpen={isNFTViewerOpen}
         onClose={() => setIsNFTViewerOpen(false)}
@@ -484,39 +458,41 @@ export default function ChallengesList({
             <div
               ref={carouselRef}
               className={classNames(
-                "flex pl-4 -mx-4 lg:mx-0 lg:pl-0 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+                "flex pl-4 -mx-4 lg:mx-0 lg:pl-0 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
               )}
             >
               {isLoading
-                ? Array.from({ length: 3 }).map((_, index) => (
-                    <ChallengeCardSkeleton />
+                ? CHALLENGE_SKELETON_KEYS.map((skeletonKey) => (
+                    <ChallengeCardSkeleton key={skeletonKey} />
                   ))
                 : recommendedChallenges.map((challenge) => (
                     <ChallengeCard
                       key={challenge.slug}
                       challenge={challenge}
-                      className="shrink-0 w-full sm:w-[calc(50%-8px)] lg:w-[calc(25%-8px)] snap-center max-w-none"
+                      className="w-full max-w-none shrink-0 snap-center sm:w-[calc(50%-8px)] lg:w-[calc(25%-8px)]"
                       setIsNFTViewerOpen={setIsNFTViewerOpen}
                       setSelectedChallenge={setSelectedChallenge}
                     />
                   ))}
             </div>
-            <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
+            <div className="absolute bottom-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
           </div>
-          <div className="w-full flex justify-center lg:hidden relative z-10">
-            <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
-            <div className="w-full h-[48px] flex justify-end">
+          <div className="relative z-10 flex w-full justify-center lg:hidden">
+            <div className="absolute top-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
+            <div className="flex h-[48px] w-full justify-end">
               <button
+                type="button"
                 disabled={scrollState.isAtStart}
                 onClick={handleScrollLeft}
-                className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
+                className="text-tertiary hover:text-primary absolute right-11 flex h-[48px] w-[48px] items-center justify-center border-x border-x-border-light bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
               >
                 <Icon name="Chevron" className="rotate-90" />
               </button>
               <button
+                type="button"
                 disabled={scrollState.isAtEnd}
                 onClick={handleScrollRight}
-                className="mr-px absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
+                className="text-tertiary hover:text-primary absolute -right-1 mr-px flex h-[48px] w-[48px] items-center justify-center bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
               >
                 <Icon name="Chevron" className="-rotate-90" />
               </button>
@@ -526,14 +502,14 @@ export default function ChallengesList({
       )}
 
       {/* Full List with Filters */}
-      <div className="relative px-1 sm:p-4 pb-12 sm:pb-16 flex flex-col gap-y-6 w-full">
-        <div className="flex gap-y-3 flex-col lg:flex-row items-start lg:items-center justify-between w-full">
-          <div className="w-full md:w-max flex flex-col md:flex-row items-center gap-y-3 md:gap-x-3">
+      <div className="relative flex w-full flex-col gap-y-6 px-1 pb-12 sm:p-4 sm:pb-16">
+        <div className="flex w-full flex-col items-start justify-between gap-y-3 lg:flex-row lg:items-center">
+          <div className="flex w-full flex-col items-center gap-y-3 md:w-max md:flex-row md:gap-x-3">
             <Input
               value={searchValue}
               onChange={(value: string) => setSearchValue(value)}
               placeholder="Search..."
-              className="w-full md:w-max min-w-[300px]"
+              className="w-full min-w-[300px] md:w-max"
               hasMessage={false}
               badge={{
                 icon: { name: "Search", size: 16 },

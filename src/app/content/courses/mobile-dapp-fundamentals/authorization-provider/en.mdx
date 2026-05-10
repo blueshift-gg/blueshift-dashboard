@@ -18,14 +18,14 @@ Without centralized state, you end up with code like this scattered everywhere:
 
 ```typescript
 // Component A
-const cachedToken = await AsyncStorage.getItem('auth_token');
+const cachedToken = await AsyncStorage.getItem("auth_token");
 await transact(async (wallet) => {
   await wallet.authorize({ identity, auth_token: cachedToken });
   // do something
 });
 
 // Component B (same code, duplicated)
-const cachedToken = await AsyncStorage.getItem('auth_token');
+const cachedToken = await AsyncStorage.getItem("auth_token");
 await transact(async (wallet) => {
   await wallet.authorize({ identity, auth_token: cachedToken });
   // do something else
@@ -33,6 +33,7 @@ await transact(async (wallet) => {
 ```
 
 Problems:
+
 - Every component manages its own token caching
 - No shared knowledge of which account is "selected"
 - Duplicate authorization logic
@@ -52,14 +53,14 @@ Components use the `useAuthorization` hook to access this state and these functi
 // Any component can do this:
 function SendButton() {
   const { selectedAccount, authorizeSession } = useAuthorization();
-  
+
   const handleSend = async () => {
     await transact(async (wallet) => {
       await authorizeSession(wallet); // Provider handles tokens
       await wallet.signAndSendTransactions({ /* ... */ });
     });
   };
-  
+
   if (!selectedAccount) return null;
   return <Button onPress={handleSend}>Send</Button>;
 }
@@ -71,12 +72,12 @@ First, define the shapes of our data:
 
 ```typescript
 // src/providers/types.ts
-import { PublicKey } from '@solana/web3.js';
-import { 
-  AuthorizeAPI, 
+import { PublicKey } from "@solana/web3.js";
+import {
+  AuthorizeAPI,
   DeauthorizeAPI,
   Base64EncodedAddress,
-} from '@solana-mobile/mobile-wallet-adapter-protocol';
+} from "@solana-mobile/mobile-wallet-adapter-protocol";
 
 export interface Account {
   address: Base64EncodedAddress; // base64, as returned by MWA
@@ -94,7 +95,7 @@ export interface AuthorizationContextValue {
   // State
   accounts: Account[] | null;
   selectedAccount: Account | null;
-  
+
   // Actions
   authorizeSession: (wallet: AuthorizeAPI) => Promise<Account>;
   deauthorizeSession: (wallet: DeauthorizeAPI) => Promise<void>;
@@ -108,18 +109,18 @@ Here's the complete AuthorizationProvider:
 
 ```typescript
 // src/providers/AuthorizationProvider.tsx
-import React, { 
-  createContext, 
-  useContext, 
-  useState, 
-  useCallback, 
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
   useMemo,
   ReactNode,
   useEffect,
 } from 'react';
 import { PublicKey } from '@solana/web3.js';
-import { 
-  AuthorizeAPI, 
+import {
+  AuthorizeAPI,
   DeauthorizeAPI,
   AuthorizationResult,
   Account as MWAAccount,
@@ -181,10 +182,10 @@ export function AuthorizationProvider({ children }: { children: ReactNode }) {
   const handleAuthorizationResult = useCallback(
     async (result: AuthorizationResult): Promise<Authorization> => {
       const accounts = result.accounts.map(convertAccount);
-      
+
       // Determine which account to select
       let selectedAccount: Account;
-      
+
       if (
         authorization?.selectedAccount &&
         accounts.some((a) => a.address === authorization.selectedAccount.address)
@@ -195,16 +196,16 @@ export function AuthorizationProvider({ children }: { children: ReactNode }) {
         // Select the first account
         selectedAccount = accounts[0];
       }
-      
+
       const newAuth: Authorization = {
         accounts,
         authToken: result.auth_token,
         selectedAccount,
       };
-      
+
       // Cache the token
       await AsyncStorage.setItem(AUTH_TOKEN_KEY, result.auth_token);
-      
+
       setAuthorization(newAuth);
       return newAuth;
     },
@@ -215,13 +216,13 @@ export function AuthorizationProvider({ children }: { children: ReactNode }) {
   const authorizeSession = useCallback(
     async (wallet: AuthorizeAPI): Promise<Account> => {
       const cachedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
-      
+
       const result = await wallet.authorize({
         identity: APP_IDENTITY,
         chain: CLUSTER,
         auth_token: cachedToken ?? undefined,
       });
-      
+
       const auth = await handleAuthorizationResult(result);
       return auth.selectedAccount;
     },
@@ -233,7 +234,7 @@ export function AuthorizationProvider({ children }: { children: ReactNode }) {
     async (wallet: DeauthorizeAPI): Promise<void> => {
       const authToken = authorization?.authToken;
       if (!authToken) return;
-      
+
       await wallet.deauthorize({ auth_token: authToken });
       await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
       setAuthorization(null);
@@ -245,15 +246,15 @@ export function AuthorizationProvider({ children }: { children: ReactNode }) {
   const onChangeAccount = useCallback(
     (account: Account): void => {
       if (!authorization) return;
-      
+
       const exists = authorization.accounts.some(
         (a) => a.address === account.address
       );
-      
+
       if (!exists) {
         throw new Error('Account not in authorized set');
       }
-      
+
       setAuthorization((prev) =>
         prev ? { ...prev, selectedAccount: account } : null
       );
@@ -341,18 +342,18 @@ Create a custom hook for transactions that uses the provider:
 
 ```typescript
 // hooks/useSendTransaction.ts
-import { useCallback } from 'react';
-import { 
-  Connection, 
-  PublicKey, 
+import { useCallback } from "react";
+import {
+  Connection,
+  PublicKey,
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
   LAMPORTS_PER_SOL,
-} from '@solana/web3.js';
-import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { useAuthorization } from '../providers/AuthorizationProvider';
-import { useConnection } from '../providers/ConnectionProvider';
+} from "@solana/web3.js";
+import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { useAuthorization } from "../providers/AuthorizationProvider";
+import { useConnection } from "../providers/ConnectionProvider";
 
 export function useSendSol() {
   const { authorizeSession } = useAuthorization();
@@ -363,9 +364,9 @@ export function useSendSol() {
       return await transact(async (wallet) => {
         // Use provider's authorize function
         const account = await authorizeSession(wallet);
-        
+
         const { blockhash } = await connection.getLatestBlockhash();
-        
+
         const transaction = new VersionedTransaction(
           new TransactionMessage({
             payerKey: account.publicKey,
@@ -377,17 +378,17 @@ export function useSendSol() {
                 lamports: amountSol * LAMPORTS_PER_SOL,
               }),
             ],
-          }).compileToV0Message()
+          }).compileToV0Message(),
         );
-        
+
         const [signature] = await wallet.signAndSendTransactions({
           transactions: [transaction],
         });
-        
+
         return signature;
       });
     },
-    [authorizeSession, connection]
+    [authorizeSession, connection],
   );
 }
 ```
@@ -398,7 +399,7 @@ Usage in a component:
 function SendScreen() {
   const sendSol = useSendSol();
   const [sending, setSending] = useState(false);
-  
+
   const handleSend = async () => {
     setSending(true);
     try {
@@ -410,7 +411,7 @@ function SendScreen() {
       setSending(false);
     }
   };
-  
+
   return <Button title="Send 0.1 SOL" onPress={handleSend} disabled={sending} />;
 }
 ```
@@ -422,20 +423,21 @@ Implement a disconnect button:
 ```typescript
 function DisconnectButton() {
   const { selectedAccount, deauthorizeSession } = useAuthorization();
-  
+
   const handleDisconnect = async () => {
     await transact(async (wallet) => {
       await deauthorizeSession(wallet);
     });
   };
-  
+
   if (!selectedAccount) return null;
-  
+
   return <Button title="Disconnect" onPress={handleDisconnect} />;
 }
 ```
 
 After disconnecting:
+
 - `selectedAccount` becomes `null`
 - `accounts` becomes `null`
 - Cached auth token is cleared
@@ -448,9 +450,9 @@ Some wallets authorize multiple accounts. The provider handles this:
 ```typescript
 function AccountPicker() {
   const { accounts, selectedAccount, onChangeAccount } = useAuthorization();
-  
+
   if (!accounts || accounts.length <= 1) return null;
-  
+
   return (
     <View>
       <Text>Select Account:</Text>

@@ -1,10 +1,10 @@
-import { AnimatePresence, anticipate, motion } from "motion/react";
 import classNames from "classnames";
+import { anticipate, motion } from "motion/react";
 
 export default function LogoGlyph({
   width = 24,
   height = 20,
-  showText = true,
+  showText: _showText = true,
   isScrolled = false,
 }) {
   function getAnimation(delay: number) {
@@ -75,12 +75,7 @@ export default function LogoGlyph({
             id="8"
             {...getAnimation(0.7)}
           />
-          <motion.path
-            d="M4 20H0V16H4V20Z"
-            fill="#00FFFF"
-            id="9"
-            {...getAnimation(0.4)}
-          />
+          <motion.path d="M4 20H0V16H4V20Z" fill="#00FFFF" id="9" {...getAnimation(0.4)} />
           <motion.path
             d="M15.9997 19.9999H11.9997V15.9999H15.9997V19.9999Z"
             fill="#00FFFF"

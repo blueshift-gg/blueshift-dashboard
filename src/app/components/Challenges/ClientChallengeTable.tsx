@@ -1,25 +1,19 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-import { anticipate } from "motion";
-import { Button } from "@blueshift-gg/ui-components";
-import { motion } from "motion/react";
+import { Button, HeadingReveal, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
-import React, { useState, useEffect } from "react";
-import {
-  ChallengeRequirement,
-  VerificationApiResponse,
-} from "@/hooks/useChallengeVerifier";
-import { Icon } from "@blueshift-gg/ui-components";
-import Divider from "../Divider/Divider";
-import { HeadingReveal } from "@blueshift-gg/ui-components";
-
-import { usePersistentStore } from "@/stores/store";
-import { Link } from "@/i18n/navigation";
-import { LogMessage } from "@/hooks/useEsbuildRunner";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import { anticipate } from "motion";
+import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import type { ChallengeRequirement, VerificationApiResponse } from "@/hooks/useChallengeVerifier";
+import type { LogMessage } from "@/hooks/useEsbuildRunner";
+import { Link } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
+import ChallengeBadge from "../ChallengeBadge/ChallengeBadge";
+import Divider from "../Divider/Divider";
 
 interface ChallengeTableProps {
   onRunCodeClick: () => void;
@@ -54,34 +48,31 @@ export default function ChallengeTable({
   const t = useTranslations();
   const searchParams = useSearchParams();
   const fromCourse = searchParams.get("fromCourse");
-  const [selectedRequirement, setSelectedRequirement] =
-    useState<ChallengeRequirement | null>(null);
+  const [selectedRequirement, setSelectedRequirement] = useState<ChallengeRequirement | null>(null);
 
   const { challengeStatuses } = usePersistentStore();
   const courseSlug = challenge.slug;
 
   useEffect(() => {
     if (verificationData) {
-      const firstFailedRequirement = requirements.find(
-        (req) => req.status === "failed"
-      );
+      const firstFailedRequirement = requirements.find((req) => req.status === "failed");
       if (firstFailedRequirement) {
         setSelectedRequirement(firstFailedRequirement);
       }
     }
   }, [verificationData, requirements]);
 
-  const overallIsLoading = isCodeRunning || !isEsbuildReady;
+  const _overallIsLoading = isCodeRunning || !isEsbuildReady;
 
   return (
     <motion.div
       className={classNames(
         "w-[calc(100%-2px)] transition opacity-0 lg:opacity-100 mx-auto flex absolute lg:relative bg-background lg:bg-transparent h-[calc(100%-81px)] lg:h-full lg:w-full",
         isOpen && "opacity-100 z-10 lg:z-1",
-        !isOpen && "pointer-events-none lg:pointer-events-auto"
+        !isOpen && "pointer-events-none lg:pointer-events-auto",
       )}
     >
-      <div className="pb-24 bg-card-solid/50 overflow-y-auto w-full min-w-full xl:min-w-[400px] px-2 lg:px-4 lg:right-4 lg:border-l lg:border-l-border lg:pt-6 flex flex-col lg:gap-y-8 justify-between overflow-hidden lg:pb-6 [mask:linear-gradient(to_bottom,black_85%,transparent_100%)]">
+      <div className="flex w-full min-w-full flex-col justify-between overflow-hidden overflow-y-auto bg-card-solid/50 px-2 pb-24 [mask:linear-gradient(to_bottom,black_85%,transparent_100%)] lg:right-4 lg:gap-y-8 lg:border-l lg:border-l-border lg:px-4 lg:pt-6 lg:pb-6 xl:min-w-[400px]">
         {(challengeStatuses[courseSlug] === "completed" ||
           challengeStatuses[courseSlug] === "claimed") &&
           !allowRedo && (
@@ -89,7 +80,7 @@ export default function ChallengeTable({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute z-10 inset-0 w-full h-[20dvh] lg:h-full bg-background/80 backdrop-blur gap-y-5 flex flex-col items-center justify-center"
+              className="absolute inset-0 z-10 flex h-[20dvh] w-full flex-col items-center justify-center gap-y-5 bg-background/80 backdrop-blur lg:h-full"
             >
               <div className="flex flex-col items-center justify-center gap-y-1">
                 <span className="text-lg font-medium text-shade-primary">
@@ -108,17 +99,15 @@ export default function ChallengeTable({
                   label={t(
                     fromCourse
                       ? "ChallengePage.challenge_completed.view_other_courses"
-                      : "ChallengePage.challenge_completed.view_other_challenges"
+                      : "ChallengePage.challenge_completed.view_other_challenges",
                   )}
                 />
               </Link>
               <div className="relative w-full">
-                <div className="font-mono absolute text-xs text-mute top-1/2 z-10 -translate-y-1/2 left-1/2 -translate-x-1/2 px-4 bg-background">
-                  {t(
-                    `ChallengePage.challenge_completed.divider_label`
-                  ).toUpperCase()}
+                <div className="text-mute absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 bg-background px-4 font-mono text-xs">
+                  {t(`ChallengePage.challenge_completed.divider_label`).toUpperCase()}
                 </div>
-                <div className="w-full h-[1px] bg-border absolute"></div>
+                <div className="absolute h-[1px] w-full bg-border"></div>
               </div>
               <Button
                 variant="secondary"
@@ -130,24 +119,24 @@ export default function ChallengeTable({
             </motion.div>
           )}
 
-        <div className="order-2 lg:order-1 flex flex-col gap-y-4 pt-4 lg:pt-0 lg:border-t-0">
+        <div className="order-2 flex flex-col gap-y-4 pt-4 lg:order-1 lg:border-t-0 lg:pt-0">
           {runnerLogs.length > 0 && (
             <div className="flex flex-col gap-y-2">
-              <div className="flex flex-col gap-y-4 items-start overflow-hidden bg-background pt-4 px-1 pb-1 border border-border">
+              <div className="flex flex-col items-start gap-y-4 overflow-hidden border border-border bg-background px-1 pt-4 pb-1">
                 <HeadingReveal
                   baseDelay={0.1}
                   text="EXECUTION LOGS"
                   headingLevel="h3"
-                  className="font-mono px-3 text-sm"
+                  className="px-3 font-mono text-sm"
                   color="#FFFFFF"
                 />
-                <div className="px-2 w-full">
+                <div className="w-full px-2">
                   <Divider />
                 </div>
-                <div className="max-w-full sm:max-w-[450px] overflow-x-scroll flex flex-col gap-y-1 items-start px-3 pr-5 pb-2 w-max max-h-80 custom-scrollbar font-fira-code text-xs">
+                <div className="custom-scrollbar flex max-h-80 w-max max-w-full flex-col items-start gap-y-1 overflow-x-scroll px-3 pr-5 pb-2 font-fira-code text-xs sm:max-w-[450px]">
                   {runnerLogs.map((log, index) => (
                     <motion.div
-                      key={index}
+                      key={log.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ duration: 0.2, delay: index * 0.03 }}
@@ -158,13 +147,12 @@ export default function ChallengeTable({
                           log.type === "WORKER_ERROR" ||
                           log.type === "VERIFICATION_ERROR",
                         "text-[#f1fa8c]": log.type === "WARN",
-                        "text-[#8be9fd]":
-                          log.type === "INFO" || log.type === "SYSTEM",
+                        "text-[#8be9fd]": log.type === "INFO" || log.type === "SYSTEM",
                         "text-[#6272a4]": log.type === "DEBUG",
                         "text-[#f8f8f2]": log.type === "LOG",
                       })}
                     >
-                      <span className="font-semibold mr-1.5 text-[#f8f8f2]">{`[${log.timestamp.toLocaleTimeString()}]`}</span>
+                      <span className="mr-1.5 font-semibold text-[#f8f8f2]">{`[${log.timestamp.toLocaleTimeString()}]`}</span>
                       <span
                         className={`font-bold ${
                           log.type === "SYSTEM"
@@ -177,11 +165,7 @@ export default function ChallengeTable({
                       <span className="ml-1.5">
                         {Array.isArray(log.payload)
                           ? log.payload
-                              .map((p) =>
-                                typeof p === "object"
-                                  ? JSON.stringify(p)
-                                  : String(p)
-                              )
+                              .map((p) => (typeof p === "object" ? JSON.stringify(p) : String(p)))
                               .join(" ")
                           : String(log.payload)}
                       </span>
@@ -205,29 +189,24 @@ export default function ChallengeTable({
                 type="button"
                 className={classNames(
                   "flex flex-col gap-y-4 group enabled:hover:cursor-pointer py-3 transition duration-200 enabled:hover:bg-card-solid-foreground/50",
-                  selectedRequirement === requirement &&
-                    "pb-6 bg-card-solid-foreground/50",
+                  selectedRequirement === requirement && "pb-6 bg-card-solid-foreground/50",
                   selectedRequirement !== null &&
                     selectedRequirement !== requirement &&
-                    "opacity-40"
+                    "opacity-40",
                 )}
                 key={requirement.instructionKey}
               >
                 <div
-                  className="flex items-center justify-between px-4 text-left w-full"
+                  className="flex w-full items-center justify-between px-4 text-left"
                   key={requirement.instructionKey}
                 >
-                  <span className="font-medium text-xs xs:text-sm max-w-[60%]">
-                    {t(
-                      `challenges.${courseSlug}.requirements.${requirement.instructionKey}.title`
-                    )}
+                  <span className="max-w-[60%] text-xs font-medium xs:text-sm">
+                    {t(`challenges.${courseSlug}.requirements.${requirement.instructionKey}.title`)}
                   </span>
                   {!isLoading && !error ? (
                     <div className="flex items-center gap-x-4">
                       <ChallengeBadge
-                        label={t(
-                          `ChallengePage.test_results.${requirement.status}`
-                        )}
+                        label={t(`ChallengePage.test_results.${requirement.status}`)}
                         variant={requirement.status}
                       />
                       <Icon
@@ -235,7 +214,7 @@ export default function ChallengeTable({
                         className={classNames(
                           "transition-transform",
                           requirement.status === "incomplete" && "opacity-40",
-                          selectedRequirement === requirement && "rotate-180"
+                          selectedRequirement === requirement && "rotate-180",
                         )}
                         size={14}
                       />
@@ -245,9 +224,7 @@ export default function ChallengeTable({
                   )}
 
                   {!isLoading && error && (
-                    <div className="text-xs font-medium">
-                      An error occurred. Please try again.
-                    </div>
+                    <div className="text-xs font-medium">An error occurred. Please try again.</div>
                   )}
                 </div>
 
@@ -261,27 +238,24 @@ export default function ChallengeTable({
                   >
                     <Divider />
                     {verificationData?.results?.find(
-                      (result) =>
-                        result.instruction === requirement.instructionKey
+                      (result) => result.instruction === requirement.instructionKey,
                     ) && (
                       <div className="flex flex-col gap-y-2 text-sm">
-                        <div className="flex flex-col gap-y-4 items-start overflow-hidden bg-background pt-4 px-1 pb-1">
+                        <div className="flex flex-col items-start gap-y-4 overflow-hidden bg-background px-1 pt-4 pb-1">
                           <HeadingReveal
                             baseDelay={0.1}
                             text="VERIFICATION LOGS"
                             headingLevel="h3"
-                            className="font-mono px-3"
+                            className="px-3 font-mono"
                             color="#FFA726"
                           />
-                          <div className="px-2 w-full">
+                          <div className="w-full px-2">
                             <Divider />
                           </div>
-                          <div className="flex gap-x-2 items-center w-full">
+                          <div className="flex w-full items-center gap-x-2">
                             <div className="flex flex-col gap-y-2 pt-1 pb-2">
                               {verificationData.results.find(
-                                (result) =>
-                                  result.instruction ===
-                                  requirement.instructionKey
+                                (result) => result.instruction === requirement.instructionKey,
                               )?.message && (
                                 <HeadingReveal
                                   baseDelay={0}
@@ -290,32 +264,26 @@ export default function ChallengeTable({
                                   splitBy="chars"
                                   speed={0.1}
                                   color="#FF5555"
-                                  className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
+                                  className="sticky left-0 w-max flex-shrink-0 px-3 font-mono"
                                 />
                               )}
                               {verificationData.results
-                                .find(
-                                  (result) =>
-                                    result.instruction ===
-                                    requirement.instructionKey
-                                )
-                                ?.program_logs?.map((log, index) => (
+                                .find((result) => result.instruction === requirement.instructionKey)
+                                ?.program_logs?.map((_log, index) => (
                                   <HeadingReveal
                                     baseDelay={index * 0.1}
                                     text="PROGRAM"
                                     headingLevel="h3"
-                                    key={index}
+                                    key={`${requirement.instructionKey}-program-label-${_log}`}
                                     splitBy="chars"
                                     speed={0.1}
-                                    className="font-mono px-3 flex-shrink-0 w-max sticky left-0"
+                                    className="sticky left-0 w-max flex-shrink-0 px-3 font-mono"
                                   />
                                 ))}
                             </div>
-                            <div className="flex flex-col gap-y-2 items-start px-1 overflow-x-auto pr-5 pb-2">
+                            <div className="flex flex-col items-start gap-y-2 overflow-x-auto px-1 pr-5 pb-2">
                               {verificationData.results.find(
-                                (result) =>
-                                  result.instruction ===
-                                  requirement.instructionKey
+                                (result) => result.instruction === requirement.instructionKey,
                               )?.message && (
                                 <motion.span
                                   initial={{ opacity: 0 }}
@@ -326,23 +294,17 @@ export default function ChallengeTable({
                                     ease: anticipate,
                                     delay: 0.8,
                                   }}
-                                  className="text-start w-full font-fira-code font-medium text-nowrap text-[#FF5555]"
+                                  className="w-full text-start font-fira-code font-medium text-nowrap text-[#FF5555]"
                                 >
                                   {
                                     verificationData.results.find(
-                                      (result) =>
-                                        result.instruction ===
-                                        requirement.instructionKey
+                                      (result) => result.instruction === requirement.instructionKey,
                                     )?.message
                                   }
                                 </motion.span>
                               )}
                               {verificationData.results
-                                .find(
-                                  (result) =>
-                                    result.instruction ===
-                                    requirement.instructionKey
-                                )
+                                .find((result) => result.instruction === requirement.instructionKey)
                                 ?.program_logs?.map((log, index) => (
                                   <motion.span
                                     initial={{ opacity: 0 }}
@@ -353,7 +315,7 @@ export default function ChallengeTable({
                                       ease: anticipate,
                                       delay: 1 + index * 0.1,
                                     }}
-                                    key={index}
+                                    key={`${requirement.instructionKey}-program-log-${log}`}
                                     className="text-start font-fira-code font-medium text-nowrap text-shade-secondary"
                                   >
                                     {log.slice(7, log.length)}
@@ -362,37 +324,25 @@ export default function ChallengeTable({
                             </div>
                           </div>
 
-                          <div className="bg-card-solid/80 px-4 py-2 flex gap-x-4 text-sm font-medium w-full justify-between items-center">
-                            <Icon
-                              name="General"
-                              size={14}
-                              className="text-brand-primary"
-                            />
+                          <div className="flex w-full items-center justify-between gap-x-4 bg-card-solid/80 px-4 py-2 text-sm font-medium">
+                            <Icon name="General" size={14} className="text-brand-primary" />
                             <div className="flex items-center gap-x-2">
                               <div>
-                                <span className="text-text-shade-tertiary">
-                                  Compute Units:{" "}
-                                </span>
+                                <span className="text-text-shade-tertiary">Compute Units: </span>
                                 <span className="font-medium text-brand-secondary">
                                   {
                                     verificationData.results.find(
-                                      (result) =>
-                                        result.instruction ===
-                                        requirement.instructionKey
+                                      (result) => result.instruction === requirement.instructionKey,
                                     )?.compute_units_consumed
                                   }
                                 </span>
                               </div>
                               <div className="hidden lg:block">
-                                <span className="text-text-shade-tertiary">
-                                  Execution Time:{" "}
-                                </span>
+                                <span className="text-text-shade-tertiary">Execution Time: </span>
                                 <span className="font-medium text-brand-secondary">
                                   {
                                     verificationData.results.find(
-                                      (result) =>
-                                        result.instruction ===
-                                        requirement.instructionKey
+                                      (result) => result.instruction === requirement.instructionKey,
                                     )?.execution_time
                                   }
                                   ms

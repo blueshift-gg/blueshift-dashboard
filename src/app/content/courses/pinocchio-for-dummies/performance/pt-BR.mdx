@@ -182,6 +182,7 @@ A Solana Virtual Machine (SVM) usa uma arquitetura de memória de três camadas 
 Entender essa arquitetura é crucial para escrever programas Solana de alto desempenho.
 
 Os programas operam dentro de espaços de endereços virtuais fixos com mapeamento de memória previsível:
+
 - **Código do Programa**: `0x100000000` - Onde o bytecode compilado do seu programa reside
 - **Dados da Stack**: `0x200000000` - Variáveis locais e frames de chamada de função
 - **Dados do Heap**: `0x300000000` - Alocações dinâmicas (custoso!)
@@ -201,38 +202,40 @@ Alocação de heap não é inerentemente ruim, mas na Solana é custosa e comple
 ### Técnicas de Zero-Allocation
 
 1. Estruturas de Dados Baseadas em Referências - Transforme dados owned em referências emprestadas:
-    ```rust
-    // ALOCAÇÃO NO HEAP:
-    struct AccountInfo {
-        key: Pubkey,        // Dados owned - copiados para o heap
-        data: Vec<u8>,      // Vector - definitivamente alocado no heap
-    }
 
-    // ZERO ALLOCATION:
-    struct AccountInfo<'a> {
-        key: &'a Pubkey,    // Referência - sem alocação
-        data: &'a [u8],     // Referência de slice - sem alocação
-    }
-    ```
+   ```rust
+   // ALOCAÇÃO NO HEAP:
+   struct AccountInfo {
+       key: Pubkey,        // Dados owned - copiados para o heap
+       data: Vec<u8>,      // Vector - definitivamente alocado no heap
+   }
+
+   // ZERO ALLOCATION:
+   struct AccountInfo<'a> {
+       key: &'a Pubkey,    // Referência - sem alocação
+       data: &'a [u8],     // Referência de slice - sem alocação
+   }
+   ```
 
 2. Acesso a Dados Zero-Copy - Acesse dados in-place sem deserialização:
-    ```rust
-    // Em vez de deserializar, acesse os dados in-place:
-    pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
-        // Faz parse das contas diretamente do slice de bytes - SEM ALOCAÇÃO NO HEAP
-        let source_account = &accounts[0..36];  // Apenas slices de referência
-        let dest_account = &accounts[36..72];
 
-        // Acessa campos através de aritmética de ponteiros - SEM ALOCAÇÃO
-        let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
-    }
-    ```
+   ```rust
+   // Em vez de deserializar, acesse os dados in-place:
+   pub fn process_transfer(accounts: &[u8], instruction_data: &[u8]) {
+       // Faz parse das contas diretamente do slice de bytes - SEM ALOCAÇÃO NO HEAP
+       let source_account = &accounts[0..36];  // Apenas slices de referência
+       let dest_account = &accounts[36..72];
+
+       // Acessa campos através de aritmética de ponteiros - SEM ALOCAÇÃO
+       let amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
+   }
+   ```
 
 3. Restrições No-Std - Previne uso acidental de heap em tempo de compilação:
-    ```rust
-    // Impõe no-std para prevenir uso acidental do heap:
-    #![no_std]
-    ```
+   ```rust
+   // Impõe no-std para prevenir uso acidental do heap:
+   #![no_std]
+   ```
 
 ### Alocador de Memória do Pinocchio
 

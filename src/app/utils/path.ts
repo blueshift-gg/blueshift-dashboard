@@ -1,12 +1,6 @@
-import {
-  languages,
-  languageColors,
-  difficulty,
-  Language,
-  Difficulty,
-} from "./common";
-import { CourseDifficulty, CourseMetadata } from "./course";
-import { ChallengeMetadata } from "./challenges";
+import type { ChallengeMetadata } from "./challenges";
+import { difficulty, type Language, languageColors, languages } from "./common";
+import type { CourseDifficulty, CourseMetadata } from "./course";
 
 // Re-export with path-specific names for consistency
 export const pathLanguages = languages;
@@ -61,7 +55,7 @@ export function calculatePathDifficulty(stepDifficulties: CourseDifficulty[]): P
  * Determine if a path has mixed languages.
  */
 export function hasMultipleLanguages(langs: Language[]): boolean {
-  const uniqueLanguages = new Set(langs.filter(l => l !== "General"));
+  const uniqueLanguages = new Set(langs.filter((l) => l !== "General"));
   return uniqueLanguages.size > 1;
 }
 
@@ -73,7 +67,7 @@ export function hasMultipleLanguages(langs: Language[]): boolean {
 export function getPathCompletedSteps(
   steps: PathStepWithMetadata[],
   courseProgress: Record<string, number>,
-  challengeStatuses: Record<string, string>
+  challengeStatuses: Record<string, string>,
 ): number {
   return steps.filter((step) => {
     if (step.type === "course") {

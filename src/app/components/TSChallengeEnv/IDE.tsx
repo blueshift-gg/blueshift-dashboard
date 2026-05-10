@@ -1,27 +1,25 @@
 "use client";
 
-import classNames from "classnames";
-import { anticipate } from "motion";
-import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
-import { motion } from "motion/react";
-import {
-  FetchDecision,
-  InterceptedRpcCallData,
-  InterceptedWsReceiveData,
-  InterceptedWsSendData,
-  useEsbuildRunner,
-  WsReceiveDecision,
-  WsSendDecision,
-} from "@/hooks/useEsbuildRunner";
-import { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
-import { useEffect, useState } from "react";
-import { Icon } from "@blueshift-gg/ui-components";
-import { Button } from "@blueshift-gg/ui-components";
-import LogoGlyph from "../Logo/LogoGlyph";
-import { useTranslations } from "next-intl";
-
+import { Button, Icon } from "@blueshift-gg/ui-components";
 import { Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
+import classNames from "classnames";
+import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import BlueshiftEditor from "@/app/components/TSChallengeEnv/BlueshiftEditor";
+import type { TestRequirement } from "@/app/components/TSChallengeEnv/types/test-requirements";
+import {
+  type FetchDecision,
+  type InterceptedRpcCallData,
+  type InterceptedWsReceiveData,
+  type InterceptedWsSendData,
+  useEsbuildRunner,
+  type WsReceiveDecision,
+  type WsSendDecision,
+} from "@/hooks/useEsbuildRunner";
+import LogoGlyph from "../Logo/LogoGlyph";
 
 const rpcEndpoint = process.env.NEXT_PUBLIC_CHALLENGE_RPC_ENDPOINT;
 
@@ -36,20 +34,13 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   const [editorCode, setEditorCode] = useState<string>(initialCode);
-  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] =
-    useState(false);
-  const [
-    verificationFailureMessageLogged,
-    setVerificationFailureMessageLogged,
-  ] = useState(false);
+  const [wasSendTransactionIntercepted, setWasSendTransactionIntercepted] = useState(false);
+  const [verificationFailureMessageLogged, setVerificationFailureMessageLogged] = useState(false);
 
   const handleRpcCallForDecision = async (
-    rpcData: InterceptedRpcCallData
+    rpcData: InterceptedRpcCallData,
   ): Promise<FetchDecision> => {
-    console.log(
-      "[ClientChallengesContent] Intercepted RPC Call, Awaiting Decision:",
-      rpcData
-    );
+    console.log("[ClientChallengesContent] Intercepted RPC Call, Awaiting Decision:", rpcData);
 
     if (rpcData.rpcMethod === "sendTransaction") {
       setWasSendTransactionIntercepted(true); // Keep this if useful for UI feedback
@@ -61,7 +52,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       const mockSignature = bs58.encode(tx?.signature ?? []);
 
       console.debug(
-        `[ClientChallengesContent] Mocking successful response for sendTransaction. Signature: ${mockSignature}`
+        `[ClientChallengesContent] Mocking successful response for sendTransaction. Signature: ${mockSignature}`,
       );
 
       return {
@@ -79,32 +70,29 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       };
     }
 
-    console.debug(
-      `RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`
-    );
+    console.debug(`RPC call (${rpcData.rpcMethod}) to ${rpcData.url} will proceed.`);
 
     // For all other calls, or if rpcMethod is null, proceed as normal
     return { decision: "PROCEED" };
   };
 
   const handleWsSendForDecision = async (
-    wsSendData: InterceptedWsSendData
+    wsSendData: InterceptedWsSendData,
   ): Promise<WsSendDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Send, Awaiting Decision:",
-      wsSendData
+      wsSendData,
     );
 
-    const targetHost = new URL(rpcEndpoint!).host;
+    if (!rpcEndpoint) {
+      return { decision: "PROCEED" };
+    }
+
+    const targetHost = new URL(rpcEndpoint).host;
 
     if (wsSendData.url.includes(targetHost)) {
-      if (
-        typeof wsSendData.data === "string" &&
-        wsSendData.data.includes("signatureSubscribe")
-      ) {
-        console.log(
-          "[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe"
-        );
+      if (typeof wsSendData.data === "string" && wsSendData.data.includes("signatureSubscribe")) {
+        console.log("[ClientChallengesContent] Intercepted WebSocket send for signatureSubscribe");
 
         const data = JSON.parse(wsSendData.data);
 
@@ -145,19 +133,16 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       }
     }
 
-    console.log(
-      "[ClientChallengesContent] WebSocket send allowed to PROCEED:",
-      wsSendData
-    );
+    console.log("[ClientChallengesContent] WebSocket send allowed to PROCEED:", wsSendData);
     return { decision: "PROCEED" };
   };
 
   const handleWsReceiveForDecision = async (
-    wsReceiveData: InterceptedWsReceiveData
+    wsReceiveData: InterceptedWsReceiveData,
   ): Promise<WsReceiveDecision> => {
     console.log(
       "[ClientChallengesContent] Intercepted WebSocket Receive, Awaiting Decision:",
-      wsReceiveData
+      wsReceiveData,
     );
 
     return { decision: "PROCEED" };
@@ -185,7 +170,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       (log) =>
         log.type === "SYSTEM" &&
         Array.isArray(log.payload) &&
-        log.payload[0] === "Execution complete."
+        log.payload[0] === "Execution complete.",
     );
 
     if (
@@ -208,7 +193,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
     addLog,
   ]);
 
-  const handleRunCode = () => {
+  const _handleRunCode = () => {
     if (esBuildInitializationState !== "initialized") {
       // TODO Consider using a toast notification or inline message instead of alert
       alert("Code runner is not ready yet. Please wait a moment.");
@@ -221,7 +206,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   };
 
   // Test requirements
-  const requirements: TestRequirement[] = [
+  const _requirements: TestRequirement[] = [
     {
       status: "incomplete",
       instructionKey: "test_1",
@@ -230,7 +215,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   ];
 
   // Test verification data received from the backend
-  const verificationData = {
+  const _verificationData = {
     success: true,
     results: [
       {
@@ -244,7 +229,7 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
   };
 
   // Used to indicate if there is some kind of error in the verification process
-  const verificationError = null;
+  const _verificationError = null;
   // Indicate if the verification is in progress
   // TODO rename this to isVerifying
   const isVerificationLoading = false;
@@ -262,53 +247,55 @@ export default function IDE({ initialCode, title, fileName }: IDEProps) {
       className={classNames(
         "py-4 max-w-app grid grid-cols-1 mx-auto w-full gap-y-12 min-h-[400px]",
         ideView === "expanded" &&
-          "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50"
+          "left-1/2 -translate-x-1/2 fixed !max-w-[90dvw] !bottom-0 !min-h-[300px] !py-0 backdrop-blur-xl z-50",
       )}
     >
-      <div className="w-full h-full flex flex-col overflow-hidden border border-border">
-        <div className="flex flex-col relative w-full h-full">
-          <div className="w-full py-2.5 h-[36px] flex-shrink-0 z-30 relative px-4 bg-card-solid flex items-center border-b border-border">
+      <div className="flex h-full w-full flex-col overflow-hidden border border-border">
+        <div className="relative flex h-full w-full flex-col">
+          <div className="relative z-30 flex h-[36px] w-full flex-shrink-0 items-center border-b border-border bg-card-solid px-4 py-2.5">
             <div className="flex items-center gap-x-2">
-              <div className="w-[12px] h-[12px] bg-card-solid-foreground"></div>
+              <div className="bg-card-solid-foreground h-[12px] w-[12px]"></div>
               <button
+                type="button"
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/minimize",
-                  ideView === "expanded" && "!bg-[#FFBD2D]"
+                  ideView === "expanded" && "!bg-[#FFBD2D]",
                 )}
                 onClick={() => setIdeView("minified")}
               >
                 <Icon
                   className={classNames(
                     "opacity-0 transition-opacity duration-100",
-                    ideView === "expanded" && "group-hover/minimize:opacity-100"
+                    ideView === "expanded" && "group-hover/minimize:opacity-100",
                   )}
                   name="Minimize"
                   size={8}
                 />
               </button>
               <button
+                type="button"
                 className={classNames(
                   "w-[12px] h-[12px] bg-card-solid-foreground flex items-center justify-center group/expand",
-                  ideView === "minified" && "!bg-[#28C840]"
+                  ideView === "minified" && "!bg-[#28C840]",
                 )}
                 onClick={() => setIdeView("expanded")}
               >
                 <Icon
                   className={classNames(
                     "opacity-0 transition-opacity duration-100",
-                    ideView === "minified" && "group-hover/expand:opacity-100"
+                    ideView === "minified" && "group-hover/expand:opacity-100",
                   )}
                   name="Expand"
                   size={8}
                 />
               </button>
             </div>
-            <div className="text-sm font-medium text-shade-secondary absolute left-1/2 -translate-x-1/2 flex items-center gap-x-1.5">
+            <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-x-1.5 text-sm font-medium text-shade-secondary">
               <Icon name="Challenge" size={12} className="hidden sm:block" />
               <span className="flex-shrink-0">{title}</span>
             </div>
           </div>
-          <div className="w-[calc(100%-2px)] py-2 bg-card-solid/20 backdrop-blur-xl border-b border-border z-20 justify-between px-4 flex items-center">
+          <div className="z-20 flex w-[calc(100%-2px)] items-center justify-between border-b border-border bg-card-solid/20 px-4 py-2 backdrop-blur-xl">
             <LogoGlyph width={16} />
             <div className="flex items-center gap-x-2.5">
               {!isPanelOpen ? (

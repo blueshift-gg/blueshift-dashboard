@@ -1,4 +1,4 @@
-import { breeze, glide, nova, silk } from "@blueshift-gg/ui-components";
+import { glide, nova } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
@@ -28,13 +28,13 @@ const ProgressCircle = ({
     <div
       className={classNames(
         "w-[16px] h-[16px] flex items-center relative justify-center border-[1.5px] border-shade-secondary rounded-full",
-        className
+        className,
       )}
     >
       <AnimatePresence mode="wait">
         {showTick ? (
           <motion.svg
-            className="will-change-contents absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 will-change-contents"
             key="tick"
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -65,7 +65,7 @@ const ProgressCircle = ({
             }}
             className={classNames(
               "h-[8px] w-[8px] shrink-0 rounded-full bg-[conic-gradient(#ced5e4_var(--percentFilled),transparent_0)]",
-              innerClassName
+              innerClassName,
             )}
           ></motion.div>
         )}

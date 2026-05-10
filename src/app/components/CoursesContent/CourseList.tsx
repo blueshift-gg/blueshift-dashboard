@@ -1,25 +1,23 @@
 "use client";
 
-import { CourseMetadata, CourseLanguages } from "@/app/utils/course";
-import {
-  languageFilterMap,
-  reverseLanguageFilterMap,
-  difficultyFilterMap,
-  reverseDifficultyFilterMap,
-} from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
-import CourseCard from "../CourseCard/CourseCard";
+import { Banner, Dropdown, Icon, Input, Tabs } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { Icon } from "@blueshift-gg/ui-components";
-import { getCourseDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import CoursesEmpty from "./CoursesEmpty";
-import { useStore } from "@/stores/store";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { Banner, Dropdown, Input, Tabs } from "@blueshift-gg/ui-components";
-import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import {
+  difficultyFilterMap,
+  languageFilterMap,
+  reverseDifficultyFilterMap,
+  reverseLanguageFilterMap,
+} from "@/app/utils/common";
+import type { CourseLanguages, CourseMetadata } from "@/app/utils/course";
+import { getCourseDropdownItems } from "@/app/utils/dropdownItems";
 import { recommendCourses } from "@/app/utils/recommendations";
+import { usePersistentStore, useStore } from "@/stores/store";
+import CourseCard from "../CourseCard/CourseCard";
+import CourseCardSkeleton from "../CourseCard/CourseCardSkeleton";
+import CoursesEmpty from "./CoursesEmpty";
 
 type CoursesContentProps = {
   searchValue?: string;
@@ -31,6 +29,21 @@ type CoursesContentProps = {
   }[];
   isLoading?: boolean;
 };
+
+const FEATURED_SKELETON_KEYS = [
+  "featured-skeleton-1",
+  "featured-skeleton-2",
+  "featured-skeleton-3",
+] as const;
+
+const COURSE_LIST_SKELETON_KEYS = [
+  "list-skeleton-1",
+  "list-skeleton-2",
+  "list-skeleton-3",
+  "list-skeleton-4",
+  "list-skeleton-5",
+  "list-skeleton-6",
+] as const;
 
 export default function CourseList({
   initialCourses = [],
@@ -80,7 +93,7 @@ export default function CourseList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -88,7 +101,7 @@ export default function CourseList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -103,7 +116,7 @@ export default function CourseList({
       // Cleanup
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   const handleScrollLeft = () => {
     if (carouselRef.current) {
@@ -212,13 +225,11 @@ export default function CourseList({
 
       // 2. Language Filter (Empty = All)
       const matchesLanguage =
-        selectedLanguages.length === 0 ||
-        selectedLanguages.includes(course.language);
+        selectedLanguages.length === 0 || selectedLanguages.includes(course.language);
 
       // 3. Difficulty Filter (Empty = All)
       const matchesDifficulty =
-        selectedDifficulties.length === 0 ||
-        selectedDifficulties.includes(course.difficulty);
+        selectedDifficulties.length === 0 || selectedDifficulties.includes(course.difficulty);
 
       // 4. Tab Filter
       let matchesTab = true;
@@ -233,21 +244,15 @@ export default function CourseList({
           (progress > 0 && progress < totalLessons) ||
           (progress === totalLessons &&
             !!course.challenge &&
-            !["completed", "claimed"].includes(
-              challengeStatuses[course.challenge]
-            ));
+            !["completed", "claimed"].includes(challengeStatuses[course.challenge]));
       } else if (activeTab === "completed") {
         const isChallengeComplete =
           !course.challenge ||
-          ["completed", "claimed"].includes(
-            challengeStatuses[course.challenge]
-          );
+          ["completed", "claimed"].includes(challengeStatuses[course.challenge]);
         matchesTab = progress === totalLessons && isChallengeComplete;
       }
 
-      return (
-        matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
-      );
+      return matchesSearch && matchesLanguage && matchesDifficulty && matchesTab;
     })
     .sort((a, b) => a.difficulty - b.difficulty);
 
@@ -266,19 +271,14 @@ export default function CourseList({
     if (progress === 0) return "";
 
     // Find the lesson with matching number
-    const currentLesson = courseLessonData.lessons.find(
-      (lesson) => lesson.number === progress
-    );
+    const currentLesson = courseLessonData.lessons.find((lesson) => lesson.number === progress);
 
     return currentLesson?.slug || "";
   };
 
   const dropdownItems = getCourseDropdownItems(isMobile);
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedCourses = useMemo(
     () =>
@@ -297,7 +297,7 @@ export default function CourseList({
       selectedLanguages,
       selectedDifficulties,
       seed,
-    ]
+    ],
   );
 
   // Create tabs array with conditional ordering
@@ -332,12 +332,7 @@ export default function CourseList({
   }, [activeTab, hasInProgress, hasCompleted, handleTabChange]);
 
   return (
-    <div
-      className={classNames(
-        "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
-      )}
-    >
+    <div className={classNames("flex flex-col gap-y-12", isLoading && "animate-pulse")}>
       {/* Get Started */}
       <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
         <Banner title={t("lessons.get_started")} variant="brand" />
@@ -345,21 +340,19 @@ export default function CourseList({
           <div
             ref={carouselRef}
             className={classNames(
-              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
             )}
           >
             {isLoading
-              ? Array.from({ length: 3 }).map((_, index) => (
-                  <CourseCardSkeleton key={`featured-skeleton-${index}`} />
+              ? FEATURED_SKELETON_KEYS.map((skeletonKey) => (
+                  <CourseCardSkeleton key={skeletonKey} />
                 ))
               : recommendedCourses.map((course) => {
                   const totalLessons =
-                    courseLessons.find((c) => c.slug === course.slug)
-                      ?.totalLessons || 0;
+                    courseLessons.find((c) => c.slug === course.slug)?.totalLessons || 0;
                   const currentLessonSlug = getCurrentLessonSlug(course.slug);
-                  const completedLessonsCount =
-                    courseProgress[course.slug] || 0;
-                  let link;
+                  const completedLessonsCount = courseProgress[course.slug] || 0;
+                  let link: string | undefined;
                   if (currentLessonSlug && course.slug) {
                     link = `/courses/${course.slug}/${currentLessonSlug}`;
                   } else if (course.slug && !currentLessonSlug) {
@@ -367,7 +360,7 @@ export default function CourseList({
                   }
                   return (
                     <CourseCard
-                      className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
+                      className="w-full max-w-[340px] shrink-0 snap-center lg:max-w-full lg:shrink"
                       key={course.slug}
                       name={t(`courses.${course.slug}.title`)}
                       language={course.language}
@@ -382,22 +375,24 @@ export default function CourseList({
                   );
                 })}
           </div>
-          <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
+          <div className="absolute bottom-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
         </div>
-        <div className="w-full flex justify-center lg:hidden relative z-10">
-          <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
-          <div className="w-full h-[48px] flex justify-end">
+        <div className="relative z-10 flex w-full justify-center lg:hidden">
+          <div className="absolute top-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
+          <div className="flex h-[48px] w-full justify-end">
             <button
+              type="button"
               disabled={scrollState.isAtStart}
               onClick={handleScrollLeft}
-              className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
+              className="text-tertiary hover:text-primary absolute right-11 flex h-[48px] w-[48px] items-center justify-center border-x border-x-border-light bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
             >
               <Icon name="Chevron" className="rotate-90" />
             </button>
             <button
+              type="button"
               disabled={scrollState.isAtEnd}
               onClick={handleScrollRight}
-              className="mr-[1px] absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
+              className="text-tertiary hover:text-primary absolute -right-1 mr-[1px] flex h-[48px] w-[48px] items-center justify-center bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
             >
               <Icon name="Chevron" className="-rotate-90" />
             </button>
@@ -406,14 +401,14 @@ export default function CourseList({
       </div>
 
       {/* Full List */}
-      <div className="relative px-1 sm:p-4 pb-12 sm:pb-16 flex flex-col gap-y-6 w-full">
-        <div className="flex gap-y-3 flex-col lg:flex-row items-start lg:items-center justify-between w-full">
-          <div className="w-full md:w-max flex flex-col md:flex-row items-center gap-y-3 md:gap-x-3">
+      <div className="relative flex w-full flex-col gap-y-6 px-1 pb-12 sm:p-4 sm:pb-16">
+        <div className="flex w-full flex-col items-start justify-between gap-y-3 lg:flex-row lg:items-center">
+          <div className="flex w-full flex-col items-center gap-y-3 md:w-max md:flex-row md:gap-x-3">
             <Input
               value={searchValue}
               onChange={(value: string) => setSearchValue(value)}
               placeholder="Search..."
-              className="w-full md:w-max min-w-[300px]"
+              className="w-full min-w-[300px] md:w-max"
               hasMessage={false}
               badge={{
                 icon: { name: "Search", size: 16 },
@@ -429,10 +424,7 @@ export default function CourseList({
               selectedItem={[
                 ...selectedLanguages.map((l) => reverseLanguageFilterMap[l]),
                 ...selectedDifficulties.map(
-                  (d) =>
-                    reverseDifficultyFilterMap[
-                      d as keyof typeof reverseDifficultyFilterMap
-                    ]
+                  (d) => reverseDifficultyFilterMap[d as keyof typeof reverseDifficultyFilterMap],
                 ),
                 ...(activeTab !== "all-courses" ? [activeTab] : []),
               ]}
@@ -448,22 +440,17 @@ export default function CourseList({
             theme="secondary"
           />
         </div>
-        <div
-          className={classNames(
-            "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
-          )}
-        >
+        <div className={classNames("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3")}>
           {isLoading
-            ? Array.from({ length: 6 }).map((_, index) => (
-                <CourseCardSkeleton key={`list-skeleton-${index}`} />
+            ? COURSE_LIST_SKELETON_KEYS.map((skeletonKey) => (
+                <CourseCardSkeleton key={skeletonKey} />
               ))
             : filteredCourses.map((course) => {
                 const totalLessons =
-                  courseLessons.find((c) => c.slug === course.slug)
-                    ?.totalLessons || 0;
+                  courseLessons.find((c) => c.slug === course.slug)?.totalLessons || 0;
                 const currentLessonSlug = getCurrentLessonSlug(course.slug);
                 const completedLessonsCount = courseProgress[course.slug] || 0;
-                let link;
+                let link: string | undefined;
                 if (currentLessonSlug && course.slug) {
                   link = `/courses/${course.slug}/${currentLessonSlug}`;
                 } else if (course.slug && !currentLessonSlug) {

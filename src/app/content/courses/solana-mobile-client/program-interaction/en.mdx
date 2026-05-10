@@ -10,6 +10,7 @@ import { ArticleSection } from "../../../../../components/ArticleSection/Article
 Token transfers and NFT operations use well-known programs with standardized instructions. But Solana's power comes from custom programs: DeFi protocols, gaming systems, social networks, all running on-chain.
 
 Every Solana program follows the same pattern:
+
 1. Receive an instruction with accounts and data
 2. Validate the accounts
 3. Process the data
@@ -27,16 +28,18 @@ import { TransactionInstruction, PublicKey } from "@solana/web3.js";
 const instruction = new TransactionInstruction({
   // 1. Which program to call
   programId: new PublicKey("YourProgramAddress111111111111111111111111"),
-  
+
   // 2. Which accounts the program needs
   keys: [
     { pubkey: userWallet, isSigner: true, isWritable: true },
     { pubkey: dataAccount, isSigner: false, isWritable: true },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ],
-  
+
   // 3. What to do (program-specific binary data)
-  data: Buffer.from([/* instruction data */])
+  data: Buffer.from([
+    /* instruction data */
+  ]),
 });
 ```
 
@@ -52,6 +55,7 @@ Get these wrong and the transaction fails. The program validates them.
 ### Instruction Data
 
 The `data` field is program-specific. It typically contains:
+
 - A discriminator (which function to call)
 - Serialized arguments
 
@@ -67,10 +71,10 @@ import { PublicKey } from "@solana/web3.js";
 // Derive a PDA
 const [pda, bump] = PublicKey.findProgramAddressSync(
   [
-    Buffer.from("user-profile"),    // A fixed string seed
-    userWallet.toBuffer(),           // The user's public key
+    Buffer.from("user-profile"), // A fixed string seed
+    userWallet.toBuffer(), // The user's public key
   ],
-  programId
+  programId,
 );
 
 // The bump ensures the address is off the curve (not a valid keypair)
@@ -84,19 +88,16 @@ console.log("Bump:", bump);
 // User-specific data
 const [userProfile] = PublicKey.findProgramAddressSync(
   [Buffer.from("profile"), userWallet.toBuffer()],
-  programId
+  programId,
 );
 
 // Global config
-const [globalConfig] = PublicKey.findProgramAddressSync(
-  [Buffer.from("config")],
-  programId
-);
+const [globalConfig] = PublicKey.findProgramAddressSync([Buffer.from("config")], programId);
 
 // Item in a collection
 const [item] = PublicKey.findProgramAddressSync(
   [Buffer.from("item"), Buffer.from(itemId)],
-  programId
+  programId,
 );
 ```
 
@@ -155,13 +156,13 @@ const tx = new VersionedTransaction(
     payerKey: userWallet,
     recentBlockhash: blockhash,
     instructions: [ix],
-  }).compileToV0Message()
+  }).compileToV0Message(),
 );
 
 // Sign with MWA
 const signedTx = await transact(async (wallet) => {
   const [signed] = await wallet.signTransactions({
-    transactions: [tx]
+    transactions: [tx],
   });
   return signed;
 });
@@ -185,7 +186,7 @@ import * as borsh from "borsh";
 class MyInstruction {
   instruction: number;
   amount: bigint;
-  
+
   constructor(fields: { instruction: number; amount: bigint }) {
     this.instruction = fields.instruction;
     this.amount = fields.amount;
@@ -193,19 +194,22 @@ class MyInstruction {
 }
 
 const schema = new Map([
-  [MyInstruction, { 
-    kind: "struct", 
-    fields: [
-      ["instruction", "u8"],
-      ["amount", "u64"]
-    ] 
-  }]
+  [
+    MyInstruction,
+    {
+      kind: "struct",
+      fields: [
+        ["instruction", "u8"],
+        ["amount", "u64"],
+      ],
+    },
+  ],
 ]);
 
 // Encode
 const instruction = new MyInstruction({
   instruction: 0, // First instruction in the program
-  amount: BigInt(1_000_000_000) // 1 SOL in lamports
+  amount: BigInt(1_000_000_000), // 1 SOL in lamports
 });
 
 const data = borsh.serialize(schema, instruction);
@@ -225,23 +229,21 @@ function getAnchorDiscriminator(instructionName: string): Buffer {
 
 // Usage
 const discriminator = getAnchorDiscriminator("initialize");
-const fullData = Buffer.concat([
-  discriminator,
-  borsh.serialize(argsSchema, args)
-]);
+const fullData = Buffer.concat([discriminator, borsh.serialize(argsSchema, args)]);
 ```
 
-<ArticleSection name="Multi-Instruction Transactions" id="multi-instruction-transactions" level="h2" />
+<ArticleSection
+  name="Multi-Instruction Transactions"
+  id="multi-instruction-transactions"
+  level="h2"
+/>
 
 Real operations often need multiple instructions:
 
 ```typescript
-async function createAndInitialize(
-  connection: Connection,
-  userWallet: PublicKey
-): Promise<string> {
+async function createAndInitialize(connection: Connection, userWallet: PublicKey): Promise<string> {
   const newAccount = Keypair.generate();
-  
+
   const instructions = [
     // 1. Create the account
     SystemProgram.createAccount({
@@ -251,7 +253,7 @@ async function createAndInitialize(
       space: dataSize,
       programId: myProgramId,
     }),
-    
+
     // 2. Initialize it with our program
     new TransactionInstruction({
       programId: myProgramId,
@@ -264,7 +266,7 @@ async function createAndInitialize(
   ];
 
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const message = new TransactionMessage({
     payerKey: userWallet,
     recentBlockhash: blockhash,
@@ -272,14 +274,14 @@ async function createAndInitialize(
   }).compileToV0Message();
 
   const tx = new VersionedTransaction(message);
-  
+
   // The new account must also sign
   tx.sign([newAccount]);
 
   // User signs with MWA
   const signedTx = await transact(async (wallet) => {
     const [signed] = await wallet.signTransactions({
-      transactions: [tx]
+      transactions: [tx],
     });
     return signed;
   });
@@ -299,7 +301,7 @@ import { AddressLookupTableAccount } from "@solana/web3.js";
 const lookupTableAddress = new PublicKey("YourLookupTable...");
 const lookupTableAccount = await connection
   .getAddressLookupTable(lookupTableAddress)
-  .then(res => res.value);
+  .then((res) => res.value);
 
 if (!lookupTableAccount) {
   throw new Error("Lookup table not found");
@@ -316,6 +318,7 @@ const tx = new VersionedTransaction(message);
 ```
 
 ALTs are especially useful for:
+
 - DeFi protocols with many token accounts
 - NFT operations across collections
 - Any transaction touching many accounts
@@ -327,7 +330,7 @@ Always simulate complex transactions:
 ```typescript
 async function simulateAndSend(
   connection: Connection,
-  transaction: VersionedTransaction
+  transaction: VersionedTransaction,
 ): Promise<{ signature: string; logs: string[] }> {
   // Simulate first
   const simulation = await connection.simulateTransaction(transaction, {
@@ -344,7 +347,7 @@ async function simulateAndSend(
 
   // If simulation passed, send it
   const signature = await connection.sendTransaction(transaction);
-  
+
   return {
     signature,
     logs: simulation.value.logs || [],
@@ -386,13 +389,10 @@ function parseSimulationLogs(logs: string[]): {
 ### Initialize User Account
 
 ```typescript
-async function initializeUserAccount(
-  program: Program,
-  userWallet: PublicKey
-): Promise<string> {
+async function initializeUserAccount(program: Program, userWallet: PublicKey): Promise<string> {
   const [userAccount] = PublicKey.findProgramAddressSync(
     [Buffer.from("user"), userWallet.toBuffer()],
-    program.programId
+    program.programId,
   );
 
   const ix = await program.methods
@@ -414,22 +414,16 @@ async function initializeUserAccount(
 async function depositToVault(
   program: Program,
   userWallet: PublicKey,
-  amount: number
+  amount: number,
 ): Promise<string> {
-  const [vault] = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault")],
-    program.programId
-  );
+  const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault")], program.programId);
 
-  const userTokenAccount = await getAssociatedTokenAddress(
-    tokenMint,
-    userWallet
-  );
+  const userTokenAccount = await getAssociatedTokenAddress(tokenMint, userWallet);
 
   const vaultTokenAccount = await getAssociatedTokenAddress(
     tokenMint,
     vault,
-    true // allowOwnerOffCurve - vault is a PDA
+    true, // allowOwnerOffCurve - vault is a PDA
   );
 
   const ix = await program.methods
@@ -459,18 +453,16 @@ try {
   if (error.message.includes("Transaction simulation failed")) {
     // Parse the logs for the actual error
     const logs = error.logs || [];
-    const programError = logs.find(log => 
-      log.includes("Error") || log.includes("error")
-    );
+    const programError = logs.find((log) => log.includes("Error") || log.includes("error"));
     console.log("Program error:", programError);
   }
-  
+
   // Anchor error codes
   if (error.error?.errorCode) {
     console.log("Anchor error:", error.error.errorCode.name);
     console.log("Message:", error.error.errorMessage);
   }
-  
+
   // Custom program error
   if (error.message.includes("custom program error")) {
     const codeMatch = error.message.match(/custom program error: 0x([0-9a-f]+)/i);

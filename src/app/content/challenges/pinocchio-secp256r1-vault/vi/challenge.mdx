@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="Deposit" id="deposit" level="h2" />
 
 Instruction `deposit` thực hiện các bước sau:
+
 1. Xác minh vault trống (có zero lamport) để ngăn chặn deposit kép
 2. Đảm bảo số tiền deposit vượt quá mức tối thiểu phí thuê cho tài khoản cơ bản
 3. Chuyển lamport từ payer đến vault bằng lệnh CPI gọi đến System Program
@@ -82,7 +83,7 @@ Sự khác biệt chính giữa một vault thông thường và một vault Sec
 
 Bởi vì với chữ ký Secp256r1, chủ sở hữu của ví thực tế không cần phải trả phí giao dịch, chúng ta thay đổi tài khoản `owner` thành một quy ước đặt tên chung hơn như `payer`.
 
-Nên cấu trúc của tài khoản `deposit` sẽ trông như thế này: 
+Nên cấu trúc của tài khoản `deposit` sẽ trông như thế này:
 
 ```rust
 pub struct DepositAccounts<'a> {
@@ -118,17 +119,19 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 Hãy phân tích từng mã kiểm tra tài khoản:
+
 1. `payer`: phải là signer vì họ cần ủy quyền cho chuyển tiền lamport.
-2. `vault`: 
+2. `vault`:
    - Phải thuộc sở hữu của System Program
    - Phải có zero lamport (đảm bảo deposit "mới")
 
 Đối với `vault`, chúng ta sẽ kiểm tra xem:
+
 - Nó được suy ra từ các seed chính xác.
 - Trùng khớp với địa chỉ PDA mong đợi.
-Bởi vì phần seed nằm trong `instruction_data`, chúng ta sẽ không truy cập vào nó lúc này.
+  Bởi vì phần seed nằm trong `instruction_data`, chúng ta sẽ không truy cập vào nó lúc này.
 
-Bây giờ hãy triển khai struct dữ liệu cho instruction: 
+Bây giờ hãy triển khai struct dữ liệu cho instruction:
 
 ```rust
 #[repr(C, packed)]
@@ -156,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Chúng ta giải tuần tự hóa dữ liệu instruction vào một struct `DepositInstructionData` bao gồm:
+
 - `pubkey`: public key Secp256r1 của người dùng thực hiện deposit
 - `amount`: Số lượng lamport để deposit
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 Như đã nhắc đến trước đó, chúng ta cần xác minh rằng PDA của vault được derive từ các seed chính xác. Trong vault dựa trên Secp256r1 này, chúng ta sử dụng `Secp256r1Pubkey` làm một phần của các seed thay vì public key của chủ sở hữu truyền thống. Đây là một biện pháp bảo mật quan trọng đảm bảo chỉ người nắm giữ khóa Secp256r1 tương ứng mới có thể truy cập vào vault.
 
 `Secp256r1Pubkey` được biểu diễn dưới dạng mảng byte có độ dài 33 bởi vì nó dùng để đại diện cho một điểm trên đường cong elliptic Secp256r1. Định dạng này bao gồm:
+
 - 1 byte thể hiện tính chẵn lẻ của điểm (xác định xem tọa độ y là chẵn hay lẻ)
 - 32 bytes cho tọa độ x
 
 Bởi vì hàm `find_program_address` của Solana có giới hạn là 32 byte cho mỗi seed, chúng ta cần chia `Secp256r1Pubkey` thành hai phần:
+
 1. Byte tính chẵn lẻ (`pubkey[..1]`)
 2. Các byte biểu diễn của tọa độ x (`pubkey[1..33]`)
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 Widthdraw instruction thực hiện các bước sau:
+
 1. Xác minh vault chứa lamport (không trống)
 2. Sử dụng PDA của vault để ký chuyển khoản thay mặt cho chính nó
 3. Chuyển tất cả lamport từ vault trở lại cho người dùng
@@ -261,7 +268,7 @@ impl<'a> TryFrom<&'a [AccountInfo]> for WithdrawAccounts<'a> {
 }
 ```
 
-Bây giờ hãy triển khai struct dữ liệu cho instruction: 
+Bây giờ hãy triển khai struct dữ liệu cho instruction:
 
 ```rust
 pub struct WithdrawInstructionData {
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 Quá trình withdraw đòi hỏi một vài bước kiểm tra bảo mật để đảm bảo rằng giao dịch là hợp lệ. Hãy xem chúng ta làm thế nào để xác minh chữ ký Secp256r1 và bảo vệ trước các cuộc tấn công tiềm năng:
 
 1. **Instruction Introspection**
+
 - Chúng ta sử dụng instruction sysvar để kiểm tra instruction tiếp theo trong transaction
 - Điều này cho phép chúng ta xác minh chữ ký Secp256r1, chứng minh quyền sở hữu của khóa ký
 - Xác minh chữ ký Secp256r1 luôn xảy ra trong một instruction riêng biệt
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - Thông điệp được ký chứa hai thông tin quan trọng:
-    - Địa chỉ của người nhận (32 bytes)
-    - Thời gian hết hạn của chữ ký (8 bytes)
+  - Địa chỉ của người nhận (32 bytes)
+  - Thời gian hết hạn của chữ ký (8 bytes)
 - Điều này ngăn chặn các cuộc tấn công MEV mà ai đó có thể chặn và tái sử dụng một chữ ký hợp lệ bằng cách chuyển một `payer` khác và lấy đi số lượng lamport trong vault
 
 4. **Kiểm tra thời hạn**

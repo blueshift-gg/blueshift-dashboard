@@ -1,3 +1,4 @@
+import { WalletSignMessageError } from "@solana/wallet-adapter-base";
 import bs58 from "bs58";
 import {
   AuthError,
@@ -6,7 +7,6 @@ import {
   UnknownAuthError,
   UserRejectedSignatureError,
 } from "@/lib/auth/errors";
-import { WalletSignMessageError } from "@solana/wallet-adapter-base";
 
 type SignMessage = (message: Uint8Array) => Promise<Uint8Array>;
 
@@ -57,9 +57,7 @@ export async function performSignIn(
     });
 
     if (!response.ok) {
-      throw new AuthenticationAPIError(
-        `API request failed with status ${response.status}`,
-      );
+      throw new AuthenticationAPIError(`API request failed with status ${response.status}`);
     }
     return response.json();
   } catch (err) {
@@ -74,4 +72,4 @@ export async function performSignIn(
     // Fallback for any other unexpected error
     throw new UnknownAuthError();
   }
-} 
+}

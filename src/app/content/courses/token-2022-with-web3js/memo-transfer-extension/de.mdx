@@ -4,26 +4,25 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 
 Die `MemoTranfer` Extension ist eine `Token` Konto-Erweiterung, die sicherstellt, dass alle eingehenden Überweisungen auf ein Token-Konto ein Memo enthalten, was eine verbesserte Transaktionsverfolgung und Benutzeridentifikation ermöglicht.
 
-<ArticleSection name="Initialisierung des Token-Kontos" id="initializing-the-token-account" level="h2" />
+<ArticleSection
+  name="Initialisierung des Token-Kontos"
+  id="initializing-the-token-account"
+  level="h2"
+/>
 
 Um die `MemoTransfer` Erweiterung auf einem `Token` Konto zu initialisieren, benötigen wir die `enableRequiredMemoTransfers()` Funktion.
 
 Hier ist, wie man einen Token mit der Memo Transfer Extension erstellt:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeAccountInstruction,
-    createEnableRequiredMemoTransfersInstruction,
-    getAccountLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeAccountInstruction,
+  createEnableRequiredMemoTransfersInstruction,
+  getAccountLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const tokenAccount = Keypair.generate();
 
@@ -35,41 +34,52 @@ const lamports = await connection.getMinimumBalanceForRentExemption(accountLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: tokenAccount.publicKey,
-    space: accountLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: tokenAccount.publicKey,
+  space: accountLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Memo Transfer extension
 const enableMemoTransferInstruction = createEnableRequiredMemoTransfersInstruction(
-    destinationTokenAccount.publicKey,
-    destinationKeypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  destinationTokenAccount.publicKey,
+  destinationKeypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the Token account itself
 const initializeAccountInstruction = createInitializeAccountInstruction(
-    tokenAccount.publicKey,
-    mint.publicKey,
-    keypair.publicKey,
-    TOKEN_2022_PROGRAM_ID,
+  tokenAccount.publicKey,
+  mint.publicKey,
+  keypair.publicKey,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeAccountInstruction,
-    enableMemoTransferInstruction,
+  createAccountInstruction,
+  initializeAccountInstruction,
+  enableMemoTransferInstruction,
 );
 
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, tokenAccount], {skipPreflight: false});
+const signature = await sendAndConfirmTransaction(
+  connection,
+  transaction,
+  [keypair, tokenAccount],
+  { skipPreflight: false },
+);
 
-console.log(`Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Token accounts created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
-<ArticleSection name="Token mit einem Memo übertragen" id="transferring-token-with-a-memo" level="h2" />
+<ArticleSection
+  name="Token mit einem Memo übertragen"
+  id="transferring-token-with-a-memo"
+  level="h2"
+/>
 
 Um das Memo-Programm auf Solana zu verwenden, haben wir zwei mögliche Wege.
 
@@ -94,92 +104,104 @@ npm i @solana/spl-memo
 In unserem Beispiel werden wir die zweite Option verwenden und es wird so aussehen:
 
 ```ts
-const memoInstruction = createMemoInstruction(
-    "Hello, world!",
-    [keypair.publicKey],
-);
+const memoInstruction = createMemoInstruction("Hello, world!", [keypair.publicKey]);
 
 const transferInstruction = createTransferCheckedInstruction(
-    tokenAccount,
-    mint.publicKey,
-    destinationTokenAccount.publicKey,
-    keypair.publicKey,
-    BigInt(100e6),
-    6,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  tokenAccount,
+  mint.publicKey,
+  destinationTokenAccount.publicKey,
+  keypair.publicKey,
+  BigInt(100e6),
+  6,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
-const transferTransaction = new Transaction().add(
-    memoInstruction,
-    transferInstruction,
+const transferTransaction = new Transaction().add(memoInstruction, transferInstruction);
+
+const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [
+  keypair,
+]);
+
+console.log(
+  `Tokens transferred with memo! Check out your TX here: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`,
 );
-
-const transferSignature = await sendAndConfirmTransaction(connection, transferTransaction, [keypair]);
-
-console.log(`Tokens transferred with memo! Check out your TX here: https://explorer.solana.com/tx/${transferSignature}?cluster=devnet`);
 ```
 
-<ArticleSection name="Deaktivieren und Aktivieren des Memos" id="disabling-and-enabling-the-memo" level="h2" />
+<ArticleSection
+  name="Deaktivieren und Aktivieren des Memos"
+  id="disabling-and-enabling-the-memo"
+  level="h2"
+/>
 
 Wenn wir nicht erzwingen wollen, dass die Überweisung mit einem Memo erfolgt, können wir dies mit der `disableRequiredMemoTransfer` Funktion tun, und es würde so aussehen:
 
 ```ts
 const disableRequiredMemoTransfersInstruction = createDisableRequiredMemoTransfersInstruction(
-    destinationTokenAccount,
-    destinationKeypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  destinationTokenAccount,
+  destinationKeypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transferInstruction = createTransferCheckedInstruction(
-    tokenAccount,
-    mint.publicKey,
-    destinationTokenAccount,
-    keypair.publicKey,
-    BigInt(100e6),
-    6,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  tokenAccount,
+  mint.publicKey,
+  destinationTokenAccount,
+  keypair.publicKey,
+  BigInt(100e6),
+  6,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(
-    disableRequiredMemoTransfersInstruction,
-    transferInstruction,
+  disableRequiredMemoTransfersInstruction,
+  transferInstruction,
 );
 
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+const signature = await sendAndConfirmTransaction(connection, transaction, [
+  keypair,
+  destinationKeypair,
+]);
 
-console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 Und wenn wir es wieder aktivieren möchten, können wir einfach die `enableRequiredMemoTransfers()` Funktion wie folgt verwenden:
 
 ```ts
 const enableRequiredMemoTransfersInstruction = createEnableRequiredMemoTransfersInstruction(
-    destinationTokenAccount,
-    destinationKeypair.publicKey,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  destinationTokenAccount,
+  destinationKeypair.publicKey,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transferInstruction = createTransferCheckedInstruction(
-    tokenAccount,
-    mint.publicKey,
-    destinationTokenAccount,
-    keypair.publicKey,
-    BigInt(100e6),
-    6,
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
+  tokenAccount,
+  mint.publicKey,
+  destinationTokenAccount,
+  keypair.publicKey,
+  BigInt(100e6),
+  6,
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(
-    enableRequiredMemoTransfersInstruction,
-    transferInstruction,
+  enableRequiredMemoTransfersInstruction,
+  transferInstruction,
 );
 
-const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, destinationKeypair]);
+const signature = await sendAndConfirmTransaction(connection, transaction, [
+  keypair,
+  destinationKeypair,
+]);
 
-console.log(`Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens transferred and account state changed! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```

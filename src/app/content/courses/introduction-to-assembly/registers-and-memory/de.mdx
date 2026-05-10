@@ -12,12 +12,12 @@ Der Kompromiss ist einfach: du hast insgesamt nur 11 Register zur Verfügung, da
 
 sBPF weist jedem Register bestimmte Rollen zu:
 
-| Register | Rolle                | Callee-saved?  | Nutzungshinweise                            |
-|----------|----------------------|----------------|---------------------------------------------|
-| `r0`     | Rückgabewert         | Nein           | Funktionsergebnisse, Syscall-Rückgabewerte  |
-| `r1`     | Eingabepuffer-Zeiger | Nein           | Zeigt bei Eintritt auf 0x400000000          |
-| `r2-r5`  | Scratch/Argumente    | Nein           | Hilfsfunktionsargumente, temporäre Werte    |
-| `r6-r9`  | Allzweck             | Ja             | Muss über Aufrufe hinweg erhalten bleiben   |
+| Register | Rolle                | Callee-saved?        | Nutzungshinweise                                  |
+| -------- | -------------------- | -------------------- | ------------------------------------------------- |
+| `r0`     | Rückgabewert         | Nein                 | Funktionsergebnisse, Syscall-Rückgabewerte        |
+| `r1`     | Eingabepuffer-Zeiger | Nein                 | Zeigt bei Eintritt auf 0x400000000                |
+| `r2-r5`  | Scratch/Argumente    | Nein                 | Hilfsfunktionsargumente, temporäre Werte          |
+| `r6-r9`  | Allzweck             | Ja                   | Muss über Aufrufe hinweg erhalten bleiben         |
 | `r10`    | Frame-Pointer        | Ja, schreibgeschützt | Stack-Basis, kann nicht direkt modifiziert werden |
 
 Register `r6` bis `r9` sind _callee-saved_, was bedeutet, dass ihre Werte über Funktionsaufrufe hinweg bestehen bleiben. Verwende diese für wichtige Daten, die Funktionsaufrufe überleben müssen.
@@ -30,12 +30,12 @@ Register `r10` ist "speziell", da es als Frame-Pointer dient, der auf die Basis 
 
 Während Register aktiv genutzte Werte enthalten, speichert der Speicher alles andere. sBPF organisiert den Speicher in feste Bereiche mit identischen Layouts in allen Programmen:
 
-| Bereich | Startadresse  | Zweck                   | Größe/Hinweise                                          |
-|---------|---------------|-------------------------|--------------------------------------------------------|
-| Text    | 0x100000000   | Code und schreibgeschützte Daten | Programmbinärdatei                                     |
-| Stack   | 0x200000000   | Lokale Variablen        | 4 KiB pro Stack-Frame, mit einer maximalen Aufruftiefe von 64 |
-| Heap    | 0x300000000   | Dynamische Zuweisung    | 32 KiB                                                 |
-| Input   | 0x400000000   | Programmparameter       | Serialisierte Konten und Anweisungsdaten              |
+| Bereich | Startadresse | Zweck                            | Größe/Hinweise                                                |
+| ------- | ------------ | -------------------------------- | ------------------------------------------------------------- |
+| Text    | 0x100000000  | Code und schreibgeschützte Daten | Programmbinärdatei                                            |
+| Stack   | 0x200000000  | Lokale Variablen                 | 4 KiB pro Stack-Frame, mit einer maximalen Aufruftiefe von 64 |
+| Heap    | 0x300000000  | Dynamische Zuweisung             | 32 KiB                                                        |
+| Input   | 0x400000000  | Programmparameter                | Serialisierte Konten und Anweisungsdaten                      |
 
 - Der **Textbereich** enthält deinen ausführbaren Code und schreibgeschützte Daten wie String-Konstanten. Daten, die mit `.quad` Direktiven definiert werden, befinden sich typischerweise hier.
 - Der **Stackbereich** beherbergt lokale Variablen. Mit `r10`, der auf die Stack-Basis zeigt, greifst du auf lokale Variablen mit negativen Offsets zu: `[r10 - 16]`, `[r10 - 24]`, usw.
@@ -53,17 +53,18 @@ Hier ist, wie Register und Speicher in der Praxis zusammenarbeiten:
 .globl entrypoint
 entrypoint:
     // On entry: r1 points to input data at 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Load first 8 bytes from input into r0
     mov64 r2, 42            // Put 42 in register r2
     add64 r0, r2            // Add them: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Store result on stack
     mov64 r0, 0             // Return success
     exit
 ```
 
 Dieses Programm demonstriert das typische Muster:
+
 - Verwendet Register `r1` (Input-Zeiger) zum Lesen aus dem Speicher
 - Verwendet Register `r0` und `r2` für Berechnungen
 - Verwendet Register `r10` (Frame-Pointer) für den Zugriff auf den Stack-Speicher
@@ -105,7 +106,8 @@ entrypoint:
 ```
 
 Das Ausstiegsverhalten hängt von der Aufruftiefe ab:
-- Bei Aufruftiefe 0 beendet der Ausstieg das Programm mit `r0` als Ergebniscode. 
+
+- Bei Aufruftiefe 0 beendet der Ausstieg das Programm mit `r0` als Ergebniscode.
 - Bei tieferen Aufrufebenen wirkt der Ausstieg wie eine Return-Anweisung, stellt vom Aufrufer gespeicherte Register (`r6`-`r9`) und den Frame-Pointer des Aufrufers (`r10`) wieder her, bevor die Ausführung an der Rücksprungadresse fortgesetzt wird.
 
 Die Laufzeitumgebung übernimmt automatisch die Einrichtung und den Abbau durch impliziten Prolog- und Epilog-Code, einschließlich der Konfiguration des anfänglichen Registerzustands und der abschließenden Rückgabeverarbeitung.

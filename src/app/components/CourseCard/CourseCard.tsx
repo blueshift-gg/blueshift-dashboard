@@ -1,29 +1,25 @@
 "use client";
 
-import { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
-import {
-  difficulty as difficultyMap,
-  languageColors,
-  Language,
-} from "@/app/utils/common";
-import React, { useRef, useState } from "react";
-import classNames from "classnames";
-import { Link } from "@/i18n/navigation";
-import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
   Avatar,
   Badge,
-  breeze,
+  BRAND_COLOURS,
   Button,
+  breeze,
   Difficulty,
   Divider,
 } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
+import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import ProgressCircle from "../ProgressCircle/ProgressCircle";
-import { Icon } from "@blueshift-gg/ui-components";
+import { useTranslations } from "next-intl";
+import type React from "react";
+import { useRef, useState } from "react";
+import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import { difficulty as difficultyMap, type Language, languageColors } from "@/app/utils/common";
+import type { CourseDifficulty, CourseLanguages } from "@/app/utils/course";
+import { Link } from "@/i18n/navigation";
 import AsciiAnimation from "../Ascii/Ascii";
+import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 type CourseCardProps = {
   name: string;
@@ -53,29 +49,23 @@ export default function CourseCard({
 }: CourseCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [hasHovered, setHasHovered] = useState(false);
-  const {
-    isHovered,
-    direction,
-    swooshAngle,
-    handleMouseEnter,
-    handleMouseLeave,
-  } = useDirectionalHover(cardRef);
+  const { isHovered, direction, swooshAngle, handleMouseEnter, handleMouseLeave } =
+    useDirectionalHover(cardRef);
 
   const t = useTranslations();
 
-  const badgeDifficulty = difficultyMap[difficulty ?? 1];
+  const _badgeDifficulty = difficultyMap[difficulty ?? 1];
 
   // Map language to a valid BRAND_COLOURS key (handles "Mobile" -> "general")
   const brandColorKey = (
-    language.toLowerCase() in BRAND_COLOURS
-      ? language.toLowerCase()
-      : "general"
+    language.toLowerCase() in BRAND_COLOURS ? language.toLowerCase() : "general"
   ) as keyof typeof BRAND_COLOURS;
 
   // Get the language color from languageColors (which properly maps Mobile -> general)
   const langColor = languageColors[language as Language] || BRAND_COLOURS.general;
 
   return (
+    // This container only tracks pointer hover for decorative motion, while navigation stays on nested links and buttons.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {
@@ -93,21 +83,16 @@ export default function CourseCard({
       className={classNames(
         "transform-gpu group transition-transform animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 relative bg-card-solid border-border-light border",
         isHovered && `swoosh-${direction}`,
-        className
+        className,
       )}
     >
-      {link && (
-        <Link href={link} className="absolute inset-0 z-1 w-full h-full"></Link>
-      )}
-      <div className="w-full p-4 flex bg-background/50 aspect-2/1 group-hover/card:scale-[0.99] transition-all duration-100 ease-glide relative overflow-hidden">
+      {link && <Link href={link} className="absolute inset-0 z-1 h-full w-full"></Link>}
+      <div className="relative flex aspect-2/1 w-full overflow-hidden bg-background/50 p-4 transition-all duration-100 ease-glide group-hover/card:scale-[0.99]">
         {/* <img
           src={`/graphics/course-images/${courseSlug}.webp`}
           className="absolute w-full h-full mix-blend-plus-lighter object-contain inset-0"
         ></img> */}
-        <AsciiAnimation
-          textPath={courseSlug || ""}
-          color={brandColorKey}
-        />
+        <AsciiAnimation textPath={courseSlug || ""} color={brandColorKey} />
 
         <Avatar
           icon={{ name: language }}
@@ -121,12 +106,8 @@ export default function CourseCard({
           }}
         />
       </div>
-      <div
-        className={classNames(
-          "flex flex-col gap-y-8 grow justify-between px-4 py-5"
-        )}
-      >
-        <div className="flex flex-col min-h-[125px] sm:min-h-[100px]">
+      <div className={classNames("flex flex-col gap-y-8 grow justify-between px-4 py-5")}>
+        <div className="flex min-h-[125px] flex-col sm:min-h-[100px]">
           <AnimatePresence>
             {!isHovered && (
               <motion.div
@@ -158,7 +139,7 @@ export default function CourseCard({
                   size="sm"
                   variant="beginner"
                   label="Beginner"
-                  className="leading-[100%] min-h-[20px]!"
+                  className="min-h-[20px]! leading-[100%]"
                   crosshair={{
                     size: 4,
                     corners: ["top-left", "bottom-right"],
@@ -198,7 +179,7 @@ export default function CourseCard({
                 }}
                 className="overflow-hidden"
               >
-                <span className="text-balance flex leading-[150%] flex-wrap items-center gap-x-3 text-sm text-shade-tertiary">
+                <span className="flex flex-wrap items-center gap-x-3 text-sm leading-[150%] text-balance text-shade-tertiary">
                   {description || ""}
                 </span>
               </motion.div>
@@ -206,21 +187,22 @@ export default function CourseCard({
           </AnimatePresence>
         </div>
         <div className="relative z-20">
-          <Link href={link!}>
-            <Button
-              variant="secondary"
-              size="lg"
-              className="w-max"
-              label={
-                completedLessonsCount === 0
-                  ? t("lessons.start_course")
-                  : completedLessonsCount === totalLessonCount
-                    ? t("lessons.review_course")
-                    : t("lessons.continue_learning")
-              }
-              children={
-                completedLessonsCount === 0 ? null : (
-                  <div className="flex items-center gap-x-2 order-last">
+          {link ? (
+            <Link href={link}>
+              <Button
+                variant="secondary"
+                size="lg"
+                className="w-max"
+                label={
+                  completedLessonsCount === 0
+                    ? t("lessons.start_course")
+                    : completedLessonsCount === totalLessonCount
+                      ? t("lessons.review_course")
+                      : t("lessons.continue_learning")
+                }
+              >
+                {completedLessonsCount === 0 ? null : (
+                  <div className="order-last flex items-center gap-x-2">
                     <Divider direction="vertical" className="h-[20px]!" />
                     <ProgressCircle
                       percentFilled={
@@ -229,14 +211,22 @@ export default function CourseCard({
                           : 0
                       }
                     />
-                    <span className="text-sm text-shade-tertiary font-mono">
+                    <span className="font-mono text-sm text-shade-tertiary">
                       {completedLessonsCount ?? 0}/{totalLessonCount ?? 0}
                     </span>
                   </div>
-                )
-              }
+                )}
+              </Button>
+            </Link>
+          ) : (
+            <Button
+              variant="secondary"
+              size="lg"
+              className="w-max"
+              disabled={true}
+              label={t("lessons.start_course")}
             />
-          </Link>
+          )}
         </div>
       </div>
     </div>

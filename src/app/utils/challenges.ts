@@ -1,4 +1,4 @@
-import { IconName } from "@blueshift-gg/ui-components";
+import type { IconName } from "@blueshift-gg/ui-components";
 
 export const challengeLanguages = {
   Anchor: "Anchor",
@@ -58,4 +58,4 @@ export const challengeStatusToIconName = (status: ChallengeStatus): IconName => 
     default:
       return "Unlocked"; // Fallback icon
   }
-}
+};

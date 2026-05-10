@@ -17,8 +17,8 @@ export default async function ContentFallbackNotice({
   const t = await getTranslations();
 
   return (
-    <div className="flex items-center gap-x-3 px-3 py-2 mb-4 bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
-      <Icon name="Globe" className="w-5 h-5" />
+    <div className="mb-4 flex items-center gap-x-3 border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-yellow-500">
+      <Icon name="Globe" className="h-5 w-5" />
       <p className="text-sm">{t("notifications.content_fallback")}</p>
     </div>
   );

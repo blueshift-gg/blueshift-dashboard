@@ -13,19 +13,14 @@ import { ArticleSection } from "../../../../components/ArticleSection/ArticleSec
 以下是如何创建带有转账手续费扩展的铸币账户：
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeTransferFeeConfigInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -37,47 +32,50 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Create the account with the correct size and owner
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Initialize the Transfer Fee extension
 const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
-    mint.publicKey,
-    keypair.publicKey,
-    keypair.publicKey,
-    500,
-    BigInt(1e6),
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  keypair.publicKey,
+  keypair.publicKey,
+  500,
+  BigInt(1e6),
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Initialize the mint itself
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    null,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  null,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combine all instructions in the correct order
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeTransferFeeConfig,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeTransferFeeConfig,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint created! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="带手续费的代币转账" id="transferring-tokens-with-the-fee" level="h2" />
 
 要为带有 TransferFee 扩展的 `Mint` 转账代币，我们有两种方式：
+
 - 我们可以使用普通的 `transferChecked()` 指令，这样手续费的计算会自动处理。
 - 我们可以使用 `tranferCheckedWithFee()` 指令，并手动提供我们将在该转账中支付的 `fee`。如果我们想确保在权限更改手续费并设置异常高的手续费时不会被“割韭菜”，这非常有用；这就像为转账设置滑点一样。
 
@@ -87,22 +85,24 @@ console.log(`Mint created! Check out your TX here: https://explorer.solana.com/t
 
 ```ts
 createTransferCheckedWithFeeInstruction(
-    sourceTokenAccount,
-    mint.publicKey, 
-    destinationTokenAccount, 
-    keypair.publicKey, 
-    BigInt(100e6), // transfer amount
-    6, // decimals
-    BigInt(1e6), // fee paid for the transfer
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
-)
+  sourceTokenAccount,
+  mint.publicKey,
+  destinationTokenAccount,
+  keypair.publicKey,
+  BigInt(100e6), // transfer amount
+  6, // decimals
+  BigInt(1e6), // fee paid for the transfer
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const transaction = new Transaction().add(transferInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens transferred! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="收取手续费" id="harvesting-the-fee" level="h2" />
@@ -114,15 +114,15 @@ console.log(`Tokens transferred! Check out your TX here: https://explorer.solana
 ```ts
 // Retrieve all Token Accounts for the Mint Account
 const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
-    commitment: "confirmed",
-    filters: [
-        {
-            memcmp: {
-                offset: 0,
-                bytes: mint.publicKey.toString(), // Mint Account address
-            },
-        },
-    ],
+  commitment: "confirmed",
+  filters: [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: mint.publicKey.toString(), // Mint Account address
+      },
+    },
+  ],
 });
 ```
 
@@ -133,19 +133,15 @@ const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
 const accountsToWithdrawFrom: PublicKey[] = [];
 
 for (const accountInfo of allAccounts) {
-    const account = unpackAccount(
-        accountInfo.pubkey,
-        accountInfo.account,
-        TOKEN_2022_PROGRAM_ID,
-    );
+  const account = unpackAccount(accountInfo.pubkey, accountInfo.account, TOKEN_2022_PROGRAM_ID);
 
-    // Extract transfer fee data from each account
-    const transferFeeAmount = getTransferFeeAmount(account);
+  // Extract transfer fee data from each account
+  const transferFeeAmount = getTransferFeeAmount(account);
 
-    // Check if fees are available to be withdrawn
-    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
-        accountsToWithdrawFrom.push(accountInfo.pubkey);
-    }
+  // Check if fees are available to be withdrawn
+  if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+    accountsToWithdrawFrom.push(accountInfo.pubkey);
+  }
 }
 ```
 
@@ -153,19 +149,21 @@ for (const accountInfo of allAccounts) {
 
 ```ts
 const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
-    mint.publicKey,
-    sourceTokenAccount,
-    keypair.publicKey,
-    [],
-    accountsToWithdrawFrom,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  sourceTokenAccount,
+  keypair.publicKey,
+  [],
+  accountsToWithdrawFrom,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(harvestInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Withheld tokens harvested! Check out your TX here: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="更新费用" id="updating-the-fee" level="h2" />
@@ -182,7 +180,7 @@ pub struct TransferFeeConfig {
     pub older_transfer_fee: TransferFee,
     pub newer_transfer_fee: TransferFee,
 }
- 
+
 pub struct TransferFee {
     pub epoch: u64,
     pub maximum_fee: u64,

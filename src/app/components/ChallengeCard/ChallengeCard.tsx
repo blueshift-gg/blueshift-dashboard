@@ -1,30 +1,28 @@
 "use client";
 
-import React, { useRef, useState } from "react";
-import classNames from "classnames";
-import { Link } from "@/i18n/navigation";
-import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
 import {
-  anticipate,
   Badge,
-  breeze,
+  BRAND_COLOURS,
   Button,
   CrosshairCorners,
   Difficulty,
   Divider,
-  glide,
-  IconName,
+  Icon,
+  type IconName,
 } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
+import classNames from "classnames";
 import { AnimatePresence, motion } from "motion/react";
-import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import { useTranslations } from "next-intl";
+import type React from "react";
+import { useRef, useState } from "react";
+import { useDirectionalHover } from "@/app/hooks/useDirectionalHover";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import { difficulty as difficultyMap } from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
+import { useAuth } from "@/hooks/useAuth";
 import useMintNFT from "@/hooks/useMintNFT";
 import { useShareChallengeOnX } from "@/hooks/useShareChallengeOnX";
-import { useAuth } from "@/hooks/useAuth";
+import { Link } from "@/i18n/navigation";
+import { usePersistentStore } from "@/stores/store";
 
 type ChallengeCardProps = {
   challenge: ChallengeMetadata;
@@ -42,16 +40,11 @@ export default function ChallengeCard({
   hrefOverride,
 }: ChallengeCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const [hasHovered, setHasHovered] = useState(false);
+  const [_hasHovered, setHasHovered] = useState(false);
   const [isHoveredFooter, setIsHoveredFooter] = useState(false);
 
-  const {
-    isHovered,
-    direction,
-    swooshAngle,
-    handleMouseEnter,
-    handleMouseLeave,
-  } = useDirectionalHover(cardRef);
+  const { isHovered, direction, swooshAngle, handleMouseEnter, handleMouseLeave } =
+    useDirectionalHover(cardRef);
 
   const t = useTranslations();
   const { challengeStatuses } = usePersistentStore();
@@ -73,6 +66,7 @@ export default function ChallengeCard({
   const challengeHref = hrefOverride ?? `/challenges/${challenge.slug}`;
 
   return (
+    // This container only tracks pointer hover for decorative motion, while actual navigation and actions remain on child controls.
     <div
       ref={cardRef}
       onMouseEnter={(e) => {
@@ -89,23 +83,17 @@ export default function ChallengeCard({
       className={classNames(
         "max-w-[360px] aspect-3/4 transform-gpu group transition-transform justify-end animate-card-swoosh duration-300 flex flex-col overflow-hidden p-1 bg-card-solid relative border-border-light border",
         isHovered && `swoosh-${direction}`,
-        className
+        className,
       )}
     >
-      <Link
-        href={challengeHref}
-        className="absolute inset-0 z-1 w-full h-full"
-      ></Link>
+      <Link href={challengeHref} className="absolute inset-0 z-1 h-full w-full"></Link>
 
       <div
         style={{
-          color:
-            BRAND_COLOURS[
-              challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
-            ],
+          color: BRAND_COLOURS[challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS],
         }}
         className={classNames(
-          "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20"
+          "justify-between items-center !absolute bg-card-foreground left-[-1px] top-4 w-[calc(100%+2px)] flex px-4 py-2 shadow-[inset_0px_0px_32px] gradient-border before:bg-current/15 shadow-current/20",
         )}
       >
         <CrosshairCorners
@@ -115,16 +103,16 @@ export default function ChallengeCard({
           animationDelay={0}
           animationDuration={0}
         />
-        <span className="text-xs font-medium font-mono text-shade-primary">
+        <span className="font-mono text-xs font-medium text-shade-primary">
           {t("ChallengeCenter.complete_to_earn")}
         </span>
         <div className="flex items-center gap-x-1.5">
-          <span className="text-xs font-medium font-mono bg-nft-gradient bg-clip-text text-transparent">
+          <span className="bg-nft-gradient bg-clip-text font-mono text-xs font-medium text-transparent">
             1 NFT
           </span>
           {/* <Divider direction="vertical" className="!h-[12px] !w-[2px]" /> */}
           {/* <span className="text-xs font-medium font-mono bg-xp-gradient bg-clip-text text-transparent"> */}
-            {/* 50 XP */}
+          {/* 50 XP */}
           {/* </span> */}
         </div>
       </div>
@@ -133,7 +121,7 @@ export default function ChallengeCard({
         <div
           className={classNames(
             "flex flex-col gap-y-4 min-h-[90px]",
-            tags.length > 0 && "min-h-[110px]"
+            tags.length > 0 && "min-h-[110px]",
           )}
         >
           <div className="flex flex-col gap-y-2">
@@ -141,9 +129,7 @@ export default function ChallengeCard({
               <span
                 style={{
                   color:
-                    BRAND_COLOURS[
-                      challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS
-                    ],
+                    BRAND_COLOURS[challenge.language.toLowerCase() as keyof typeof BRAND_COLOURS],
                 }}
                 className={classNames("font-mono leading-[100%]")}
               >
@@ -160,16 +146,12 @@ export default function ChallengeCard({
                     | "expert"
                 }
                 label={badgeDifficulty}
-                className="leading-[100%] min-h-[20px]!"
+                className="min-h-[20px]! leading-[100%]"
                 crosshair={{ size: 4, corners: ["top-left", "bottom-right"] }}
-                icon={
-                  <Difficulty size={12} difficulties={[challenge.difficulty]} />
-                }
+                icon={<Difficulty size={12} difficulties={[challenge.difficulty]} />}
               />
             </div>
-            <span
-              className={classNames("text-xl font-medium text-shade-primary")}
-            >
+            <span className={classNames("text-xl font-medium text-shade-primary")}>
               {t(`challenges.${challenge.slug}.title`)}
             </span>
           </div>
@@ -177,7 +159,7 @@ export default function ChallengeCard({
             {tags.map((tag) => (
               <span
                 key={tag}
-                className="text-xs leading-none font-medium text-shade-tertiary bg-border px-2 py-1"
+                className="bg-border px-2 py-1 text-xs leading-none font-medium text-shade-tertiary"
               >
                 {tag.startsWith("#") ? tag : `#${tag}`}
               </span>
@@ -192,7 +174,7 @@ export default function ChallengeCard({
               <Link
                 href={challengeHref}
                 onClick={(e) => e.stopPropagation()}
-                className="z-20 relative"
+                className="relative z-20"
               >
                 <Button
                   variant="primary"
@@ -204,7 +186,8 @@ export default function ChallengeCard({
               </Link>
               <div className="flex items-center justify-center gap-x-2">
                 <button
-                  className="font-mono flex items-center justify-center gap-x-1.5 text-xs text-shade-tertiary/50 cursor-not-allowed w-full flex-shrink uppercase"
+                  type="button"
+                  className="flex w-full flex-shrink cursor-not-allowed items-center justify-center gap-x-1.5 font-mono text-xs text-shade-tertiary/50 uppercase"
                   onMouseEnter={() => setIsHoveredFooter(true)}
                   onMouseLeave={() => setIsHoveredFooter(false)}
                 >
@@ -230,7 +213,7 @@ export default function ChallengeCard({
             </>
           )}
           {status === "completed" && !auth.isLoggedIn && (
-            <span className="text-shade-tertiary font-medium gap-x-1.5 flex items-center">
+            <span className="flex items-center gap-x-1.5 font-medium text-shade-tertiary">
               <Icon name="Locked" />
               {t("ChallengeCenter.locked_description")}
             </span>
@@ -239,11 +222,7 @@ export default function ChallengeCard({
             <Button
               variant="primary"
               size="md"
-              label={
-                isLoading
-                  ? t("ChallengePage.minting")
-                  : t("ChallengeCenter.claim")
-              }
+              label={isLoading ? t("ChallengePage.minting") : t("ChallengeCenter.claim")}
               icon={{ name: "Claim" as IconName }}
               className="!w-full"
               onClick={() => {
@@ -253,7 +232,7 @@ export default function ChallengeCard({
             />
           )}
           {status === "claimed" && (
-            <div className="flex flex-col items-center gap-4 w-full">
+            <div className="flex w-full flex-col items-center gap-4">
               <Button
                 variant="primary"
                 size="md"
@@ -268,7 +247,7 @@ export default function ChallengeCard({
               <Link
                 href={challengeShareUrl}
                 target="_blank"
-                className="w-full flex justify-center"
+                className="flex w-full justify-center"
                 onClick={(e) => e.stopPropagation()}
               >
                 <Button
@@ -276,7 +255,7 @@ export default function ChallengeCard({
                   variant="secondary"
                   size="sm"
                   icon={{ name: "X" as IconName }}
-                  className="!w-full !flex-shrink !text-xs !text-shade-tertiary !gap-x-3"
+                  className="!w-full !flex-shrink !gap-x-3 !text-xs !text-shade-tertiary"
                 />
               </Link>
             </div>

@@ -9,6 +9,7 @@ Các lệnh là những thao tác cơ bản mà chương trình của bạn th�
 <ArticleSection name="Lệnh là gì?" id="what-are-instructions" level="h2" />
 
 Các lệnh là những khối xây dựng cơ bản của chương trình. Hãy coi chúng như những mệnh lệnh chỉ dẫn chính xác cho bộ xử lý phải làm gì:
+
 - `add64 r1, r2`: "Cộng các giá trị trong thanh ghi `r1` và `r2`, lưu kết quả vào `r1`"
 - `ldxdw r0, [r10 - 8]`: "Tải 8 byte từ bộ nhớ stack vào thanh ghi `r0`"
 - `jeq r1, 42, +3`: "Nếu `r1` bằng 42, nhảy tiến 3 lệnh"
@@ -16,14 +17,19 @@ Các lệnh là những khối xây dựng cơ bản của chương trình. Hãy
 Mỗi lệnh thực hiện chính xác một thao tác và được mã hóa thành chính xác 8 byte dữ liệu để VM giải mã ngay lập tức.
 
 Các lệnh sBPF làm việc với các kích thước dữ liệu khác nhau:
+
 - byte = 8 bit (1 byte)
-- halfword = 16 bit (2 byte) 
+- halfword = 16 bit (2 byte)
 - word = 32 bit (4 byte)
 - doubleword = 64 bit (8 byte)
 
 Hầu hết các thao tác sBPF sử dụng giá trị 64-bit (doublewords) vì các thanh ghi là 64 bit, nhưng bạn có thể tải và lưu trữ các kích thước nhỏ hơn khi cần thiết để tăng hiệu quả.
 
-<ArticleSection name="Danh mục và định dạng các lệnh" id="instruction-categories-and-format" level="h2" />
+<ArticleSection
+  name="Danh mục và định dạng các lệnh"
+  id="instruction-categories-and-format"
+  level="h2"
+/>
 
 Khi bạn biên dịch mã Rust, C, hoặc assembly, toolchain sẽ tạo ra một luồng các lệnh có kích thước cố định 8-byte được đóng gói vào phần `.text` của ELF.
 
@@ -36,7 +42,7 @@ Mỗi lệnh tuân theo một cấu trúc nhất quán mà VM có thể giải m
 └──────────┴────────┴────────┴──────────────┴──────────────────┘
 ```
 
-- `opcode`: Xác định loại thao tác. 3 bit cao nhất xác định lớp lệnh (số học, bộ nhớ, nhảy, gọi, thoát), trong khi 5 bit thấp hơn chỉ định  chính xác biến thể (cộng, nhân, tải, nhảy-nếu-bằng).
+- `opcode`: Xác định loại thao tác. 3 bit cao nhất xác định lớp lệnh (số học, bộ nhớ, nhảy, gọi, thoát), trong khi 5 bit thấp hơn chỉ định chính xác biến thể (cộng, nhân, tải, nhảy-nếu-bằng).
 - `dst`: Số thanh ghi đích (`r0–r10`) nơi kết quả được lưu trữ—kết quả số học, giá trị đã tải, hoặc giá trị trả về từ hàm bổ trợ.
 - `src`: Thanh ghi nguồn cung cấp đầu vào. Đối với số học hai toán hạng (`add r1, r2`), nó cung cấp giá trị thứ hai. Đối với các thao tác bộ nhớ, nó có thể cung cấp địa chỉ cơ sở. Đối với các biến thể tức thời (`add r1, 10`), 4 bit này được gộp vào mã lệnh.
 - `offset`: Một số nguyên nhỏ điều chỉnh hành vi lệnh. Đối với tải/lưu, nó được thêm vào địa chỉ nguồn để đạt đến `[src + offset]`. Đối với các lệnh nhảy, đó là mục tiêu nhánh tương đối được đo bằng số lệnh.
@@ -52,7 +58,7 @@ Các loại lệnh khác nhau sử dụng các trường này theo những cách
 mov64 r1, 42           // Put immediate value 42 into r1
                        // opcode=move_imm, dst=1, src=unused, imm=42
 
-ldxdw r0, [r10 - 8]    // Load 8 bytes from stack into r0  
+ldxdw r0, [r10 - 8]    // Load 8 bytes from stack into r0
                        // opcode=load64, dst=0, src=10, offset=-8, imm=unused
 
 stxdw [r1 + 16], r0    // Store r0 to memory at [r1 + 16]
@@ -65,7 +71,7 @@ stxdw [r1 + 16], r0    // Store r0 to memory at [r1 + 16]
 add64 r1, r2           // r1 = r1 + r2
                        // opcode=add_reg, dst=1, src=2, offset=unused, imm=unused
 
-add64 r1, 100          // r1 = r1 + 100  
+add64 r1, 100          // r1 = r1 + 100
                        // opcode=add_imm, dst=1, src=unused, offset=unused, imm=100
 ```
 
@@ -78,13 +84,14 @@ ja +5                  // Jump forward 5 instructions unconditionally
 jeq r1, r2, +3         // If r1 == r2, jump forward 3 instructions
                        // opcode=jump_eq_reg, dst=1, src=2, offset=3, imm=unused
 
-jeq r1, 42, +3         // If r1 == 42, jump forward 3 instructions  
+jeq r1, 42, +3         // If r1 == 42, jump forward 3 instructions
                        // opcode=jump_eq_imm, dst=1, src=unused, offset=3, imm=42
 ```
 
 ### Mã hóa opcode
 
 Mã hóa opcode nắm bắt nhiều thông tin ngoài loại thao tác:
+
 - Lớp lệnh: Số học, bộ nhớ, nhảy, gọi, v.v.
 - Kích thước thao tác: các thao tác 32-bit hay 64-bit
 - Loại nguồn: Thanh ghi hay giá trị tức thời
@@ -108,7 +115,7 @@ Các thao tác bộ nhớ kết hợp nhiều trường một cách có ý nghĩ
 
 Đối với `ldxdw r1, [r2+8]`, opcode chỉ ra một thao tác tải bộ nhớ 64-bit, `dst` nhận giá trị được tải, `src` cung cấp địa chỉ cơ sở, và `offset` (8) được thêm vào để tạo địa chỉ cuối cùng `r2 + 8`.
 
-Các lệnh điều khiển luồng tuân theo cùng một mẫu: 
+Các lệnh điều khiển luồng tuân theo cùng một mẫu:
 
 Khi bạn viết `jeq r1, r2, +5`, mã opcode mã hóa một lệnh nhảy có điều kiện so sánh hai thanh ghi. Nếu `r1` bằng `r2`, VM sẽ thêm `offset` (5) vào bộ đếm chương trình, nhảy về phía trước 5 lệnh.
 
@@ -116,7 +123,7 @@ Khi bạn viết `jeq r1, r2, +5`, mã opcode mã hóa một lệnh nhảy có �
 
 ### Lệnh gọi hàm và Syscall
 
-Cơ chế gọi của sBPF đã phát triển qua nhiều phiên bản để có được sự rõ ràng và độ bảo mật tốt hơn. Cho đến sBPF v3, `call imm` phục vụ hai mục đích: giá trị tức thời xác định liệu bạn đang gọi một hàm nội bộ hay đang gọi một syscall. 
+Cơ chế gọi của sBPF đã phát triển qua nhiều phiên bản để có được sự rõ ràng và độ bảo mật tốt hơn. Cho đến sBPF v3, `call imm` phục vụ hai mục đích: giá trị tức thời xác định liệu bạn đang gọi một hàm nội bộ hay đang gọi một syscall.
 
 Runtime phân biệt giữa các loại này dựa trên phạm vi giá trị tức thời, với các số syscall thường là các số nguyên dương nhỏ như 16 cho `sol_log`.
 
@@ -128,149 +135,149 @@ Các lệnh gọi gián tiếp thông qua `callx` cũng đã phát triển. Các
 
 ### Các thao tác tải bộ nhớ
 
-| opcode | Mnemonic                 | Mô tả                               |
-|--------|--------------------------|-------------------------------------|
-| lddw   | `lddw dst, imm`          | Tải giá trị tức thời 64-bit (slot đầu tiên)  |
-| lddw   | `lddw dst, imm`          | Tải giá trị tức thời 64-bit (slot thứ hai) |
-| ldxw   | `ldxw dst, [src + off]`  | Tải word từ bộ nhớ                  |
-| ldxh   | `ldxh dst, [src + off]`  | Tải halfword từ bộ nhớ              |
-| ldxb   | `ldxb dst, [src + off]`  | Tải byte từ bộ nhớ                  |
-| ldxdw  | `ldxdw dst, [src + off]` | Tải doubleword từ bộ nhớ            |
+| opcode | Mnemonic                 | Mô tả                                       |
+| ------ | ------------------------ | ------------------------------------------- |
+| lddw   | `lddw dst, imm`          | Tải giá trị tức thời 64-bit (slot đầu tiên) |
+| lddw   | `lddw dst, imm`          | Tải giá trị tức thời 64-bit (slot thứ hai)  |
+| ldxw   | `ldxw dst, [src + off]`  | Tải word từ bộ nhớ                          |
+| ldxh   | `ldxh dst, [src + off]`  | Tải halfword từ bộ nhớ                      |
+| ldxb   | `ldxb dst, [src + off]`  | Tải byte từ bộ nhớ                          |
+| ldxdw  | `ldxdw dst, [src + off]` | Tải doubleword từ bộ nhớ                    |
 
 ### Các thao tác lưu trữ bộ nhớ
 
-| opcode | Mnemonic                 | Mô tả                         |
-|--------|--------------------------|--------------------------------|
-| stw    | `stw [dst + off], imm`   | Lưu trữ word tức thời            |
-| sth    | `sth [dst + off], imm`   | Lưu trữ halfword tức thời        |
-| stb    | `stb [dst + off], imm`   | Lưu trữ byte tức thời          |
-| stdw   | `stdw [dst + off], imm`  | Lưu trữ doubleword tức thời        |
-| stxw   | `stxw [dst + off], src`  | Lưu trữ word từ thanh ghi        |
-| stxh   | `stxh [dst + off], src`  | Lưu trữ halfword từ thanh ghi    |
-| stxb   | `stxb [dst + off], src`  | Lưu trữ byte từ thanh ghi      |
-| stxdw  | `stxdw [dst + off], src` | Lưu trữ doubleword từ thanh ghi    |
+| opcode | Mnemonic                 | Mô tả                           |
+| ------ | ------------------------ | ------------------------------- |
+| stw    | `stw [dst + off], imm`   | Lưu trữ word tức thời           |
+| sth    | `sth [dst + off], imm`   | Lưu trữ halfword tức thời       |
+| stb    | `stb [dst + off], imm`   | Lưu trữ byte tức thời           |
+| stdw   | `stdw [dst + off], imm`  | Lưu trữ doubleword tức thời     |
+| stxw   | `stxw [dst + off], src`  | Lưu trữ word từ thanh ghi       |
+| stxh   | `stxh [dst + off], src`  | Lưu trữ halfword từ thanh ghi   |
+| stxb   | `stxb [dst + off], src`  | Lưu trữ byte từ thanh ghi       |
+| stxdw  | `stxdw [dst + off], src` | Lưu trữ doubleword từ thanh ghi |
 
 ### Các thao tác số học (64-bit)
 
-| opcode | Mnemonic          | Mô tả                         |
-|--------|-------------------|--------------------------------|
-| add64  | `add64 dst, imm`  | Cộng tức thời                  |
-| add64  | `add64 dst, src`  | Cộng thanh ghi                 |
-| sub64  | `sub64 dst, imm`  | Trừ tức thời                   |
-| sub64  | `sub64 dst, src`  | Trừ thanh ghi                  |
-| mul64  | `mul64 dst, imm`  | Nhân tức thời                  |
-| mul64  | `mul64 dst, src`  | Nhân thanh ghi                 |
-| div64  | `div64 dst, imm`  | Chia tức thời (không dấu)      |
-| div64  | `div64 dst, src`  | Chia thanh ghi (không dấu)     |
-| sdiv64 | `sdiv64 dst, imm` | Chia tức thời (có dấu)         |
-| sdiv64 | `sdiv64 dst, src` | Chia thanh ghi (có dấu)        |
-| mod64  | `mod64 dst, imm`  | Chia lấy dư tức thời (không dấu) |
+| opcode | Mnemonic          | Mô tả                             |
+| ------ | ----------------- | --------------------------------- |
+| add64  | `add64 dst, imm`  | Cộng tức thời                     |
+| add64  | `add64 dst, src`  | Cộng thanh ghi                    |
+| sub64  | `sub64 dst, imm`  | Trừ tức thời                      |
+| sub64  | `sub64 dst, src`  | Trừ thanh ghi                     |
+| mul64  | `mul64 dst, imm`  | Nhân tức thời                     |
+| mul64  | `mul64 dst, src`  | Nhân thanh ghi                    |
+| div64  | `div64 dst, imm`  | Chia tức thời (không dấu)         |
+| div64  | `div64 dst, src`  | Chia thanh ghi (không dấu)        |
+| sdiv64 | `sdiv64 dst, imm` | Chia tức thời (có dấu)            |
+| sdiv64 | `sdiv64 dst, src` | Chia thanh ghi (có dấu)           |
+| mod64  | `mod64 dst, imm`  | Chia lấy dư tức thời (không dấu)  |
 | mod64  | `mod64 dst, src`  | Chia lấy dư thanh ghi (không dấu) |
-| smod64 | `smod64 dst, imm` | Chia lấy dư tức thời (có dấu)  |
-| smod64 | `smod64 dst, src` | Chia lấy dư thanh ghi (có dấu) |
-| neg64  | `neg64 dst`       | Đổi dấu                        |
+| smod64 | `smod64 dst, imm` | Chia lấy dư tức thời (có dấu)     |
+| smod64 | `smod64 dst, src` | Chia lấy dư thanh ghi (có dấu)    |
+| neg64  | `neg64 dst`       | Đổi dấu                           |
 
 ### Các thao tác số học (32-bit)
 
-| opcode | Mnemonic          | Mô tả                         |
-|--------|-------------------|--------------------------------|
-| add32  | `add32 dst, imm`  | Cộng tức thời (32-bit)         |
-| add32  | `add32 dst, src`  | Cộng thanh ghi (32-bit)        |
-| sub32  | `sub32 dst, imm`  | Trừ tức thời (32-bit)          |
-| sub32  | `sub32 dst, src`  | Trừ thanh ghi (32-bit)         |
-| mul32  | `mul32 dst, imm`  | Nhân tức thời (32-bit)         |
-| mul32  | `mul32 dst, src`  | Nhân thanh ghi (32-bit)        |
-| div32  | `div32 dst, imm`  | Chia tức thời (32-bit)         |
-| div32  | `div32 dst, src`  | Chia thanh ghi (32-bit)        |
-| sdiv32 | `sdiv32 dst, imm` | Chia tức thời (32-bit có dấu)  |
-| sdiv32 | `sdiv32 dst, src` | Chia thanh ghi (32-bit có dấu) |
-| mod32  | `mod32 dst, imm`  | Chia lấy dư tức thời (32-bit)  |
-| mod32  | `mod32 dst, src`  | Chia lấy dư thanh ghi (32-bit) |
-| smod32 | `smod32 dst, imm` | Chia lấy dư tức thời (32-bit có dấu) |
+| opcode | Mnemonic          | Mô tả                                 |
+| ------ | ----------------- | ------------------------------------- |
+| add32  | `add32 dst, imm`  | Cộng tức thời (32-bit)                |
+| add32  | `add32 dst, src`  | Cộng thanh ghi (32-bit)               |
+| sub32  | `sub32 dst, imm`  | Trừ tức thời (32-bit)                 |
+| sub32  | `sub32 dst, src`  | Trừ thanh ghi (32-bit)                |
+| mul32  | `mul32 dst, imm`  | Nhân tức thời (32-bit)                |
+| mul32  | `mul32 dst, src`  | Nhân thanh ghi (32-bit)               |
+| div32  | `div32 dst, imm`  | Chia tức thời (32-bit)                |
+| div32  | `div32 dst, src`  | Chia thanh ghi (32-bit)               |
+| sdiv32 | `sdiv32 dst, imm` | Chia tức thời (32-bit có dấu)         |
+| sdiv32 | `sdiv32 dst, src` | Chia thanh ghi (32-bit có dấu)        |
+| mod32  | `mod32 dst, imm`  | Chia lấy dư tức thời (32-bit)         |
+| mod32  | `mod32 dst, src`  | Chia lấy dư thanh ghi (32-bit)        |
+| smod32 | `smod32 dst, imm` | Chia lấy dư tức thời (32-bit có dấu)  |
 | smod32 | `smod32 dst, src` | Chia lấy dư thanh ghi (32-bit có dấu) |
-| neg32  | `neg32 dst`       | Đổi dấu                         |
+| neg32  | `neg32 dst`       | Đổi dấu                               |
 
 ### Các phép toán logic (64-bit)
 
-| opcode | Mnemonic          | Description                    |
-|--------|-------------------|--------------------------------|
-| or64   | `or64 dst, imm`   | Phép OR bit tức thời           |
-| or64   | `or64 dst, src`   | Phép OR bit thanh ghi            |
-| and64  | `and64 dst, imm`  | Phép AND bit tức thời          |
-| and64  | `and64 dst, src`  | Phép AND bit thanh ghi           |
-| lsh64  | `lsh64 dst, imm`  | Dịch trái tức thời           |
-| lsh64  | `lsh64 dst, src`  | Dịch trái thanh ghi            |
-| rsh64  | `rsh64 dst, imm`  | Dịch phải tức thời          |
-| rsh64  | `rsh64 dst, src`  | Dịch phải thanh ghi           |
-| xor64  | `xor64 dst, imm`  | Phép XOR bit tức thời          |
-| xor64  | `xor64 dst, src`  | Phép XOR bit thanh ghi           |
-| mov64  | `mov64 dst, imm`  | Di chuyển tức thời                 |
-| mov64  | `mov64 dst, src`  | Di chuyển thanh ghi                  |
-| arsh64 | `arsh64 dst, imm` | Dịch phải số học tức thời     |
-| arsh64 | `arsh64 dst, src` | Dịch phải số học thanh ghi     |
+| opcode | Mnemonic          | Description                |
+| ------ | ----------------- | -------------------------- |
+| or64   | `or64 dst, imm`   | Phép OR bit tức thời       |
+| or64   | `or64 dst, src`   | Phép OR bit thanh ghi      |
+| and64  | `and64 dst, imm`  | Phép AND bit tức thời      |
+| and64  | `and64 dst, src`  | Phép AND bit thanh ghi     |
+| lsh64  | `lsh64 dst, imm`  | Dịch trái tức thời         |
+| lsh64  | `lsh64 dst, src`  | Dịch trái thanh ghi        |
+| rsh64  | `rsh64 dst, imm`  | Dịch phải tức thời         |
+| rsh64  | `rsh64 dst, src`  | Dịch phải thanh ghi        |
+| xor64  | `xor64 dst, imm`  | Phép XOR bit tức thời      |
+| xor64  | `xor64 dst, src`  | Phép XOR bit thanh ghi     |
+| mov64  | `mov64 dst, imm`  | Di chuyển tức thời         |
+| mov64  | `mov64 dst, src`  | Di chuyển thanh ghi        |
+| arsh64 | `arsh64 dst, imm` | Dịch phải số học tức thời  |
+| arsh64 | `arsh64 dst, src` | Dịch phải số học thanh ghi |
 
 ### Các phép toán logic (32-bit)
 
-| opcode | Mnemonic          | Description                    |
-|--------|-------------------|--------------------------------|
-| or32   | `or32 dst, imm`   | Phép OR bit tức thời (32-bit)  |
-| or32   | `or32 dst, src`   | Phép OR bit thanh ghi (32-bit)   |
-| and32  | `and32 dst, imm`  | Phép AND bit tức thời (32-bit) |
-| and32  | `and32 dst, src`  | Phép AND bit thanh ghi (32-bit)  |
-| lsh32  | `lsh32 dst, imm`  | Dịch trái tức thời (32-bit)  |
-| lsh32  | `lsh32 dst, src`  | Dịch trái thanh ghi (32-bit)   |
-| rsh32  | `rsh32 dst, imm`  | Dịch phải tức thời (32-bit) |
-| rsh32  | `rsh32 dst, src`  | Dịch phải thanh ghi (32-bit)  |
-| xor32  | `xor32 dst, imm`  | Phép XOR bit tức thời (32-bit) |
-| xor32  | `xor32 dst, src`  | Phép XOR bit thanh ghi (32-bit)  |
-| mov32  | `mov32 dst, imm`  | Di chuyển tức thời (32-bit)        |
-| mov32  | `mov32 dst, src`  | Di chuyển thanh ghi (32-bit)         |
-| arsh32 | `arsh32 dst, imm` | Dịch phải số học tức thời (32-bit) |
+| opcode | Mnemonic          | Description                         |
+| ------ | ----------------- | ----------------------------------- |
+| or32   | `or32 dst, imm`   | Phép OR bit tức thời (32-bit)       |
+| or32   | `or32 dst, src`   | Phép OR bit thanh ghi (32-bit)      |
+| and32  | `and32 dst, imm`  | Phép AND bit tức thời (32-bit)      |
+| and32  | `and32 dst, src`  | Phép AND bit thanh ghi (32-bit)     |
+| lsh32  | `lsh32 dst, imm`  | Dịch trái tức thời (32-bit)         |
+| lsh32  | `lsh32 dst, src`  | Dịch trái thanh ghi (32-bit)        |
+| rsh32  | `rsh32 dst, imm`  | Dịch phải tức thời (32-bit)         |
+| rsh32  | `rsh32 dst, src`  | Dịch phải thanh ghi (32-bit)        |
+| xor32  | `xor32 dst, imm`  | Phép XOR bit tức thời (32-bit)      |
+| xor32  | `xor32 dst, src`  | Phép XOR bit thanh ghi (32-bit)     |
+| mov32  | `mov32 dst, imm`  | Di chuyển tức thời (32-bit)         |
+| mov32  | `mov32 dst, src`  | Di chuyển thanh ghi (32-bit)        |
+| arsh32 | `arsh32 dst, imm` | Dịch phải số học tức thời (32-bit)  |
 | arsh32 | `arsh32 dst, src` | Dịch phải số học thanh ghi (32-bit) |
 
 ### Các thao tác điều khiển luồng
 
-| opcode | Mnemonic             | Description                                   |
-|--------|----------------------|-----------------------------------------------|
-| ja     | `ja off`             | Nhảy vô điều kiện (jump 0 = nhảy đến lệnh kế tiếp)    |
-| jeq    | `jeq dst, imm, off`  | Nhảy nếu bằng giá trị tức thời                    |
-| jeq    | `jeq dst, src, off`  | Nhảy nếu bằng giá trị thanh ghi                     |
-| jgt    | `jgt dst, imm, off`  | Nhảy nếu lớn hơn giá trị tức thời (không dấu)     |
-| jgt    | `jgt dst, src, off`  | Nhảy nếu lớn hơn giá trị thanh ghi (không dấu)      |
-| jge    | `jge dst, imm, off`  | Nhảy nếu lớn hơn hoặc bằng giá trị tức thời (không dấu) |
-| jge    | `jge dst, src, off`  | Nhảy nếu lớn hơn hoặc bằng giá trị thanh ghi (không dấu)  |
-| jset   | `jset dst, imm, off` | Nhảy nếu bit được thiết lập (mặt nạ tức thời)              |
-| jset   | `jset dst, src, off` | Nhảy nếu bit được thiết lập (mặt nạ thanh ghi)               |
-| jne    | `jne dst, imm, off`  | Nhảy nếu không bằng giá trị tức thời                |
-| jne    | `jne dst, src, off`  | Nhảy nếu không bằng giá trị thanh ghi                 |
-| jsgt   | `jsgt dst, imm, off` | Nhảy nếu lớn hơn giá trị tức thời (có dấu)       |
-| jsgt   | `jsgt dst, src, off` | Nhảy nếu lớn hơn giá trị thanh ghi (có dấu)        |
-| jsge   | `jsge dst, imm, off` | Nhảy nếu lớn hơn hoặc bằng giá trị tức thời (có dấu)   |
+| opcode | Mnemonic             | Description                                              |
+| ------ | -------------------- | -------------------------------------------------------- |
+| ja     | `ja off`             | Nhảy vô điều kiện (jump 0 = nhảy đến lệnh kế tiếp)       |
+| jeq    | `jeq dst, imm, off`  | Nhảy nếu bằng giá trị tức thời                           |
+| jeq    | `jeq dst, src, off`  | Nhảy nếu bằng giá trị thanh ghi                          |
+| jgt    | `jgt dst, imm, off`  | Nhảy nếu lớn hơn giá trị tức thời (không dấu)            |
+| jgt    | `jgt dst, src, off`  | Nhảy nếu lớn hơn giá trị thanh ghi (không dấu)           |
+| jge    | `jge dst, imm, off`  | Nhảy nếu lớn hơn hoặc bằng giá trị tức thời (không dấu)  |
+| jge    | `jge dst, src, off`  | Nhảy nếu lớn hơn hoặc bằng giá trị thanh ghi (không dấu) |
+| jset   | `jset dst, imm, off` | Nhảy nếu bit được thiết lập (mặt nạ tức thời)            |
+| jset   | `jset dst, src, off` | Nhảy nếu bit được thiết lập (mặt nạ thanh ghi)           |
+| jne    | `jne dst, imm, off`  | Nhảy nếu không bằng giá trị tức thời                     |
+| jne    | `jne dst, src, off`  | Nhảy nếu không bằng giá trị thanh ghi                    |
+| jsgt   | `jsgt dst, imm, off` | Nhảy nếu lớn hơn giá trị tức thời (có dấu)               |
+| jsgt   | `jsgt dst, src, off` | Nhảy nếu lớn hơn giá trị thanh ghi (có dấu)              |
+| jsge   | `jsge dst, imm, off` | Nhảy nếu lớn hơn hoặc bằng giá trị tức thời (có dấu)     |
 | jsge   | `jsge dst, src, off` | Nhảy nếu lớn hơn hoặc bằng giá trị thanh ghi (có dấu)    |
-| jlt    | `jlt dst, imm, off`  | Nhảy nếu nhỏ hơn giá trị tức thời (không dấu)        |
-| jlt    | `jlt dst, src, off`  | Nhảy nếu nhỏ hơn giá trị thanh ghi (không dấu)         |
-| jle    | `jle dst, imm, off`  | Nhảy nếu nhỏ hơn hoặc bằng giá trị tức thời (không dấu)    |
-| jle    | `jle dst, src, off`  | Nhảy nếu nhỏ hơn hoặc bằng giá trị thanh ghi (không dấu)     |
-| jslt   | `jslt dst, imm, off` | Nhảy nếu nhỏ hơn giá trị tức thời (có dấu)          |
-| jslt   | `jslt dst, src, off` | Nhảy nếu nhỏ hơn giá trị thanh ghi (có dấu)           |
-| jsle   | `jsle dst, imm, off` | Nhảy nếu nhỏ hơn hoặc bằng giá trị tức thời (có dấu)      |
-| jsle   | `jsle dst, src, off` | Nhảy nếu nhỏ hơn hoặc bằng giá trị thanh ghi (có dấu)       |
+| jlt    | `jlt dst, imm, off`  | Nhảy nếu nhỏ hơn giá trị tức thời (không dấu)            |
+| jlt    | `jlt dst, src, off`  | Nhảy nếu nhỏ hơn giá trị thanh ghi (không dấu)           |
+| jle    | `jle dst, imm, off`  | Nhảy nếu nhỏ hơn hoặc bằng giá trị tức thời (không dấu)  |
+| jle    | `jle dst, src, off`  | Nhảy nếu nhỏ hơn hoặc bằng giá trị thanh ghi (không dấu) |
+| jslt   | `jslt dst, imm, off` | Nhảy nếu nhỏ hơn giá trị tức thời (có dấu)               |
+| jslt   | `jslt dst, src, off` | Nhảy nếu nhỏ hơn giá trị thanh ghi (có dấu)              |
+| jsle   | `jsle dst, imm, off` | Nhảy nếu nhỏ hơn hoặc bằng giá trị tức thời (có dấu)     |
+| jsle   | `jsle dst, src, off` | Nhảy nếu nhỏ hơn hoặc bằng giá trị thanh ghi (có dấu)    |
 
 ### Các thao tác gọi hàm
 
-| opcode | Mnemonic                    | Mô tả                                |
-|--------|-----------------------------|---------------------------------------|
-| call   | `call imm` hoặc `syscall imm` | Gọi hàm hoặc syscall                  |
-| callx  | `callx imm`                 | Gọi gián tiếp (thanh ghi trong trường imm) |
-| exit   | `exit` hoặc `return`          | Trở về từ hàm                        |
+| opcode | Mnemonic                      | Mô tả                                      |
+| ------ | ----------------------------- | ------------------------------------------ |
+| call   | `call imm` hoặc `syscall imm` | Gọi hàm hoặc syscall                       |
+| callx  | `callx imm`                   | Gọi gián tiếp (thanh ghi trong trường imm) |
+| exit   | `exit` hoặc `return`          | Trở về từ hàm                              |
 
 ### Các thao tác hoán đổi byte
 
-| opcode   | Mnemonic      | Mô tả                             |
-|----------|---------------|------------------------------------|
-| be16     | `be16 dst`    | Hoán đổi byte (16-bit)             |
-| be32     | `be32 dst`    | Hoán đổi byte (32-bit)             |
-| be64     | `be64 dst`    | Hoán đổi byte (64-bit)             |
-| le16     | `le16 dst`    | Mặt nạ bit (16-bit)                |
-| le32     | `le32 dst`    | Mặt nạ bit (32-bit)                |
-| le64     | `le64 dst`    | Không thao tác (64-bit)            |
+| opcode | Mnemonic   | Mô tả                   |
+| ------ | ---------- | ----------------------- |
+| be16   | `be16 dst` | Hoán đổi byte (16-bit)  |
+| be32   | `be32 dst` | Hoán đổi byte (32-bit)  |
+| be64   | `be64 dst` | Hoán đổi byte (64-bit)  |
+| le16   | `le16 dst` | Mặt nạ bit (16-bit)     |
+| le32   | `le32 dst` | Mặt nạ bit (32-bit)     |
+| le64   | `le64 dst` | Không thao tác (64-bit) |

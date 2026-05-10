@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="存款" id="deposit" level="h2" />
 
 存款指令執行以下步驟：
+
 1. 驗證保管庫為空（擁有零 lamports），以防止重複存款
 2. 確保存款金額超過基本帳戶的免租金最低限額
 3. 使用 CPI 到系統程序，將 lamports 從付款人轉移到保管庫
@@ -118,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 讓我們分解每個帳戶檢查：
+
 1. `payer`：必須是簽署者，因為他們需要授權 lamports 的轉移
 2. `vault`：
    - 必須由系統程序擁有
    - 必須擁有零 lamports（確保「全新」存款）
 
 對於 `vault`，我們將檢查：
+
 - 它是否來自正確的種子推導
 - 是否匹配預期的 PDA 地址
-由於種子的一部分位於我們目前無法訪問的 `instruction_data` 中。
+  由於種子的一部分位於我們目前無法訪問的 `instruction_data` 中。
 
 現在讓我們實現指令數據結構：
 
@@ -156,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 我們將指令數據反序列化為 `DepositInstructionData` 結構，其中包含：
+
 - `pubkey`：進行存款的用戶的 Secp256r1 公鑰
 - `amount`：存款的 lamports 金額
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 如前所述，我們需要驗證保險庫的 PDA 是否來自正確的種子。在這個基於 Secp256r1 的保險庫中，我們使用 `Secp256r1Pubkey` 作為種子的一部分，而不是傳統的擁有者公鑰。這是一個關鍵的安全措施，確保只有對應 Secp256r1 密鑰的持有者才能訪問保險庫。
 
 `Secp256r1Pubkey` 是 33 字節長，因為它使用了橢圓曲線公鑰的壓縮點表示法。這種格式包括：
+
 - 1 字節表示點的奇偶性（指示 y 坐標是偶數還是奇數）
 - 32 字節表示 x 坐標
 
 由於 Solana 的 `find_program_address` 函數對每個種子有 32 字節的限制，我們需要將 `Secp256r1Pubkey` 分成兩部分：
+
 1. 奇偶性字節（`pubkey[..1]`）
 2. x 坐標字節（`pubkey[1..33]`）
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 提款指令執行以下步驟：
+
 1. 驗證保險庫內有 lamports（非空）
 2. 使用保險庫的 PDA 以其自身名義簽署轉賬
 3. 將保險庫內的所有 lamports 轉回給擁有者
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 提款過程涉及多項安全檢查，以確保交易的合法性。我們來分解如何驗證 Secp256r1 簽名並防範潛在攻擊：
 
 1. **指令內省**
+
 - 我們使用指令系統變數來檢查交易中的下一個指令
 - 這讓我們可以驗證 Secp256r1 簽名，證明簽名密鑰的擁有權
 - Secp256r1 的簽名驗證總是在單獨的指令中進行
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - 簽名的訊息包含兩個關鍵資訊：
-    - 預定接收者的地址（32 字節）
-    - 簽名過期的時間戳（8 字節）
+  - 預定接收者的地址（32 字節）
+  - 簽名過期的時間戳（8 字節）
 - 這可以防止 MEV 攻擊，例如有人攔截並重複使用有效簽名，通過傳遞另一個 `payer` 並聲稱保管庫中的金額
 
 4. **過期檢查**

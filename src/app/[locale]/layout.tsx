@@ -1,22 +1,19 @@
-import { getTranslations } from "next-intl/server";
 import localFont from "next/font/local";
-import { NextIntlClientProvider, hasLocale } from "next-intl";
 import { notFound } from "next/navigation";
+import { hasLocale, NextIntlClientProvider } from "next-intl";
+import { getTranslations } from "next-intl/server";
 import { routing } from "@/i18n/routing";
 import "@/app/globals.css";
-import Header from "@/app/components/Header/Header";
-import Footer from "@/app/components/Footer/Footer";
-import GlobalModals from "@/app/components/Modals/GlobalModals";
-import { AuthProvider } from "@/contexts/AuthContext";
-import WalletProvider from "@/contexts/WalletProvider";
-import TanstackProvider from "@/contexts/TanstackProvider";
-import { Fira_Code, Funnel_Display } from "next/font/google";
+import { Icon } from "@blueshift-gg/ui-components";
 import { GoogleAnalytics } from "@next/third-parties/google";
-import { headers } from "next/headers";
+import { Fira_Code, Funnel_Display } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import { Toaster as SonnerToaster } from "sonner";
-import { Icon } from "@blueshift-gg/ui-components";
+import GlobalModals from "@/app/components/Modals/GlobalModals";
 import { URLS } from "@/constants/urls";
+import { AuthProvider } from "@/contexts/AuthContext";
+import TanstackProvider from "@/contexts/TanstackProvider";
+import WalletProvider from "@/contexts/WalletProvider";
 
 const FiraCode = Fira_Code({
   subsets: ["latin"],
@@ -69,41 +66,12 @@ interface RootLayoutProps {
 export async function generateMetadata({ params }: RootLayoutProps) {
   const { locale } = await params;
   const t = await getTranslations({ locale, namespace: "metadata" });
-  const requestURL = await headers();
-  const pathname = requestURL.get("x-current-path") || "";
 
   return {
     metadataBase: new URL(URLS.BLUESHIFT_EDUCATION),
     title: t("title"),
     description: t("description"),
     keywords: t("keywords"),
-    alternates: {
-      canonical: `/${locale}${pathname}`,
-      languages: {
-        en: `/en${pathname}`,
-        "zh-CN": `/zh-CN${pathname}`,
-        "zh-HK": `/zh-HK${pathname}`,
-        fr: `/fr${pathname}`,
-        id: `/id${pathname}`,
-        vi: `/vi${pathname}`,
-        uk: `/uk${pathname}`,
-        de: `/de${pathname}`,
-      },
-    },
-    openGraph: {
-      title: t("title"),
-      type: "website",
-      description: t("description"),
-      url: `/${locale}`,
-      siteName: t("title"),
-      images: [
-        {
-          url: `${URLS.BLUESHIFT_EDUCATION}/graphics/meta-image.png`,
-          width: 1200,
-          height: 628,
-        },
-      ],
-    },
   };
 }
 
@@ -120,23 +88,6 @@ export default async function RootLayout({
     notFound();
   }
 
-  const requestURL = await headers();
-  const pathname = requestURL.get("x-current-path");
-  const isHomepage = pathname === `/${locale}` || pathname === '/';
-
-  // Organization schema for homepage
-  const organizationSchema = isHomepage ? {
-    "@context": "https://schema.org",
-    "@type": "EducationalOrganization",
-    "name": "Blueshift",
-    "url": URLS.BLUESHIFT_EDUCATION,
-    "logo": `${URLS.BLUESHIFT_EDUCATION}/branding/logo.svg`,
-    "description": "Learn Solana development with hands-on courses, challenges, and on-chain verification. Free education from blockchain basics to advanced program development.",
-    "foundingDate": "2023",
-    "knowsAbout": ["Solana", "Blockchain Development", "Anchor Framework", "Rust Programming", "Web3", "Smart Contracts", "DeFi", "NFTs"],
-    "teaches": "Solana Blockchain Development"
-  } : null;
-
   return (
     <html lang={locale}>
       <body
@@ -146,24 +97,8 @@ export default async function RootLayout({
           <TanstackProvider>
             <WalletProvider>
               <AuthProvider>
-                {organizationSchema && (
-                  <script
-                    type="application/ld+json"
-                    dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
-                  />
-                )}
                 <GlobalModals />
-                {!pathname?.includes("/nft-generator") ? (
-                  <>
-                    <Header />
-                    <div className="pt-[74px] min-h-[calc(100dvh-74px)]">
-                      {children}
-                    </div>
-                    <Footer />
-                  </>
-                ) : (
-                  children
-                )}
+                {children}
                 <Toaster
                   position="top-center"
                   toastOptions={{

@@ -1,5 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 type ImageKind = "markdown" | "jsx" | "html";
 
@@ -56,18 +56,13 @@ type Report = {
 
 const CONTENT_DIR = path.join(process.cwd(), "src", "app", "content");
 const COURSES_DIR = path.join(CONTENT_DIR, "courses");
-const COURSE_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "course-banners",
-);
+const COURSE_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "course-banners");
 const REPORT_DIR = path.join(process.cwd(), ".tmp");
 const REPORT_FILE = path.join(REPORT_DIR, "mdx-image-banner-map.json");
 
 async function listDirectories(dirPath: string): Promise<string[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  return entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 
 async function walkMdxFiles(dirPath: string): Promise<string[]> {
@@ -105,8 +100,7 @@ function extractImages(content: string): {
     });
   }
 
-  const sourceUriRegex =
-    /source=\{\{\s*[^}]*?uri\s*:\s*["']([^"']+)["'][^}]*\}\}/g;
+  const sourceUriRegex = /source=\{\{\s*[^}]*?uri\s*:\s*["']([^"']+)["'][^}]*\}\}/g;
   for (const match of content.matchAll(sourceUriRegex)) {
     images.push({
       kind: "jsx",
@@ -119,8 +113,7 @@ function extractImages(content: string): {
     /<(?:img|Image)\b[^>]*\b(src|source)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{`([^`]+)`\}|\{['"]([^'"]+)['"]\})/g;
   for (const match of content.matchAll(jsxImageRegex)) {
     const attribute = match[1] as "src" | "source";
-    const imagePath =
-      match[2] || match[3] || match[4] || match[5] || undefined;
+    const imagePath = match[2] || match[3] || match[4] || match[5] || undefined;
 
     if (imagePath) {
       images.push({
@@ -131,8 +124,7 @@ function extractImages(content: string): {
     }
   }
 
-  const dynamicImageRegex =
-    /<(?:img|Image)\b[^>]*\b(src|source)\s*=\s*\{([^}]+)\}[^>]*>/g;
+  const dynamicImageRegex = /<(?:img|Image)\b[^>]*\b(src|source)\s*=\s*\{([^}]+)\}[^>]*>/g;
   for (const match of content.matchAll(dynamicImageRegex)) {
     const attribute = match[1] as "src" | "source";
     const expression = match[2].trim();
@@ -167,9 +159,7 @@ async function main() {
 
   const bannerFiles = await fs.readdir(COURSE_BANNERS_DIR);
   const bannerSlugs = new Set(
-    bannerFiles
-      .filter(file => file.endsWith(".png"))
-      .map(file => file.replace(/\.png$/i, "")),
+    bannerFiles.filter((file) => file.endsWith(".png")).map((file) => file.replace(/\.png$/i, "")),
   );
 
   const courseBannerMap: Record<string, string> = {};
@@ -206,13 +196,13 @@ async function main() {
       ? new Set([expectedBanner, expectedBanner.replace(/^\//, "")])
       : null;
 
-    const reportImages = images.map(image => {
+    const reportImages = images.map((image) => {
       const normalizedPath = normalizeImagePath(image.path);
       const isCourseBanner =
         normalizedPath.includes("/graphics/course-banners/") ||
         normalizedPath.includes("graphics/course-banners/");
       const matchesExpected = expectedBanner
-        ? normalizedExpectedVariants?.has(normalizedPath) ?? false
+        ? (normalizedExpectedVariants?.has(normalizedPath) ?? false)
         : null;
 
       if (courseSlug && isCourseBanner) {
@@ -243,8 +233,8 @@ async function main() {
       };
 
       const bannerPaths = reportImages
-        .filter(image => image.isCourseBanner)
-        .map(image => normalizeImagePath(image.path));
+        .filter((image) => image.isCourseBanner)
+        .map((image) => normalizeImagePath(image.path));
 
       for (const bannerPath of bannerPaths) {
         if (!usage.foundBanners.includes(bannerPath)) {
@@ -273,7 +263,7 @@ async function main() {
     });
   }
 
-  const coursesWithoutBannerUsage = Object.keys(courseBannerMap).filter(slug => {
+  const coursesWithoutBannerUsage = Object.keys(courseBannerMap).filter((slug) => {
     const usage = courseBannerUsage[slug];
     return !usage || usage.foundBanners.length === 0;
   });
@@ -303,13 +293,11 @@ async function main() {
   console.log(`Total images found: ${totalImages}`);
   console.log(`Course banner images found: ${totalCourseBannerImages}`);
   console.log(`Course banner mismatches: ${mismatchedCourseBannerImages}`);
-  console.log(
-    `Missing course banner files: ${missingCourseBannerFiles.length}`,
-  );
+  console.log(`Missing course banner files: ${missingCourseBannerFiles.length}`);
   console.log(`Report written to: ${REPORT_FILE}`);
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error("Error generating MDX image banner map:", error);
   process.exit(1);
 });

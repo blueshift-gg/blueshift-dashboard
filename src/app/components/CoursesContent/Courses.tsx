@@ -1,6 +1,6 @@
+import { Suspense } from "react";
 import { getAllCourses, getCourseLessons } from "@/app/utils/content";
 import CourseList from "./CourseList";
-import { Suspense } from "react";
 
 async function CoursesContent() {
   const courses = await getAllCourses();
@@ -18,7 +18,7 @@ async function CoursesContent() {
           slug: lesson.slug.toLowerCase().replace(/\s+/g, "-"),
         })),
       };
-    })
+    }),
   );
 
   return <CourseList initialCourses={courses} courseLessons={courseLessons} />;
@@ -26,7 +26,7 @@ async function CoursesContent() {
 
 export default function Courses() {
   return (
-    <div className="relative content-wrapper">
+    <div className="content-wrapper relative">
       <Suspense fallback={<CourseList isLoading={true} />}>
         <CoursesContent />
       </Suspense>

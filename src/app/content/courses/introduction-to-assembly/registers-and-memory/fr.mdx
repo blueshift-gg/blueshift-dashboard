@@ -12,13 +12,13 @@ Le compromis est simple : vous n'avez que 11 cases au total, vous devez donc les
 
 sBPF attribue des rôles spécifiques à chaque registre :
 
-| Registre | Rôle                 | Sauvegardé par l'appelé ?  | Notes d'utilisation                                 |
-|----------|----------------------|----------------|---------------------------------------------|
-| `r0`     | Valeur de retour         | Non             | Résultats de fonction, valeurs de retour des appels système     |
-| `r1`     | Pointeur de tampon d'entrée | Non             | Pointe vers 0x400000000 à l'entrée              |
-| `r2-r5`  | Brouillon/arguments    | Non             | Arguments de fonction auxiliaire, valeurs temporaires |
-| `r6-r9`  | Usage général      | Oui            | Doit être préservé entre les appels                  |
-| `r10`    | Pointeur de trame        | Oui, lecture seule | Base de la pile, ne peut pas être modifié directement          |
+| Registre | Rôle                        | Sauvegardé par l'appelé ? | Notes d'utilisation                                         |
+| -------- | --------------------------- | ------------------------- | ----------------------------------------------------------- |
+| `r0`     | Valeur de retour            | Non                       | Résultats de fonction, valeurs de retour des appels système |
+| `r1`     | Pointeur de tampon d'entrée | Non                       | Pointe vers 0x400000000 à l'entrée                          |
+| `r2-r5`  | Brouillon/arguments         | Non                       | Arguments de fonction auxiliaire, valeurs temporaires       |
+| `r6-r9`  | Usage général               | Oui                       | Doit être préservé entre les appels                         |
+| `r10`    | Pointeur de trame           | Oui, lecture seule        | Base de la pile, ne peut pas être modifié directement       |
 
 Les registres `r6` à `r9` sont _sauvegardés par l'appelé_, ce qui signifie que leurs valeurs persistent entre les appels de fonction. Utilisez-les pour les données importantes qui doivent survivre aux invocations de fonction.
 
@@ -30,12 +30,12 @@ Le registre `r10` est « spécial » car il sert de pointeur de trame, pointant 
 
 Alors que les registres contiennent les valeurs activement utilisées, la mémoire stocke tout le reste. sBPF organise la mémoire en régions fixes avec des dispositions identiques dans tous les programmes :
 
-| Région | Adresse de départ | Objectif                 | Taille/Notes                                           |
-|--------|-------------------|--------------------------|--------------------------------------------------------|
-| Texte  | 0x100000000       | Code et données en lecture seule | Programme binaire                                      |
-| Pile   | 0x200000000       | Variables locales        | 4 Kio par cadre de pile, avec une profondeur d'appel maximale de 64 |
-| Tas    | 0x300000000       | Allocation dynamique     | 32 Kio                                                 |
-| Entrée | 0x400000000       | Paramètres du programme  | Comptes sérialisés et données d'instruction            |
+| Région | Adresse de départ | Objectif                         | Taille/Notes                                                        |
+| ------ | ----------------- | -------------------------------- | ------------------------------------------------------------------- |
+| Texte  | 0x100000000       | Code et données en lecture seule | Programme binaire                                                   |
+| Pile   | 0x200000000       | Variables locales                | 4 Kio par cadre de pile, avec une profondeur d'appel maximale de 64 |
+| Tas    | 0x300000000       | Allocation dynamique             | 32 Kio                                                              |
+| Entrée | 0x400000000       | Paramètres du programme          | Comptes sérialisés et données d'instruction                         |
 
 - La **région de texte** contient votre code exécutable et les données en lecture seule comme les constantes de chaîne. Les données définies avec des directives `.quad` résident généralement ici.
 - La **région de pile** héberge les variables locales. Avec `r10` pointant vers la base de la pile, vous accédez aux variables locales en utilisant des décalages négatifs : `[r10 - 16]`, `[r10 - 24]`, etc.
@@ -45,7 +45,11 @@ Cette disposition fixe offre trois avantages clés : la sécurité grâce à l'i
 
 > Toute tentative d'accès à des adresses non mappées déclenche une violation d'accès et la transaction échoue.
 
-<ArticleSection name="Utilisation des registres et de la mémoire" id="using-registers-and-memory" level="h2" />
+<ArticleSection
+  name="Utilisation des registres et de la mémoire"
+  id="using-registers-and-memory"
+  level="h2"
+/>
 
 Voici comment les registres et la mémoire fonctionnent ensemble en pratique :
 
@@ -53,17 +57,18 @@ Voici comment les registres et la mémoire fonctionnent ensemble en pratique :
 .globl entrypoint
 entrypoint:
     // On entry: r1 points to input data at 0x400000000
-    
+
     ldxdw r0, [r1 + 0]      // Load first 8 bytes from input into r0
     mov64 r2, 42            // Put 42 in register r2
     add64 r0, r2            // Add them: r0 = r0 + r2
-    
+
     stxdw [r10 - 8], r0     // Store result on stack
     mov64 r0, 0             // Return success
     exit
 ```
 
 Ce programme démontre le modèle typique :
+
 - Utilise le registre `r1` (pointeur d'entrée) pour lire depuis la mémoire
 - Utilise les registres `r0` et `r2` pour les calculs
 - Utilise le registre `r10` (pointeur de cadre) pour accéder à la mémoire de la pile
@@ -105,7 +110,8 @@ entrypoint:
 ```
 
 Le comportement de sortie dépend de la profondeur d'appel :
-- À la profondeur d'appel 0, la sortie termine le programme avec `r0` comme code de résultat. 
+
+- À la profondeur d'appel 0, la sortie termine le programme avec `r0` comme code de résultat.
 - À des niveaux d'appel plus profonds, la sortie agit comme une instruction return, restaurant les registres sauvegardés par l'appelant (`r6`-`r9`) et le pointeur de trame de l'appelant (`r10`) avant de poursuivre l'exécution à l'adresse de retour.
 
 Le runtime gère automatiquement la configuration et le nettoyage grâce à un code implicite de prologue et d'épilogue, y compris la configuration de l'état initial des registres et le traitement final du retour.

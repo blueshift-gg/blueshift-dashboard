@@ -14,7 +14,7 @@ O MWA usa AES-128-GCM (Galois/Counter Mode) porque fornece:
 
 **Autenticação**: A tag de autenticação prova que a mensagem veio de alguém que conhece a chave.
 
-GCM é um modo *authenticated encryption with associated data* (AEAD). É eficiente, amplamente suportado em hardware e disponível na Web Crypto API.
+GCM é um modo _authenticated encryption with associated data_ (AEAD). É eficiente, amplamente suportado em hardware e disponível na Web Crypto API.
 
 <ArticleSection name="Estrutura da Mensagem Criptografada" id="message-structure" level="h2" />
 
@@ -54,7 +54,7 @@ Para criptografar uma mensagem:
 async function encryptMessage(
   sessionKey: CryptoKey,
   sequenceNumber: number,
-  plaintext: Uint8Array
+  plaintext: Uint8Array,
 ): Promise<Uint8Array> {
   // Gerar IV aleatório
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -66,13 +66,13 @@ async function encryptMessage(
   // Criptografar com AES-GCM, usando número de sequência como AAD
   const encrypted = await crypto.subtle.encrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: iv,
-      additionalData: seqBytes,  // AAD: autentica o número de sequência
-      tagLength: 128  // 16 bytes
+      additionalData: seqBytes, // AAD: autentica o número de sequência
+      tagLength: 128, // 16 bytes
     },
     sessionKey,
-    plaintext
+    plaintext,
   );
 
   // Web Crypto retorna ciphertext || tag
@@ -96,7 +96,7 @@ Para descriptografar:
 async function decryptMessage(
   sessionKey: CryptoKey,
   expectedSequenceNumber: number,
-  message: Uint8Array
+  message: Uint8Array,
 ): Promise<Uint8Array> {
   // Analisar o formato de transmissão
   const seqBytes = message.slice(0, 4);
@@ -106,19 +106,21 @@ async function decryptMessage(
   // Verificar número de sequência
   const receivedSeq = new DataView(seqBytes.buffer).getUint32(0, false);
   if (receivedSeq !== expectedSequenceNumber) {
-    throw new Error(`Incompatibilidade no número de sequência: esperado ${expectedSequenceNumber}, recebido ${receivedSeq}`);
+    throw new Error(
+      `Incompatibilidade no número de sequência: esperado ${expectedSequenceNumber}, recebido ${receivedSeq}`,
+    );
   }
 
   // Descriptografar com AES-GCM, usando número de sequência como AAD
   const decrypted = await crypto.subtle.decrypt(
     {
-      name: 'AES-GCM',
+      name: "AES-GCM",
       iv: iv,
-      additionalData: seqBytes,  // AAD deve corresponder ao usado na criptografia
-      tagLength: 128
+      additionalData: seqBytes, // AAD deve corresponder ao usado na criptografia
+      tagLength: 128,
     },
     sessionKey,
-    ciphertextAndTag
+    ciphertextAndTag,
   );
 
   return new Uint8Array(decrypted);
@@ -168,6 +170,7 @@ Entender o GCM ajuda a depurar problemas:
 ### Modo Counter
 
 O GCM é construído sobre o modo CTR (Counter):
+
 1. Começa com IV e um contador (inicialmente 1)
 2. Criptografa blocos de contador com AES: `E(K, IV || counter)`
 3. Faz XOR do contador criptografado com blocos de plaintext
@@ -177,6 +180,7 @@ Isso produz o ciphertext. O contador incrementa para cada bloco.
 ### Autenticação GHASH
 
 O GCM adiciona autenticação via GHASH:
+
 1. Faz hash do ciphertext com uma multiplicação polinomial especial
 2. O resultado, combinado com o contador criptografado, produz a tag
 
@@ -200,7 +204,9 @@ Após a descriptografia, o plaintext é uma mensagem JSON-RPC:
   "id": "1",
   "method": "authorize",
   "params": {
-    "identity": { /* ... */ },
+    "identity": {
+      /* ... */
+    },
     "cluster": "mainnet-beta"
   }
 }
@@ -213,7 +219,9 @@ Ou uma resposta:
   "jsonrpc": "2.0",
   "id": "1",
   "result": {
-    "accounts": [ /* ... */ ],
+    "accounts": [
+      /* ... */
+    ],
     "auth_token": "***"
   }
 }
@@ -229,6 +237,7 @@ A especificação define limites:
 - **Local**: Definido pela implementação, tipicamente muito maior
 
 Para fins práticos:
+
 - Payloads de transação podem ser grandes (múltiplas transações, cada uma até 1232 bytes)
 - Codificação Base64 infla o tamanho em ~33%
 - Mantenha abaixo de 3KB para compatibilidade com o reflector
@@ -242,6 +251,7 @@ Falhas de criptografia/descriptografia devem ser tratadas com cuidado:
 ### Falha na Descriptografia
 
 A Web Crypto API lança um erro se:
+
 - A tag de autenticação não corresponde (mensagem adulterada ou incompatibilidade de chave)
 - O IV ou ciphertext está malformado
 
@@ -296,7 +306,7 @@ export async function encryptJsonRpcMessage(
 ): Promise<Uint8Array> {
   const plaintext = new TextEncoder().encode(JSON.stringify(jsonRpcMessage));
   const iv = crypto.getRandomValues(new Uint8Array(INITIALIZATION_VECTOR_SIZE_BYTES));
-  
+
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
@@ -310,7 +320,7 @@ export async function encryptJsonRpcMessage(
   // Construir a mensagem criptografada completa
   const seqNumBuffer = new ArrayBuffer(SEQUENCE_NUMBER_SIZE_BYTES);
   new DataView(seqNumBuffer).setUint32(0, sequenceNumber);
-  
+
   return new Uint8Array([
     ...new Uint8Array(seqNumBuffer),
     ...iv,
@@ -320,6 +330,7 @@ export async function encryptJsonRpcMessage(
 ```
 
 Note como o SDK:
+
 1. Codifica em JSON a mensagem RPC
 2. Gera um IV novo para cada mensagem
 3. Usa `AES-GCM` com tag de 128 bits
@@ -346,9 +357,14 @@ const seq = encryptedMessage.slice(0, 4);
 const iv = encryptedMessage.slice(4, 16);
 const ciphertext = encryptedMessage.slice(16);
 
-console.log('Sequência:', new DataView(seq.buffer).getUint32(0, false));
-console.log('IV:', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''));
-console.log('Comprimento do ciphertext:', ciphertext.length);
+console.log("Sequência:", new DataView(seq.buffer).getUint32(0, false));
+console.log(
+  "IV:",
+  Array.from(iv)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(""),
+);
+console.log("Comprimento do ciphertext:", ciphertext.length);
 ```
 
 ### Erros Comuns
@@ -365,11 +381,11 @@ console.log('Comprimento do ciphertext:', ciphertext.length);
 
 AES-GCM é rápido:
 
-| Operação | Tempo (dispositivo mobile típico) |
-|-----------|------------------------------|
-| Criptografar 1KB | < 0.1ms |
-| Descriptografar 1KB | < 0.1ms |
-| Geração de IV | < 0.01ms |
+| Operação            | Tempo (dispositivo mobile típico) |
+| ------------------- | --------------------------------- |
+| Criptografar 1KB    | < 0.1ms                           |
+| Descriptografar 1KB | < 0.1ms                           |
+| Geração de IV       | < 0.01ms                          |
 
 A sobrecarga é insignificante comparada à latência de rede ou processamento de transações.
 
@@ -382,6 +398,7 @@ Da especificação MWA, mensagens criptografadas:
 > "Todas as mensagens JSON-RPC trocadas após a sessão ser estabelecida são criptografadas usando AES-128-GCM. O segredo compartilhado derivado do ECDH é usado como chave de criptografia."
 
 Pontos chave da especificação:
+
 - IV de 12 bytes (gerado aleatoriamente)
 - Número de sequência de 4 bytes (big-endian)
 - Tag de autenticação de 128 bits (16 bytes)

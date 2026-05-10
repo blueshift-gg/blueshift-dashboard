@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import CopyClipboard from "../CopyClipboard/CopyClipboard";
-import { Icon } from "@blueshift-gg/ui-components";
 import { usePathname } from "@/i18n/navigation";
+import CopyClipboard from "../CopyClipboard/CopyClipboard";
 
 export function ArticleSection({
   name,
@@ -25,11 +24,11 @@ export function ArticleSection({
   }, [id, pathname]);
 
   return (
-    <Heading id={id} className="scroll-mt-24 flex items-center gap-x-2 prose">
+    <Heading id={id} className="prose flex scroll-mt-24 items-center gap-x-2">
       {!isCode ? (
         <span>{name}</span>
       ) : (
-        <div className="gradient-border heading-code flex items-center justify-center">
+        <div className="heading-code gradient-border flex items-center justify-center">
           <code>{name}</code>
         </div>
       )}

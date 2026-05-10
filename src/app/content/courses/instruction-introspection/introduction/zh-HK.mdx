@@ -61,37 +61,49 @@ fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
 這意味著通過在您的程式中讀取 `Instructions` sysvar 帳戶，您可以訪問當前交易中包含的所有指令。
 
 您不需要手動解析原始位元組。Solana 提供了輔助函數：
+
 - `load_current_index_checked`：返回當前執行指令的索引。
 - `load_instruction_at_checked`：允許您按索引以解析、反序列化的格式載入特定指令。
 
 <ArticleSection name="如何運作？" id="how-does-it-work" level="h2" />
 
 每個 Solana 指令包含：
+
 - 它目標的程式 ID，
 - 它互動的帳戶（包括簽名者/可寫等元數據），
 - 以及數據負載（通常是識別碼 + 參數）。
 
 而這正是 Instructions sysvar 中的 `load_instruction_at_checked` 函數提供的內容：
+
 - program_id：此指令調用的程式。
 - accounts：包含元數據的相關帳戶列表。
 - data：原始輸入負載（如果我們正在內省一個 Anchor 指令，它通常以 8 字節的識別碼開頭，後跟參數）。
 
 為了安全且高效地檢查其他指令，請按照以下步驟進行：
+
 - 確定當前指令的索引：使用`load_current_index_checked`來找到當前執行指令的索引。
-> 請注意：您的指令可能不是交易中的第一個（索引為0）。
+
+  > 請注意：您的指令可能不是交易中的第一個（索引為0）。
 
 - 加載目標指令進行分析：獲得索引後，使用`load_instruction_at_checked(index)`加載同一交易中的另一個指令——可以是前一個、後一個或特定位置的指令。
-> 這對於驗證行為、確保預期輸入或在程序間安全地組合非常有用。
+
+  > 這對於驗證行為、確保預期輸入或在程序間安全地組合非常有用。
 
 - 建立約束以防止惡意行為：指令檢查功能非常強大，但也引入了新的攻擊面。請確保：驗證被檢查的指令是否針對預期的程序，確認帳戶地址和數據是否符合預期模式，並避免對指令順序做出假設，除非有明確的強制規定。
 
 通過採取這些預防措施，您可以安全地利用指令檢查功能來構建強大、可組合且安全的Solana程序。
 
-<ArticleSection name="Common Constraints for Introspection" id="common-constraints-for-introspection" level="h2" />
+<ArticleSection
+  name="Common Constraints for Introspection"
+  id="common-constraints-for-introspection"
+  level="h2"
+/>
 
 在使用指令檢查時，必須強制執行嚴格的約束以防止惡意或意外行為。最常見的安全措施包括：
+
 - 指令驗證：驗證指令的程序ID和識別碼，以確保其正確。識別碼（通常是指令數據的前1、4或8個字節）唯一標識正在調用的功能。
-> 此步驟確保您正在檢查預期的指令，而不是被偽造或格式錯誤的指令。
+
+  > 此步驟確保您正在檢查預期的指令，而不是被偽造或格式錯誤的指令。
 
 - 變量驗證：在識別碼之後，解析並檢查指令使用的關鍵變量。這些可能包括金額、方向（例如多/空）或ID，您應始終確認這些字段是否符合您的集成或安全措施的預期邏輯。
 - 帳戶驗證：驗證指令帳戶的結構和身份。檢查預期帳戶是否出現在特定位置（例如簽署者、保管庫、抵押品），並確保角色如簽署者/可寫狀態符合您的假設。

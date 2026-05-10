@@ -17,17 +17,16 @@ export function resolveColorVar(colorString: string): [number, number, number] {
   // Handle "rgba(r, g, b, a)" or "rgb(r, g, b)"
   const rgbaMatch = resolved.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
   if (rgbaMatch) {
-    return [parseInt(rgbaMatch[1]), parseInt(rgbaMatch[2]), parseInt(rgbaMatch[3])];
+    return [parseInt(rgbaMatch[1], 10), parseInt(rgbaMatch[2], 10), parseInt(rgbaMatch[3], 10)];
   }
-  
+
   // Handle comma-separated "r,g,b" (legacy format)
   if (resolved.includes(",")) {
-     const parts = resolved.split(",").map(Number);
-     if (parts.length >= 3 && !parts.some(isNaN)) {
-         return [parts[0], parts[1], parts[2]];
-     }
+    const parts = resolved.split(",").map(Number);
+    if (parts.length >= 3 && !parts.some(Number.isNaN)) {
+      return [parts[0], parts[1], parts[2]];
+    }
   }
 
   return [0, 0, 0];
 }
-

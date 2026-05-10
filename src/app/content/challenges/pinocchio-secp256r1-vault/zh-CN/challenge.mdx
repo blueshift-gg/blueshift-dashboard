@@ -74,6 +74,7 @@ fn process_instruction(
 <ArticleSection name="存款" id="deposit" level="h2" />
 
 存款指令执行以下步骤：
+
 1. 验证金库为空（lamports 为零），以防止重复存款
 2. 确保存款金额超过基本账户的免租金最低限额
 3. 使用 CPI 调用系统程序，将 lamports 从付款人转移到金库
@@ -118,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 让我们分解每个账户检查：
+
 1. `payer`：必须是签名者，因为他们需要授权 lamports 的转移
 2. `vault`：
    - 必须由系统程序拥有
    - 必须为零 lamports（确保“新鲜”存款）
 
 对于 `vault`，我们将检查：
+
 - 它是否从正确的种子派生
 - 是否匹配预期的 PDA 地址
-由于种子的一部分在 `instruction_data` 中，而我们此时无法访问它。
+  由于种子的一部分在 `instruction_data` 中，而我们此时无法访问它。
 
 现在让我们实现指令数据结构：
 
@@ -156,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 我们将指令数据反序列化为 `DepositInstructionData` 结构，其中包含：
+
 - `pubkey`：进行存款的用户的 Secp256r1 公钥
 - `amount`：存款的 lamports 数量
 
@@ -213,16 +217,19 @@ impl<'a> Deposit<'a> {
 如前所述，我们需要验证金库的PDA是否由正确的种子派生。在这个基于Secp256r1的金库中，我们使用`Secp256r1Pubkey`作为种子的一部分，而不是传统的所有者公钥。这是一个关键的安全措施，确保只有持有相应Secp256r1密钥的人才能访问金库。
 
 `Secp256r1Pubkey`长度为33字节，因为它使用了椭圆曲线公钥的压缩点表示格式。该格式包括：
+
 - 1字节用于点的奇偶性（指示y坐标是偶数还是奇数）
 - 32字节用于x坐标
 
 由于Solana的`find_program_address`函数对每个种子的长度限制为32字节，我们需要将`Secp256r1Pubkey`分成两部分：
+
 1. 奇偶性字节（`pubkey[..1]`）
 2. x坐标字节（`pubkey[1..33]`）
 
 <ArticleSection name="Withdraw" id="withdraw" level="h2" />
 
 提款指令执行以下步骤：
+
 1. 验证金库中有lamports（非空）
 2. 使用金库的PDA代表其自身签署转账
 3. 将金库中的所有lamports转回给所有者
@@ -320,7 +327,7 @@ impl<'a> Withdraw<'a> {
         // Enforce that the signer of the first signature is our PDA owner
         let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 
-        // Check that our fee payer is the correct 
+        // Check that our fee payer is the correct
         let (payer, expiry) = secp256r1_ix
             .get_message_data(0)?
             .split_at_checked(32)
@@ -341,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Create signer seeds for our CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -364,6 +371,7 @@ impl<'a> Withdraw<'a> {
 提款过程涉及多个安全检查，以确保交易的合法性。让我们分解如何验证Secp256r1签名并防范潜在攻击：
 
 1. **指令内省**
+
 - 我们使用指令 sysvar 来检查交易中的下一条指令
 - 这使我们能够验证 Secp256r1 签名，从而证明签名密钥的所有权
 - Secp256r1 的签名验证始终在单独的指令中进行
@@ -391,8 +399,8 @@ if self.accounts.payer.key().ne(payer) {
 ```
 
 - 签名的消息包含两条关键信息：
-    - 目标接收者的地址（32 字节）
-    - 签名过期的时间戳（8 字节）
+  - 目标接收者的地址（32 字节）
+  - 签名过期的时间戳（8 字节）
 - 这可以防止 MEV 攻击，即有人拦截并重复使用有效签名，通过传递另一个 `payer` 并声称金库中的金额
 
 4. **过期检查**

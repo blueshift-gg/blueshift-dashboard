@@ -23,11 +23,13 @@ cd blueshift_secp256r1_vault
 ```
 
 Adicione Pinocchio e o crate `Secp256r1` compatível com Pinocchio:
+
 ```bash
 cargo add pinocchio pinocchio-system pinocchio-secp256r1-instruction
 ```
 
 Declare os tipos de crate no `Cargo.toml` para gerar artefatos de deploy em `target/deploy`:
+
 ```toml
 [lib]
 crate-type = ["lib", "cdylib"]
@@ -69,10 +71,10 @@ fn process_instruction(
 }
 ```
 
-
 <ArticleSection name="Depósito" id="deposit" level="h2" />
 
 A instrução de depósito executa os seguintes passos:
+
 1. Verifica se o vault está vazio (tem zero lamports) para prevenir depósitos duplicados
 2. Garante que o valor do depósito exceda o mínimo isento de aluguel para uma conta básica
 3. Transfere lamports do pagador para o vault usando uma CPI para o System Program
@@ -117,15 +119,17 @@ impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
 ```
 
 Vamos detalhar cada verificação de conta:
+
 1. `payer`: Deve ser um signer já que precisa autorizar a transferência de lamports
-2. `vault`: 
+2. `vault`:
    - Deve ser de propriedade do System Program
    - Deve ter zero lamports (garante depósito "fresco")
 
 Para o `vault`, vamos então verificar se:
+
 - Foi derivado das seeds corretas
 - Corresponde ao endereço PDA esperado
-Como parte da seed está no `instruction_data` ao qual não temos acesso neste momento.
+  Como parte da seed está no `instruction_data` ao qual não temos acesso neste momento.
 
 Agora vamos implementar a struct de dados da instrução:
 
@@ -155,6 +159,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
 ```
 
 Desserializamos os dados da instrução em uma struct `DepositInstructionData` que contém:
+
 - `pubkey`: A chave pública Secp256r1 do usuário fazendo o depósito
 - `amount`: A quantidade de lamports a depositar
 
@@ -212,16 +217,19 @@ impl<'a> Deposit<'a> {
 Como mencionado anteriormente, precisamos verificar se o PDA do vault foi derivado das seeds corretas. Neste vault baseado em Secp256r1, usamos o `Secp256r1Pubkey` como parte das seeds em vez da chave pública tradicional do dono. Esta é uma medida de segurança crucial que garante que apenas o detentor da chave Secp256r1 correspondente pode acessar o vault.
 
 O `Secp256r1Pubkey` tem 33 bytes porque usa representação de ponto comprimido para chaves públicas de curva elíptica. Este formato consiste em:
+
 - 1 byte para a paridade do ponto (indicando se a coordenada y é par ou ímpar)
 - 32 bytes para a coordenada x
 
 Como a função `find_program_address` da Solana tem um limite de 32 bytes para cada seed, precisamos dividir o `Secp256r1Pubkey` em duas partes:
+
 1. O byte de paridade (`pubkey[..1]`)
 2. Os bytes da coordenada x (`pubkey[1..33]`)
 
 <ArticleSection name="Saque" id="withdraw" level="h2" />
 
 A instrução de saque executa os seguintes passos:
+
 1. Verifica se o vault contém lamports (não está vazio)
 2. Usa o PDA do vault para assinar a transferência em seu próprio nome
 3. Transfere todos os lamports do vault de volta para o dono
@@ -340,7 +348,7 @@ impl<'a> Withdraw<'a> {
         if now > expiry {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         // Criar seeds do assinante para nossa CPI
         let seeds = [
             Seed::from(b"vault"),
@@ -363,11 +371,13 @@ impl<'a> Withdraw<'a> {
 O processo de saque envolve várias verificações de segurança para garantir que a transação é legítima. Vamos detalhar como verificamos a assinatura Secp256r1 e protegemos contra ataques potenciais:
 
 1. **Introspecção de Instrução**
+
 - Usamos o sysvar de instruções para inspecionar a próxima instrução na transação
 - Isso nos permite verificar a assinatura Secp256r1 que comprova a propriedade da chave de assinatura
 - A verificação de assinatura para Secp256r1 sempre acontece em uma instrução separada
 
 2. **Verificação de Assinatura**
+
 ```rust
 let secp256r1_ix = Secp256r1Instruction::try_from(&ix)?;
 if secp256r1_ix.num_signatures() != 1 {
@@ -375,22 +385,26 @@ if secp256r1_ix.num_signatures() != 1 {
 }
 let signer: Secp256r1Pubkey = *secp256r1_ix.get_signer(0)?;
 ```
+
 - Verificamos que há exatamente uma assinatura
 - Extraímos a chave pública do assinante, que deve corresponder à usada para criar o PDA do vault para fins de verificação
 
 3. **Validação da Mensagem**
+
 ```rust
 let (payer, expiry) = secp256r1_ix.get_message_data(0)?.split_at_checked(32)?;
 if self.accounts.payer.key().ne(payer) {
     return Err(ProgramError::InvalidAccountOwner);
 }
 ```
+
 - A mensagem assinada contém duas informações críticas:
-    - O endereço do destinatário pretendido (32 bytes)
-    - Um timestamp para quando a assinatura expira (8 bytes)
+  - O endereço do destinatário pretendido (32 bytes)
+  - Um timestamp para quando a assinatura expira (8 bytes)
 - Isso previne ataques de MEV onde alguém poderia interceptar e reutilizar uma assinatura válida passando outro `payer` e reivindicando o valor que está no vault
 
 4. **Verificação de Expiração**
+
 ```rust
 let now = Clock::get()?.unix_timestamp;
 let expiry = i64::from_le_bytes(expiry.try_into()?);
@@ -398,11 +412,13 @@ if now > expiry {
     return Err(ProgramError::InvalidInstructionData);
 }
 ```
+
 - Verificamos que a assinatura não expirou
 - Isso adiciona uma camada de segurança baseada em tempo para prevenir reuso de assinatura
 - O tempo de expiração deve ser considerado um "período refratário"; nenhum novo vault pode ser criado até que ele expire ou poderia ser reutilizado sem o conhecimento do dono real.
 
 5. **Assinatura PDA**
+
 ```rust
 let seeds = [
     Seed::from(b"vault"),
@@ -411,10 +427,9 @@ let seeds = [
     Seed::from(&self.instruction_data.bump),
 ];
 ```
+
 - Finalmente, usamos a chave pública verificada para criar as seeds do PDA
 - Isso garante que apenas o detentor legítimo da chave Secp256r1 pode assinar a transação de saque
-
-
 
 <ArticleSection name="Conclusão" id="conclusion" level="h2" />
 

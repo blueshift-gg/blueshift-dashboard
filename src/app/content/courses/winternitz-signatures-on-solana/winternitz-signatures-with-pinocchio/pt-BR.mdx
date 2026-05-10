@@ -11,10 +11,12 @@ Esta implementação é particularmente valiosa para fornecer segurança resiste
 Esta implementação usa `w = 8` para equilibrar as restrições da Solana: limites de tamanho de transação e restrições de unidades de computação.
 
 O parâmetro Winternitz `w` cria um compromisso fundamental entre o tamanho da assinatura e os requisitos computacionais:
+
 - Valores w mais altos significam assinaturas menores, mas mais computação, já que a verificação requer mais operações de hash por componente de assinatura
 - Valores w mais baixos significam assinaturas maiores, mas menos computação, já que a verificação requer menos operações de hash por componente de assinatura
 
 A Solana impõe duas restrições críticas que moldam a escolha do parâmetro:
+
 - Restrição de Tamanho de Transação (1024 bytes): Com `w = 8`, uma implementação completa produz assinaturas de exatamente 1024 bytes usando hashes de 256 bits (32 bytes × 32 componentes). Isso consome todo o espaço da transação, não deixando espaço para overhead de transação e dados adicionais.
 - Restrição de Unidades de Computação: Mudar para `w = 16` reduziria pela metade o tamanho da assinatura, mas excederia os limites de unidades de computação (CU) da Solana durante a verificação, pois cada componente de assinatura exigiria significativamente mais operações de hash.
 
@@ -63,6 +65,7 @@ A verificação reconstrói a chave pública a partir da assinatura e da mensage
 <ArticleSection name="Implementação" id="implementation" level="h2" />
 
 Para implementar a verificação de assinaturas Winternitz no seu programa Pinocchio, você precisa de:
+
 1. O crate `solana-winternitz`: Este fornece a funcionalidade central de assinaturas Winternitz
 2. Criação e verificação de PDA usando derivação de endereços resistente a quantum
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### Otimização do Tamanho da Assinatura
 
 A implementação usa uma abordagem truncada para caber dentro das restrições de transação da Solana:
+
 - Assinatura completa (`WinternitzSignature`): 1024 bytes (32 bytes × 32 componentes).
 - Assinatura truncada (`WinternitzCommitmentSignature`): 896 bytes (32 bytes × 28 componentes).
 - Espaço disponível: 128 bytes restantes para overhead de transação
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Cria o PDA resistente a quantum
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recupera a chave pública a partir da assinatura e da mensagem
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verifica a propriedade do PDA
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Executa a operação protegida
         self.execute_protected_operation(accounts)
     }
@@ -219,5 +223,3 @@ if accounts.recipient.key().as_ref().ne(intended_recipient) {
     return Err(ProgramError::InvalidAccountOwner);
 }
 ```
-
-

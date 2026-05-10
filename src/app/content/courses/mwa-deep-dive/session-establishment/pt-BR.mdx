@@ -32,18 +32,18 @@ Tamanho total: 129 bytes
 
 Componentes:
 
-**Qd (65 bytes)**: A chave pública de *sessão* do dApp (P-256, formato não comprimido). Esta é diferente da chave pública de associação. O dApp gera dois pares de chaves.
+**Qd (65 bytes)**: A chave pública de _sessão_ do dApp (P-256, formato não comprimido). Esta é diferente da chave pública de associação. O dApp gera dois pares de chaves.
 
-**Sa (64 bytes)**: Uma assinatura ECDSA sobre Qd usando a chave privada de *associação*. Isso prova que o dApp controla a chave de associação da URI.
+**Sa (64 bytes)**: Uma assinatura ECDSA sobre Qd usando a chave privada de _associação_. Isso prova que o dApp controla a chave de associação da URI.
 
 ### Por Que Dois Pares de Chaves?
 
 O dApp usa dois pares de chaves P-256 distintos:
 
-| Par de Chaves | Usado Para | Algoritmo |
-|---------------|------------|-----------|
-| Par de chaves de associação | Autenticar o dApp (assinando HELLO_REQ) | ECDSA |
-| Par de chaves de sessão | Troca de chaves (derivando o segredo compartilhado) | ECDH |
+| Par de Chaves               | Usado Para                                          | Algoritmo |
+| --------------------------- | --------------------------------------------------- | --------- |
+| Par de chaves de associação | Autenticar o dApp (assinando HELLO_REQ)             | ECDSA     |
+| Par de chaves de sessão     | Troca de chaves (derivando o segredo compartilhado) | ECDH      |
 
 Essa separação segue a melhor prática criptográfica: não reutilize chaves para propósitos diferentes.
 
@@ -55,25 +55,22 @@ Vamos rastrear os passos exatos do SDK:
 // From createHelloReq.ts (simplified)
 async function createHelloReq(
   associationPrivateKey: CryptoKey,
-  sessionPublicKey: CryptoKey
+  sessionPublicKey: CryptoKey,
 ): Promise<Uint8Array> {
   // Exporta a chave pública de sessão em formato raw (65 bytes)
-  const sessionPublicKeyBuffer = await crypto.subtle.exportKey(
-    'raw',
-    sessionPublicKey
-  );
+  const sessionPublicKeyBuffer = await crypto.subtle.exportKey("raw", sessionPublicKey);
   const Qd = new Uint8Array(sessionPublicKeyBuffer);
 
   // Assina Qd com a chave privada de associação
   const signature = await crypto.subtle.sign(
     {
-      name: 'ECDSA',
-      hash: 'SHA-256'
+      name: "ECDSA",
+      hash: "SHA-256",
     },
     associationPrivateKey,
-    Qd
+    Qd,
   );
-  
+
   // Converte a assinatura de DER para formato raw (64 bytes: r || s)
   const Sa = derToRaw(new Uint8Array(signature));
 
@@ -81,7 +78,7 @@ async function createHelloReq(
   const message = new Uint8Array(65 + 64);
   message.set(Qd, 0);
   message.set(Sa, 65);
-  
+
   return message;
 }
 ```
@@ -137,11 +134,13 @@ Após trocar as mensagens de hello, ambas as partes podem derivar o segredo comp
 ### Segredo Compartilhado ECDH
 
 O dApp computa:
+
 ```
 shared_secret = ECDH(dApp_session_private_key, wallet_session_public_key)
 ```
 
 A carteira computa:
+
 ```
 shared_secret = ECDH(wallet_session_private_key, dApp_session_public_key)
 ```
@@ -189,40 +188,34 @@ O SDK implementa isso:
 async function deriveSessionKey(
   ecdhPrivateKey: CryptoKey,
   walletPublicKey: CryptoKey,
-  associationPublicKey: CryptoKey
+  associationPublicKey: CryptoKey,
 ): Promise<Uint8Array> {
   // Passo 1: ECDH para obter o segredo compartilhado
   const sharedSecret = await crypto.subtle.deriveBits(
     {
-      name: 'ECDH',
-      public: walletPublicKey
+      name: "ECDH",
+      public: walletPublicKey,
     },
     ecdhPrivateKey,
-    256 // bits
+    256, // bits
   );
 
   // Passo 2: Exporta a chave pública de associação como salt
-  const salt = await crypto.subtle.exportKey('raw', associationPublicKey);
+  const salt = await crypto.subtle.exportKey("raw", associationPublicKey);
 
   // Passo 3: HKDF Extract - importa o segredo compartilhado como entrada HKDF
-  const hkdfKey = await crypto.subtle.importKey(
-    'raw',
-    sharedSecret,
-    'HKDF',
-    false,
-    ['deriveBits']
-  );
+  const hkdfKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveBits"]);
 
   // Passo 4: HKDF Expand - deriva a chave de sessão (sem parâmetro info)
   const sessionKeyBits = await crypto.subtle.deriveBits(
     {
-      name: 'HKDF',
-      hash: 'SHA-256',
+      name: "HKDF",
+      hash: "SHA-256",
       salt: new Uint8Array(salt),
-      info: new Uint8Array(0) // Vazio - o spec MWA não usa parâmetro info
+      info: new Uint8Array(0), // Vazio - o spec MWA não usa parâmetro info
     },
     hkdfKey,
-    128 // Tamanho da chave AES-128 em bits
+    128, // Tamanho da chave AES-128 em bits
   );
 
   return new Uint8Array(sessionKeyBits);
@@ -236,6 +229,7 @@ Várias decisões criptográficas merecem explicação:
 ### Por Que P-256 (secp256r1)?
 
 Não secp256k1 (curva Bitcoin/Ethereum). Motivos:
+
 1. **Suporte de hardware**: P-256 é suportado pelo módulo de segurança de hardware do Android e pelo iOS Secure Enclave
 2. **Web Crypto API**: Suporte nativo para P-256, sem necessidade de bibliotecas externas
 3. **Padronização NIST**: Amplamente auditada e confiável
@@ -243,6 +237,7 @@ Não secp256k1 (curva Bitcoin/Ethereum). Motivos:
 ### Por Que Não Usar TLS?
 
 TLS funcionaria para criptografia, mas não resolve:
+
 1. **Autenticação em nível de app**: TLS autentica servidores, não apps mobile
 2. **Certificados de localhost**: Nenhuma autoridade certificadora emite certificados para 127.0.0.1
 3. **Restrições de plataforma**: Apps nativos não têm a mesma integração TLS que navegadores
@@ -274,15 +269,15 @@ A partir deste ponto, todas as mensagens são criptografadas com AES-GCM usando 
 
 O handshake é rápido, tipicamente abaixo de 50ms em dispositivos modernos. Detalhamento do tempo:
 
-| Operação | Tempo Típico |
-|----------|--------------|
-| Gerar par de chaves de sessão | 2-5ms |
-| Assinar Qd com chave de associação | 1-2ms |
-| Enviar HELLO_REQ | &lt;1ms (local) |
-| Carteira gerar par de chaves | 2-5ms |
-| Carteira enviar HELLO_RSP | &lt;1ms (local) |
-| Derivação ECDH | 2-5ms |
-| Derivação HKDF | &lt;1ms |
+| Operação                           | Tempo Típico    |
+| ---------------------------------- | --------------- |
+| Gerar par de chaves de sessão      | 2-5ms           |
+| Assinar Qd com chave de associação | 1-2ms           |
+| Enviar HELLO_REQ                   | &lt;1ms (local) |
+| Carteira gerar par de chaves       | 2-5ms           |
+| Carteira enviar HELLO_RSP          | &lt;1ms (local) |
+| Derivação ECDH                     | 2-5ms           |
+| Derivação HKDF                     | &lt;1ms         |
 
 Total: ~10-20ms em hardware moderno.
 
@@ -297,6 +292,7 @@ O que pode dar errado?
 A carteira não conseguiu verificar Sa sobre Qd usando a chave pública de associação da URI.
 
 Causas:
+
 - A URI foi alterada
 - Bug de implementação do dApp (assinando dados errados)
 - Incompatibilidade de formato de chave
@@ -306,6 +302,7 @@ Causas:
 Qd ou Qw não é um ponto P-256 válido.
 
 Causas:
+
 - Mensagem malformada
 - Curva errada (ex.: chave secp256k1 enviada como P-256)
 - Transmissão corrompida (raro com WebSocket)
@@ -315,6 +312,7 @@ Causas:
 A carteira não respondeu ao HELLO_REQ dentro do tempo limite.
 
 Causas:
+
 - Carteira não foi totalmente iniciada
 - Usuário distraído com o onboarding da carteira
 - Bug da carteira
@@ -324,6 +322,7 @@ Causas:
 O `protocol_version` da carteira nas props de sessão indica incompatibilidade.
 
 Causas:
+
 - Versão muito antiga da carteira
 - Versão muito nova com mudanças incompatíveis
 
@@ -332,23 +331,27 @@ Causas:
 Vamos rastrear byte a byte (com valores realistas, mas não reais):
 
 **1. dApp gera o par de chaves de associação**
+
 ```
 Association public key (Qa): 04 a1b2c3... (65 bytes)
 Association private key (da): armazenada de forma segura
 ```
 
 **2. dApp gera o par de chaves de sessão**
+
 ```
 Session public key (Qd): 04 d4e5f6... (65 bytes)
 Session private key (dd): armazenada de forma segura
 ```
 
 **3. dApp assina Qd**
+
 ```
 Sa = ECDSA-Sign(da, Qd) = 7a8b9c... (64 bytes)
 ```
 
 **4. dApp envia HELLO_REQ**
+
 ```
 00 04d4e5f6...(65 bytes)... 7a8b9c...(64 bytes)...
 │   └─── Qd ───────────────┘ └─── Sa ──────────┘
@@ -356,6 +359,7 @@ Sa = ECDSA-Sign(da, Qd) = 7a8b9c... (64 bytes)
 ```
 
 **5. Carteira recebe HELLO_REQ**
+
 ```
 - Extrai Qd (bytes 1-65)
 - Extrai Sa (bytes 66-129)
@@ -364,12 +368,14 @@ Sa = ECDSA-Sign(da, Qd) = 7a8b9c... (64 bytes)
 ```
 
 **6. Carteira gera o par de chaves de sessão**
+
 ```
 Session public key (Qw): 04 1a2b3c... (65 bytes)
 Session private key (dw): armazenada de forma segura
 ```
 
 **7. Carteira envia HELLO_RSP**
+
 ```
 01 041a2b3c...(65 bytes)... {"protocol_version":"2.0.0"}
 │   └─── Qw ───────────────┘ └─── session props (JSON) ──┘
@@ -377,12 +383,14 @@ Session private key (dw): armazenada de forma segura
 ```
 
 **8. Ambos derivam o segredo compartilhado**
+
 ```
 dApp:     shared = ECDH(dd, Qw) = 5f6a7b... (32 bytes)
 Carteira: shared = ECDH(dw, Qd) = 5f6a7b... (32 bytes)
 ```
 
 **9. Ambos derivam a chave de sessão**
+
 ```
 session_key = HKDF(shared, Qa, "session_key") = 9d8e7f... (16 bytes)
 ```

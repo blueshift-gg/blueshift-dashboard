@@ -1,6 +1,6 @@
+import { Suspense } from "react";
 import { getAllChallenges } from "@/app/utils/content";
 import ChallengesList from "./ChallengesList";
-import { Suspense } from "react";
 
 async function ChallengesContent() {
   const challenges = await getAllChallenges();
@@ -10,7 +10,7 @@ async function ChallengesContent() {
 
 export default function Challenges() {
   return (
-    <div className="relative content-wrapper">
+    <div className="content-wrapper relative">
       <Suspense fallback={<ChallengesList isLoading={true} />}>
         <ChallengesContent />
       </Suspense>

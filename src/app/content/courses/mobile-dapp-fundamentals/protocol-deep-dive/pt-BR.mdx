@@ -57,6 +57,7 @@ solana-wallet:/v1/associate/local
 ```
 
 Decompondo isso:
+
 - `solana-wallet:`: O esquema de URI registrado pelas carteiras MWA
 - `/v1/associate/local`: Conexão local (mesmo dispositivo)
 - `association`: A chave pública codificada em base64url do Passo 1
@@ -76,6 +77,7 @@ await Linking.openURL(associationUri);
 ### Passo 4: A Carteira Inicia o Servidor
 
 O app da carteira:
+
 1. Analisa o parâmetro `port`
 2. Inicia um servidor WebSocket naquela porta
 3. Começa a escutar por exatamente uma conexão
@@ -92,7 +94,11 @@ const socket = new WebSocket(`ws://localhost:${port}/solana-wallet`);
 
 Se a carteira ainda não estiver pronta, a conexão falha. O SDK tenta novamente por até 30 segundos antes de desistir.
 
-<ArticleSection name="Estabelecimento de Sessão: O Handshake" id="estabelecimento-de-sessao" level="h2" />
+<ArticleSection
+  name="Estabelecimento de Sessão: O Handshake"
+  id="estabelecimento-de-sessao"
+  level="h2"
+/>
 
 Uma vez que o WebSocket se conecta, a verdadeira mágica criptográfica começa. Ambas as partes precisam estabelecer um segredo compartilhado para criptografar toda a comunicação subsequente, sem nunca enviar esse segredo pela rede.
 
@@ -126,6 +132,7 @@ Qd || Signature(Qd, association_private_key)
 ```
 
 Onde:
+
 - `Qd`: Chave pública ECDH codificada em X9.62 (65 bytes)
 - `Signature`: Prova ECDSA-SHA256 de que isso vem do mesmo app que criou a URI de associação
 
@@ -153,15 +160,16 @@ O SDK então deriva a chave de criptografia AES-128 usando HKDF:
 
 ```typescript
 const encryptionKey = hkdf({
-  ikm: sharedSecret,          // 32 bytes do ECDH
+  ikm: sharedSecret, // 32 bytes do ECDH
   salt: associationPublicKey, // 65 bytes (formato X9.62)
-  length: 16,                 // Chave AES de 128 bits
+  length: 16, // Chave AES de 128 bits
 });
 ```
 
 ### Por Que Toda Essa Complexidade?
 
 Cada sessão usa chaves efêmeras novas. Mesmo que um atacante:
+
 - Intercepte a URI de associação
 - Monitore o tráfego WebSocket
 - Grave o handshake inteiro
@@ -190,14 +198,14 @@ O número de sequência é incluído como Additional Authenticated Data (AAD). S
 function encryptMessage(payload: string): Uint8Array {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const sequenceBytes = uint32ToBytes(this.sequenceNumber++);
-  
+
   const { ciphertext, tag } = aesGcmEncrypt({
     key: this.encryptionKey,
     iv,
     plaintext: new TextEncoder().encode(payload),
     aad: sequenceBytes,
   });
-  
+
   return concat(sequenceBytes, iv, ciphertext, tag);
 }
 ```
@@ -210,22 +218,22 @@ Com a criptografia estabelecida, seu dApp envia requisições JSON-RPC 2.0. A ca
 
 Estes funcionam imediatamente após o estabelecimento da sessão:
 
-| Método | Finalidade |
-|--------|-----------|
-| `authorize` | Solicitar acesso à conta e/ou reautorizar com token em cache |
-| `deauthorize` | Invalidar um token de autenticação |
-| `get_capabilities` | Consultar recursos e limites da carteira |
+| Método             | Finalidade                                                   |
+| ------------------ | ------------------------------------------------------------ |
+| `authorize`        | Solicitar acesso à conta e/ou reautorizar com token em cache |
+| `deauthorize`      | Invalidar um token de autenticação                           |
+| `get_capabilities` | Consultar recursos e limites da carteira                     |
 
 ### Métodos Privilegiados
 
 Estes exigem um `authorize` bem-sucedido primeiro:
 
-| Método | Finalidade |
-|--------|-----------|
-| `sign_and_send_transactions` | Assinar e transmitir transações |
-| `sign_transactions` | Assinar transações (sem enviar) |
-| `sign_messages` | Assinar payloads de bytes arbitrários |
-| `clone_authorization` | Criar um novo token de autenticação a partir de um existente |
+| Método                       | Finalidade                                                   |
+| ---------------------------- | ------------------------------------------------------------ |
+| `sign_and_send_transactions` | Assinar e transmitir transações                              |
+| `sign_transactions`          | Assinar transações (sem enviar)                              |
+| `sign_messages`              | Assinar payloads de bytes arbitrários                        |
+| `clone_authorization`        | Criar um novo token de autenticação a partir de um existente |
 
 Se você chamar um método privilegiado sem autorização, receberá:
 
@@ -308,17 +316,17 @@ Para sessões remotas (desktop para mobile via QR code), a conexão passa por um
 
 O MWA usa códigos de erro JSON-RPC. Conhecê-los ajuda você a escrever um tratamento de erros melhor:
 
-| Código | Nome | Significado |
-|--------|------|-------------|
-| -32700 | Parse Error | JSON inválido |
-| -32600 | Invalid Request | Requisição JSON-RPC inválida |
-| -32601 | Method Not Found | Nome de método desconhecido |
-| -32602 | Invalid Params | Tipos de parâmetros incorretos |
-| -32603 | Internal Error | Falha na simulação da transação |
-| -32000 | Server Error | Erro genérico da carteira |
-| -32001 | Not Authorized | Chame `authorize` primeiro |
-| -32002 | Too Many Requests | Limite de taxa atingido |
-| 4001 | User Rejected | O usuário recusou a requisição |
+| Código | Nome              | Significado                     |
+| ------ | ----------------- | ------------------------------- |
+| -32700 | Parse Error       | JSON inválido                   |
+| -32600 | Invalid Request   | Requisição JSON-RPC inválida    |
+| -32601 | Method Not Found  | Nome de método desconhecido     |
+| -32602 | Invalid Params    | Tipos de parâmetros incorretos  |
+| -32603 | Internal Error    | Falha na simulação da transação |
+| -32000 | Server Error      | Erro genérico da carteira       |
+| -32001 | Not Authorized    | Chame `authorize` primeiro      |
+| -32002 | Too Many Requests | Limite de taxa atingido         |
+| 4001   | User Rejected     | O usuário recusou a requisição  |
 
 O erro mais comum que você lidará é `4001`: o usuário pressionou "Cancelar" ou "Rejeitar" na interface da carteira.
 
@@ -332,10 +340,10 @@ await transact(async (wallet) => {
   //   O app da carteira vem para o primeiro plano
   //   WebSocket conectado
   //   Criptografia estabelecida
-  
+
   await wallet.authorize(/* ... */);
   await wallet.signAndSendTransactions(/* ... */);
-  
+
   // ← A SESSÃO TERMINA quando o callback retorna
 });
 // A carteira pode ir para o segundo plano

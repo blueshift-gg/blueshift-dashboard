@@ -61,37 +61,49 @@ fn serialize_instructions(instructions: &[BorrowedInstruction]) -> Vec<u8> {
 Cela signifie qu'en lisant le compte sysvar `Instructions` dans votre programme, vous pouvez accéder à toutes les instructions incluses dans la transaction en cours.
 
 Vous n'avez pas besoin d'analyser manuellement les octets bruts. Solana fournit des fonctions auxiliaires :
+
 - `load_current_index_checked` : renvoie l'index de l'instruction en cours d'exécution.
 - `load_instruction_at_checked` : vous permet de charger une instruction spécifique par son index dans un format analysé et désérialisé.
 
 <ArticleSection name="Comment ça marche ?" id="how-does-it-work" level="h2" />
 
 Chaque instruction de Solana contient :
+
 - l'ID du programme qu'elle cible,
-- les comptes avec lesquels elle interagit (y compris les métadonnées telles que signataire/modifiable en écriture (*writable*)),
+- les comptes avec lesquels elle interagit (y compris les métadonnées telles que signataire/modifiable en écriture (_writable_)),
 - et la charge utile des données (généralement un discriminateur + des arguments).
 
 Et c'est exactement ce que vous offre la fonction `load_instruction_at_checked` de la sysvar Instructions :
+
 - program_id: le programme appelé par cette instruction.
 - accounts: une liste des comptes impliqués avec leurs métadonnées.
 - data: la charge utile brute (si nous introspectons une instruction anchor, elle commence souvent par un discriminateur de 8 octets suivi de paramètres).
 
 Pour introspecter d'autres instructions de manière sûre et efficace, procédez comme suit :
+
 - Déterminer l'Index de l'Instruction Actuelle : Utilisez `load_current_index_checked` pour trouver l'index de l'instruction en cours d'exécution.
-> Gardez à l'esprit que votre instruction n'est peut-être pas la première (index 0) dans la transaction
+
+  > Gardez à l'esprit que votre instruction n'est peut-être pas la première (index 0) dans la transaction
 
 - Charger une Instruction Cible à Analyser : Une fois l'index en votre possession, utilisez `load_instruction_at_checked(index)` pour charger une autre instruction de la même transaction, soit celle qui précède, celle qui suit ou celle qui se trouve à une position donnée.
-> Cela est utile pour valider un comportement, garantir les entrées attendues ou composer en toute sécurité entre les programmes
+
+  > Cela est utile pour valider un comportement, garantir les entrées attendues ou composer en toute sécurité entre les programmes
 
 - Définir des Contraintes pour Empêcher les Comportements Malveillants : L'introspection des instructions est puissante mais elle introduit de nouvelles zones d'attaque. Assurez-vous de : vérifier que l'instruction introspectée cible bien le programme attendu, confirmer que les adresses et les données du compte correspondent aux modèles attendus et éviter toute hypothèse concernant l'ordre des instructions, sauf si celui-ci est explicitement imposé.
 
 En prenant ces précautions, vous pouvez exploiter en toute sécurité l'introspection des instructions pour créer des programmes Solana puissants, composables et sécurisés.
 
-<ArticleSection name="Contraintes Courantes pour l'Introspection" id="common-constraints-for-introspection" level="h2" />
+<ArticleSection
+  name="Contraintes Courantes pour l'Introspection"
+  id="common-constraints-for-introspection"
+  level="h2"
+/>
 
 Lorsque vous utilisez l'introspection d'instructions, il est essentiel d'appliquer des contraintes strictes afin d'éviter tout comportement malveillant ou inattendu. Les mesures de protection les plus courantes comprennent :
+
 - la Vérification des Instructions : Vérifier l'ID du programme et le discriminateur de l'instruction pour vous assurer qu'ils sont corrects. Le discriminateur (généralement les 1, 4 ou 8 premiers octets des données d'instruction) identifie de manière unique la fonction appelée.
-> Cette étape vous permet de vous assurer que vous inspectez bien l'instruction souhaitée et non une instruction falsifiée ou malformée.
+
+  > Cette étape vous permet de vous assurer que vous inspectez bien l'instruction souhaitée et non une instruction falsifiée ou malformée.
 
 - la Validation des Variables : Après le discriminateur, analysez et vérifiez les variables critiques utilisées par l'instruction. Il peut s'agir de montants, de directives (par exemple, long/short) ou d'identifiants. Vous devez toujours vérifier que ces champs correspondent à la logique attendue de votre intégration ou de vos mesures de sécurité.
 - la Vérification des Comptes : Valider la structure et l'identité des comptes de l'instruction. Vérifiez que les comptes attendus apparaissent aux emplacements prévus (par exemple, signataire, vault, collatéral) et assurez-vous que les rôles tels que signataire/modifiable en écriture correspondent à vos hypothèses.

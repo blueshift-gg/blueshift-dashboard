@@ -1,10 +1,10 @@
-import { CourseMetadata, LessonMetadata } from "./course";
 import { notFound } from "next/navigation";
-import { courses } from "@/app/content/courses/courses";
 import { challenges } from "@/app/content/challenges/challenges";
+import { courses } from "@/app/content/courses/courses";
 import { paths } from "@/app/content/paths/paths";
-import { ChallengeMetadata } from "./challenges";
-import { PathMetadata } from "./path";
+import type { ChallengeMetadata } from "./challenges";
+import type { CourseMetadata, LessonMetadata } from "./course";
+import type { PathMetadata } from "./path";
 
 export async function getCourse(courseSlug: string): Promise<CourseMetadata> {
   const course = courses.find((course) => course.slug === courseSlug);
@@ -26,9 +26,7 @@ export async function getAllCourses(): Promise<CourseMetadata[]> {
   return structuredClone(courses);
 }
 
-export async function getCourseLessons(
-  courseSlug: string
-): Promise<LessonMetadata[]> {
+export async function getCourseLessons(courseSlug: string): Promise<LessonMetadata[]> {
   const course = await getCourse(courseSlug);
 
   if (!course) {
@@ -39,11 +37,9 @@ export async function getCourseLessons(
 }
 
 export async function getChallenge(
-  challengeSlug: string | undefined | null
+  challengeSlug: string | undefined | null,
 ): Promise<ChallengeMetadata | undefined> {
-  const challenge = challenges.find(
-    (challenge) => challenge.slug === challengeSlug
-  );
+  const challenge = challenges.find((challenge) => challenge.slug === challengeSlug);
 
   return structuredClone(challenge);
 }
@@ -85,14 +81,14 @@ export async function getAllPaths(): Promise<PathMetadata[]> {
             ...step,
             metadata,
           };
-        })
+        }),
       );
 
       return {
         ...path,
         steps: stepsWithMetadata,
       };
-    })
+    }),
   );
 
   return enrichedPaths;
@@ -127,7 +123,7 @@ export async function getPathStepsWithMetadata(pathSlug: string): Promise<{
         ...step,
         metadata,
       };
-    })
+    }),
   );
 
   return {

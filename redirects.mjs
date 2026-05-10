@@ -36,4 +36,4 @@ const redirects = [
   },
 ];
 
-export default redirects; 
+export default redirects;

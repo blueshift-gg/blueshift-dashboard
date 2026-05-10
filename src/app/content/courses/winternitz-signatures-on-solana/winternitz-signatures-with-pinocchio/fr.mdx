@@ -11,10 +11,12 @@ Cette implémentation est particulièrement précieuse pour fournir une sécurit
 Cette implémentation utilise `w = 8` pour équilibrer les contraintes de Solana : limites de taille des transactions et restrictions d'unités de calcul.
 
 Le paramètre Winternitz `w` crée un compromis fondamental entre la taille de la signature et les exigences de calcul :
+
 - Des valeurs w plus élevées signifient des signatures plus petites mais plus de calcul, car la vérification nécessite plus d'opérations de hachage par composant de signature
 - Des valeurs w plus basses signifient des signatures plus grandes mais moins de calcul, car la vérification nécessite moins d'opérations de hachage par composant de signature
 
 Solana impose deux contraintes critiques qui façonnent le choix des paramètres :
+
 - Contrainte de taille de transaction (1024 octets) : Avec `w = 8`, une implémentation complète produit des signatures de exactement 1024 octets en utilisant des hachages de 256 bits (32 octets × 32 composants). Cela consomme tout l'espace de transaction, ne laissant aucune place pour les frais généraux de transaction et les données supplémentaires.
 - Contrainte d'unités de calcul : Passer à `w = 16` réduirait de moitié la taille de la signature mais dépasserait les limites d'unités de calcul (CU) de Solana pendant la vérification, car chaque composant de signature nécessiterait beaucoup plus d'opérations de hachage.
 
@@ -63,6 +65,7 @@ La vérification reconstruit la clé publique à partir de la signature et du me
 <ArticleSection name="Implementation" id="implementation" level="h2" />
 
 Pour implémenter la vérification de signature Winternitz dans votre programme Pinocchio, vous avez besoin :
+
 1. Du crate `solana-winternitz` : Il fournit les fonctionnalités de base pour la signature Winternitz
 2. La création et la vérification de PDA utilisant une dérivation d'adresse résistante aux attaques quantiques
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### Optimisation de la taille de signature
 
 L'implémentation utilise une approche tronquée pour s'adapter aux contraintes de transaction de Solana :
+
 - Signature complète (`WinternitzSignature`) : 1024 octets (32 octets × 32 composants).
 - Signature tronquée (`WinternitzCommitmentSignature`) : 896 octets (32 octets × 28 composants).
 - Espace disponible : 128 octets restants pour les frais généraux de transaction
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Create the quantum-secure PDA
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recover the public key from signature and message
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verify PDA ownership
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Execute the protected operation
         self.execute_protected_operation(accounts)
     }

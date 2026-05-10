@@ -1,8 +1,8 @@
-import useMinter from "@/hooks/useMinter";
-import { usePersistentStore } from "@/stores/store";
-import { findUnitPda } from "@/lib/nft/sdk";
 import { useCallback, useState } from "react";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import useMinter from "@/hooks/useMinter";
+import { findUnitPda } from "@/lib/nft/sdk";
+import { usePersistentStore } from "@/stores/store";
 
 export default function useMintNFT() {
   const { program: minter, error: minterError } = useMinter();
@@ -31,26 +31,19 @@ export default function useMintNFT() {
         const certificate = certificates[challenge.slug];
 
         if (!certificate) {
-          throw new Error(
-            `Certificate not found for challenge: ${challenge.slug}`,
-          );
+          throw new Error(`Certificate not found for challenge: ${challenge.slug}`);
         }
 
         if (!user) {
-          throw new Error(
-            "User public key is not available. Please connect your wallet.",
-          );
+          throw new Error("User public key is not available. Please connect your wallet.");
         }
 
         const signature = Buffer.from(certificate.signature, "hex");
 
-        const tx = await minter.methods
-          .mintCredential(signature)
-          .accounts({ unit })
-          .rpc({
-            commitment: "processed",
-            skipPreflight: true,
-          });
+        const tx = await minter.methods.mintCredential(signature).accounts({ unit }).rpc({
+          commitment: "processed",
+          skipPreflight: true,
+        });
 
         setIsLoading(false);
         setChallengeStatus(challenge.slug, "claimed");

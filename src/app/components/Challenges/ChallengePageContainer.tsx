@@ -1,17 +1,16 @@
-import { getTranslations } from "next-intl/server";
-import { getChallenge } from "@/app/utils/content";
-import { getCompiledMdx } from "@/app/utils/mdx";
-import { notFound } from "next/navigation";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
+import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
+import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
 import ContentPagination from "@/app/components/CoursesContent/ContentPagination";
-import { Link } from "@/i18n/navigation";
-import { Button } from "@blueshift-gg/ui-components";
-import { Icon } from "@blueshift-gg/ui-components";
 import ChallengeLayout from "@/app/components/Layout/ChallengeLayout";
 import MdxLayout from "@/app/mdx-layout";
-import ContentFallbackNotice from "@/app/components/ContentFallbackNotice";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
+import { getChallenge } from "@/app/utils/content";
+import { getCompiledMdx } from "@/app/utils/mdx";
+import { decodeCoreCollectionNumMinted } from "@/lib/nft/decodeCoreCollectionNumMinted";
 import ChallengeFooter from "./ChallengeFooter";
+import type { JSX } from "react/jsx-runtime";
 
 interface ChallengePageContainerProps {
   params: Promise<{
@@ -21,10 +20,8 @@ interface ChallengePageContainerProps {
   }>;
 }
 
-export default async function ChallengePageContainer({
-  params,
-}: ChallengePageContainerProps) {
-  const t = await getTranslations();
+export default async function ChallengePageContainer({ params }: ChallengePageContainerProps) {
+  const _t = await getTranslations();
   const { challengeSlug, pageSlug, locale } = await params;
 
   const challengeMetadata = await getChallenge(challengeSlug);
@@ -33,41 +30,33 @@ export default async function ChallengePageContainer({
     notFound();
   }
 
-  let MdxComponent;
+  let MdxComponent: JSX.Element;
   let challengeLocale = locale;
   if (pageSlug) {
-    const pageExists = challengeMetadata.pages?.some(
-      (p) => p.slug === pageSlug
-    );
+    const pageExists = challengeMetadata.pages?.some((p) => p.slug === pageSlug);
     if (!pageExists) {
       notFound();
     }
     try {
       MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`
+        `challenges/${challengeSlug}/${locale}/pages/${pageSlug}.mdx`,
       );
-    } catch (error) {
+    } catch (_error) {
       try {
-        MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`
-        );
+        MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/en/pages/${pageSlug}.mdx`);
         challengeLocale = "en";
-      } catch (error) {
+      } catch (_error) {
         notFound();
       }
     }
   } else {
     try {
-      MdxComponent = await getCompiledMdx(
-        `challenges/${challengeSlug}/${locale}/challenge.mdx`
-      );
-    } catch (error) {
+      MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/${locale}/challenge.mdx`);
+    } catch (_error) {
       try {
-        MdxComponent = await getCompiledMdx(
-          `challenges/${challengeSlug}/en/challenge.mdx`
-        );
+        MdxComponent = await getCompiledMdx(`challenges/${challengeSlug}/en/challenge.mdx`);
         challengeLocale = "en";
-      } catch (error) {
+      } catch (_error) {
         notFound();
       }
     }
@@ -88,32 +77,21 @@ export default async function ChallengePageContainer({
       if (accountInfo) {
         collectionSize = decodeCoreCollectionNumMinted(accountInfo.data);
         if (collectionSize === null) {
-          console.error(
-            `Failed to decode num_minted for collection ${collectionMintAddress}`
-          );
+          console.error(`Failed to decode num_minted for collection ${collectionMintAddress}`);
         }
       } else {
-        console.error(
-          `Failed to fetch account info for ${collectionMintAddress}`
-        );
+        console.error(`Failed to fetch account info for ${collectionMintAddress}`);
       }
     } catch (error) {
-      console.error(
-        `Failed to fetch collection details for ${collectionMintAddress}:`,
-        error
-      );
+      console.error(`Failed to fetch collection details for ${collectionMintAddress}:`, error);
     }
   }
 
-  let nextPage;
+  let nextPage: NonNullable<ChallengeMetadata["pages"]>[number] | null = null;
   if (pageSlug) {
-    const currentPageIndex = challengeMetadata.pages?.findIndex(
-      (p) => p.slug === pageSlug
-    );
+    const currentPageIndex = challengeMetadata.pages?.findIndex((p) => p.slug === pageSlug);
     nextPage =
-      currentPageIndex !== undefined &&
-      currentPageIndex > -1 &&
-      challengeMetadata.pages
+      currentPageIndex !== undefined && currentPageIndex > -1 && challengeMetadata.pages
         ? challengeMetadata.pages[currentPageIndex + 1]
         : null;
   } else {
@@ -124,11 +102,7 @@ export default async function ChallengePageContainer({
   }
 
   const pagination = (
-    <ContentPagination
-      type="challenge"
-      challenge={challengeMetadata}
-      currentPageSlug={pageSlug}
-    />
+    <ContentPagination type="challenge" challenge={challengeMetadata} currentPageSlug={pageSlug} />
   );
 
   const footer = (
@@ -147,10 +121,7 @@ export default async function ChallengePageContainer({
       footer={footer}
     >
       <MdxLayout>
-        <ContentFallbackNotice
-          locale={locale}
-          originalLocale={challengeLocale}
-        />
+        <ContentFallbackNotice locale={locale} originalLocale={challengeLocale} />
         {MdxComponent}
       </MdxLayout>
     </ChallengeLayout>

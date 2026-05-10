@@ -11,6 +11,7 @@ As técnicas neste guia funcionam com qualquer framework de desenvolvimento Sola
 ### Quando Usar Código Unsafe
 
 Use código unsafe apenas quando:
+
 - Você precisa de máximo desempenho e mediu que alternativas seguras são muito lentas
 - Você pode verificar rigorosamente todas as invariantes de segurança
 - Você documenta os requisitos de segurança claramente
@@ -39,6 +40,7 @@ let value = u64::from_le_bytes(data[0..8].try_into().unwrap());
 ### Requisitos de Alinhamento
 
 Cada tipo em Rust possui um requisito de alinhamento que determina onde pode ser colocado na memória. Ler um tipo de memória que não está propriamente alinhado resulta em comportamento indefinido. A maioria dos tipos primitivos requer alinhamento igual ao seu tamanho:
+
 - `u8`: alinhamento de 1 byte
 - `u16`: alinhamento de 2 bytes
 - `u32`: alinhamento de 4 bytes
@@ -57,7 +59,7 @@ Assim é como fica uma struct com ordenação ruim:
 struct BadOrder {
     small: u8,    // 1 byte
     // padding: [u8; 7] já que `big` precisa ser alinhado em 8 bytes.
-    big: u64,     // 8 bytes  
+    big: u64,     // 8 bytes
     medium: u16,  // 2 bytes
     // padding: [u8; 6] já que o tamanho da struct precisa ser alinhado a 8 bytes.
 }
@@ -71,7 +73,7 @@ Uma forma melhor seria ordenar os campos da struct assim:
 #[repr(C)]
 struct GoodOrder {
     big: u64,     // 8 bytes
-    medium: u16,  // 2 bytes  
+    medium: u16,  // 2 bytes
     small: u8,    // 1 byte
     // padding: [u8; 5] já que o tamanho da struct precisa ser alinhado a 8 bytes.
 }
@@ -87,7 +89,7 @@ Existe outra forma, mais avançada, de serializar e desserializar dados para má
 #[repr(C)]
 struct ByteArrayStruct {
     big: [u8; 8],    // representa u64
-    medium: [u8; 2], // representa u16  
+    medium: [u8; 2], // representa u16
     small: u8,
 }
 ```
@@ -125,7 +127,7 @@ impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
             data[0..8].try_into()
                 .map_err(|_| ProgramError::InvalidInstructionData)?
         );
-        
+
         let recipient = Pubkey::try_from(&data[8..40])
             .map_err(|_| ProgramError::InvalidInstructionData)?;
 
@@ -142,17 +144,17 @@ Isso pode ser usado para máximo desempenho com structs devidamente alinhadas, m
 #[repr(C)]
 pub struct Config {
     pub authority: Pubkey,
-    pub mint_x: Pubkey, 
+    pub mint_x: Pubkey,
     pub mint_y: Pubkey,
     pub seed: u64,        // Este campo requer alinhamento de 8 bytes
-    pub fee: u16,         // Este campo requer alinhamento de 2 bytes  
+    pub fee: u16,         // Este campo requer alinhamento de 2 bytes
     pub state: u8,
     pub config_bump: u8,
 }
 
 impl Config {
     pub const LEN: usize = size_of::<Self>();
-    
+
     pub fn from_bytes(data: &[u8]) -> Result<&Self, ProgramError> {
         if data.len() != Self::LEN {
             return Err(ProgramError::InvalidAccountData);
@@ -173,7 +175,7 @@ impl Config {
 #[repr(C)]
 pub struct ConfigSafe {
     pub authority: Pubkey,
-    pub mint_x: Pubkey, 
+    pub mint_x: Pubkey,
     pub mint_y: Pubkey,
     seed: [u8; 8],      // Converter com u64::from_le_bytes quando necessário
     fee: [u8; 2],       // Converter com u16::from_le_bytes quando necessário
@@ -190,11 +192,11 @@ impl ConfigSafe {
         // SAFETY: Sem necessidade de verificação de alinhamento - tudo está alinhado a u8
         Ok(unsafe { &*(data.as_ptr() as *const Self) })
     }
-    
+
     pub fn seed(&self) -> u64 {
         u64::from_le_bytes(self.seed)
     }
-    
+
     pub fn fee(&self) -> u16 {
         u16::from_le_bytes(self.fee)
     }
@@ -267,7 +269,7 @@ impl StateAccount {
         // Trata enum de forma segura
         let state_type = match data[1] {
             0 => StateType::Inactive,
-            1 => StateType::Active, 
+            1 => StateType::Active,
             2 => StateType::Paused,
             _ => return Err(ProgramError::InvalidAccountData),
         };
@@ -367,31 +369,31 @@ impl Config {
         }
 
         let mut offset = 0;
-        
+
         // Escreve authority
         data[offset..offset + 32].copy_from_slice(self.authority.as_ref());
         offset += 32;
-        
-        // Escreve mint_x  
+
+        // Escreve mint_x
         data[offset..offset + 32].copy_from_slice(self.mint_x.as_ref());
         offset += 32;
-        
+
         // Escreve mint_y
         data[offset..offset + 32].copy_from_slice(self.mint_y.as_ref());
         offset += 32;
-        
+
         // Escreve seed
         data[offset..offset + 8].copy_from_slice(&self.seed.to_le_bytes());
         offset += 8;
-        
+
         // Escreve fee
         data[offset..offset + 2].copy_from_slice(&self.fee.to_le_bytes());
         offset += 2;
-        
+
         // Escreve state
         data[offset] = self.state;
         offset += 1;
-        
+
         // Escreve config_bump
         data[offset] = self.config_bump;
 
@@ -401,6 +403,7 @@ impl Config {
 ```
 
 Esta abordagem é o método mais seguro porque serializa explicitamente cada campo no buffer de bytes:
+
 - Sem preocupações com alinhamento: você está escrevendo em um array de bytes
 - Endianness explícita: você controla a ordem dos bytes com to_le_bytes()
 - Layout de memória claro: fácil de depurar e entender
@@ -438,7 +441,7 @@ O melhor dos dois mundos: podemos usar arrays de bytes internamente mas fornecer
 #[repr(C)]
 pub struct ConfigSafe {
     pub authority: Pubkey,
-    pub mint_x: Pubkey, 
+    pub mint_x: Pubkey,
     pub mint_y: Pubkey,
     seed: [u8; 8],
     fee: [u8; 2],
@@ -455,11 +458,11 @@ impl ConfigSafe {
         // Sem necessidade de verificação de alinhamento - tudo está alinhado a u8
         Ok(unsafe { &mut *(data.as_mut_ptr() as *mut Self) })
     }
-    
+
     pub fn seed(&self) -> u64 {
         u64::from_le_bytes(self.seed)
     }
-    
+
     pub fn fee(&self) -> u16 {
         u16::from_le_bytes(self.fee)
     }
@@ -469,7 +472,7 @@ impl ConfigSafe {
     pub fn set_seed(&mut self, seed: u64) {
         self.seed = seed.to_le_bytes();
     }
-    
+
     pub fn set_fee(&mut self, fee: u16) {
         self.fee = fee.to_le_bytes();
     }
@@ -477,6 +480,7 @@ impl ConfigSafe {
 ```
 
 Isso é ideal porque:
+
 - Sem problemas de alinhamento: todos os campos são alinhados a bytes
 - Mutação direta rápida: sem overhead de serialização após configuração inicial
 - Endianness consistente: setters tratam conversão de ordem de bytes
@@ -503,7 +507,7 @@ pub struct DynamicAccount {
 
 impl DynamicAccount {
     pub const FIXED_SIZE: usize = size_of::<Self>();
-    
+
     /// Analisa conta com dados dinâmicos de forma segura
     pub fn from_bytes_with_dynamic(data: &[u8]) -> Result<(&Self, &[u8]), ProgramError> {
         if data.len() < Self::FIXED_SIZE {
@@ -513,13 +517,13 @@ impl DynamicAccount {
         // SAFETY: Verificamos que o buffer é grande o suficiente para a parte fixa
         // A parte fixa contém apenas [u8; 32] e u64, que têm layout previsível
         let fixed_part = unsafe { &*(data.as_ptr() as *const Self) };
-        
+
         // Tudo após a parte fixa são dados dinâmicos
         let dynamic_part = &data[Self::FIXED_SIZE..];
-        
+
         Ok((fixed_part, dynamic_part))
     }
-    
+
     /// Obtém referências mutáveis para ambas as partes
     pub fn from_bytes_mut_with_dynamic(data: &mut [u8]) -> Result<(&mut Self, &mut [u8]), ProgramError> {
         if data.len() < Self::FIXED_SIZE {
@@ -528,10 +532,10 @@ impl DynamicAccount {
 
         // Divide o buffer para evitar problemas de borrowing
         let (fixed_bytes, dynamic_bytes) = data.split_at_mut(Self::FIXED_SIZE);
-        
+
         // SAFETY: Verificamos o tamanho e dividimos de forma segura
         let fixed_part = unsafe { &mut *(fixed_bytes.as_mut_ptr() as *mut Self) };
-        
+
         Ok((fixed_part, dynamic_bytes))
     }
 }
@@ -539,36 +543,36 @@ impl DynamicAccount {
 /// Escrita de campo dinâmico único
 impl DynamicAccount {
     pub fn write_with_dynamic(
-        data: &mut [u8], 
-        fixed_data: &[u8; 32], 
+        data: &mut [u8],
+        fixed_data: &[u8; 32],
         counter: u64,
         dynamic_data: &[u8]
     ) -> Result<(), ProgramError> {
         let total_size = Self::FIXED_SIZE + dynamic_data.len();
-        
+
         if data.len() != total_size {
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         // Escreve parte fixa campo a campo (abordagem mais segura)
         data[0..32].copy_from_slice(fixed_data);
         data[32..40].copy_from_slice(&counter.to_le_bytes());
-        
+
         // Escreve parte dinâmica
         data[Self::FIXED_SIZE..].copy_from_slice(dynamic_data);
-        
+
         Ok(())
     }
-    
+
     /// Atualiza apenas a porção dinâmica
     pub fn update_dynamic_data(&mut self, account_data: &mut [u8], new_data: &[u8]) -> Result<(), ProgramError> {
         if account_data.len() < Self::FIXED_SIZE + new_data.len() {
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         // Escreve novos dados dinâmicos
         account_data[Self::FIXED_SIZE..Self::FIXED_SIZE + new_data.len()].copy_from_slice(new_data);
-        
+
         Ok(())
     }
 }
@@ -621,7 +625,7 @@ Esta abordagem é mais complexa, pois precisaremos de uma forma de determinar o 
 Aqui está um padrão simples e robusto: armazene o comprimento do primeiro campo dinâmico como um u8 (ou u16, etc. se precisar de tamanhos maiores) imediatamente após os dados de tamanho estático. O primeiro campo dinâmico segue, e o segundo campo dinâmico ocupa o restante do buffer.
 
 ```rust
-#[repr(C)]  
+#[repr(C)]
 pub struct MultiDynamicAccount {
     pub fixed_data: [u8; 32],
     pub timestamp: u64,
@@ -632,36 +636,36 @@ impl MultiDynamicAccount {
     pub const FIXED_SIZE: usize = size_of::<Self>();
     pub const LEN_PREFIX_SIZE: usize = size_of::<u8>();
     pub const MIN_SIZE: usize = Self::FIXED_SIZE + Self::LEN_PREFIX_SIZE;
-    
+
     /// Analisa conta com duas seções dinâmicas
     pub fn parse_dynamic_fields(data: &[u8]) -> Result<(&[u8; 32], u64, &[u8], &[u8]), ProgramError> {
         if data.len() < Self::MIN_SIZE {
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         // Extrai dados fixos com segurança
         let fixed_data = data[..32].try_into()
             .map_err(|_| ProgramError::InvalidAccountData)?;
-            
+
         let timestamp = u64::from_le_bytes(
             data[32..40].try_into()
                 .map_err(|_| ProgramError::InvalidAccountData)?
         );
-            
+
         // Lê comprimento do primeiro campo dinâmico (único byte)
         let len = data[Self::FIXED_SIZE] as usize;
-        
+
         // Valida que temos dados suficientes
         if data.len() <  Self::MIN_SIZE + len {
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         let data_1 = &data[Self::MIN_SIZE..Self::MIN_SIZE + len];
         let data_2 = &data[Self::MIN_SIZE + len..]; // Restante
-        
+
         Ok((fixed_data, timestamp, data_1, data_2))
     }
-    
+
     /// Escreve conta com duas seções dinâmicas
     pub fn write_with_multiple_dynamic(
         buffer: &mut [u8],
@@ -671,36 +675,36 @@ impl MultiDynamicAccount {
         data_2: &[u8]
     ) -> Result<(), ProgramError> {
         let total_size = Self::MIN_SIZE + data_1.len() + data_2.len();
-        
+
         if buffer.len() != total_size {
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         // Valida que o comprimento de data_1 cabe em u8
         if data_1.len() > u8::MAX as usize {
             return Err(ProgramError::InvalidInstructionData);
         }
-        
+
         let mut offset = 0;
-        
+
         // Escreve dados fixos
         buffer[offset..offset + 32].copy_from_slice(fixed_data);
         offset += 32;
-        
+
         buffer[offset..offset + 8].copy_from_slice(&timestamp.to_le_bytes());
         offset += 8;
-        
+
         // Escreve prefixo de comprimento para data1 (único byte)
         buffer[offset] = data_1.len() as u8;
         offset += 1;
-        
+
         // Escreve data1
         buffer[offset..offset + data_1.len()].copy_from_slice(data_1);
         offset += data_1.len();
-        
+
         // Escreve data2 (restante - sem prefixo de comprimento necessário)
         buffer[offset..].copy_from_slice(data_2);
-        
+
         Ok(())
     }
 }

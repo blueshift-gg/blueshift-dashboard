@@ -1,5 +1,5 @@
 import { useLocale, useTranslations } from "next-intl";
-import { ChallengeMetadata } from "@/app/utils/challenges";
+import type { ChallengeMetadata } from "@/app/utils/challenges";
 import { URLS } from "@/constants/urls";
 
 /**
@@ -17,7 +17,7 @@ export function useShareChallengeOnX(challenge: ChallengeMetadata): string {
 
   const tweetText = t("ChallengePage.challenge_share_tweet", {
     challengeTitle,
-    challengeUrl
+    challengeUrl,
   });
 
   return `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;

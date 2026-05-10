@@ -19,6 +19,7 @@ Si vous n'êtes pas familier avec la façon d'écrire un programme en assemblage
 Notre programme implémente une opération simple mais cruciale : valider qu'un compte de jetons dispose d'un solde suffisant avant de procéder à une transaction. Ce modèle apparaît partout dans la DeFi — des échanges AMM aux protocoles de prêt.
 
 Le programme attend :
+
 - Un seul compte de jetons SPL dans le tableau des comptes
 - Un montant de 8 octets dans les données d'instruction
 - Renvoie un succès si le solde ≥ montant, une erreur dans le cas contraire
@@ -40,7 +41,11 @@ Les programmes sBPF reçoivent les données de compte sous forme de régions de 
 
 Contrairement aux langages de haut niveau qui abstraient la disposition de la mémoire, l'assembleur exige que vous sachiez exactement où se trouve chaque élément de données.
 
-<ArticleSection name="Point d'entrée et validation initiale" id="entrypoint-and-validations" level="h2" />
+<ArticleSection
+  name="Point d'entrée et validation initiale"
+  id="entrypoint-and-validations"
+  level="h2"
+/>
 
 ```sbpf
 .globl entrypoint
@@ -52,12 +57,17 @@ entrypoint:
 Chaque programme sBPF commence par un symbole global `.entrypoint`. L'environnement d'exécution de Solana fournit les données de compte et d'instruction via le registre `r1`.
 
 L'instruction `ldxdw` charge (`ldx`) une valeur de 8 octets (double mot, `dx`) depuis la mémoire vers un registre. Voici ce qui se passe :
+
 - `ldxdw r3, [r1+MINIMUM_BALANCE]` : calcule l'adresse mémoire contenant notre montant requis. La valeur est chargée dans `r3`.
 - `ldxdw r4, [r1+TOKEN_ACCOUNT_BALANCE]` : pointe vers le champ de solde du compte de jetons. Cette valeur de 64 bits arrive dans `r4`.
 
 Les deux opérations sont sans copie : nous lisons directement les données du compte sans surcharge de désérialisation.
 
-<ArticleSection name="Logique conditionnelle et branchement" id="conditional-logic-and-branching" level="h2" />
+<ArticleSection
+  name="Logique conditionnelle et branchement"
+  id="conditional-logic-and-branching"
+  level="h2"
+/>
 
 ```sbpf
 jge r3, r4, end         // Skip to exit if balance is valid
@@ -67,16 +77,21 @@ L'instruction `jge` (saut si supérieur ou égal) compare `r3` (montant requis) 
 
 Si la condition échoue, l'exécution continue vers le chemin de gestion d'erreur. Ce modèle de branchement conditionnel est la façon dont l'assembleur implémente la logique if/else.
 
-<ArticleSection name="Gestion des erreurs et journalisation" id="error-handling-and-logging" level="h2" />
+<ArticleSection
+  name="Gestion des erreurs et journalisation"
+  id="error-handling-and-logging"
+  level="h2"
+/>
 
 ```sbpf
 lddw r1, e              // Load error message address
-lddw r2, 17             // Load length of error message  
+lddw r2, 17             // Load length of error message
 call sol_log_           // Log out error message
 lddw r0, 1              // Return error code 1
 ```
 
 Lorsque la validation échoue, nous journalisons une erreur lisible avant de terminer :
+
 - `lddw` charge des valeurs immédiates, dans ce cas l'adresse de notre chaîne d'erreur, qui se trouve dans la section `.rodata`, et sa longueur (17 octets pour "Slippage exceeded").
 - `call sol_log_` invoque l'appel système de journalisation de Solana. L'environnement d'exécution lit le message depuis la mémoire et l'ajoute aux journaux de transaction.
 - Nous chargeons ensuite `1` dans `r0` pour signaler l'échec du programme. L'environnement d'exécution annulera la transaction et renverra ce code d'erreur.
@@ -102,8 +117,9 @@ Contrairement aux langages de haut niveau avec nettoyage automatique, les progra
 La section `.rodata` (données en lecture seule) contient notre message d'erreur.
 
 <ArticleSection name="Conclusion" id="conclusion" level="h2" />
-  
-Ce petit programme accomplit ce qui pourrait prendre des dizaines de CUs en Rust avec seulement `4 CUs` dans un cas de réussite, `6 CUs` dans un cas d'échec, ou `106 CUs` dans un cas d'échec qui journalise un message d'erreur.
+Ce petit programme accomplit ce qui pourrait prendre des dizaines de CUs en Rust avec seulement `4
+CUs` dans un cas de réussite, `6 CUs` dans un cas d'échec, ou `106 CUs` dans un cas d'échec qui
+journalise un message d'erreur.
 
 La contrepartie est que nous devons comprendre les dispositions mémoire, les conventions d'appel et la gestion des erreurs au niveau le plus bas. Mais pour les opérations critiques en termes de performance, les avantages justifient souvent l'effort.
 

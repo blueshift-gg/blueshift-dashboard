@@ -50,7 +50,7 @@ export const languageFilterMap: Record<string, Language> = {
 };
 
 export const reverseLanguageFilterMap = Object.fromEntries(
-  Object.entries(languageFilterMap).map(([k, v]) => [v, k])
+  Object.entries(languageFilterMap).map(([k, v]) => [v, k]),
 ) as Record<Language, string>;
 
 export const difficultyFilterMap: Record<string, Difficulty> = {
@@ -61,5 +61,5 @@ export const difficultyFilterMap: Record<string, Difficulty> = {
 };
 
 export const reverseDifficultyFilterMap = Object.fromEntries(
-  Object.entries(difficultyFilterMap).map(([k, v]) => [v, k])
+  Object.entries(difficultyFilterMap).map(([k, v]) => [v, k]),
 ) as Record<number, string>;

@@ -1,12 +1,12 @@
 "use client";
 
-import { motion, AnimatePresence } from "motion/react";
-import { Icon, CrosshairCorners } from "@blueshift-gg/ui-components";
-import { useEffect, useState, useRef } from "react";
-import { anticipate } from "motion";
+import { CrosshairCorners, Icon } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { useTranslations } from "next-intl";
+import { anticipate } from "motion";
+import { AnimatePresence, motion } from "motion/react";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useRef, useState } from "react";
 import { URLS } from "@/constants/urls";
 import { usePersistentStore } from "@/stores/store";
 
@@ -32,9 +32,7 @@ function getGithubSourceUrl(pathname: string): string {
 
 export default function TableOfContents() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [expandedOverrides, setExpandedOverrides] = useState<
-    Record<string, boolean>
-  >({});
+  const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
   const [sections, setSections] = useState<
     {
       id: string;
@@ -111,10 +109,8 @@ export default function TableOfContents() {
           const distanceA = Math.abs(rectA.top - viewportCenter);
           const distanceB = Math.abs(rectB.top - viewportCenter);
 
-          if (rectA.top < viewportCenter && rectB.top >= viewportCenter)
-            return -1;
-          if (rectB.top < viewportCenter && rectA.top >= viewportCenter)
-            return 1;
+          if (rectA.top < viewportCenter && rectB.top >= viewportCenter) return -1;
+          if (rectB.top < viewportCenter && rectA.top >= viewportCenter) return 1;
 
           return distanceA - distanceB;
         });
@@ -130,16 +126,20 @@ export default function TableOfContents() {
       {
         rootMargin: "-20% 0px -60% 0px",
         threshold: [0, 0.1, 0.5, 1],
-      }
+      },
     );
 
     // Observe all h2 and h3 elements
     const allHeadings = article.querySelectorAll("h2, h3");
-    allHeadings.forEach((heading) => observer.observe(heading));
+    allHeadings.forEach((heading) => {
+      observer.observe(heading);
+    });
 
     return () => {
       clearTimeout(timeoutId);
-      allHeadings.forEach((heading) => observer.unobserve(heading));
+      allHeadings.forEach((heading) => {
+        observer.unobserve(heading);
+      });
     };
   }, []);
 
@@ -152,31 +152,30 @@ export default function TableOfContents() {
       transition={{ duration: 0.4, ease: anticipate }}
       className={classNames(
         "font-content order-1 lg:order-2 h-max lg:sticky top-[78px] md:col-span-2 lg:col-span-3 xl:col-span-3 flex flex-col gap-y-6 py-6 px-5 lg:py-6 xl:px-6",
-        !marketingBannerViewed && "top-[128px]!"
+        !marketingBannerViewed && "top-[128px]!",
       )}
     >
       <div className="flex items-center space-x-2">
         <Icon name="Table" size={16} />
-        <span className="font-medium font-mono text-shade-primary text-sm">
+        <span className="font-mono text-sm font-medium text-shade-primary">
           {t("contents.contents")}
         </span>
       </div>
-      <div className="flex space-x-5 items-stretch">
+      <div className="flex items-stretch space-x-5">
         {/* Scroll Spy Background */}
         <div className="w-[1.5px] shrink-0 bg-card-solid"></div>
-        <div className="flex flex-col gap-y-5 w-max">
+        <div className="flex w-max flex-col gap-y-5">
           {sections.map((section) => {
             const isSectionActive = activeSection === section.id;
             const containsActiveSubsection = section.subsections.some(
-              (sub) => sub.id === activeSection
+              (sub) => sub.id === activeSection,
             );
             const shouldCollapse = sections.length > 5;
             const isExpandedDerived =
               !shouldCollapse || isSectionActive || containsActiveSubsection;
 
             // Use override if present, otherwise use derived state
-            const isExpanded =
-              expandedOverrides[section.id] ?? isExpandedDerived;
+            const isExpanded = expandedOverrides[section.id] ?? isExpandedDerived;
 
             // Show indicator on parent if parent is active, or if a child is active when collapsed
             const shouldShowParentIndicator =
@@ -204,12 +203,12 @@ export default function TableOfContents() {
                       isManualScrollRef.current = false;
                     }, 1000);
                   }}
-                  className={`font-mono relative text-sm font-medium text-shade-primary transition hover:text-shade-primary flex items-center`}
+                  className={`relative flex items-center font-mono text-sm font-medium text-shade-primary transition hover:text-shade-primary`}
                 >
                   {shouldShowParentIndicator && (
                     <motion.div
                       className={classNames(
-                        "absolute -left-[calc(24px-2.5px)] w-[1.5px] bg-brand-secondary"
+                        "absolute -left-[calc(24px-2.5px)] w-[1.5px] bg-brand-secondary",
                       )}
                       style={{ height: "24px" }}
                       layoutId={`article`}
@@ -217,8 +216,9 @@ export default function TableOfContents() {
                     />
                   )}
                   {section.subsections.length > 0 && (
-                    <div
-                      className="relative w-[14px] h-[14px] flex items-center justify-center shrink-0 mr-2 cursor-pointer z-10"
+                    <button
+                      type="button"
+                      className="relative z-10 mr-2 flex h-[14px] w-[14px] shrink-0 cursor-pointer items-center justify-center"
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
@@ -237,7 +237,7 @@ export default function TableOfContents() {
                       <span className="font-mono text-[10px] leading-none text-shade-tertiary select-none">
                         {isExpanded ? "-" : "+"}
                       </span>
-                    </div>
+                    </button>
                   )}
                   {section.text}
                 </a>
@@ -267,9 +267,9 @@ export default function TableOfContents() {
                           },
                         },
                       }}
-                      className="overflow-hidden -ml-8 pl-8"
+                      className="-ml-8 overflow-hidden pl-8"
                     >
-                      <div className="pl-2 pt-4 flex flex-col gap-y-3">
+                      <div className="flex flex-col gap-y-3 pt-4 pl-2">
                         {section.subsections.map((subsection) => (
                           <div key={subsection.id} className="relative">
                             <a
@@ -285,15 +285,13 @@ export default function TableOfContents() {
                                   isManualScrollRef.current = false;
                                 }, 1000);
                               }}
-                              className={`font-mono relative flex font-medium text-shade-tertiary text-xs transition hover:text-shade-primary`}
+                              className={`relative flex font-mono text-xs font-medium text-shade-tertiary transition hover:text-shade-primary`}
                             >
-                              <span /*className="truncate max-w-[80%]"*/>
-                                {subsection.text}
-                              </span>
+                              <span /*className="truncate max-w-[80%]"*/>{subsection.text}</span>
                             </a>
                             {activeSection === subsection.id && (
                               <motion.div
-                                className="absolute -left-[calc(32px-2.5px)] top-0 w-[1.5px] bg-brand-secondary"
+                                className="absolute top-0 -left-[calc(32px-2.5px)] w-[1.5px] bg-brand-secondary"
                                 style={{ height: "20px" }}
                                 layoutId={`article`}
                                 transition={{ duration: 0.4, ease: anticipate }}
@@ -310,19 +308,17 @@ export default function TableOfContents() {
           })}
         </div>
       </div>
-      {githubUrl ?
+      {githubUrl ? (
         <a
           href={githubUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center space-x-2 hover:text-shade-tertiary text-shade-primary"
+          className="flex items-center space-x-2 text-shade-primary hover:text-shade-tertiary"
         >
           <Icon name="Github" size={16} />
-          <span className="font-medium font-mono text-sm">
-            {t("contents.view_source")}
-          </span>
+          <span className="font-mono text-sm font-medium">{t("contents.view_source")}</span>
         </a>
-      : null}
+      ) : null}
     </motion.div>
   );
 }

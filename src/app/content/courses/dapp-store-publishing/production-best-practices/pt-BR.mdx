@@ -46,33 +46,33 @@ Para apps de cripto, você precisa de visibilidade nas interações com a blockc
 // Registre tentativas de transação com contexto
 const executeTransaction = async (tx: Transaction, type: string) => {
   const startTime = Date.now();
-  
+
   try {
     const signature = await connection.sendTransaction(tx, [wallet]);
     await connection.confirmTransaction(signature);
-    
+
     // Registre o sucesso
-    analytics.track('transaction_success', {
+    analytics.track("transaction_success", {
       type,
       duration: Date.now() - startTime,
       signature,
     });
-    
+
     return signature;
   } catch (error) {
     // Registre a falha com detalhes
-    analytics.track('transaction_failure', {
+    analytics.track("transaction_failure", {
       type,
       duration: Date.now() - startTime,
       error: error.message,
       errorCode: error.code,
     });
-    
+
     Sentry.captureException(error, {
       tags: { transaction_type: type },
-      extra: { tx: tx.serialize().toString('base64') }
+      extra: { tx: tx.serialize().toString("base64") },
     });
-    
+
     throw error;
   }
 };
@@ -80,14 +80,14 @@ const executeTransaction = async (tx: Transaction, type: string) => {
 
 ### Métricas-chave para acompanhar
 
-| Métrica | Por Que Importa |
-|--------|----------------|
-| Taxa livre de crashes | Meta de 99.5%+ |
-| Taxa de sucesso de transações | Identificar problemas de RPC ou rede |
-| Latência de transações | Indicador de experiência do usuário |
-| Sucesso de conexão com carteira | Saúde da autenticação |
-| Taxa de erros da API | Saúde do backend |
-| Duração da sessão | Indicador de engajamento |
+| Métrica                         | Por Que Importa                      |
+| ------------------------------- | ------------------------------------ |
+| Taxa livre de crashes           | Meta de 99.5%+                       |
+| Taxa de sucesso de transações   | Identificar problemas de RPC ou rede |
+| Latência de transações          | Indicador de experiência do usuário  |
+| Sucesso de conexão com carteira | Saúde da autenticação                |
+| Taxa de erros da API            | Saúde do backend                     |
+| Duração da sessão               | Indicador de engajamento             |
 
 ### Limites de alertas
 
@@ -108,15 +108,15 @@ Não dependa de um único provedor:
 
 ```typescript
 const RPC_ENDPOINTS = [
-  'https://your-primary.rpc.com',
-  'https://your-backup.rpc.com',
-  'https://api.mainnet-beta.solana.com', // Fallback público
+  "https://your-primary.rpc.com",
+  "https://your-backup.rpc.com",
+  "https://api.mainnet-beta.solana.com", // Fallback público
 ];
 
 let currentEndpointIndex = 0;
 
 const getConnection = () => {
-  return new Connection(RPC_ENDPOINTS[currentEndpointIndex], 'confirmed');
+  return new Connection(RPC_ENDPOINTS[currentEndpointIndex], "confirmed");
 };
 
 const rotateEndpoint = () => {
@@ -126,23 +126,23 @@ const rotateEndpoint = () => {
 
 const executeWithRetry = async <T>(
   operation: (connection: Connection) => Promise<T>,
-  maxRetries = 3
+  maxRetries = 3,
 ): Promise<T> => {
   let lastError;
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation(getConnection());
     } catch (error) {
       lastError = error;
-      
+
       // Rotacione em erros de conexão
-      if (error.message.includes('429') || error.message.includes('timeout')) {
+      if (error.message.includes("429") || error.message.includes("timeout")) {
         rotateEndpoint();
       }
     }
   }
-  
+
   throw lastError;
 };
 ```
@@ -153,14 +153,14 @@ Provedores RPC têm limites de taxa. Trate-os elegantemente:
 
 ```typescript
 // Implemente exponential backoff
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const fetchWithBackoff = async (fetchFn: () => Promise<any>, maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fetchFn();
     } catch (error) {
-      if (error.message.includes('429') && attempt < maxRetries - 1) {
+      if (error.message.includes("429") && attempt < maxRetries - 1) {
         const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
         console.log(`Rate limited, waiting ${delay}ms`);
         await sleep(delay);
@@ -180,34 +180,31 @@ Para atualizações em tempo real, conexões WebSocket podem falhar silenciosame
 const setupAccountSubscription = (publicKey: PublicKey) => {
   let ws: number;
   let heartbeatInterval: NodeJS.Timeout;
-  
+
   const connect = () => {
-    ws = connection.onAccountChange(
-      publicKey,
-      (accountInfo) => {
-        handleAccountUpdate(accountInfo);
-      }
-    );
-    
+    ws = connection.onAccountChange(publicKey, (accountInfo) => {
+      handleAccountUpdate(accountInfo);
+    });
+
     // Heartbeat para detectar desconexões silenciosas
     heartbeatInterval = setInterval(async () => {
       try {
         await connection.getSlot();
       } catch {
-        console.log('WebSocket health check failed, reconnecting...');
+        console.log("WebSocket health check failed, reconnecting...");
         cleanup();
         connect();
       }
     }, 30000);
   };
-  
+
   const cleanup = () => {
     if (ws) connection.removeAccountChangeListener(ws);
     if (heartbeatInterval) clearInterval(heartbeatInterval);
   };
-  
+
   connect();
-  
+
   return cleanup;
 };
 ```
@@ -222,16 +219,16 @@ Seu app terá múltiplas versões em uso simultaneamente. Projete para isso:
 
 ```typescript
 // Versionamento de API
-const API_VERSION = '2024.1';
+const API_VERSION = "2024.1";
 
 const apiRequest = async (endpoint: string, options: RequestInit) => {
   return fetch(`https://api.yourapp.com/v1/${endpoint}`, {
     ...options,
     headers: {
       ...options.headers,
-      'X-App-Version': APP_VERSION,
-      'X-API-Version': API_VERSION,
-    }
+      "X-App-Version": APP_VERSION,
+      "X-API-Version": API_VERSION,
+    },
   });
 };
 
@@ -244,39 +241,35 @@ const apiRequest = async (endpoint: string, options: RequestInit) => {
 
 ```typescript
 const checkForceUpdate = async () => {
-  const response = await fetch('https://api.yourapp.com/app-config');
+  const response = await fetch("https://api.yourapp.com/app-config");
   const config = await response.json();
-  
+
   const currentVersion = DeviceInfo.getVersion();
-  
+
   if (compareVersions(currentVersion, config.minimumVersion) < 0) {
     // Atualização forçada necessária
     Alert.alert(
-      'Atualização Necessária',
-      'Por favor, atualize para a versão mais recente para continuar.',
+      "Atualização Necessária",
+      "Por favor, atualize para a versão mais recente para continuar.",
       [
         {
-          text: 'Atualizar',
-          onPress: () => Linking.openURL(config.storeUrl)
-        }
+          text: "Atualizar",
+          onPress: () => Linking.openURL(config.storeUrl),
+        },
       ],
-      { cancelable: false }
+      { cancelable: false },
     );
     return false;
   }
-  
+
   if (compareVersions(currentVersion, config.latestVersion) < 0) {
     // Aviso suave de atualização
-    Alert.alert(
-      'Atualização Disponível',
-      'Uma nova versão está disponível com melhorias.',
-      [
-        { text: 'Depois', style: 'cancel' },
-        { text: 'Atualizar', onPress: () => Linking.openURL(config.storeUrl) }
-      ]
-    );
+    Alert.alert("Atualização Disponível", "Uma nova versão está disponível com melhorias.", [
+      { text: "Depois", style: "cancel" },
+      { text: "Atualizar", onPress: () => Linking.openURL(config.storeUrl) },
+    ]);
   }
-  
+
   return true;
 };
 ```
@@ -313,11 +306,11 @@ const fetchFeatureFlags = async (): Promise<FeatureFlags> => {
 // Uso
 const FeatureFlagProvider: React.FC = ({ children }) => {
   const [flags, setFlags] = useState<FeatureFlags>(defaultFlags);
-  
+
   useEffect(() => {
     fetchFeatureFlags().then(setFlags);
   }, []);
-  
+
   return (
     <FeatureFlagContext.Provider value={flags}>
       {children}
@@ -331,7 +324,7 @@ const FeatureFlagProvider: React.FC = ({ children }) => {
 Para React Native, ferramentas como CodePush permitem atualizações de JavaScript sem revisão da App Store:
 
 ```typescript
-import CodePush from 'react-native-code-push';
+import CodePush from "react-native-code-push";
 
 // Verifique atualizações ao iniciar o app
 const codePushOptions = {
@@ -347,6 +340,7 @@ export default CodePush(codePushOptions)(App);
 ```
 
 **Limitações:**
+
 - Não é possível atualizar código nativo (apenas o bundle JavaScript)
 - Apple e Google têm políticas sobre atualizações OTA
 - Não use para burlar a revisão com conteúdo que viole políticas
@@ -372,14 +366,14 @@ const reportIssue = async (userDescription: string) => {
     recentTransactions: await getRecentTransactionLogs(),
     timestamp: new Date().toISOString(),
   };
-  
-  await fetch('https://api.yourapp.com/support/issue', {
-    method: 'POST',
+
+  await fetch("https://api.yourapp.com/support/issue", {
+    method: "POST",
     body: JSON.stringify({
       description: userDescription,
       diagnostics,
       userId: currentUser?.id,
-    })
+    }),
   });
 };
 ```
@@ -399,21 +393,21 @@ const logTransaction = async (tx: {
 }) => {
   const history = await getTransactionHistory();
   history.unshift(tx);
-  
+
   // Mantenha as últimas 100 transações
   if (history.length > 100) history.pop();
-  
+
   await AsyncStorage.setItem('txHistory', JSON.stringify(history));
 };
 
 // Exponha na tela de suporte/depuração
 const TransactionHistory = () => {
   const [history, setHistory] = useState([]);
-  
+
   useEffect(() => {
     getTransactionHistory().then(setHistory);
   }, []);
-  
+
   return (
     <FlatList
       data={history}
@@ -464,8 +458,10 @@ connection.onAccountChange(publicKey, (accountInfo) => {
 // Ainda melhor: Agrupe requisições quando possível
 const [balance, tokenAccounts, recentTx] = await Promise.all([
   connection.getBalance(publicKey),
-  connection.getParsedTokenAccountsByOwner(publicKey, { programId: TOKEN_PROGRAM_ID }),
-  connection.getSignaturesForAddress(publicKey, { limit: 5 })
+  connection.getParsedTokenAccountsByOwner(publicKey, {
+    programId: TOKEN_PROGRAM_ID,
+  }),
+  connection.getSignaturesForAddress(publicKey, { limit: 5 }),
 ]);
 ```
 
@@ -522,24 +518,28 @@ Muitos apps simplesmente bloqueiam certas jurisdições para evitar exposição 
 Tarefas contínuas para manter seu app saudável:
 
 ### Semanalmente
+
 - [ ] Revise relatórios de crashes e priorize correções
 - [ ] Verifique as taxas de sucesso de transações
 - [ ] Monitore a saúde e os custos do RPC
 - [ ] Revise feedback de usuários/tickets de suporte
 
 ### Mensalmente
+
 - [ ] Atualize dependências (verifique patches de segurança)
 - [ ] Revise analytics para padrões de uso
 - [ ] Teste fluxos críticos nas versões mais recentes do SO
 - [ ] Revise atualizações de políticas da App Store/Play Store
 
 ### Trimestralmente
+
 - [ ] Audite dependências de terceiros por vulnerabilidades
 - [ ] Revise e rotacione chaves de API/credenciais
 - [ ] Teste recuperação de desastres (consegue restaurar a partir de backups?)
 - [ ] Atualize documentação (API, guias do usuário)
 
 ### Anualmente
+
 - [ ] Renove certificados (notificações push, SSL pins)
 - [ ] Revise a arquitetura geral para necessidades de escala
 - [ ] Audite práticas de segurança
@@ -550,28 +550,33 @@ Tarefas contínuas para manter seu app saudável:
 Você completou o curso final do currículo de desenvolvimento mobile na Solana. Vamos recapitular o que cobrimos:
 
 **Lição 1: Cenário de distribuição**
+
 - Três canais: Play Store, App Store, Solana dApp Store
 - Cada um tem políticas e trade-offs diferentes
 - Apps de cripto enfrentam desafios únicos nas lojas tradicionais
 
 **Lição 2: Publicação na Solana dApp Store**
+
 - Registro baseado em NFT (Publisher → App → Release)
 - Ferramentas CLI para minting e submissão
 - Requisitos de assets e processo de revisão
 
 **Lição 3: Estratégias de revisão da App Store**
+
 - Diretrizes 3.1.5 de criptomoedas da Apple
 - Política de conteúdo blockchain do Google Play
 - Contas de teste e modos de demonstração para revisão
 - Tratamento de rejeições e recursos
 
 **Lição 4: Segurança mobile**
+
 - Realidade da engenharia reversa (tudo pode ser extraído)
 - Armazenamento seguro com Keychain/Keystore
 - Padrões de segurança de API (proxy, tokens de curta duração)
 - Proteção de chaves privadas
 
 **Lição 5: Operações de produção**
+
 - Monitoramento e alertas
 - Gerenciamento de RPC e fallbacks
 - Estratégias de atualização e feature flags
@@ -584,6 +589,7 @@ Agora você tem o conhecimento para construir, proteger, publicar e manter uma a
 O melhor próximo passo é construir algo. Escolha um problema que você se importa, aplique o que aprendeu e publique.
 
 Algumas ideias para explorar:
+
 - Uma UI de carteira simples com carteiras embutidas Privy
 - Uma experiência mobile com token-gating
 - Um app de galeria NFT

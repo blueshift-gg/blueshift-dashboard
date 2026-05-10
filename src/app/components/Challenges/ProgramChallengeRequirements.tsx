@@ -1,24 +1,22 @@
 "use client";
 
-import { useTranslations } from "next-intl";
 import { Icon } from "@blueshift-gg/ui-components";
-import React from "react";
+import { useTranslations } from "next-intl";
+import type React from "react";
 
 interface ChallengeRequirementsProps {
   content: React.ReactNode;
 }
 
-export default function ChallengeRequirements({
-  content,
-}: ChallengeRequirementsProps) {
+export default function ChallengeRequirements({ content }: ChallengeRequirementsProps) {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col gap-y-12 col-span-2">
+    <div className="col-span-2 flex flex-col gap-y-12">
       <div className="flex flex-col gap-y-2">
-        <div className="flex items-center gap-x-2 text-brand-secondary mb-2">
+        <div className="mb-2 flex items-center gap-x-2 text-brand-secondary">
           <Icon name="Challenge" />
-          <div className="font-medium font-mono">
+          <div className="font-mono font-medium">
             {t("ChallengePage.requirements_title").toUpperCase()}
           </div>
         </div>

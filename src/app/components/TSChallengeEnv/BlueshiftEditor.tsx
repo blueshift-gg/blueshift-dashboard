@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 import "./style.css";
-import Editor, { Monaco } from "@monaco-editor/react";
-import type { editor } from "monaco-editor";
-import classNames from "classnames";
 import { Icon } from "@blueshift-gg/ui-components";
-import { useTranslations } from "next-intl";
-import { motion, AnimatePresence } from "motion/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
+import classNames from "classnames";
+import type { editor } from "monaco-editor";
 import { anticipate } from "motion";
+import { AnimatePresence, motion } from "motion/react";
+import { useTranslations } from "next-intl";
 
 /**
  * Props for the BlueshiftEditor component
@@ -46,6 +46,16 @@ declare var process: {
 };
 `;
 
+const fetchRawAsset = async (assetPath: string) => {
+  const response = await fetch(assetPath);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch raw asset: ${assetPath}`);
+  }
+
+  return { default: await response.text() };
+};
+
 /**
  * Monaco-based TypeScript code editor with auto-save functionality
  * Features syntax highlighting, type checking, and visual save state indicators
@@ -64,10 +74,7 @@ export default function BlueshiftEditor({
   const [showRefreshDialog, setShowRefreshDialog] = useState(false);
   const t = useTranslations();
 
-  const handleEditorDidMount = (
-    editorInstance: editor.IStandaloneCodeEditor,
-    monaco: Monaco
-  ) => {
+  const handleEditorDidMount = (editorInstance: editor.IStandaloneCodeEditor, monaco: Monaco) => {
     if (editorRefInternal.current) return;
 
     editorRefInternal.current = editorInstance;
@@ -77,27 +84,24 @@ export default function BlueshiftEditor({
 
     monaco.languages.typescript.typescriptDefaults.addExtraLib(
       processEnvTypes,
-      "file:///node_modules/@types/node/index.d.ts"
+      "file:///node_modules/@types/node/index.d.ts",
     );
 
     const addMonacoTypesForModule = async (
       moduleName: string,
       dtsImportPromise: Promise<{ default: string }>,
       monacoTypesPath: string,
-      monacoModulePath: string
+      monacoModulePath: string,
     ) => {
       try {
         const dtsModule = await dtsImportPromise;
         const dtsContent = dtsModule.default;
 
-        monaco.languages.typescript.typescriptDefaults.addExtraLib(
-          dtsContent,
-          monacoTypesPath
-        );
+        monaco.languages.typescript.typescriptDefaults.addExtraLib(dtsContent, monacoTypesPath);
 
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           `declare module '${moduleName}' { export * from '${monacoTypesPath}'; export { default } from '${monacoTypesPath}'; }`,
-          monacoModulePath
+          monacoModulePath,
         );
       } catch (error) {
         console.error(`Error adding ${moduleName} types:`, error);
@@ -106,23 +110,23 @@ export default function BlueshiftEditor({
 
     addMonacoTypesForModule(
       "@solana/web3.js",
-      import("@solana/web3.js/lib/index.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/solana-web3.d.ts"),
       "file:///node_modules/@types/@solana/web3.js/index.d.ts",
-      "file:///node_modules/@solana/web3.js/index.d.ts"
+      "file:///node_modules/@solana/web3.js/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "@solana/spl-token",
-      import("./types/spl-token.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/spl-token.d.ts"),
       "file:///node_modules/@types/@solana/spl-token/index.d.ts",
-      "file:///node_modules/@solana/spl-token/index.d.ts"
+      "file:///node_modules/@solana/spl-token/index.d.ts",
     );
 
     addMonacoTypesForModule(
       "bs58",
-      import("./types/bs58.d.ts?raw"),
+      fetchRawAsset("/editor-assets/types/bs58.d.ts"),
       "file:///node_modules/@types/bs58/index.d.ts",
-      "file:///node_modules/bs58/index.d.ts"
+      "file:///node_modules/bs58/index.d.ts",
     );
 
     monaco.editor.defineTheme("dracula", {
@@ -283,13 +287,11 @@ export default function BlueshiftEditor({
         },
         {
           foreground: "eeeeee",
-          token:
-            "punctuation.definition.string.begin.json - meta.structure.dictionary.value.json",
+          token: "punctuation.definition.string.begin.json - meta.structure.dictionary.value.json",
         },
         {
           foreground: "eeeeee",
-          token:
-            "punctuation.definition.string.end.json - meta.structure.dictionary.value.json",
+          token: "punctuation.definition.string.end.json - meta.structure.dictionary.value.json",
         },
         {
           foreground: "8be9fd",
@@ -297,18 +299,15 @@ export default function BlueshiftEditor({
         },
         {
           foreground: "f1fa8c",
-          token:
-            "meta.structure.dictionary.value.json string.quoted.double.json",
+          token: "meta.structure.dictionary.value.json string.quoted.double.json",
         },
         {
           foreground: "50fa7b",
-          token:
-            "meta meta meta meta meta meta meta.structure.dictionary.value string",
+          token: "meta meta meta meta meta meta meta.structure.dictionary.value string",
         },
         {
           foreground: "ffb86c",
-          token:
-            "meta meta meta meta meta meta.structure.dictionary.value string",
+          token: "meta meta meta meta meta meta.structure.dictionary.value string",
         },
         {
           foreground: "ff79c6",
@@ -359,10 +358,10 @@ export default function BlueshiftEditor({
 
   return (
     <div className={classNames("w-full h-full lg:relative", className)}>
-      <div className="absolute py-4 bottom-0 z-10 right-0 px-6 flex items-center gap-x-4 w-full h-auto justify-end border-t border-border bg-background/80 lg:border-t-0 backdrop-blur lg:bg-transparent lg:backdrop-blur-none">
+      <div className="absolute right-0 bottom-0 z-10 flex h-auto w-full items-center justify-end gap-x-4 border-t border-border bg-background/80 px-6 py-4 backdrop-blur lg:border-t-0 lg:bg-transparent lg:backdrop-blur-none">
         {/* Loaded from auto-save indicator */}
         {loadedFromAutoSave && saveState === "saved" && (
-          <div className="flex items-center gap-x-1.5 text-xs text-blue-400 bg-blue-400/10 px-2 py-1">
+          <div className="flex items-center gap-x-1.5 bg-blue-400/10 px-2 py-1 text-xs text-blue-400">
             <Icon name="Progress" size={12} />
             <span>{t("ChallengePage.loaded_from_auto_save")}</span>
           </div>
@@ -370,32 +369,33 @@ export default function BlueshiftEditor({
 
         {/* Save status indicator */}
         {saveState === "unsaved" && (
-          <div className="flex items-center gap-x-1.5 text-xs text-orange-400 bg-orange-400/10 px-2 py-1">
-            <div className="w-2 h-2 bg-orange-400 animate-pulse" />
+          <div className="flex items-center gap-x-1.5 bg-orange-400/10 px-2 py-1 text-xs text-orange-400">
+            <div className="h-2 w-2 animate-pulse bg-orange-400" />
             <span>{t("ChallengePage.unsaved_changes")}</span>
           </div>
         )}
         {saveState === "saving" && (
-          <div className="flex items-center gap-x-1.5 text-xs text-blue-400 bg-blue-400/10 px-2 py-1">
-            <div className="w-2 h-2 bg-blue-400 animate-spin" />
+          <div className="flex items-center gap-x-1.5 bg-blue-400/10 px-2 py-1 text-xs text-blue-400">
+            <div className="h-2 w-2 animate-spin bg-blue-400" />
             <span>{t("ChallengePage.saving")}</span>
           </div>
         )}
         {justSaved && (
-          <div className="flex items-center gap-x-1.5 text-xs text-green-400 bg-green-400/10 px-2 py-1">
+          <div className="flex items-center gap-x-1.5 bg-green-400/10 px-2 py-1 text-xs text-green-400">
             <Icon name="Success" size={12} />
             <span>{t("ChallengePage.auto_saved")}</span>
           </div>
         )}
 
         <button
-          className="group/refresh font-medium flex items-center gap-x-2 text-sm text-shade-tertiary cursor-pointer hover:text-shade-secondary transition-colors"
+          type="button"
+          className="group/refresh flex cursor-pointer items-center gap-x-2 text-sm font-medium text-shade-tertiary transition-colors hover:text-shade-secondary"
           onClick={handleRefreshClick}
         >
           <Icon
             name="Refresh"
             size={12}
-            className="group-hover/refresh:rotate-360 transition-transform"
+            className="transition-transform group-hover/refresh:rotate-360"
           />
           <span>{t("ChallengePage.reset_button")}</span>
         </button>
@@ -425,26 +425,28 @@ export default function BlueshiftEditor({
                 y: 20,
                 transition: { duration: 0.2 },
               }}
-              className="bg-card-solid border border-border  p-6 max-w-md mx-4 shadow-xl"
+              className="mx-4 max-w-md border border-border bg-card-solid p-6 shadow-xl"
             >
-              <div className="flex items-center gap-x-3 mb-4">
+              <div className="mb-4 flex items-center gap-x-3">
                 <Icon name="Warning" size={18} className="text-yellow-500" />
                 <h3 className="text-lg font-semibold">
                   {t("ChallengePage.reset_code_modal.title")}
                 </h3>
               </div>
-              <p className="text-shade-secondary mb-6">
+              <p className="mb-6 text-shade-secondary">
                 {t("ChallengePage.reset_code_modal.description")}
               </p>
-              <div className="flex gap-x-3 justify-end">
+              <div className="flex justify-end gap-x-3">
                 <button
-                  className="px-4 py-2 text-sm font-medium text-shade-secondary hover:text-shade-primary border border-border  hover:bg-card-solid-hover transition-colors cursor-pointer"
+                  type="button"
+                  className="hover:bg-card-solid-hover cursor-pointer border border-border px-4 py-2 text-sm font-medium text-shade-secondary transition-colors hover:text-shade-primary"
                   onClick={handleCancelRefresh}
                 >
                   {t("ChallengePage.reset_code_modal.cancel")}
                 </button>
                 <button
-                  className="px-4 py-2 text-sm font-medium bg-[#ff285a] hover:bg-[#e6234f] text-white transition-colors cursor-pointer"
+                  type="button"
+                  className="cursor-pointer bg-[#ff285a] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#e6234f]"
                   onClick={handleConfirmRefresh}
                 >
                   {t("ChallengePage.reset_code_modal.confirm")}
@@ -455,11 +457,11 @@ export default function BlueshiftEditor({
         )}
       </AnimatePresence>
 
-      <div className="w-full h-full">
+      <div className="h-full w-full">
         <Editor
           height="100%"
           width="100%"
-          className="bg-transparent min-h-[400px] backdrop-blur-lg"
+          className="min-h-[400px] bg-transparent backdrop-blur-lg"
           language="typescript"
           value={initialCode}
           options={{

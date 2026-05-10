@@ -1,24 +1,17 @@
 "use client";
 
-import { PathMetadata, getPathCompletedSteps } from "@/app/utils/path";
-import { CourseLanguages } from "@/app/utils/course";
-import { languageFilterMap, difficultyFilterMap } from "@/app/utils/common";
-import { usePersistentStore } from "@/stores/store";
-import PathCard from "../PathCard/PathCard";
+import { Banner, Icon, Input, Tabs } from "@blueshift-gg/ui-components";
 import classNames from "classnames";
-import { getPathDropdownItems } from "@/app/utils/dropdownItems";
 import { useTranslations } from "next-intl";
-import { recommendPaths } from "@/app/utils/recommendations";
-import {
-  Banner,
-  Dropdown,
-  Input,
-  Icon,
-  Tabs,
-} from "@blueshift-gg/ui-components";
-import { useStore } from "@/stores/store";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { difficultyFilterMap, languageFilterMap } from "@/app/utils/common";
+import type { CourseLanguages } from "@/app/utils/course";
+import { getPathDropdownItems } from "@/app/utils/dropdownItems";
+import { getPathCompletedSteps, type PathMetadata } from "@/app/utils/path";
+import { recommendPaths } from "@/app/utils/recommendations";
+import { usePersistentStore, useStore } from "@/stores/store";
+import PathCard from "../PathCard/PathCard";
 import PathCardSkeleton from "../PathCard/PathCardSkeleton";
 
 type PathsContentProps = {
@@ -26,10 +19,22 @@ type PathsContentProps = {
   isLoading?: boolean;
 };
 
-export default function PathList({
-  initialPaths = [],
-  isLoading = false,
-}: PathsContentProps) {
+const FEATURED_PATH_SKELETON_KEYS = [
+  "featured-path-skeleton-1",
+  "featured-path-skeleton-2",
+  "featured-path-skeleton-3",
+] as const;
+
+const PATH_LIST_SKELETON_KEYS = [
+  "path-list-skeleton-1",
+  "path-list-skeleton-2",
+  "path-list-skeleton-3",
+  "path-list-skeleton-4",
+  "path-list-skeleton-5",
+  "path-list-skeleton-6",
+] as const;
+
+export default function PathList({ initialPaths = [], isLoading = false }: PathsContentProps) {
   const t = useTranslations();
   const {
     selectedLanguages,
@@ -45,11 +50,7 @@ export default function PathList({
 
   // Calculate global in-progress paths to determine tab state
   const globalInProgressPaths = initialPaths.filter((path) => {
-    const completedSteps = getPathCompletedSteps(
-      path.steps,
-      courseProgress,
-      challengeStatuses
-    );
+    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
     const totalSteps = path.steps.length;
     return completedSteps > 0 && completedSteps < totalSteps;
   });
@@ -58,11 +59,7 @@ export default function PathList({
 
   // Calculate global completed paths
   const globalCompletedPaths = initialPaths.filter((path) => {
-    const completedSteps = getPathCompletedSteps(
-      path.steps,
-      courseProgress,
-      challengeStatuses
-    );
+    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
     const totalSteps = path.steps.length;
     return completedSteps === totalSteps;
   });
@@ -73,7 +70,7 @@ export default function PathList({
   const [activeTab, setActiveTab] = useState("all-paths");
 
   const { width } = useWindowSize();
-  const [isMobile, setIsMobile] = useState(false);
+  const [_isMobile, setIsMobile] = useState(false);
 
   const [scrollState, setScrollState] = useState({
     isAtStart: true,
@@ -83,7 +80,7 @@ export default function PathList({
   const carouselRef = useRef<HTMLDivElement>(null);
 
   // Function to update scroll state
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     if (carouselRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = carouselRef.current;
       setScrollState({
@@ -91,7 +88,7 @@ export default function PathList({
         isAtEnd: scrollLeft === scrollWidth - clientWidth,
       });
     }
-  };
+  }, []);
 
   // Add scroll event listener
   useEffect(() => {
@@ -101,7 +98,7 @@ export default function PathList({
       carousel.addEventListener("scroll", updateScrollState);
       return () => carousel.removeEventListener("scroll", updateScrollState);
     }
-  }, []);
+  }, [updateScrollState]);
 
   useEffect(() => {
     setIsMobile(width < 768);
@@ -116,7 +113,7 @@ export default function PathList({
     setActiveTab(tab);
   }, []);
 
-  const handleFilterChange = (value: string | string[] | undefined) => {
+  const _handleFilterChange = (value: string | string[] | undefined) => {
     if (Array.isArray(value)) {
       const newLanguages: CourseLanguages[] = [];
       const newDifficulties: number[] = [];
@@ -189,16 +186,11 @@ export default function PathList({
 
       // 3. Difficulty Filter (Empty = All)
       const matchesDifficulty =
-        selectedDifficulties.length === 0 ||
-        selectedDifficulties.includes(path.difficulty);
+        selectedDifficulties.length === 0 || selectedDifficulties.includes(path.difficulty);
 
       // 4. Tab Filter
       let matchesTab = true;
-      const completedSteps = getPathCompletedSteps(
-        path.steps,
-        courseProgress,
-        challengeStatuses
-      );
+      const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
       const totalSteps = path.steps.length;
 
       if (activeTab === "all-paths") {
@@ -210,20 +202,15 @@ export default function PathList({
         matchesTab = completedSteps === totalSteps;
       }
 
-      return (
-        matchesSearch && matchesLanguage && matchesDifficulty && matchesTab
-      );
+      return matchesSearch && matchesLanguage && matchesDifficulty && matchesTab;
     })
     .sort((a, b) => a.difficulty - b.difficulty);
 
   const hasNoResults = filteredPaths.length === 0;
 
-  const dropdownItems = getPathDropdownItems();
+  const _dropdownItems = getPathDropdownItems();
 
-  const seed = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const seed = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const recommendedPaths = useMemo(
     () =>
@@ -242,7 +229,7 @@ export default function PathList({
       selectedLanguages,
       selectedDifficulties,
       seed,
-    ]
+    ],
   );
 
   // Create tabs array with conditional ordering
@@ -284,9 +271,7 @@ export default function PathList({
   // Get counts for path stats
   const getPathStats = (path: PathMetadata) => {
     const courseCount = path.steps.filter((s) => s.type === "course").length;
-    const challengeCount = path.steps.filter(
-      (s) => s.type === "challenge"
-    ).length;
+    const challengeCount = path.steps.filter((s) => s.type === "challenge").length;
     return { courseCount, challengeCount };
   };
 
@@ -309,12 +294,7 @@ export default function PathList({
   };
 
   return (
-    <div
-      className={classNames(
-        "flex flex-col gap-y-12",
-        isLoading && "animate-pulse"
-      )}
-    >
+    <div className={classNames("flex flex-col gap-y-12", isLoading && "animate-pulse")}>
       {/* Featured Paths */}
       <div className="relative flex flex-col border-x border-border-light p-1 pb-0 lg:pb-1">
         <Banner title={t("paths.get_started")} variant="brand" />
@@ -322,23 +302,23 @@ export default function PathList({
           <div
             ref={carouselRef}
             className={classNames(
-              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar"
+              "lg:grid flex pl-4 -mx-4 lg:mx-0 lg:pl-0 lg:grid-cols-3 gap-3 overflow-x-auto lg:overflow-x-hidden snap-x snap-mandatory hide-scrollbar",
             )}
           >
             {isLoading
-              ? Array.from({ length: 3 }).map((_, index) => (
-                  <PathCardSkeleton key={`featured-skeleton-${index}`} />
+              ? FEATURED_PATH_SKELETON_KEYS.map((skeletonKey) => (
+                  <PathCardSkeleton key={skeletonKey} />
                 ))
               : recommendedPaths.map((path) => {
                   const { courseCount, challengeCount } = getPathStats(path);
                   const completedSteps = getPathCompletedSteps(
                     path.steps,
                     courseProgress,
-                    challengeStatuses
+                    challengeStatuses,
                   );
                   return (
                     <PathCard
-                      className="shrink-0 lg:shrink w-full max-w-[340px] lg:max-w-full snap-center"
+                      className="w-full max-w-[340px] shrink-0 snap-center lg:max-w-full lg:shrink"
                       key={path.slug}
                       name={t(`paths.${path.slug}.title`)}
                       description={t(`paths.${path.slug}.description`)}
@@ -356,22 +336,24 @@ export default function PathList({
                   );
                 })}
           </div>
-          <div className="absolute bottom-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
+          <div className="absolute bottom-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
         </div>
-        <div className="w-full flex justify-center lg:hidden relative z-10">
-          <div className="absolute top-0 w-screen h-px bg-border-light left-1/2 -translate-x-1/2" />
-          <div className="w-full h-[48px] flex justify-end">
+        <div className="relative z-10 flex w-full justify-center lg:hidden">
+          <div className="absolute top-0 left-1/2 h-px w-screen -translate-x-1/2 bg-border-light" />
+          <div className="flex h-[48px] w-full justify-end">
             <button
+              type="button"
               disabled={scrollState.isAtStart}
               onClick={handleScrollLeft}
-              className="absolute right-11 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none border-x text-tertiary hover:text-primary transition-colors border-x-border-light w-[48px] h-[48px] flex items-center justify-center"
+              className="text-tertiary hover:text-primary absolute right-11 flex h-[48px] w-[48px] items-center justify-center border-x border-x-border-light bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
             >
               <Icon name="Chevron" className="rotate-90" />
             </button>
             <button
+              type="button"
               disabled={scrollState.isAtEnd}
               onClick={handleScrollRight}
-              className="mr-[1px] absolute -right-1 disabled:text-shade-mute bg-transparent enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 outline-none text-tertiary hover:text-primary transition-colors w-[48px] h-[48px] flex items-center justify-center"
+              className="text-tertiary hover:text-primary absolute -right-1 mr-[1px] flex h-[48px] w-[48px] items-center justify-center bg-transparent transition-colors outline-none enabled:hover:cursor-pointer enabled:hover:bg-card-solid/50 disabled:text-shade-mute"
             >
               <Icon name="Chevron" className="-rotate-90" />
             </button>
@@ -380,14 +362,14 @@ export default function PathList({
       </div>
 
       {/* Full List */}
-      <div className="relative px-1 sm:p-4 pb-12 sm:pb-16 flex flex-col gap-y-6 w-full">
-        <div className="flex gap-y-3 flex-col lg:flex-row items-start lg:items-center justify-between w-full">
-          <div className="w-full md:w-max flex flex-col md:flex-row items-center gap-y-3 md:gap-x-3">
+      <div className="relative flex w-full flex-col gap-y-6 px-1 pb-12 sm:p-4 sm:pb-16">
+        <div className="flex w-full flex-col items-start justify-between gap-y-3 lg:flex-row lg:items-center">
+          <div className="flex w-full flex-col items-center gap-y-3 md:w-max md:flex-row md:gap-x-3">
             <Input
               value={searchValue}
               onChange={(value: string) => setSearchValue(value)}
               placeholder="Search..."
-              className="w-full md:w-max min-w-[300px]"
+              className="w-full min-w-[300px] md:w-max"
               hasMessage={false}
               badge={{
                 icon: { name: "Search", size: 16 },
@@ -403,17 +385,15 @@ export default function PathList({
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {isLoading
-            ? Array.from({ length: 6 }).map((_, index) => (
-                <PathCardSkeleton key={`list-skeleton-${index}`} />
-              ))
+            ? PATH_LIST_SKELETON_KEYS.map((skeletonKey) => <PathCardSkeleton key={skeletonKey} />)
             : filteredPaths.map((path) => {
                 const { courseCount, challengeCount } = getPathStats(path);
                 const completedSteps = getPathCompletedSteps(
                   path.steps,
                   courseProgress,
-                  challengeStatuses
+                  challengeStatuses,
                 );
                 return (
                   <PathCard
@@ -444,15 +424,11 @@ function PathsEmpty() {
   const t = useTranslations();
 
   return (
-    <div className="flex flex-col items-center justify-center py-12 gap-4">
+    <div className="flex flex-col items-center justify-center gap-4 py-12">
       <Icon name="Lessons" size={18} className="text-shade-tertiary" />
       <div className="text-center">
-        <h3 className="text-lg font-medium text-shade-primary">
-          {t("paths.empty_title")}
-        </h3>
-        <p className="text-sm text-shade-tertiary">
-          {t("paths.empty_description")}
-        </p>
+        <h3 className="text-lg font-medium text-shade-primary">{t("paths.empty_title")}</h3>
+        <p className="text-sm text-shade-tertiary">{t("paths.empty_description")}</p>
       </div>
     </div>
   );

@@ -14,23 +14,26 @@
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          commonPackages = with pkgs; [ nodejs_24 pnpm ];
+
+          runtimePackages = with pkgs; [
+            nodejs_24
+            pnpm
+          ];
+
           bannerMessage = ''echo "🟢 Node.js $(node --version) + pnpm $(pnpm --version) ready"'';
         in
         {
-          default =
-            if pkgs.stdenv.isLinux then
-              (pkgs.buildFHSEnv {
-                name = "blueshift-dashboard-dev";
-                targetPkgs = pkgs: commonPackages;
-                runScript = "bash";
-                profile = bannerMessage;
-              }).env
-            else
-              pkgs.mkShell {
-                packages = commonPackages;
-                shellHook = bannerMessage;
-              };
+          default = pkgs.mkShell {
+            packages = runtimePackages;
+            shellHook = bannerMessage;
+          };
+
+          nixos = (pkgs.buildFHSEnv {
+            name = "blueshift-dashboard-dev";
+            targetPkgs = pkgs: runtimePackages;
+            runScript = "bash";
+            profile = bannerMessage;
+          }).env;
         }
       );
     };

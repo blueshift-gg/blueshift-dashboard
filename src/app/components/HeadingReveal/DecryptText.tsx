@@ -1,5 +1,19 @@
-import { useEffect, useState } from "react";
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
+
+const getStableCharacterEntries = (value: string) => {
+  const seenCounts = new Map<string, number>();
+
+  return value.split("").map((char) => {
+    const nextCount = (seenCounts.get(char) ?? 0) + 1;
+    seenCounts.set(char, nextCount);
+
+    return {
+      char,
+      key: `${char}-${nextCount}`,
+    };
+  });
+};
 
 interface DecryptedTextProps {
   text: string;
@@ -21,37 +35,25 @@ export default function DecryptedText({
 }: DecryptedTextProps) {
   const [displayText, setDisplayText] = useState<string>(text);
   const [isScrambling, setIsScrambling] = useState<boolean>(false);
-  const [revealedIndices, setRevealedIndices] = useState<Set<number>>(
-    new Set()
-  );
+  const [revealedIndices, setRevealedIndices] = useState<Set<number>>(new Set());
   const [isExiting, setIsExiting] = useState<boolean>(false);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
 
-    const shuffleText = (
-      currentRevealed: Set<number>,
-      isExiting: boolean = false
-    ): string => {
+    const shuffleText = (currentRevealed: Set<number>, isExiting: boolean = false): string => {
       const positions = text.split("").map((char, i) => ({
         char,
         isSpace: char === " ",
         index: i,
-        isRevealed: isExiting
-          ? !currentRevealed.has(i)
-          : currentRevealed.has(i),
+        isRevealed: isExiting ? !currentRevealed.has(i) : currentRevealed.has(i),
       }));
 
-      const nonSpaceChars = positions
-        .filter((p) => !p.isSpace && !p.isRevealed)
-        .map((p) => p.char);
+      const nonSpaceChars = positions.filter((p) => !p.isSpace && !p.isRevealed).map((p) => p.char);
 
       for (let i = nonSpaceChars.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [nonSpaceChars[i], nonSpaceChars[j]] = [
-          nonSpaceChars[j],
-          nonSpaceChars[i],
-        ];
+        [nonSpaceChars[i], nonSpaceChars[j]] = [nonSpaceChars[j], nonSpaceChars[i]];
       }
 
       let charIndex = 0;
@@ -110,29 +112,24 @@ export default function DecryptedText({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isHovering, text, speed]);
+  }, [isHovering, text, speed, revealedIndices.size]);
 
   return (
     <motion.span
-      className={`inline-block whitespace-pre-wrap pt-0.5 ${parentClassName}`}
+      className={`inline-block pt-0.5 whitespace-pre-wrap ${parentClassName}`}
       {...props}
     >
       <span className="sr-only">{displayText}</span>
 
       <span aria-hidden="true" className="inline-flex tracking-tight">
-        {displayText.split("").map((char, index) => {
+        {getStableCharacterEntries(displayText).map(({ char, key }, index) => {
           const isRevealedOrDone =
-            (isExiting
-              ? !revealedIndices.has(index)
-              : revealedIndices.has(index)) ||
+            (isExiting ? !revealedIndices.has(index) : revealedIndices.has(index)) ||
             !isScrambling ||
             (!isHovering && !isExiting);
 
           return (
-            <span
-              key={index}
-              className={isRevealedOrDone ? className : encryptedClassName}
-            >
+            <span key={key} className={isRevealedOrDone ? className : encryptedClassName}>
               {char}
             </span>
           );

@@ -1,32 +1,17 @@
-import fs from "fs/promises";
-import path from "path";
-import { generateBannerData } from "@/lib/banners/banner-generator";
+import fs from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
-import { courses } from "@/app/content/courses/courses";
 import { challenges } from "@/app/content/challenges/challenges";
+import { courses } from "@/app/content/courses/courses";
 import { paths } from "@/app/content/paths/paths";
+import { generateBannerData } from "@/lib/banners/banner-generator";
 
-const COURSE_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "course-banners",
-);
-const CHALLENGE_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "challenge-banners",
-);
-const PATH_BANNERS_DIR = path.join(
-  process.cwd(),
-  "public",
-  "graphics",
-  "path-banners",
-);
+const COURSE_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "course-banners");
+const CHALLENGE_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "challenge-banners");
+const PATH_BANNERS_DIR = path.join(process.cwd(), "public", "graphics", "path-banners");
 
 async function generateBannersFor(
-  items: any[],
+  items: Array<{ slug?: string }>,
   type: "course" | "challenge" | "path",
   outputDir: string,
   options: { force: boolean },
@@ -46,9 +31,7 @@ async function generateBannersFor(
 
   for (const item of items) {
     if (!item.slug) {
-      console.warn(
-        `${type} with no slug found, skipping: ${JSON.stringify(item)}`,
-      );
+      console.warn(`${type} with no slug found, skipping: ${JSON.stringify(item)}`);
       continue;
     }
 
@@ -69,7 +52,7 @@ async function generateBannersFor(
       type,
     });
 
-    if (bannerInfo && bannerInfo.data) {
+    if (bannerInfo?.data) {
       // Optimize using sharp before writing to disk
       let outputBuffer: Buffer;
       try {
@@ -87,9 +70,7 @@ async function generateBannersFor(
       existingFiles.add(filename);
       console.log(`Successfully generated and saved: ${filePath}`);
     } else {
-      console.warn(
-        `Skipped banner for ${itemSlug} (generation failed or no data returned).`,
-      );
+      console.warn(`Skipped banner for ${itemSlug} (generation failed or no data returned).`);
     }
   }
 }
@@ -107,7 +88,7 @@ async function main() {
   console.log("Banner generation process complete.");
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error("Unexpected error in main execution:", error);
   process.exit(1);
 });

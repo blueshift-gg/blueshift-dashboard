@@ -1,6 +1,6 @@
-import { CourseMetadata, CourseLanguages } from "./course";
-import { ChallengeMetadata } from "./challenges";
-import { PathMetadata, getPathCompletedSteps } from "./path";
+import type { ChallengeMetadata } from "./challenges";
+import type { CourseLanguages, CourseMetadata } from "./course";
+import { getPathCompletedSteps, type PathMetadata } from "./path";
 
 export type RecommendationSignals = {
   preferredLanguages?: CourseLanguages[];
@@ -34,16 +34,13 @@ const WEIGHTS = {
 
 const matchLanguage = (
   language: CourseLanguages,
-  preferredLanguages?: CourseLanguages[]
+  preferredLanguages?: CourseLanguages[],
 ): number => {
   if (!preferredLanguages || preferredLanguages.length === 0) return 0;
   return preferredLanguages.includes(language) ? WEIGHTS.language : 0;
 };
 
-const difficultyAffinity = (
-  difficulty: number,
-  preferredDifficulties?: number[]
-): number => {
+const difficultyAffinity = (difficulty: number, preferredDifficulties?: number[]): number => {
   if (!preferredDifficulties || preferredDifficulties.length === 0) return 0;
   // Reward near-matches: max(0, 1 - distance/3) scaled by weight
   const bestMatch = preferredDifficulties.reduce((best, pref) => {
@@ -61,7 +58,7 @@ const easeScore = (difficulty: number): number => {
 const fillWithFallback = <T extends { slug: string }>(
   primary: T[],
   candidates: T[],
-  limit: number
+  limit: number,
 ): T[] => {
   if (primary.length >= limit) {
     return primary.slice(0, limit);
@@ -86,7 +83,7 @@ const stableHash = (value: string | number): number => {
 const compareWithSeed = <T extends { slug: string }>(
   a: Scored<T>,
   b: Scored<T>,
-  seed: number | string | undefined
+  seed: number | string | undefined,
 ): number => {
   if (a.score === b.score) {
     if (seed !== undefined) {
@@ -109,7 +106,7 @@ const compareWithSeed = <T extends { slug: string }>(
 
 export function recommendPaths(
   paths: PathMetadata[],
-  signals: RecommendationSignals = {}
+  signals: RecommendationSignals = {},
 ): PathMetadata[] {
   const {
     courseProgress = {},
@@ -126,11 +123,7 @@ export function recommendPaths(
       return { item: path, score: Number.NEGATIVE_INFINITY };
     }
 
-    const completedSteps = getPathCompletedSteps(
-      path.steps,
-      courseProgress,
-      challengeStatuses
-    );
+    const completedSteps = getPathCompletedSteps(path.steps, courseProgress, challengeStatuses);
     const completionRatio = completedSteps / totalSteps;
     const isCompleted = completedSteps >= totalSteps;
 
@@ -144,17 +137,10 @@ export function recommendPaths(
         : 0;
     const freshStartBonus = completionRatio === 0 ? WEIGHTS.freshStart : 0;
     const featuredBonus = path.isFeatured ? WEIGHTS.featured : 0;
-    const languageBonus = matchLanguage(
-      path.language as CourseLanguages,
-      preferredLanguages
-    );
-    const difficultyBonus = difficultyAffinity(
-      path.difficulty,
-      preferredDifficulties
-    );
+    const languageBonus = matchLanguage(path.language as CourseLanguages, preferredLanguages);
+    const difficultyBonus = difficultyAffinity(path.difficulty, preferredDifficulties);
     const durationBonus = path.estimatedHours
-      ? Math.max(0.1, 1 - Math.min(path.estimatedHours, 30) / 45) *
-        WEIGHTS.duration
+      ? Math.max(0.1, 1 - Math.min(path.estimatedHours, 30) / 45) * WEIGHTS.duration
       : 0.2 * WEIGHTS.duration;
 
     const score =
@@ -179,7 +165,7 @@ export function recommendPaths(
 
 export function recommendCourses(
   courses: CourseMetadata[],
-  signals: RecommendationSignals = {}
+  signals: RecommendationSignals = {},
 ): CourseMetadata[] {
   const {
     courseProgress = {},
@@ -197,12 +183,12 @@ export function recommendCourses(
     }
     const progress = courseProgress[course.slug] || 0;
     const progressRatio = Math.min(progress / totalLessons, 1);
-    const challengeStatus = course.challenge
-      ? challengeStatuses[course.challenge]
-      : undefined;
+    const challengeStatus = course.challenge ? challengeStatuses[course.challenge] : undefined;
     const challengeComplete =
       !course.challenge || ["completed", "claimed"].includes(challengeStatus || "open");
-    const hasPendingChallenge = Boolean(course.challenge && !challengeComplete && progress >= totalLessons);
+    const hasPendingChallenge = Boolean(
+      course.challenge && !challengeComplete && progress >= totalLessons,
+    );
     const isCompleted = progress >= totalLessons && challengeComplete;
 
     if (isCompleted) {
@@ -217,10 +203,7 @@ export function recommendCourses(
     const freshStartBonus = progressRatio === 0 ? WEIGHTS.freshStart : 0;
     const featuredBonus = course.isFeatured ? WEIGHTS.featured : 0;
     const languageBonus = matchLanguage(course.language, preferredLanguages);
-    const difficultyBonus = difficultyAffinity(
-      course.difficulty,
-      preferredDifficulties
-    );
+    const difficultyBonus = difficultyAffinity(course.difficulty, preferredDifficulties);
 
     const score =
       inProgressBonus +
@@ -244,7 +227,7 @@ export function recommendCourses(
 
 export function recommendChallenges(
   challenges: ChallengeMetadata[],
-  signals: RecommendationSignals = {}
+  signals: RecommendationSignals = {},
 ): ChallengeMetadata[] {
   const {
     challengeStatuses = {},

@@ -11,10 +11,12 @@ Blueshift 团队的 [Dean](https://x.com/deanmlittle) 发布了首个支持创�
 此实现使用 `w = 8` 来平衡 Solana 的限制：交易大小限制和计算单元限制。
 
 Winternitz 参数 `w` 在签名大小和计算需求之间创造了一个基本的权衡：
+
 - 较高的 w 值意味着较小的签名，但需要更多计算，因为验证每个签名组件需要更多的哈希操作。
 - 较低的 w 值意味着较大的签名，但需要较少计算，因为验证每个签名组件需要较少的哈希操作。
 
 Solana 施加了两个关键限制，这些限制决定了参数的选择：
+
 - 交易大小限制（1024 字节）：使用 `w = 8`，完整实现会生成正好 1024 字节的签名，使用 256 位哈希（32 字节 × 32 个组件）。这会占用整个交易空间，无法留出交易开销和额外数据的空间。
 - 计算单元限制：切换到 `w = 16` 会将签名大小减半，但在验证时会超出 Solana 的计算单元（CU）限制，因为每个签名组件需要显著更多的哈希操作。
 
@@ -63,6 +65,7 @@ assert_eq!(recovered_pubkey, pubkey);
 <ArticleSection name="Implementation" id="implementation" level="h2" />
 
 要在您的Pinocchio程序中实现Winternitz签名验证，您需要：
+
 1. `solana-winternitz` crate：提供核心的Winternitz签名功能
 2. 使用量子安全地址派生进行PDA创建和验证
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### 签名大小优化
 
 该实现使用截断方法以适应Solana的交易限制：
+
 - 完整签名（`WinternitzSignature`）：1024字节（32字节 × 32个组件）。
 - 截断签名（`WinternitzCommitmentSignature`）：896字节（32字节 × 28个组件）。
 - 可用空间：剩余128字节用于交易开销
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Create the quantum-secure PDA
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recover the public key from signature and message
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verify PDA ownership
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Execute the protected operation
         self.execute_protected_operation(accounts)
     }

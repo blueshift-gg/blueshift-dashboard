@@ -1,8 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { BRAND_COLOURS } from "@blueshift-gg/ui-components";
-import { anticipate } from "motion";
+import { motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+
+const ASCII_BACKGROUND_ROWS = Array.from(
+  { length: 50 },
+  (_, rowNumber) => `ascii-row-${rowNumber + 1}`,
+);
 
 interface AsciiAnimationProps {
   textPath: string;
@@ -19,22 +23,23 @@ const AsciiAnimation = ({ textPath, color }: AsciiAnimationProps) => {
       .then((text) => {
         setText(text);
       });
-  }, []);
+  }, [textPath]);
 
   return (
     <motion.div
       style={{ color: BRAND_COLOURS[color] }}
-      className="flex justify-center items-center absolute inset-0 w-full mask-[linear-gradient(60deg,transparent_10%,black_40%,black_60%,transparent_100%)] overflow-hidden"
+      className="absolute inset-0 flex w-full items-center justify-center overflow-hidden mask-[linear-gradient(60deg,transparent_10%,black_40%,black_60%,transparent_100%)]"
     >
       <pre
         ref={preRef}
-        className="absolute left-0 md:-left-1/5 xl:left-[25px] text-[8px] tracking-wider text-current"
-        dangerouslySetInnerHTML={{ __html: text || "" }}
-      />
+        className="absolute left-0 text-[8px] tracking-wider text-current md:-left-1/5 xl:left-[25px]"
+      >
+        {text}
+      </pre>
 
-      <div className="flex flex-col max-w-[700px] break-all opacity-20 absolute left-0 text-current text-[8px] tracking-wider">
-        {Array.from({ length: 50 }).map((_, index) => (
-          <span key={index}>{`.`.repeat(500)}</span>
+      <div className="absolute left-0 flex max-w-[700px] flex-col text-[8px] tracking-wider break-all text-current opacity-20">
+        {ASCII_BACKGROUND_ROWS.map((rowKey) => (
+          <span key={rowKey}>{".".repeat(500)}</span>
         ))}
       </div>
     </motion.div>

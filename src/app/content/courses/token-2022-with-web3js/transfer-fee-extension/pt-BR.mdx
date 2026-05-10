@@ -13,19 +13,14 @@ Para inicializar a extensão `TransferFee` em uma conta `Mint` vamos precisar da
 Aqui está como criar uma mint com a extensão Transfer Fee:
 
 ```ts
+import { Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import {
-    createInitializeMintInstruction,
-    createInitializeTransferFeeConfigInstruction,
-    getMintLen,
-    ExtensionType,
-    TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 
 const mint = Keypair.generate();
 
@@ -37,47 +32,54 @@ const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
 // Criar a conta com o tamanho e owner corretos
 const createAccountInstruction = SystemProgram.createAccount({
-    fromPubkey: keypair.publicKey,
-    newAccountPubkey: mint.publicKey,
-    space: mintLen,
-    lamports,
-    programId: TOKEN_2022_PROGRAM_ID,
+  fromPubkey: keypair.publicKey,
+  newAccountPubkey: mint.publicKey,
+  space: mintLen,
+  lamports,
+  programId: TOKEN_2022_PROGRAM_ID,
 });
 
 // Inicializar a extensão Transfer Fee
 const initializeTransferFeeConfig = createInitializeTransferFeeConfigInstruction(
-    mint.publicKey,
-    keypair.publicKey,
-    keypair.publicKey,
-    500,
-    BigInt(1e6),
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  keypair.publicKey,
+  keypair.publicKey,
+  500,
+  BigInt(1e6),
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Inicializar a própria mint
 const initializeMintInstruction = createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    keypair.publicKey,
-    null,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  6,
+  keypair.publicKey,
+  null,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 // Combinar todas as instruções na ordem correta
 const transaction = new Transaction().add(
-    createAccountInstruction,
-    initializeTransferFeeConfig,
-    initializeMintInstruction,
+  createAccountInstruction,
+  initializeTransferFeeConfig,
+  initializeMintInstruction,
 );
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair, mint]);
 
-console.log(`Mint criada! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Mint criada! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
-<ArticleSection name="Transferindo Tokens com a Taxa" id="transferring-tokens-with-the-fee" level="h2" />
+<ArticleSection
+  name="Transferindo Tokens com a Taxa"
+  id="transferring-tokens-with-the-fee"
+  level="h2"
+/>
 
 Para transferir tokens de uma `Mint` que tem a extensão `TransferFee` temos dois caminhos:
+
 - Podemos usar a instrução normal `transferChecked()` e, fazendo isso, o cálculo da taxa é tratado automaticamente
 - Podemos usar a instrução `transferCheckedWithFee()` e fornecer manualmente a `taxa` que vamos pagar naquela transferência. Isso é muito útil se queremos ter certeza de não sermos "rugados" se a autoridade mudar a taxa e criar uma taxa anormalmente alta; é como definir o slippage para uma transferência.
 
@@ -87,22 +89,24 @@ Aqui está como criar uma transferência usando a instrução `transferCheckedWi
 
 ```ts
 createTransferCheckedWithFeeInstruction(
-    sourceTokenAccount,
-    mint.publicKey, 
-    destinationTokenAccount, 
-    keypair.publicKey, 
-    BigInt(100e6), // valor da transferência
-    6, // decimais
-    BigInt(1e6), // taxa paga pela transferência
-    undefined,
-    TOKEN_2022_PROGRAM_ID,
-)
+  sourceTokenAccount,
+  mint.publicKey,
+  destinationTokenAccount,
+  keypair.publicKey,
+  BigInt(100e6), // valor da transferência
+  6, // decimais
+  BigInt(1e6), // taxa paga pela transferência
+  undefined,
+  TOKEN_2022_PROGRAM_ID,
+);
 
 const transaction = new Transaction().add(transferInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Tokens transferidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens transferidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="Recolhendo a Taxa" id="harvesting-the-fee" level="h2" />
@@ -114,15 +118,15 @@ Podemos fazer isso definindo um filtro e obtendo todas as contas que pertencem �
 ```ts
 // Recuperar todas as Contas Token para a Conta Mint
 const allAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
-    commitment: "confirmed",
-    filters: [
-        {
-            memcmp: {
-                offset: 0,
-                bytes: mint.publicKey.toString(), // Endereço da Conta Mint
-            },
-        },
-    ],
+  commitment: "confirmed",
+  filters: [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: mint.publicKey.toString(), // Endereço da Conta Mint
+      },
+    },
+  ],
 });
 ```
 
@@ -133,19 +137,15 @@ E obter uma lista de todas as contas `Token` que têm uma taxa dentro delas faze
 const accountsToWithdrawFrom: PublicKey[] = [];
 
 for (const accountInfo of allAccounts) {
-    const account = unpackAccount(
-        accountInfo.pubkey,
-        accountInfo.account,
-        TOKEN_2022_PROGRAM_ID,
-    );
+  const account = unpackAccount(accountInfo.pubkey, accountInfo.account, TOKEN_2022_PROGRAM_ID);
 
-    // Extrair dados de taxa de transferência de cada conta
-    const transferFeeAmount = getTransferFeeAmount(account);
+  // Extrair dados de taxa de transferência de cada conta
+  const transferFeeAmount = getTransferFeeAmount(account);
 
-    // Verificar se há taxas disponíveis para saque
-    if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
-        accountsToWithdrawFrom.push(accountInfo.pubkey);
-    }
+  // Verificar se há taxas disponíveis para saque
+  if (transferFeeAmount !== null && transferFeeAmount.withheldAmount > 0) {
+    accountsToWithdrawFrom.push(accountInfo.pubkey);
+  }
 }
 ```
 
@@ -153,19 +153,21 @@ Depois disso, podemos usar a instrução `withdrawWithheldTokensFromAccounts` co
 
 ```ts
 const harvestInstructions = createWithdrawWithheldTokensFromAccountsInstruction(
-    mint.publicKey,
-    sourceTokenAccount,
-    keypair.publicKey,
-    [],
-    accountsToWithdrawFrom,
-    TOKEN_2022_PROGRAM_ID,
+  mint.publicKey,
+  sourceTokenAccount,
+  keypair.publicKey,
+  [],
+  accountsToWithdrawFrom,
+  TOKEN_2022_PROGRAM_ID,
 );
 
 const transaction = new Transaction().add(harvestInstructions);
 
 const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
 
-console.log(`Tokens retidos recolhidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+console.log(
+  `Tokens retidos recolhidos! Veja sua TX aqui: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+);
 ```
 
 <ArticleSection name="Atualizando a Taxa" id="updating-the-fee" level="h2" />
@@ -182,7 +184,7 @@ pub struct TransferFeeConfig {
     pub older_transfer_fee: TransferFee,
     pub newer_transfer_fee: TransferFee,
 }
- 
+
 pub struct TransferFee {
     pub epoch: u64,
     pub maximum_fee: u64,

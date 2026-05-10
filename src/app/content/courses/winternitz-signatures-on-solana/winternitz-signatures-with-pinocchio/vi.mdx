@@ -11,10 +11,12 @@ Triển khai này đặc biệt có giá trị để cung cấp bảo mật khá
 Triển khai này sử dụng `w = 8` để cân bằng các ràng buộc của Solana: giới hạn kích thước giao dịch và hạn chế đơn vị tính toán.
 
 Tham số Winternitz `w` tạo ra một sự đánh đổi cơ bản giữa kích thước chữ ký và yêu cầu tính toán:
+
 - Các giá trị w cao hơn có nghĩa là chữ ký nhỏ hơn nhưng yêu cầu tính toán nhiều hơn vì xác minh đòi hỏi nhiều phép băm hơn cho mỗi thành phần chữ ký
 - Các giá trị w thấp hơn có nghĩa là chữ ký lớn hơn nhưng yêu cầu tính toán ít hơn vì xác minh đòi hỏi ít phép băm hơn cho mỗi thành phần chữ ký
 
 Solana áp đặt hai ràng buộc quan trọng định hình việc lựa chọn tham số:
+
 - Ràng buộc kích thước giao dịch (1024 byte): Với `w = 8`, một triển khai đầy đủ tạo ra chính xác chữ ký 1024 byte sử dụng băm 256 bit (32 byte × 32 thành phần). Điều này tiêu thụ toàn bộ không gian giao dịch, không để lại chỗ cho chi phí giao dịch và dữ liệu bổ sung.
 - Ràng buộc đơn vị tính toán: Chuyển sang `w = 16` sẽ giảm một nửa kích thước chữ ký nhưng sẽ vượt quá giới hạn đơn vị tính toán (CU) của Solana trong quá trình xác minh, vì mỗi thành phần chữ ký sẽ yêu cầu nhiều phép băm hơn đáng kể.
 
@@ -63,6 +65,7 @@ Việc xác minh tái tạo khóa công khai từ chữ ký và thông điệp, 
 <ArticleSection name="Triển khai" id="implementation" level="h2" />
 
 Để triển khai xác minh chữ ký Winternitz trong chương trình Pinocchio của bạn, bạn cần:
+
 1. Crate `solana-winternitz`: Cung cấp chức năng chữ ký Winternitz
 2. Tạo và xác minh PDA bằng cách sử dụng phương pháp tạo địa chỉ an toàn với lượng tử
 
@@ -75,6 +78,7 @@ cargo add solana-winternitz
 ### Tối ưu kích thước chữ ký
 
 Triển khai sử dụng phương pháp cắt ngắn để phù hợp với các ràng buộc giao dịch của Solana:
+
 - Chữ ký đầy đủ (`WinternitzSignature`): 1024 byte (32 byte × 32 thành phần).
 - Chữ ký cắt ngắn (`WinternitzCommitmentSignature`): 896 byte (32 byte × 28 thành phần).
 - Không gian còn lại: 128 byte cho chi phí giao dịch
@@ -110,7 +114,7 @@ impl CreateWinternitzPDA {
     pub fn create_pda(&self, accounts: &CreatePDAAccounts) -> ProgramResult {
         let seeds = [Seed::from(&self.hash), Seed::from(&self.bump)];
         let signers = [Signer::from(&seeds)];
-        
+
         // Create the quantum-secure PDA
         CreateAccount {
             from: accounts.payer,
@@ -150,7 +154,7 @@ impl VerifyWinternitzSignature {
         // Recover the public key from signature and message
         let recovered_pubkey = self.signature.recover_pubkey(message);
         let hash = recovered_pubkey.merklize();
-        
+
         // Verify PDA ownership
         let expected_pda = solana_nostd_sha256::hashv(&[
             hash.as_ref(),
@@ -158,11 +162,11 @@ impl VerifyWinternitzSignature {
             crate::ID.as_ref(),
             b"ProgramDerivedAddress",
         ]);
-        
+
         if expected_pda.ne(accounts.pda.key()) {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        
+
         // Execute the protected operation
         self.execute_protected_operation(accounts)
     }

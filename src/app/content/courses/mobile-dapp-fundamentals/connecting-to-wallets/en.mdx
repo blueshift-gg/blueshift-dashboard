@@ -17,10 +17,7 @@ In this lesson, you'll build the wallet connection logic. By the end, you'll hav
 Import `transact` from the web3.js wrapper package (not the base protocol package):
 
 ```typescript
-import { 
-  transact, 
-  Web3MobileWallet 
-} from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
+import { transact, Web3MobileWallet } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
 ```
 
 The basic pattern:
@@ -29,7 +26,7 @@ The basic pattern:
 const result = await transact(async (wallet: Web3MobileWallet) => {
   // wallet is your interface to the wallet app
   // You can call authorize, signTransactions, etc.
-  
+
   // Whatever you return becomes the result of transact()
   return someValue;
 });
@@ -38,6 +35,7 @@ const result = await transact(async (wallet: Web3MobileWallet) => {
 ```
 
 When `transact()` is called:
+
 1. Your app generates association credentials
 2. A URI intent launches the wallet app
 3. The wallet comes to the foreground
@@ -52,28 +50,28 @@ The wallet app is visible during step 4. Users see your app's identity and can a
 Before you can sign anything, you must authorize. This tells the wallet "I'm this app, and I want access to the user's accounts."
 
 ```typescript
-import { transact, Web3MobileWallet } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { PublicKey } from '@solana/web3.js';
-import { toByteArray } from 'react-native-quick-base64';
+import { transact, Web3MobileWallet } from "@solana-mobile/mobile-wallet-adapter-protocol-web3js";
+import { PublicKey } from "@solana/web3.js";
+import { toByteArray } from "react-native-quick-base64";
 
 const APP_IDENTITY = {
-  name: 'My Solana dApp',
-  uri: 'https://mydapp.com',
-  icon: 'favicon.ico',
+  name: "My Solana dApp",
+  uri: "https://mydapp.com",
+  icon: "favicon.ico",
 };
 
 async function connectWallet(): Promise<PublicKey> {
   return await transact(async (wallet: Web3MobileWallet) => {
     const authResult = await wallet.authorize({
       identity: APP_IDENTITY,
-      chain: 'solana:devnet',
+      chain: "solana:devnet",
     });
-    
+
     // authResult.accounts contains the authorized accounts
     // addresses are base64-encoded
     const firstAccount = authResult.accounts[0];
     const publicKey = new PublicKey(toByteArray(firstAccount.address));
-    
+
     return publicKey;
   });
 }
@@ -90,11 +88,11 @@ type AuthorizationResult = {
 };
 
 type Account = {
-  address: string;           // base64-encoded public key
-  display_address?: string;  // base58-encoded (human-readable)
-  label?: string;            // User's name for this account
-  chains: string[];          // Supported chains
-  features: string[];        // Supported features
+  address: string; // base64-encoded public key
+  display_address?: string; // base58-encoded (human-readable)
+  label?: string; // User's name for this account
+  chains: string[]; // Supported chains
+  features: string[]; // Supported features
 };
 ```
 
@@ -127,43 +125,43 @@ On first connect, you get an `auth_token`:
 ```typescript
 const authResult = await wallet.authorize({
   identity: APP_IDENTITY,
-  chain: 'solana:devnet',
+  chain: "solana:devnet",
 });
 
 // Save this token
-await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
+await AsyncStorage.setItem("mwa_auth_token", authResult.auth_token);
 ```
 
 On subsequent connects, include the token:
 
 ```typescript
 async function connectWithCachedToken(): Promise<PublicKey | null> {
-  const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
-  
+  const cachedToken = await AsyncStorage.getItem("mwa_auth_token");
+
   return await transact(async (wallet) => {
     try {
       const authResult = await wallet.authorize({
         identity: APP_IDENTITY,
-        chain: 'solana:devnet',
+        chain: "solana:devnet",
         auth_token: cachedToken ?? undefined,
       });
-      
+
       // Save the potentially updated token
-      await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
-      
+      await AsyncStorage.setItem("mwa_auth_token", authResult.auth_token);
+
       return new PublicKey(toByteArray(authResult.accounts[0].address));
     } catch (error: any) {
       if (error.code === -32000 && cachedToken) {
         // Token expired or invalid, clear it and try fresh
-        await AsyncStorage.removeItem('mwa_auth_token');
-        
+        await AsyncStorage.removeItem("mwa_auth_token");
+
         // Request fresh authorization
         const freshResult = await wallet.authorize({
           identity: APP_IDENTITY,
-          chain: 'solana:devnet',
+          chain: "solana:devnet",
         });
-        
-        await AsyncStorage.setItem('mwa_auth_token', freshResult.auth_token);
+
+        await AsyncStorage.setItem("mwa_auth_token", freshResult.auth_token);
         return new PublicKey(toByteArray(freshResult.accounts[0].address));
       }
       throw error;
@@ -183,15 +181,16 @@ Wallets differ in what they support. Before assuming a feature works, query the 
 ```typescript
 await transact(async (wallet) => {
   const capabilities = await wallet.getCapabilities();
-  
-  console.log('Max transactions per request:', capabilities.max_transactions_per_request);
-  console.log('Max messages per request:', capabilities.max_messages_per_request);
-  console.log('Supported transaction versions:', capabilities.supported_transaction_versions);
-  console.log('Optional features:', capabilities.features);
+
+  console.log("Max transactions per request:", capabilities.max_transactions_per_request);
+  console.log("Max messages per request:", capabilities.max_messages_per_request);
+  console.log("Supported transaction versions:", capabilities.supported_transaction_versions);
+  console.log("Optional features:", capabilities.features);
 });
 ```
 
 The response tells you:
+
 - **max_transactions_per_request**: How many transactions can be signed at once
 - **max_messages_per_request**: How many messages can be signed at once
 - **supported_transaction_versions**: `['legacy', 0]` or similar
@@ -205,15 +204,15 @@ To "disconnect" a wallet, invalidating any cached auth tokens, use `deauthorize`
 
 ```typescript
 async function disconnect(): Promise<void> {
-  const authToken = await AsyncStorage.getItem('mwa_auth_token');
-  
+  const authToken = await AsyncStorage.getItem("mwa_auth_token");
+
   if (!authToken) return;
-  
+
   await transact(async (wallet) => {
     await wallet.deauthorize({ auth_token: authToken });
   });
-  
-  await AsyncStorage.removeItem('mwa_auth_token');
+
+  await AsyncStorage.removeItem("mwa_auth_token");
 }
 ```
 
@@ -228,14 +227,14 @@ Some wallets support multiple accounts. The `authorize` response may contain sev
 ```typescript
 const authResult = await wallet.authorize({
   identity: APP_IDENTITY,
-  chain: 'solana:devnet',
+  chain: "solana:devnet",
 });
 
 // Could be multiple accounts
 authResult.accounts.forEach((account, index) => {
   console.log(`Account ${index}:`, account.display_address);
-  console.log(`  Label: ${account.label ?? 'No label'}`);
-  console.log(`  Chains: ${account.chains.join(', ')}`);
+  console.log(`  Label: ${account.label ?? "No label"}`);
+  console.log(`  Chains: ${account.chains.join(", ")}`);
 });
 ```
 
@@ -286,23 +285,23 @@ export function ConnectButton({ onConnect, onError }: ConnectButtonProps) {
   const handleConnect = useCallback(async () => {
     if (connecting) return;
     setConnecting(true);
-    
+
     try {
       const cachedToken = await AsyncStorage.getItem('mwa_auth_token');
-      
+
       await transact(async (wallet: Web3MobileWallet) => {
         const authResult = await wallet.authorize({
           identity: APP_IDENTITY,
           chain: 'solana:devnet',
           auth_token: cachedToken ?? undefined,
         });
-        
+
         await AsyncStorage.setItem('mwa_auth_token', authResult.auth_token);
-        
+
         const publicKey = new PublicKey(
           toByteArray(authResult.accounts[0].address)
         );
-        
+
         onConnect(publicKey, authResult.auth_token);
       });
     } catch (error: any) {
@@ -353,6 +352,7 @@ const styles = StyleSheet.create({
 ```
 
 Key details:
+
 - **Loading state**: Prevents double-taps while connecting
 - **Cached token**: Attempts silent re-auth first
 - **Error handling**: Distinguishes user cancellation from real errors
@@ -366,6 +366,7 @@ The MWA protocol specifies timeouts:
 - **Request timeout**: 10 seconds for individual RPC requests within a session
 
 If the wallet doesn't respond in time, you get a timeout error. This usually means:
+
 - The wallet app isn't installed
 - The wallet crashed during startup
 - The device is under heavy load
@@ -375,14 +376,14 @@ Handle timeouts gracefully:
 ```typescript
 try {
   await transact(async (wallet) => {
-    await wallet.authorize({ identity: APP_IDENTITY, chain: 'solana:devnet' });
+    await wallet.authorize({ identity: APP_IDENTITY, chain: "solana:devnet" });
   });
 } catch (error: any) {
-  if (error.message?.includes('timeout')) {
+  if (error.message?.includes("timeout")) {
     Alert.alert(
-      'Connection Timeout',
-      'The wallet took too long to respond. Make sure you have a Solana wallet installed.',
-      [{ text: 'OK' }]
+      "Connection Timeout",
+      "The wallet took too long to respond. Make sure you have a Solana wallet installed.",
+      [{ text: "OK" }],
     );
   }
 }

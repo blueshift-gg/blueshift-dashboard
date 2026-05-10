@@ -31,6 +31,7 @@ Allerdings kann das Schreiben dieser Prüfungen für jede Anweisung repetitiv we
 Für unsere `helper.rs` Datei haben wir zwei grundlegende Rust-Konzepte genutzt: **Gemeinsame Schnittstellen** und **Traits**.
 
 Wir haben diesen Ansatz anstelle einer makrobasierten Lösung (wie bei Anchor) aus mehreren wichtigen Gründen gewählt:
+
 - Traits und Schnittstellen bieten klaren, expliziten Code, dem Leser folgen können, ohne Makros mental "erweitern" zu müssen
 - Der Compiler kann Trait-Implementierungen überprüfen, was eine bessere Fehlererkennung, Typinferenz, automatische Vervollständigung und Refactoring-Tools ermöglicht
 - Traits ermöglichen generische Implementierungen, die ohne Codeduplizierung wiederverwendet werden können, während prozedurale Makros Code für jede Verwendung duplizieren
@@ -242,6 +243,7 @@ Vielleicht ist dir aufgefallen, dass wir für das Legacy SPL Token Program nur e
 Für Token2022 funktioniert dieser einfache Ansatz nicht. Die Größe des `Mint` kann wachsen und potenziell die Größe des `TokenAccount` überschreiten, wenn Token-Erweiterungen direkt zu den `Mint`Daten hinzugefügt werden. Das bedeutet, dass wir uns nicht ausschließlich auf die Größe verlassen können, um zwischen Kontotypen zu unterscheiden.
 
 Für Token2022 können wir auf zwei Arten zwischen einem `Mint` und einem `TokenAccount` unterscheiden:
+
 - **Nach Größe**: Ähnlich wie beim Legacy Token Program (wenn Konten Standardgrößen haben)
 - **Nach Diskriminator**: Ein spezielles Byte an Position 165 (ein Byte größer als das Legacy TokenAccount, um Konflikte zu vermeiden)
 
@@ -488,76 +490,76 @@ Vielleicht bemerkst du etwas Interessantes in unserer `close`Implementierung: Wi
 
 Ein Reinitialisierungsangriff tritt auf, wenn ein Angreifer versucht, ein geschlossenes Konto wiederzuverwenden, indem er es mit schädlichen Daten reinitialisiert. Indem wir das erste Byte auf 255 setzen und das Konto auf nahezu Nullgröße verkleinern, machen wir es unmöglich, dass das Konto in Zukunft mit einem gültigen Kontotyp verwechselt werden kann. Dies ist ein gängiges Sicherheitsmuster in Solana-Programmen.
 
-  ```rust
-  pub struct ProgramAccount;
+```rust
+pub struct ProgramAccount;
 
-  impl AccountCheck for ProgramAccount {
-      fn check(account: &AccountInfo) -> Result<(), ProgramError> {
-          if !account.is_owned_by(&crate::ID) {
-              return Err(PinocchioError::InvalidOwner.into());
-          }
+impl AccountCheck for ProgramAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_owned_by(&crate::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
 
-          if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
-              return Err(PinocchioError::InvalidAccountData.into());
-          }
+        if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait ProgramAccountInit {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult;
-  }
+pub trait ProgramAccountInit {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult;
+}
 
-  impl ProgramAccountInit for ProgramAccount {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult {
-          // Get required lamports for rent
-          let lamports = Rent::get()?.minimum_balance(space);
+impl ProgramAccountInit for ProgramAccount {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(space);
 
-          // Create signer with seeds slice
-          let signer = [Signer::from(seeds)];
+        // Create signer with seeds slice
+        let signer = [Signer::from(seeds)];
 
-          // Create the account
-          CreateAccount {
-              from: payer,
-              to: account,
-              lamports,
-              space: space as u64,
-              owner: &crate::ID,
-          }
-          .invoke_signed(&signer)?;
+        // Create the account
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: space as u64,
+            owner: &crate::ID,
+        }
+        .invoke_signed(&signer)?;
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait AccountClose {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
-  }
+pub trait AccountClose {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
+}
 
-  impl AccountClose for ProgramAccount {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
-          {
-              let mut data = account.try_borrow_mut_data()?;
-              data[0] = 0xff;
-          }
+impl AccountClose for ProgramAccount {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
+        {
+            let mut data = account.try_borrow_mut_data()?;
+            data[0] = 0xff;
+        }
 
-          *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
-          account.realloc(1, true)?;
-          account.close()
-      }
-  }
-  ```
+        *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
+        account.realloc(1, true)?;
+        account.close()
+    }
+}
+```
 
 ### Optimierung des Zugriffs auf Kontodaten
 
@@ -628,6 +630,7 @@ impl AccountExample {
 ```
 
 Diese Implementierung bietet drei Methoden für den Zugriff auf Kontodaten:
+
 1. `from_account_info`: Eine sichere Methode, die vollständige Validierung und Borrow-Checking durchführt
 2. `from_account_info_unchecked`: Eine unsichere Methode, die Borrow-Checking überspringt, aber trotzdem Kontoeigenschaften validiert
 3. `from_bytes`: Eine unsichere Methode für direkten Bytezugriff, die intern von den anderen Methoden verwendet wird
@@ -698,6 +701,7 @@ pub fn set_seeds_unchecked(account_info: &AccountInfo, seed: u64) -> Result<(), 
 ```
 
 Diese Implementierung bietet:
+
 1. Eine Konstante `SEED_OFFSET` zur Verfolgung der Position der Seed-Daten
 2. Eine Validierungsfunktion `check_program_id_and_discriminator`
 3. Sichere und unsichere Versionen von Gettern und Settern

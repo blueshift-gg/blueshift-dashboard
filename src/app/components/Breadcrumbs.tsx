@@ -1,12 +1,12 @@
 "use client";
 
-import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import { Icon } from "@blueshift-gg/ui-components";
 import { PaginationButton } from "@blueshift-gg/ui-components/Pagination";
 import classNames from "classnames";
-import { usePathContent } from "@/app/hooks/usePathContent";
 import { useTranslations } from "next-intl";
 import type { PathNavigationStep } from "@/app/contexts/PathContentContext";
+import { usePathContent } from "@/app/hooks/usePathContent";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
 
 interface BreadcrumbItem {
   label: string;
@@ -44,16 +44,14 @@ function buildPathHref(step: PathNavigationStep, pathSlug: string) {
 function deriveBreadcrumbItems(
   items: BreadcrumbItem[],
   pathSlug: string | null,
-  t: ReturnType<typeof useTranslations>
+  t: ReturnType<typeof useTranslations>,
 ) {
   if (!pathSlug) return items;
 
   const scopedTexts = scopedLabels.map((key) => t(key));
   const sanitizedItems = items.filter(
     (item) =>
-      !scopedTexts.includes(item.label) &&
-      item.href !== "/courses" &&
-      item.href !== "/challenges"
+      !scopedTexts.includes(item.label) && item.href !== "/courses" && item.href !== "/challenges",
   );
 
   let pathTitle = pathSlug;
@@ -77,7 +75,7 @@ function deriveBreadcrumbItems(
       item.label === pathsLabel ||
       item.href === "/paths" ||
       item.href?.startsWith(`/paths/${pathSlug}`) ||
-      item.label === pathTitle
+      item.label === pathTitle,
   );
 
   return alreadyScoped ? sanitizedItems : [...pathItems, ...sanitizedItems];
@@ -86,7 +84,7 @@ function deriveBreadcrumbItems(
 function derivePathPagination(
   pathname: string,
   pathSlug: string | null,
-  pathSteps: PathNavigationStep[] | undefined
+  pathSteps: PathNavigationStep[] | undefined,
 ) {
   if (!pathSlug || !pathSteps?.length) return null;
 
@@ -119,9 +117,7 @@ function derivePathPagination(
   const previousStep = pathSteps[currentIndex - 1];
   const nextStep = pathSteps[currentIndex + 1];
 
-  const previousHref = previousStep
-    ? buildPathHref(previousStep, pathSlug)
-    : null;
+  const previousHref = previousStep ? buildPathHref(previousStep, pathSlug) : null;
   const nextHref = nextStep ? buildPathHref(nextStep, pathSlug) : null;
 
   if (!previousHref && !nextHref) return null;
@@ -149,11 +145,7 @@ export default function Breadcrumbs({
   const resolvedPathSlug = pathSlug ?? null;
 
   const breadcrumbItems = deriveBreadcrumbItems(items, resolvedPathSlug, t);
-  const pathPagination = derivePathPagination(
-    pathname,
-    resolvedPathSlug,
-    pathSteps
-  );
+  const pathPagination = derivePathPagination(pathname, resolvedPathSlug, pathSteps);
 
   const shouldShowPagination = hasPagination || Boolean(pathPagination);
   const resolvedCanPaginateBack = hasPagination
@@ -173,10 +165,7 @@ export default function Breadcrumbs({
       return;
     }
 
-    const target =
-      direction === "previous"
-        ? pathPagination.previousHref
-        : pathPagination.nextHref;
+    const target = direction === "previous" ? pathPagination.previousHref : pathPagination.nextHref;
 
     if (target) {
       router.push(target);
@@ -187,44 +176,30 @@ export default function Breadcrumbs({
     <nav
       className={classNames(
         "max-w-app relative mx-auto w-full px-5 py-3 flex items-center gap-2 text-sm font-medium text-shade-tertiary",
-        className
+        className,
       )}
     >
-      <div className="absolute inset-0 -z-1 w-dvw left-1/2 -translate-x-1/2 border-b border-border-light bg-card-solid"></div>
-      <div className="relative z-10 flex items-center gap-2 flex-1 min-w-0">
+      <div className="absolute inset-0 left-1/2 -z-1 w-dvw -translate-x-1/2 border-b border-border-light bg-card-solid"></div>
+      <div className="relative z-10 flex min-w-0 flex-1 items-center gap-2">
         {breadcrumbItems.map((item, index) => {
           const isLast = index === breadcrumbItems.length - 1;
           return (
-            <div
-              key={item.href ?? item.label}
-              className="flex items-center gap-2"
-            >
+            <div key={item.href ?? item.label} className="flex items-center gap-2">
               {item.href && !isLast ? (
-                <Link
-                  href={item.href}
-                  className="hover:text-shade-primary transition-colors"
-                >
+                <Link href={item.href} className="transition-colors hover:text-shade-primary">
                   {item.label}
                 </Link>
               ) : (
-                <span className={classNames(isLast && "text-shade-primary")}>
-                  {item.label}
-                </span>
+                <span className={classNames(isLast && "text-shade-primary")}>{item.label}</span>
               )}
-              {!isLast && (
-                <Icon
-                  name="Chevron"
-                  size={12}
-                  className="-rotate-90 text-shade-mute"
-                />
-              )}
+              {!isLast && <Icon name="Chevron" size={12} className="-rotate-90 text-shade-mute" />}
             </div>
           );
         })}
         {children}
       </div>
       {shouldShowPagination && (
-        <div className="relative z-10 ml-auto flex items-center gap-x-2 flex-shrink-0 [&_button:not(:disabled)]:cursor-pointer">
+        <div className="relative z-10 ml-auto flex flex-shrink-0 items-center gap-x-2 [&_button:not(:disabled)]:cursor-pointer">
           <PaginationButton
             label="Previous"
             onClick={() => handlePaginate("previous")}

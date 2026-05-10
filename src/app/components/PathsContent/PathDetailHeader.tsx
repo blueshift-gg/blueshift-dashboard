@@ -1,15 +1,9 @@
 "use client";
 
-import {
-  getPathCompletedSteps,
-  PathStep,
-  PathStepWithMetadata,
-} from "@/app/utils/path";
-import { usePersistentStore } from "@/stores/store";
-import { useTranslations } from "next-intl";
-import { Icon } from "@blueshift-gg/ui-components";
-
 import classNames from "classnames";
+import { useTranslations } from "next-intl";
+import { getPathCompletedSteps, type PathStepWithMetadata } from "@/app/utils/path";
+import { usePersistentStore } from "@/stores/store";
 import ProgressCircle from "../ProgressCircle/ProgressCircle";
 
 interface PathDetailHeaderProps {
@@ -26,43 +20,35 @@ export default function PathDetailHeader({
   const t = useTranslations();
   const { courseProgress, challengeStatuses } = usePersistentStore();
 
-  const completedSteps = getPathCompletedSteps(
-    steps,
-    courseProgress,
-    challengeStatuses
-  );
+  const completedSteps = getPathCompletedSteps(steps, courseProgress, challengeStatuses);
   const totalSteps = steps.length;
 
   return (
     <div
       className={classNames(
         "max-w-app mx-auto w-full relative",
-        showBorder && "border-x border-border-light"
+        showBorder && "border-x border-border-light",
       )}
     >
-      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-dvw h-px bg-border-light"></div>
-      <div className="flex flex-col gap-y-3 px-6 py-8 md:py-12 md:px-12">
+      <div className="absolute bottom-0 left-1/2 h-px w-dvw -translate-x-1/2 bg-border-light"></div>
+      <div className="flex flex-col gap-y-3 px-6 py-8 md:px-12 md:py-12">
         {/* Progress indicator */}
         <div className="flex items-center gap-x-2 text-shade-tertiary">
           <ProgressCircle
-            percentFilled={
-              totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0
-            }
+            percentFilled={totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0}
           />
-          <span className="text-sm font-mono uppercase">
+          <span className="font-mono text-sm uppercase">
             {completedSteps}/{totalSteps} {t("paths.completed")}
           </span>
         </div>
 
         {/* Title */}
-        <h1 className="text-[28px] leading-[120%] sm:text-3xl font-semibold text-shade-primary">
+        <h1 className="text-[28px] leading-[120%] font-semibold text-shade-primary sm:text-3xl">
           {t(`paths.${slug}.title`)}
         </h1>
 
         {/* Description */}
-        <p className="text-shade-secondary text-base max-w-2xl">
-          {t(`paths.${slug}.description`)}
-        </p>
+        <p className="max-w-2xl text-base text-shade-secondary">{t(`paths.${slug}.description`)}</p>
       </div>
     </div>
   );

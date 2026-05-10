@@ -31,6 +31,7 @@ if !account.is_owned_by(&pinocchio_system::ID) {
 对于我们的 `helper.rs` 文件，我们利用了 Rust 的两个基本概念：**通用接口** 和 **特性**。
 
 我们选择这种方法而不是基于宏的解决方案（如 Anchor 的）有几个关键原因：
+
 - 特性和接口提供了清晰、明确的代码，读者无需在脑海中“展开”宏即可理解
 - 编译器可以验证特性实现，从而实现更好的错误检测、类型推断、自动补全和重构工具
 - 特性允许通用实现，可以重复使用而无需代码重复，而过程宏会为每次使用生成重复代码
@@ -242,6 +243,7 @@ impl AccountInit for TokenAccount {
 对于 Token2022，这种简单的方法不起作用。当直接将 token extensions 添加到 `Mint` 数据时，其大小可能会增长并可能超过 `TokenAccount` 的大小。这意味着我们不能仅依赖大小来区分账户类型。
 
 对于 Token2022，我们可以通过两种方式区分 `Mint` 和 `TokenAccount`：
+
 - **通过大小**：类似于传统的 Token Program（当账户具有标准大小时）
 - **通过 discriminator**：一个位于位置 165 的特殊字节（比传统的 TokenAccount 大一个字节，以避免冲突）
 
@@ -488,76 +490,76 @@ impl AssociatedTokenAccountInit for AssociatedTokenAccount {
 
 重新初始化攻击是指攻击者试图通过重新初始化已关闭的账户并注入恶意数据来重新利用该账户。通过将第一个字节设置为 255 并将账户缩小到几乎为零的大小，我们可以确保该账户在未来不会被误认为任何有效的账户类型。这是 Solana 程序中常见的安全模式。
 
-  ```rust
-  pub struct ProgramAccount;
+```rust
+pub struct ProgramAccount;
 
-  impl AccountCheck for ProgramAccount {
-      fn check(account: &AccountInfo) -> Result<(), ProgramError> {
-          if !account.is_owned_by(&crate::ID) {
-              return Err(PinocchioError::InvalidOwner.into());
-          }
+impl AccountCheck for ProgramAccount {
+    fn check(account: &AccountInfo) -> Result<(), ProgramError> {
+        if !account.is_owned_by(&crate::ID) {
+            return Err(PinocchioError::InvalidOwner.into());
+        }
 
-          if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
-              return Err(PinocchioError::InvalidAccountData.into());
-          }
+        if account.data_len().ne(&crate::state::ProgramAccount::LEN) {
+            return Err(PinocchioError::InvalidAccountData.into());
+        }
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait ProgramAccountInit {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult;
-  }
+pub trait ProgramAccountInit {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult;
+}
 
-  impl ProgramAccountInit for ProgramAccount {
-      fn init<'a, T: Sized>(
-          payer: &AccountInfo,
-          account: &AccountInfo,
-          seeds: &[Seed<'a>],
-          space: usize,
-      ) -> ProgramResult {
-          // Get required lamports for rent
-          let lamports = Rent::get()?.minimum_balance(space);
+impl ProgramAccountInit for ProgramAccount {
+    fn init<'a, T: Sized>(
+        payer: &AccountInfo,
+        account: &AccountInfo,
+        seeds: &[Seed<'a>],
+        space: usize,
+    ) -> ProgramResult {
+        // Get required lamports for rent
+        let lamports = Rent::get()?.minimum_balance(space);
 
-          // Create signer with seeds slice
-          let signer = [Signer::from(seeds)];
+        // Create signer with seeds slice
+        let signer = [Signer::from(seeds)];
 
-          // Create the account
-          CreateAccount {
-              from: payer,
-              to: account,
-              lamports,
-              space: space as u64,
-              owner: &crate::ID,
-          }
-          .invoke_signed(&signer)?;
+        // Create the account
+        CreateAccount {
+            from: payer,
+            to: account,
+            lamports,
+            space: space as u64,
+            owner: &crate::ID,
+        }
+        .invoke_signed(&signer)?;
 
-          Ok(())
-      }
-  }
+        Ok(())
+    }
+}
 
-  pub trait AccountClose {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
-  }
+pub trait AccountClose {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult;
+}
 
-  impl AccountClose for ProgramAccount {
-      fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
-          {
-              let mut data = account.try_borrow_mut_data()?;
-              data[0] = 0xff;
-          }
+impl AccountClose for ProgramAccount {
+    fn close(account: &AccountInfo, destination: &AccountInfo) -> ProgramResult {
+        {
+            let mut data = account.try_borrow_mut_data()?;
+            data[0] = 0xff;
+        }
 
-          *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
-          account.realloc(1, true)?;
-          account.close()
-      }
-  }
-  ```
+        *destination.try_borrow_mut_lamports()? += *account.try_borrow_lamports()?;
+        account.realloc(1, true)?;
+        account.close()
+    }
+}
+```
 
 ### 优化账户数据访问
 
@@ -628,6 +630,7 @@ impl AccountExample {
 ```
 
 此实现提供了三种访问账户数据的方法：
+
 1. `from_account_info`：一种安全的方法，执行完整的验证和借用检查
 2. `from_account_info_unchecked`：一种不安全的方法，跳过借用检查但仍验证账户属性
 3. `from_bytes`：一种用于直接字节访问的不安全方法，由其他方法内部使用
@@ -698,6 +701,7 @@ pub fn set_seeds_unchecked(account_info: &AccountInfo, seed: u64) -> Result<(), 
 ```
 
 此实现提供：
+
 1. 一个常量 `SEED_OFFSET` 用于跟踪 seed 数据的位置
 2. 一个验证函数 `check_program_id_and_discriminator`
 3. 安全和不安全版本的 getter 和 setter
