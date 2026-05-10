@@ -51,7 +51,7 @@ export default function Modal({
           className={classNames(
             "fixed inset-0 h-screen w-full z-30 items-center justify-center flex flex-col",
             className,
-            isOpen && "no-scroll",
+            "no-scroll",
           )}
         >
           {showBackdrop && (
