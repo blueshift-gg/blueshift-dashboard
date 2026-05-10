@@ -68,13 +68,19 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           COMPILED_DIR: .compiled-mdx
-          CONTENT_DIR: src/app/content
           CONTENT_PREFIX: compiled-mdx
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
         run: |
           CONTENT_PREFIX=${CONTENT_PREFIX:-compiled-mdx}
           S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
+          MANIFEST_NAME=".upload-manifest.json"
+          MANIFEST_FILE="$COMPILED_DIR/$MANIFEST_NAME"
+          REMOTE_MANIFEST_FILE="$RUNNER_TEMP/$MANIFEST_NAME"
+
+          node ./scripts/mdx-upload-manifest.mjs write "$COMPILED_DIR" "$MANIFEST_FILE"
+
+          aws s3 cp "$S3_PREFIX/$MANIFEST_NAME" "$REMOTE_MANIFEST_FILE" \
+            --endpoint-url "$ENDPOINT" \
+            --no-progress >/dev/null 2>&1 || printf '{}\n' > "$REMOTE_MANIFEST_FILE"
 
           # Size-only sync first (handles new files, size changes, and deletions efficiently)
           aws s3 sync "$COMPILED_DIR/" "$S3_PREFIX" \
@@ -84,28 +90,24 @@ jobs:
             --delete \
             --content-type "application/json"
 
-          # Then force-upload any files changed in this push (catches same-size content edits)
-          if ! git cat-file -e "$BASE_SHA"^{commit} >/dev/null 2>&1; then
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          fi
+          # Manifest comparison catches same-size content edits without re-uploading every PR-touched file.
+          changed_files=$(node ./scripts/mdx-upload-manifest.mjs diff "$MANIFEST_FILE" "$REMOTE_MANIFEST_FILE")
 
-          if git rev-parse --verify "$BASE_SHA" >/dev/null 2>&1; then
-            changed_files=$(git diff --name-only --diff-filter=ACM "$BASE_SHA...$HEAD_SHA" "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
+          if [ -n "$changed_files" ]; then
+            printf '%s\n' "$changed_files" | while IFS= read -r json_path; do
+              [ -n "$json_path" ] || continue
 
-            for file in $changed_files; do
-              # Convert .mdx path to .json path in compiled directory
-              relative_path="${file#$CONTENT_DIR/}"
-              json_path="${relative_path%.mdx}.json"
-              compiled_file="$COMPILED_DIR/$json_path"
-
-              if [ -f "$compiled_file" ]; then
-                aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
-                  --endpoint-url "$ENDPOINT" \
-                  --no-progress \
-                  --content-type "application/json"
-              fi
+              aws s3 cp "$COMPILED_DIR/$json_path" "$S3_PREFIX/$json_path" \
+                --endpoint-url "$ENDPOINT" \
+                --no-progress \
+                --content-type "application/json"
             done
           fi
+
+          aws s3 cp "$MANIFEST_FILE" "$S3_PREFIX/$MANIFEST_NAME" \
+            --endpoint-url "$ENDPOINT" \
+            --no-progress \
+            --content-type "application/json"
 
       - name: Build
         env:

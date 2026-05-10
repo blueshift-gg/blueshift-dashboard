@@ -129,12 +129,14 @@ jobs:
           ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           PROD_CONTENT_PREFIX: compiled-mdx
         run: |
+          MANIFEST_NAME=".upload-manifest.json"
           SOURCE_PREFIX="s3://${{ secrets.R2_BUCKET }}/$PROD_CONTENT_PREFIX"
           DEST_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
           aws s3 sync "$SOURCE_PREFIX" "$DEST_PREFIX" \
             --endpoint-url "$ENDPOINT" \
             --quiet \
             --size-only \
+            --exclude "$MANIFEST_NAME" \
             --delete
 
       - name: Upload Compiled MDX to R2 (preview)
@@ -143,13 +145,23 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           COMPILED_DIR: .compiled-mdx
-          CONTENT_DIR: src/app/content
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PROD_CONTENT_PREFIX: compiled-mdx
         run: |
           S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$CONTENT_PREFIX"
+          PROD_S3_PREFIX="s3://${{ secrets.R2_BUCKET }}/$PROD_CONTENT_PREFIX"
+          MANIFEST_NAME=".upload-manifest.json"
+          MANIFEST_FILE="$COMPILED_DIR/$MANIFEST_NAME"
+          REMOTE_MANIFEST_FILE="$RUNNER_TEMP/$MANIFEST_NAME"
+
+          node ./scripts/mdx-upload-manifest.mjs write "$COMPILED_DIR" "$MANIFEST_FILE"
+
+          if ! aws s3 cp "$S3_PREFIX/$MANIFEST_NAME" "$REMOTE_MANIFEST_FILE" \
+            --endpoint-url "$ENDPOINT" \
+            --no-progress >/dev/null 2>&1; then
+            aws s3 cp "$PROD_S3_PREFIX/$MANIFEST_NAME" "$REMOTE_MANIFEST_FILE" \
+              --endpoint-url "$ENDPOINT" \
+              --no-progress >/dev/null 2>&1 || printf '{}\n' > "$REMOTE_MANIFEST_FILE"
+          fi
 
           aws s3 sync "$COMPILED_DIR/" "$S3_PREFIX" \
             --endpoint-url "$ENDPOINT" \
@@ -158,25 +170,24 @@ jobs:
             --delete \
             --content-type "application/json"
 
-          # Force-upload any files changed in this PR (catches same-size content edits)
-          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            git fetch --no-tags --depth=1 "https://github.com/${BASE_REPO}.git" "$BASE_SHA"
-          fi
+          # Compare against the existing preview manifest first; fall back to production only to bootstrap a new preview.
+          changed_files=$(node ./scripts/mdx-upload-manifest.mjs diff "$MANIFEST_FILE" "$REMOTE_MANIFEST_FILE")
 
-          changed_files=$(git diff --name-only --diff-filter=ACM "$BASE_SHA...$HEAD_SHA" "$CONTENT_DIR/" | grep '\.mdx$' || echo "")
+          if [ -n "$changed_files" ]; then
+            printf '%s\n' "$changed_files" | while IFS= read -r json_path; do
+              [ -n "$json_path" ] || continue
 
-          for file in $changed_files; do
-            relative_path="${file#$CONTENT_DIR/}"
-            json_path="${relative_path%.mdx}.json"
-            compiled_file="$COMPILED_DIR/$json_path"
-
-            if [ -f "$compiled_file" ]; then
-              aws s3 cp "$compiled_file" "$S3_PREFIX/$json_path" \
+              aws s3 cp "$COMPILED_DIR/$json_path" "$S3_PREFIX/$json_path" \
                 --endpoint-url "$ENDPOINT" \
                 --quiet \
                 --content-type "application/json"
-            fi
-          done
+            done
+          fi
+
+          aws s3 cp "$MANIFEST_FILE" "$S3_PREFIX/$MANIFEST_NAME" \
+            --endpoint-url "$ENDPOINT" \
+            --quiet \
+            --content-type "application/json"
 
       - name: Build
         env:
