@@ -1,19 +1,28 @@
-"use client";
+import type { Metadata } from "next";
+import { getTranslations } from "next-intl/server";
+import NFTGeneratorScene from "./NFTGeneratorScene";
 
-import NFTScene from "@/app/components/NFTViewer/NFTScene";
+interface NFTGeneratorPageProps {
+  params: Promise<{
+    locale: string;
+  }>;
+}
+
+export async function generateMetadata({ params }: NFTGeneratorPageProps): Promise<Metadata> {
+  const { locale } = await params;
+  const t = await getTranslations({ locale, namespace: "metadata" });
+  const title = `${t("title")} | NFT Generator`;
+
+  return {
+    title,
+    description: "Internal NFT generation tool.",
+    robots: {
+      index: false,
+      follow: false,
+    },
+  };
+}
 
 export default function NFTGeneratorPage() {
-  return (
-    <div className="h-screen w-screen">
-      <NFTScene
-        challengeName="Hello World"
-        challengeLanguage="Typescript"
-        challengeDifficulty={1}
-        isAnimationComplete={true}
-        useAnimation={false}
-        showControls={true}
-        showBackground={true}
-      />
-    </div>
-  );
+  return <NFTGeneratorScene />;
 }

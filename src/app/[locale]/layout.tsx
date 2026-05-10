@@ -7,67 +7,13 @@ import "@/app/globals.css";
 import { Icon } from "@blueshift-gg/ui-components";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { Fira_Code, Funnel_Display } from "next/font/google";
-import { headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
 import { Toaster as SonnerToaster } from "sonner";
-import Footer from "@/app/components/Footer/Footer";
-import Header from "@/app/components/Header/Header";
 import GlobalModals from "@/app/components/Modals/GlobalModals";
 import { URLS } from "@/constants/urls";
 import { AuthProvider } from "@/contexts/AuthContext";
 import TanstackProvider from "@/contexts/TanstackProvider";
 import WalletProvider from "@/contexts/WalletProvider";
-import { getLocalizedAlternates } from "@/i18n/metadata";
-
-/**
- * Normalizes absolute URL or relative path to a pathname starting with "/".
- *
- * Examples:
- *   - "https://blueshift.gg/en/courses/intro?tab=overview" becomes "/en/courses/intro"
- *   - "en/courses/intro" becomes "/en/courses/intro"
- *  - "/en/courses/intro" stays "/en/courses/intro"
- * @param rawPath The raw path to normalize
- * @returns Normalized pathname
- */
-function normalizePathname(rawPath: string): string {
-  try {
-    return new URL(rawPath, URLS.BLUESHIFT_EDUCATION).pathname;
-  } catch {
-    return rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  }
-}
-
-// Layout code works with a locale-free pathname so there is one stable shape
-// internally: "/" or "/courses/foo", never "/en/...".
-function stripLocalePrefix(pathname: string): string {
-  for (const locale of routing.locales) {
-    const localePrefix = `/${locale}`;
-
-    if (pathname === localePrefix) {
-      return "/";
-    }
-
-    if (pathname.startsWith(`${localePrefix}/`)) {
-      return pathname.slice(localePrefix.length);
-    }
-  }
-
-  return pathname;
-}
-
-// Server layouts do not get the locale-free pathname from next-intl directly,
-// so this is the one place where we derive it from the current request.
-function getCurrentPath(requestHeaders: Headers): string {
-  const nextUrl = requestHeaders.get("next-url");
-  const rewrittenPath = requestHeaders.get("x-nextjs-rewritten-path");
-  const rawPath = rewrittenPath ?? nextUrl;
-
-  if (!rawPath) {
-    return "/";
-  }
-
-  return stripLocalePrefix(normalizePathname(rawPath));
-}
 
 const FiraCode = Fira_Code({
   subsets: ["latin"],
@@ -120,30 +66,12 @@ interface RootLayoutProps {
 export async function generateMetadata({ params }: RootLayoutProps) {
   const { locale } = await params;
   const t = await getTranslations({ locale, namespace: "metadata" });
-  const requestHeaders = await headers();
-  const pathname = getCurrentPath(requestHeaders);
-  const alternates = getLocalizedAlternates(pathname, locale);
 
   return {
     metadataBase: new URL(URLS.BLUESHIFT_EDUCATION),
     title: t("title"),
     description: t("description"),
     keywords: t("keywords"),
-    alternates,
-    openGraph: {
-      title: t("title"),
-      type: "website",
-      description: t("description"),
-      url: alternates.canonical,
-      siteName: t("title"),
-      images: [
-        {
-          url: `${URLS.BLUESHIFT_EDUCATION}/graphics/meta-image.png`,
-          width: 1200,
-          height: 628,
-        },
-      ],
-    },
   };
 }
 
@@ -160,35 +88,6 @@ export default async function RootLayout({
     notFound();
   }
 
-  const requestHeaders = await headers();
-  const pathname = getCurrentPath(requestHeaders);
-  const isHomepage = pathname === "/";
-
-  // Organization schema for homepage
-  const organizationSchema = isHomepage
-    ? {
-        "@context": "https://schema.org",
-        "@type": "EducationalOrganization",
-        name: "Blueshift",
-        url: URLS.BLUESHIFT_EDUCATION,
-        logo: `${URLS.BLUESHIFT_EDUCATION}/branding/logo.svg`,
-        description:
-          "Learn Solana development with hands-on courses, challenges, and on-chain verification. Free education from blockchain basics to advanced program development.",
-        foundingDate: "2023",
-        knowsAbout: [
-          "Solana",
-          "Blockchain Development",
-          "Anchor Framework",
-          "Rust Programming",
-          "Web3",
-          "Smart Contracts",
-          "DeFi",
-          "NFTs",
-        ],
-        teaches: "Solana Blockchain Development",
-      }
-    : null;
-
   return (
     <html lang={locale}>
       <body
@@ -198,19 +97,8 @@ export default async function RootLayout({
           <TanstackProvider>
             <WalletProvider>
               <AuthProvider>
-                {organizationSchema && (
-                  <script type="application/ld+json">{JSON.stringify(organizationSchema)}</script>
-                )}
                 <GlobalModals />
-                {!pathname.includes("/nft-generator") ? (
-                  <>
-                    <Header />
-                    <div className="min-h-[calc(100dvh-74px)] pt-[74px]">{children}</div>
-                    <Footer />
-                  </>
-                ) : (
-                  children
-                )}
+                {children}
                 <Toaster
                   position="top-center"
                   toastOptions={{
