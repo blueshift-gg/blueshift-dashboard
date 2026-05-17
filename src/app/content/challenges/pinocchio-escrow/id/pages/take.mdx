@@ -2,9 +2,12 @@
 
 Instruksi `take` menyelesaikan pertukaran:
 
-- Menutup catatan escrow, mengirimkan lamport sewanya kembali ke pembuat.
-- Memindahkan Token A dari vault ke pengambil, kemudian menutup vault.
+- Memindahkan Token A dari vault ke pengambil.
+- Menutup akun token vault yang sekarang kosong.
 - Memindahkan jumlah Token B yang disepakati dari pengambil ke pembuat.
+- Menutup akun program escrow.
+
+Dengan `p-token` yang sudah live di mainnet, ini adalah tempat yang tepat untuk menggunakan alur batch saat ini. Kita bisa memasukkan kedua transfer token dan penutupan vault ke dalam satu `Batch`.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@ Berikut adalah akun yang dibutuhkan oleh konteks:
 - taker_ata_b: akun token terkait yang dimiliki oleh pengambil untuk mint_b. Harus dapat diubah
 - maker_ata_b: akun token terkait yang dimiliki oleh pembuat untuk mint_b. Harus dapat diubah
 - system_program: program sistem. Harus dapat dieksekusi
-- token_program: program token. Harus dapat dieksekusi
+- token_program: program token. Dengan `p-token` yang sudah live di mainnet, akun yang sama ini juga mendukung batching transfer token dalam instruksi ini. Harus dapat dieksekusi
 
 Dan kita melakukan pemeriksaan berikut padanya:
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 Sekarang kita bisa fokus pada logika itu sendiri yang akan:
 
-- Mentransfer token dari `taker_ata_b` ke `maker_ata_b`.
 - Mentransfer token dari `vault` ke `taker_ata_a`.
-- Menutup `vault` yang sekarang kosong dan menarik biaya sewa dari akun tersebut.
+- Menutup akun token `vault` yang sekarang kosong dan menarik biaya sewanya.
+- Mentransfer token dari `taker_ata_b` ke `maker_ata_b`.
+- Menutup akun program `escrow` setelah pertukaran selesai.
+
+Perubahan utamanya adalah kita bisa membatch kedua transfer token dan penutupan vault, lalu memanggil program token hanya sekali. PDA escrow tetap perlu menandatangani karena ia mengotorisasi transfer keluar dari vault dan juga `CloseAccount` pada akun token tersebut. Karena itu batch diakhiri dengan `batch.invoke_signed(&[signer.clone()])?;`. Setelah itu kita tetap menutup `escrow` dengan `ProgramAccount::close`, karena itu adalah akun yang dimiliki program:
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 

@@ -2,9 +2,12 @@
 
 L'instruction `take` finalise l'échange :
 
-- Ferme le compte d'escrow en retournant la rente au créateur.
-- Transfére le Jeton A du coffre au preneur puis ferme le vault.
+- Transfére le Jeton A du vault au preneur.
+- Ferme le compte de jetons du vault désormais vide.
 - Transférer le montant convenu du Jeton B du preneur au créateur.
+- Ferme le compte de programme `escrow`.
+
+Avec `p-token` déjà live sur mainnet, c'est un bon endroit pour utiliser le flux de batch actuel. Nous pouvons mettre les deux transferts de jetons et la fermeture du vault dans un seul `Batch`.
 
 <ArticleSection name="Comptes Nécessaires" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@ Voici les comptes dont le contexte a besoin :
 - taker_ata_b: le compte de jetons associé appartenant au preneur pour le mint_b. Doit être mutable
 - maker_ata_b: le compte de jetons associé appartenant au créateur pour le mint_b. Doit être mutable
 - system_program: le programme système. Doit être executable
-- token_program: le programme de jeton. Doit être executable
+- token_program: le programme de jeton. Avec `p-token` live sur mainnet, ce même compte prend aussi en charge le batching des transferts de jetons dans cette instruction. Doit être executable
 
 Et nous effectuons ces vérifications :
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 Nous pouvons maintenant nous concentrer sur la logique elle-même :
 
-- Transférer les jetons de `taker_ata_b` vers `maker_ata_b`.
 - Transférer les jetons du `vault` vers `taker_ata_a`.
-- Fermer le `vault` désormais vide et récupérer la rente du compte.
+- Fermer le compte de jetons `vault` désormais vide et récupérer sa rente.
+- Transférer les jetons de `taker_ata_b` vers `maker_ata_b`.
+- Fermer le compte de programme `escrow` une fois l'échange terminé.
+
+Le principal changement est que nous pouvons batcher les deux transferts de jetons et la fermeture du vault, puis n'invoquer le programme de jetons qu'une seule fois. La PDA de l'escrow doit toujours signer, car elle autorise à la fois le transfert sortant depuis le vault et le `CloseAccount` sur ce compte de jetons. Le batch se termine donc par `batch.invoke_signed(&[signer.clone()])?;`. Ensuite, nous fermons toujours `escrow` avec `ProgramAccount::close`, car il s'agit d'un compte détenu par le programme :
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 

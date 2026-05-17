@@ -2,9 +2,12 @@
 
 The `take` instruction finalizes the swap:
 
-- Close the escrow record, sending its rent lamports back to the maker.
-- Move Token A from the vault to the taker, then close the vault.
+- Move Token A from the vault to the taker.
+- Close the now empty vault token account.
 - Move the agreed amount of Token B from the taker to the maker.
+- Close the escrow program account.
+
+With `p-token` live on mainnet, this is a good place to use the current batch flow. We can queue both token transfers and the vault close into a single `Batch`.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@ Below are the accounts the context needs:
 - taker_ata_b: the associated token account owned by the taker for mint_b. Must be mutable
 - maker_ata_b: the associated token account owned by the maker for mint_b. Must be mutable
 - system_program: the system program. Must be executable
-- token_program: the token program. Must be executable
+- token_program: the token program. With `p-token` live on mainnet, this same account also supports batching the token transfers in this instruction. Must be executable
 
 And we perform these checks on it:
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 We can now focus on the logic itself that will:
 
-- Transfer the tokens from the `taker_ata_b` to the `maker_ata_b`.
 - Transfer the tokens from the `vault` to the `taker_ata_a`.
-- Close the now empty `vault` and withdraw the rent from the account.
+- Close the now empty `vault` token account and withdraw its rent.
+- Transfer the tokens from the `taker_ata_b` to the `maker_ata_b`.
+- Close the `escrow` program account once the swap is complete.
+
+The main change is that we can batch both token transfers and the vault close, then invoke the token program once. The escrow PDA still needs to sign because it authorizes both the transfer out of the vault and the `CloseAccount` on that token account, so the batch ends with `batch.invoke_signed(&[signer.clone()])?;`. After that, we still close the `escrow` with `ProgramAccount::close` because it is a program-owned account:
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 

@@ -2,9 +2,12 @@
 
 Die `take` Anweisung schließt den Tausch ab:
 
-- Schließt den Escrow-Datensatz und sendet die Rent-Lamports zurück an den Ersteller.
-- Überträgt Token A vom Tresor zum Nehmer und schließt dann den Tresor.
+- Überträgt Token A vom Tresor zum Nehmer.
+- Schließt das nun leere Vault-Token-Konto.
 - Überträgt die vereinbarte Menge von Token B vom Nehmer zum Ersteller.
+- Schließt das Escrow-Programmkonto.
+
+Da `p-token` bereits auf Mainnet live ist, ist dies ein guter Ort, um den aktuellen Batch-Flow zu verwenden. Wir können beide Token-Transfers und das Schließen des Vaults in einen einzigen `Batch` packen.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@ Nachfolgend sind die Konten aufgeführt, die der Kontext benötigt:
 - taker_ata_b: das zugehörige Token-Konto im Besitz des Nehmers für mint_b. Muss veränderbar sein
 - maker_ata_b: das zugehörige Token-Konto im Besitz des Erstellers für mint_b. Muss veränderbar sein
 - system_program: das System-Programm. Muss ausführbar sein
-- token_program: das Token-Programm. Muss ausführbar sein
+- token_program: das Token-Programm. Da `p-token` auf Mainnet live ist, unterstützt dieses Konto auch das Batching der Token-Transfers in dieser Anweisung. Muss ausführbar sein
 
 Und wir führen folgende Prüfungen daran durch:
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 Wir können uns jetzt auf die eigentliche Logik konzentrieren, die:
 
-- Die Token vom `taker_ata_b` zum `maker_ata_b` überträgt.
 - Die Token vom `vault` zum `taker_ata_a` überträgt.
-- Das nun leere `vault` schließt und die Miete vom Konto abhebt.
+- Das nun leere `vault` Token-Konto schließt und die Miete vom Konto abhebt.
+- Die Token vom `taker_ata_b` zum `maker_ata_b` überträgt.
+- Das `escrow` Programmkonto schließt, sobald der Tausch abgeschlossen ist.
+
+Die wichtigste Änderung ist, dass wir beide Token-Transfers und das Schließen des Vaults batchen und das Token-Programm nur einmal aufrufen können. Die Escrow-PDA muss weiterhin signieren, weil sie sowohl den Transfer aus dem Vault als auch `CloseAccount` auf diesem Token-Konto autorisiert. Daher endet der Batch mit `batch.invoke_signed(&[signer.clone()])?;`. Danach schließen wir das `escrow` weiterhin mit `ProgramAccount::close`, weil es ein programmgesteuertes Konto ist:
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 
