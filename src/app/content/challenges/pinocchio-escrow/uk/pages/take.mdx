@@ -2,9 +2,12 @@
 
 Інструкція `take` завершує обмін:
 
-- Закриває запис ескроу, повертаючи його лампорти оренди творцю.
-- Переміщує Токен A зі сховища до отримувача, потім закриває сховище.
+- Переміщує Токен A зі сховища до отримувача.
+- Закриває тепер порожній токен-акаунт сховища.
 - Переміщує узгоджену кількість Токену B від отримувача до творця.
+- Закриває програмний акаунт `escrow`.
+
+Оскільки `p-token` уже працює в mainnet, це гарне місце для використання поточного batch-потоку. Ми можемо помістити обидва токен-перекази та закриття сховища в один `Batch`.
 
 <ArticleSection name="Необхідні облікові записи" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@
 - taker_ata_b: пов'язаний обліковий запис токена, що належить отримувачу для mint_b. Має бути змінюваним
 - maker_ata_b: пов'язаний обліковий запис токена, що належить творцю для mint_b. Має бути змінюваним
 - system_program: системна програма. Має бути виконуваною
-- token_program: програма токенів. Має бути виконуваною
+- token_program: програма токенів. Оскільки `p-token` уже працює в mainnet, цей самий акаунт також підтримує batching токен-переказів у цій інструкції. Має бути виконуваною
 
 І ми виконуємо такі перевірки:
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 Тепер ми можемо зосередитися на самій логіці, яка буде:
 
-- Переказувати токени з `taker_ata_b` до `maker_ata_b`.
 - Переказувати токени з `vault` до `taker_ata_a`.
-- Закривати тепер порожній `vault` і виводити орендну плату з рахунку.
+- Закривати тепер порожній токен-акаунт `vault` і виводити його орендну плату.
+- Переказувати токени з `taker_ata_b` до `maker_ata_b`.
+- Закривати програмний акаунт `escrow` після завершення обміну.
+
+Головна зміна полягає в тому, що ми можемо забатчити обидва токен-перекази та закриття сховища, а потім викликати токен-програму лише один раз. PDA escrow все одно має підписати, оскільки вона авторизує як вихідний переказ зі сховища, так і `CloseAccount` для цього токен-акаунта. Тому batch завершується `batch.invoke_signed(&[signer.clone()])?;`. Після цього ми все одно закриваємо `escrow` через `ProgramAccount::close`, оскільки це акаунт, яким володіє програма:
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 

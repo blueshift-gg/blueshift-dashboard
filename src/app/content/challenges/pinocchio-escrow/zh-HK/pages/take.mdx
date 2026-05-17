@@ -2,9 +2,12 @@
 
 `take` 指令完成交換的最後步驟：
 
-- 關閉托管記錄，將其租金 lamports 返回給創建者。
-- 將 Token A 從保管庫移至接受者，然後關閉保管庫。
+- 將 Token A 從保管庫移至接受者。
+- 關閉現在已空的 vault 代幣帳戶。
 - 將商定數量的 Token B 從接受者移至創建者。
+- 關閉 `escrow` 程式帳戶。
+
+由於 `p-token` 已經在主網上線，這裡很適合使用目前的 batch 流程。我們可以把兩次代幣轉移與 vault 的關閉放進同一個 `Batch`。
 
 <ArticleSection name="所需帳戶" id="required-accounts" level="h2" />
 
@@ -20,7 +23,7 @@
 - taker_ata_b：由接受者擁有的 mint_b 的關聯代幣帳戶。必須可變。
 - maker_ata_b：由創建者擁有的 mint_b 的關聯代幣帳戶。必須可變。
 - system_program：系統程序。必須可執行。
-- token_program：代幣程序。必須可執行。
+- token_program：代幣程序。由於 `p-token` 已經在主網上線，這個帳戶也支援在此指令中對代幣轉移進行 batching。必須可執行。
 
 我們對其進行以下檢查：
 
@@ -122,9 +125,12 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 
 現在我們可以專注於邏輯本身，該邏輯將：
 
-- 從`taker_ata_b`轉移代幣到`maker_ata_b`。
 - 從`vault`轉移代幣到`taker_ata_a`。
-- 關閉現在已空的`vault`並提取該帳戶的租金。
+- 關閉現在已空的 `vault` 代幣帳戶並提取其中的租金。
+- 從 `taker_ata_b` 轉移代幣到 `maker_ata_b`。
+- 在交換完成後關閉 `escrow` 程式帳戶。
+
+這裡最重要的變化是，我們可以把兩次代幣轉移與 vault 的關閉放進 batch，然後只呼叫一次代幣程式。Escrow PDA 仍然需要簽名，因為它既要授權從 vault 轉出，也要授權該代幣帳戶上的 `CloseAccount`。因此 batch 會以 `batch.invoke_signed(&[signer.clone()])?;` 結束。之後我們仍然使用 `ProgramAccount::close` 來關閉 `escrow`，因為它是由程式擁有的帳戶：
 
 ```rust
 impl<'a> Take<'a> {
@@ -152,30 +158,34 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    // Transfer from the Vault to the Taker
-    Transfer {
-      from: self.accounts.vault,
-      to: self.accounts.taker_ata_a,
-      authority: self.accounts.escrow,
+    let mut batch = Batch::default();
+
+    Transfer::new(
+      self.accounts.vault,
+      self.accounts.taker_ata_a,
+      self.accounts.escrow,
       amount,
-    }.invoke_signed(&[signer.clone()])?;
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Vault
-    CloseAccount {
-      account: self.accounts.vault,
-      destination: self.accounts.maker,
-      authority: self.accounts.escrow,
-    }.invoke_signed(&[signer.clone()])?;
+    CloseAccount::new(
+      self.accounts.vault,
+      self.accounts.maker,
+      self.accounts.escrow,
+    )
+    .into_batch(&mut batch)?;
 
-    // Transfer from the Taker to the Maker
-    Transfer {
-      from: self.accounts.taker_ata_b,
-      to: self.accounts.maker_ata_b,
-      authority: self.accounts.taker,
-      amount: escrow.receive,
-    }.invoke()?;
+    Transfer::new(
+      self.accounts.taker_ata_b,
+      self.accounts.maker_ata_b,
+      self.accounts.taker,
+      escrow.receive,
+    )
+    .into_batch(&mut batch)?;
 
-    // Close the Escrow
+    batch.invoke_signed(&[signer.clone()])?;
+
+    // Close the Escrow program account
     drop(data);
     ProgramAccount::close(self.accounts.escrow, self.accounts.taker)?;
 
