@@ -1,25 +1,27 @@
-# Обмін
+# Swap
 
-Інструкція `swap` виконує два основних завдання:
+Інструкція `swap` як і раніше виконує дві основні задачі:
 
-- Обчислює кількість `mint_x`, яку ми отримаємо, відправивши певну кількість `mint_y` в amm (і навпаки), включаючи комісію.
-- Переказує токен `from` до сховища та токен `to` на рахунок користувача
+- Обчислює, скільки токена з протилежного боку користувач має отримати з урахуванням комісії.
+- Переміщує токени в пул і з пулу.
 
-> Як зазначалося в розділі інструкції `initialize`; ми ініціалізуємо всі `Associated Token Accounts` поза нашою інструкцією з метою оптимізації.
+Змінюється те, як ми взаємодіємо з token program. Звичайний AMM swap зазвичай робить два CPI до token program, тобто двічі платить базову ціну CPI. З `p-token` ми зберігаємо той самий program ID і той самий клієнтський потік, але можемо загорнути кілька token instructions в одну instruction `batch`.
 
-<ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
+> Один із найкраще прихованих секретів `p-token` це batching. Кілька операцій із токенами можна виконати в одному CPI за допомогою discriminator `255`, і це дуже добре підходить для AMM swap.
 
-Нижче наведено рахунки, необхідні для цього контексту:
+<ArticleSection name="Потрібні Акаунти" id="required-accounts" level="h2" />
 
-- `user`: Користувач, який обмінює токен на ліквідність Amm. Має бути `signer`.
-- `user_x_ata`: Асоційований токен-рахунок користувача для токена X. Це рахунок, який отримуватиме або надсилатиме токен X у пул. Має бути переданий як `mutable`.
-- `user_y_ata`: Асоційований токен-рахунок користувача для токена Y. Це рахунок, який отримуватиме або надсилатиме токен Y у пул. Має бути переданий як `mutable`.
-- `vault_x`: Токен-рахунок, який містить усі токени X, внесені в пул. Має бути переданий як `mutable`.
-- `vault_y`: Токен-рахунок, який містить усі токени Y, внесені в пул. Має бути переданий як `mutable`.
-- `config`: Конфігураційний рахунок для пулу AMM. Зберігає всі відповідні параметри та стан пулу.
-- `token program`: Рахунок програми SPL Token. Це необхідно для виконання операцій з токенами, таких як перекази та емісія. Має бути `executable`.
+Ось акаунти, які потрібні в цьому контексті:
 
-Тут, знову ж таки, я залишу реалізацію вам:
+- `user`: користувач, який робить swap в AMM. Має бути `signer`.
+- `user_x_ata`: associated token account користувача для токена X. Має передаватися як `mutable`.
+- `user_y_ata`: associated token account користувача для токена Y. Має передаватися як `mutable`.
+- `vault_x`: token account, що зберігає токен X пулу. Має передаватися як `mutable`.
+- `vault_y`: token account, що зберігає токен Y пулу. Має передаватися як `mutable`.
+- `config`: акаунт конфігурації AMM. Зберігає стан пулу та параметри.
+- `token_program`: акаунт token program. `p-token` уже працює в mainnet, зберігає той самий program ID SPL Token і той самий клієнтський інтерфейс та надає batch instruction, яку ми хочемо використати для цього swap. Має бути `executable`.
+
+Парсер акаунтів не змінюється:
 
 ```rust
 pub struct SwapAccounts<'a> {
@@ -41,16 +43,16 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 }
 ```
 
-<ArticleSection name="Дані інструкції" id="instruction-data" level="h2" />
+<ArticleSection name="Дані Інструкції" id="instruction-data" level="h2" />
 
-Ось дані інструкції, які нам потрібно передати:
+Дані інструкції також не змінюються:
 
-- `is_x`: Чи виконується цей обмін з токена X на токен Y чи навпаки; потрібно для правильного вирівнювання рахунків. Має бути `[u8]`
-- `amount`: Кількість токенів, яку користувач готовий надіслати в обмін на інший токен у парі. Має бути `[u64]`
-- `min`: Мінімальна кількість токенів, яку користувач готовий отримати в обмін на `amount`. Має бути `[u64]`
-- `expiration`: Термін дії цього ордера. Важливо переконатися, що транзакція має бути виконана за певний проміжок часу. Має бути `[i64]`
+- `is_x`: чи міняє користувач X на Y або Y на X. Має бути `[u8]`.
+- `amount`: сума, яку користувач хоче відправити. Має бути `[u64]`.
+- `min`: мінімальна сума, яку користувач хоче отримати. Має бути `[u64]`.
+- `expiration`: часовий штамп, після якого ордер стає невалідним. Має бути `[i64]`.
 
-Ми будемо обробляти реалізацію для `SwapInstructionData` так само, як і ініціалізацію. Тому я залишу реалізацію вам:
+Можна зберегти ту саму структуру:
 
 ```rust
 pub struct SwapInstructionData {
@@ -69,25 +71,42 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> Переконайтеся, що будь-які суми, такі як `amount` та `min` більші за нуль, і що термін дії ордера ще не минув, використовуючи sysvar `Clock`.
+> Переконайся, що `amount` і `min` більші за нуль, і відхиляй прострочені ордери через sysvar `Clock`.
 
-<ArticleSection name="Логіка інструкції" id="instruction-logic" level="h2" />
+<ArticleSection name="Чому Batch Важливий" id="why-batch-matters" level="h2" />
 
-Ми починаємо з десеріалізації як `instruction_data`, так і `accounts`.
+Кожен CPI має базову вартість 1 000 compute units. Звичайний swap виконує два token transfers:
 
-Потім нам потрібно:
+1. token account користувача -> vault
+2. vault -> token account користувача
 
-- Завантажити рахунок `Config`, щоб отримати всі дані всередині нього. Ми можемо зробити це за допомогою хелпера `Config::load()`.
-- Перевірити, що `AmmState` є дійсним (тобто дорівнює `AmmState::Initialized`).
-- Перевірити деривацію `vault_x` та `vault_y` як Associated Token Accounts.
-- Десеріалізувати всі задіяні токен-рахунки та використати дані всередині них для обчислення суми для обміну, використовуючи крейт `constant-product-curve` та перевіряючи проковзування таким чином:
+Без batching це означає два окремі token CPI. З `p-token` обидва трансфери можна загорнути в один зовнішній token CPI за допомогою batch instruction з discriminator `u8::MAX` (`255`).
+
+Кожна внутрішня instruction всередині batch кодується так:
+
+- `account_count: u8`
+- `data_len: u8`
+- `instruction_data: [u8; data_len]`
+
+Потім token program проходить по payload і послідовно виконує кожну внутрішню instruction. Batch instruction не може містити іншу batch instruction.
+
+<ArticleSection name="Логіка Інструкції" id="instruction-logic" level="h2" />
+
+Ми починаємо з десеріалізації `instruction_data` та `accounts`.
+
+Потім потрібно:
+
+- завантажити акаунт `Config` через `Config::load()`,
+- перевірити, що стан пулу дорівнює `AmmState::Initialized`,
+- перевірити, що `vault_x` і `vault_y` це очікувані associated token accounts,
+- десеріалізувати vault token accounts і порахувати результат swap за допомогою `constant-product-curve`.
+
+Сам розрахунок лишається таким:
 
 ```rust
-// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
-// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -106,40 +125,75 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
-// Check for correct values
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
 ```
 
-- Створіть логіку переказу, перевіряючи значення `is_x` та переказуючи суми `from` до сховищ і суми `to` на токен-рахунки користувача, як показано нижче:
+Важлива зміна стосується етапу transfer. Ми все ще хочемо використовувати token helpers із `pinocchio_token`, але замість того, щоб двічі викликати `Transfer::invoke()`, ми покладемо обидва transfer в одну `Batch` і викличемо token program лише один раз.
+
+Імпорт може виглядати так:
 
 ```rust
-if self.instruction_data.is_x {
-    Transfer {
-        //...
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-} else {
-    Transfer {
-        //...
-
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-}
+use pinocchio_token::{
+    instructions::{Batch, Transfer},
+    state::TokenAccount,
+};
 ```
 
-Ви повинні бути достатньо кваліфікованими, щоб зробити це самостійно, тому я залишу реалізацію вам:
+А сам крок transfer має виглядати так:
+
+```rust
+let mut batch = Batch::default();
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        self.accounts.user_x_ata,
+        self.accounts.vault_x,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_y,
+        self.accounts.user_y_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        self.accounts.user_y_ata,
+        self.accounts.vault_y,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_x,
+        self.accounts.user_x_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+Ключовий момент у тому, що ми все ще використовуємо `Transfer`, просто в batch-формі. `Transfer` реалізує `IntoBatch`, тож нам не потрібно вручну серіалізувати внутрішні instruction. Якщо у твоєму flow не потрібні PDA signer seeds, це може завершуватися простим `batch.invoke()?;` точно як у прикладах `p-token`. У цьому AMM swap нам потрібна PDA `config`, щоб підписати transfer із vault, тому ми використовуємо `batch.invoke_signed(&[signer])?;`.
+
+> Тобто: кілька token instructions, один CPI. Саме тому batch настільки добре підходить для swap, LP deposit та подібних DeFi-потоків.
+
+Тепер тобі потрібно оновити фінальну логіку `process()` так, щоб:
+
+- спочатку виконувалися перевірки та обчислення,
+- обидві інструкції `Transfer` додавалися в batch,
+- а в кінці batch один раз викликалася до token program.
+
+Зовнішня форма instruction не змінюється:
 
 ```rust
 pub struct Swap<'a> {
@@ -154,13 +208,13 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
-        // Return the initialized struct
         Ok(Self {
             accounts,
             instruction_data,
         })
     }
 }
+
 impl<'a> Swap<'a> {
     pub const DISCRIMINATOR: &'a u8 = &3;
 

@@ -1,25 +1,27 @@
 # 交换
 
-`swap` 指令主要执行两个任务：
+`swap` 指令仍然执行同样的两个高层任务：
 
-- 计算通过将一定数量的 `mint_y` 发送到 AMM（或反之）后，能够接收到的 `mint_x` 的数量，包括手续费。
-- 将 `from` 代币转移到金库，并将 `to` 代币转移到用户的代币账户。
+- 计算用户在扣除手续费后应当收到多少另一侧的代币。
+- 将代币转入池子并从池子中转出。
 
-> 如 `initialize` 指令部分所述；为了优化，我们将在指令外部初始化所有 `Associated Token Accounts`。
+变化点在于我们如何与代币程序交互。一个普通的 AMM 交换通常会对代币程序执行两次 CPI，这意味着要支付两次 CPI 基础成本。使用 `p-token` 时，我们仍然保留相同的程序 ID 和客户端调用方式，但可以把多条代币指令封装进一条 `batch` 指令里。
+
+> `p-token` 最值得关注的特性之一就是 batching。使用 discriminator `255`，你可以在一次 CPI 中执行多条代币操作，这对 AMM swap 非常合适。
 
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
 
-以下是此上下文所需的账户：
+此上下文需要以下账户：
 
-- `user`：将代币交换到 AMM 流动性中的用户。必须是 `signer`。
-- `user_x_ata`：用户的代币 X 关联账户。此账户将接收或发送代币 X 到池中。必须作为 `mutable` 传递。
-- `user_y_ata`：用户的代币 Y 关联账户。此账户将接收或发送代币 Y 到池中。必须作为 `mutable` 传递。
-- `vault_x`：持有所有存入池中的代币 X 的代币账户。必须作为 `mutable` 传递。
-- `vault_y`：持有所有存入池中的代币 Y 的代币账户。必须作为 `mutable` 传递。
-- `config`：AMM 池的配置账户。存储所有相关的池参数和状态。
-- `token program`：SPL 代币程序账户。执行代币操作（如转账和铸造）所需。必须是 `executable`。
+- `user`：执行 AMM 交换的用户。必须是 `signer`。
+- `user_x_ata`：用户的 token X 关联代币账户。必须作为 `mutable` 传入。
+- `user_y_ata`：用户的 token Y 关联代币账户。必须作为 `mutable` 传入。
+- `vault_x`：池子持有 token X 的代币账户。必须作为 `mutable` 传入。
+- `vault_y`：池子持有 token Y 的代币账户。必须作为 `mutable` 传入。
+- `config`：AMM 配置账户。保存池子的状态和参数。
+- `token_program`：代币程序账户。`p-token` 已经在主网上线，保留相同的 SPL Token 程序 ID 和客户端接口，并提供我们要在这次 swap 中使用的 batch 指令。必须是 `executable`。
 
-这里，我将再次把实现留给你：
+账户解析逻辑保持不变：
 
 ```rust
 pub struct SwapAccounts<'a> {
@@ -43,14 +45,14 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 
 <ArticleSection name="指令数据" id="instruction-data" level="h2" />
 
-以下是我们需要传递的指令数据：
+指令数据同样保持不变：
 
-- `is_x`：此交换是从代币 X 到代币 Y 或反之进行的；需要正确对齐账户。必须是一个 `[u8]`
-- `amount`：用户愿意用来交换另一种代币的代币数量。必须是一个 `[u64]`
-- `min`：用户愿意在交换 `amount` 时接收的最小代币数量。必须是一个 `[u64]`
-- `expiration`：此订单的过期时间。确保交易必须在一定时间内完成非常重要。必须是一个 `[i64]`
+- `is_x`：表示用户是从 X 换到 Y，还是从 Y 换到 X。必须是 `[u8]`。
+- `amount`：用户愿意发送的数量。必须是 `[u64]`。
+- `min`：用户愿意接收的最小数量。必须是 `[u64]`。
+- `expiration`：订单失效的时间戳。必须是 `[i64]`。
 
-我们将以与初始化相同的方式处理 `SwapInstructionData` 的实现。因此，我将实现部分留给你：
+我们可以保留相同的数据结构：
 
 ```rust
 pub struct SwapInstructionData {
@@ -69,25 +71,42 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> 确保任何数量，例如 `amount` 和 `min` 都大于零，并且使用 `Clock` 系统变量检查订单尚未过期。
+> 请确保 `amount` 和 `min` 都大于零，并使用 `Clock` sysvar 拒绝已经过期的订单。
+
+<ArticleSection name="为什么 Batch 很重要" id="why-batch-matters" level="h2" />
+
+每次 CPI 都有 1,000 compute units 的基础成本。一次普通交换会执行两次代币转账：
+
+1. 用户代币账户 -> vault
+2. vault -> 用户代币账户
+
+不使用 batching 时，这就是两次独立的代币 CPI。使用 `p-token` 时，可以通过 discriminator 为 `u8::MAX`（`255`）的 batch 指令，把这两次转账打包进一次外层代币 CPI。
+
+batch 中的每条内部指令都按如下格式编码：
+
+- `account_count: u8`
+- `data_len: u8`
+- `instruction_data: [u8; data_len]`
+
+代币程序随后会遍历整个 payload，并按顺序执行每条内部指令。batch 指令本身不能再嵌套另一条 batch 指令。
 
 <ArticleSection name="指令逻辑" id="instruction-logic" level="h2" />
 
-我们首先反序列化 `instruction_data` 和 `accounts`。
+我们首先要反序列化 `instruction_data` 和 `accounts`。
 
-然后我们需要：
+然后需要：
 
-- 加载 `Config` 账户以获取其中的所有数据。我们可以使用 `Config::load()` 辅助工具来完成。
-- 验证 `AmmState` 是否有效（例如它是否等于 `AmmState::Initialized`）。
-- 检查 `vault_x` 和 `vault_y` 的派生是否为关联代币账户。
-- 反序列化所有涉及的代币账户，并使用其中的数据通过 `constant-product-curve` crate 计算交换数量，并像这样检查滑点：
+- 使用 `Config::load()` 加载 `Config` 账户，
+- 验证池子的状态为 `AmmState::Initialized`，
+- 验证 `vault_x` 和 `vault_y` 是预期的关联代币账户，
+- 反序列化 vault 的代币账户，并使用 `constant-product-curve` 计算交换结果。
+
+这部分计算仍然如下：
 
 ```rust
-// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
-// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -106,40 +125,75 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
-// Check for correct values
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
 ```
 
-- 创建转账逻辑，检查`is_x`值，并将`from`金额转入金库，将`to`金额转入用户的代币账户，如下所示：
+真正重要的变化在转账步骤。我们仍然想继续使用 `pinocchio_token` 里的代币 helper，但不是再调用两次 `Transfer::invoke()`，而是把两笔转账都加入一个 `Batch`，然后只调用一次代币程序。
+
+导入可以写成这样：
 
 ```rust
-if self.instruction_data.is_x {
-    Transfer {
-        //...
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-} else {
-    Transfer {
-        //...
-
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-}
+use pinocchio_token::{
+    instructions::{Batch, Transfer},
+    state::TokenAccount,
+};
 ```
 
-你应该已经足够熟练，可以独立完成这个任务，所以我将把实现部分留给你：
+转账步骤应该像这样：
+
+```rust
+let mut batch = Batch::default();
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        self.accounts.user_x_ata,
+        self.accounts.vault_x,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_y,
+        self.accounts.user_y_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        self.accounts.user_y_ata,
+        self.accounts.vault_y,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_x,
+        self.accounts.user_x_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+这里最关键的是：我们仍然在使用 `Transfer`，只是换成了 batched 的用法。`Transfer` 实现了 `IntoBatch`，所以不需要再手动序列化内部指令。如果你的流程不需要 PDA signer seeds，那么这里可以像 `p-token` 示例那样直接 `batch.invoke()?;`。而在这个 AMM swap 中，我们需要 `config` 这个 PDA 为 vault 向外转账签名，所以这里应该使用 `batch.invoke_signed(&[signer])?;`。
+
+> 换句话说：多条代币指令，一次 CPI。这正是 batch 特别适合 swap、LP 存款以及类似 DeFi 流程的原因。
+
+现在你应该把最终的 `process()` 逻辑更新为：
+
+- 先完成校验和计算，
+- 再把两条 `Transfer` 指令加入 batch，
+- 最后只调用一次 batch，把它发送给代币程序执行。
+
+外层指令的结构保持不变：
 
 ```rust
 pub struct Swap<'a> {
@@ -154,13 +208,13 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
-        // Return the initialized struct
         Ok(Self {
             accounts,
             instruction_data,
         })
     }
 }
+
 impl<'a> Swap<'a> {
     pub const DISCRIMINATOR: &'a u8 = &3;
 
