@@ -6,6 +6,8 @@ The `deposit` instruction performs three main tasks:
 - Calculate the amount to deposit and check that the amount isn't greater than `max_x` and `max_y` designated by the user.
 - Mint the right amount of `mint_lp` in the user ata.
 
+With `p-token` live on mainnet, we batch the token CPIs for this instruction. Queue the transfers and mint into a single `Batch`, then finish with `batch.invoke_signed(&[signer])?` because the `config` PDA must authorize the LP mint.
+
 > As mentioned in the `initialize` instruction section; we're going to initialize all the `Associated Token Accounts` outside of our instruction for optimization purposes.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@ Below are the accounts required for this context:
 - `user_y_ata`: The user's associated token account for token Y. This is the source account from which the user's token Y will be transferred into the pool. Must be passed as `mutable`.
 - `user_lp_ata`: The user's associated token account for LP tokens. This is the destination account where LP tokens will be minted. Must be passed as `mutable`.
 - `config`: The configuration account for the AMM pool. Stores all relevant pool parameters and state.
-- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. Must be `executable`.
+- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. With `p-token` live on mainnet, this same token program account also supports the batch flow. Must be `executable`.
 
 Here, again, I’ll leave the implementation to you:
 
@@ -135,7 +137,41 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > If it's the first deposit, we can skip the calculation of LP tokens and deposits and just go with the value that the user suggest
 
-- Transfer the amounts from the token accounts of the user to the vaults and mint the appropriate amount of LP tokens to the user token account
+- Transfer the amounts from the token accounts of the user to the vaults and mint the appropriate amount of LP tokens to the user token account. Use a single `Batch` so both transfers and the mint run in one CPI.
+
+This is the part where you wire the batch. We still use the token helpers, just in batched form. `Transfer` and `MintTo` both implement `IntoBatch`, so we don't need to manually serialize anything. Because the LP mint authority is the `config` PDA, we end with `batch.invoke_signed(&[signer])?;`:
+
+```rust
+use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+
+let mut batch = Batch::default();
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
 
 You should be proficient enough to this on your own, so I’ll leave the implementation to you:
 

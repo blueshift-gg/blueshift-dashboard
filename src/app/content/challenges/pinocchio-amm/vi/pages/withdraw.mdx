@@ -6,6 +6,8 @@ Instruction `withdraw` thực hiện hai nhiệm vụ chính:
 - Tính toán số lượng cần rút và kiểm tra rằng số lượng không ít hơn `mint_x` và `mint_y` được người dùng chỉ định.
 - Đốt đúng số lượng `mint_lp` từ ata của người dùng.
 
+Vì `p-token` đã live trên mainnet, chúng ta sẽ batch các CPI token trong instruction này. Bạn đã thấy pattern batch ở `deposit`; ở đây bạn sẽ đưa hai transfer và một burn vào cùng `Batch` rồi kết thúc bằng `batch.invoke_signed(&[signer])?;` vì transfer từ vault cần `config` PDA ký.
+
 > Như đã đề cập trong phần instruction `initialize`; chúng ta sẽ khởi tạo tất cả `Associated Token Accounts` bên ngoài instruction của chúng ta vì mục đích tối ưu hóa.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
@@ -19,7 +21,7 @@ Dưới đây là các tài khoản cần thiết cho context này:
 - `user_x_ata`: Tài khoản token liên kết của người dùng cho token X. Đây là tài khoản đích mà token X của người dùng sẽ được chuyển từ pool. Phải được truyền vào như `mutable`.
 - `user_y_ata`: Tài khoản token liên kết của người dùng cho token Y. Đây là tài khoản đích mà token Y của người dùng sẽ được chuyển từ pool. Phải được truyền vào như `mutable`.
 - `config`: Tài khoản cấu hình cho AMM pool. Lưu trữ tất cả các tham số và trạng thái pool liên quan.
-- `token program`: Tài khoản chương trình SPL Token. Điều này cần thiết để thực hiện các hoạt động token như chuyển khoản và minting. Phải là `executable`.
+- `token program`: Tài khoản chương trình SPL Token. `p-token` đã live trên mainnet và giữ nguyên program ID, nên tài khoản này cũng hỗ trợ batching. Phải là `executable`.
 
 Ở đây, một lần nữa, tôi sẽ để việc triển khai cho bạn:
 
@@ -113,7 +115,7 @@ if !(x <= self.instruction_data.min_x && y <= self.instruction_data.min_y) {
 }
 ```
 
-- Chuyển số lượng từ các vault đến tài khoản token của người dùng và burn số lượng LP token thích hợp từ tài khoản token của người dùng
+- Chuyển số lượng từ các vault đến tài khoản token của người dùng và burn số lượng LP token thích hợp từ tài khoản token của người dùng. Dùng một `Batch` để gộp hai transfer và một burn vào một CPI.
 
 > `authority` của `vault_x` và `vault_y` là tài khoản `config`
 

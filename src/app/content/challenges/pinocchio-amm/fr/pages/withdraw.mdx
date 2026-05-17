@@ -6,6 +6,8 @@ L'instruction `withdraw` effectue trois tâches principales :
 - Calcule le montant à retirer et vérifie qu'il n'est pas inférieur aux valeurs `mint_x` et `mint_y` définies par l'utilisateur.
 - _Burn_ la quantité appropriée de `mint_lp` provenant de l'ATA de l'utilisateur.
 
+Comme `p-token` est déjà en ligne sur mainnet, nous batchons les CPI token pour cette instruction. Tu as deja vu le pattern batch dans `deposit` ; ici, vous ajoutez deux transfers et un burn dans un seul `Batch`, puis vous terminez par `batch.invoke_signed(&[signer])?;` car les transferts depuis le vault nécessitent la signature de la PDA `config`.
+
 > Comme mentionné dans la section relative à l'instruction `initialize`, nous allons initialiser tous les `Associated Token Accounts` en dehors de notre instruction à des fins d'optimisation.
 
 <ArticleSection name="Comptes Nécessaires" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@ Voici les comptes nécessaires pour ce contexte :
 - `user_y_ata`: Le compte de jeton associé de l'utilisateur pour le jeton Y. Il s'agit du compte source à partir duquel le jeton Y de l'utilisateur sera transféré dans la _pool_. Doit être `mutable`.
 - `user_lp_ata`: Le compte de jetons associé de l'utilisateur pour les jetons LP. Il s'agit du compte source à partir duquel les jetons LP seront brûlés. Doit être `mutable`.
 - `config`: Le compte de configuration de la _pool_ de l'AMM. Stocke tous les paramètres pertinents et l'état de la _pool_.
-- `token program`: Le compte du program SPL-Token. Cela est nécessaire pour effectuer des opérations liées aux jetons telles que les transferts et la création. Doit être `executable`.
+- `token program`: Le compte du program SPL-Token. `p-token` est déjà sur mainnet et conserve le même program ID, ce compte supporte donc aussi le batching. Doit être `executable`.
 
 Ici encore, je vous laisse le soin de l'implémenter :
 
@@ -114,7 +116,7 @@ if !(x >= self.instruction_data.min_x && y >= self.instruction_data.min_y) {
 }
 ```
 
-- Transférez les montants des vaults vers les comptes de jetons de l'utilisateur et brûler le montant approprié de jetons LP du compte de jetons de l'utilisateur
+- Transférez les montants des vaults vers les comptes de jetons de l'utilisateur et brûler le montant approprié de jetons LP du compte de jetons de l'utilisateur. Utilisez un seul `Batch` pour regrouper les deux transfers et le burn en un seul CPI.
 
 > L'`authority` de `vault_x` et `vault_y` est le compte `config`
 

@@ -5,9 +5,7 @@ Lệnh `swap` vẫn thực hiện cùng hai nhiệm vụ chính:
 - Tính xem người dùng nên nhận được bao nhiêu token ở phía đối diện, đã bao gồm phí.
 - Di chuyển token vào pool và ra khỏi pool.
 
-Điểm thay đổi là cách chúng ta gọi token program. Một AMM swap thông thường thường thực hiện hai CPI tới token program, nghĩa là phải trả chi phí CPI cơ bản hai lần. Với `p-token`, ta vẫn giữ nguyên program ID và luồng client hiện tại, nhưng có thể gói nhiều token instruction vào một instruction `batch`.
-
-> Một trong những bí mật hay nhất của `p-token` là batching. Nhiều thao tác token có thể được thực hiện trong một CPI với discriminator `255`, và điều này cực kỳ phù hợp với AMM swap.
+Điểm thay đổi là cách chúng ta gọi token program. `p-token` đã live trên mainnet và giữ nguyên program ID cùng luồng client hiện tại, nên chúng ta có thể gói nhiều thao tác token vào một CPI.
 
 <ArticleSection name="Tài Khoản Cần Thiết" id="required-accounts" level="h2" />
 
@@ -19,7 +17,7 @@ Các tài khoản cần cho ngữ cảnh này là:
 - `vault_x`: token account giữ token X của pool. Phải được truyền dưới dạng `mutable`.
 - `vault_y`: token account giữ token Y của pool. Phải được truyền dưới dạng `mutable`.
 - `config`: tài khoản cấu hình của AMM. Lưu trạng thái và các tham số của pool.
-- `token_program`: tài khoản token program. `p-token` đã live trên mainnet, vẫn giữ nguyên program ID SPL Token và bề mặt client, đồng thời cung cấp batch instruction mà chúng ta muốn dùng cho swap này. Phải là `executable`.
+- `token_program`: tài khoản token program. `p-token` đã live trên mainnet và giữ nguyên program ID SPL Token cùng bề mặt client, đồng thời hỗ trợ batching. Phải là `executable`.
 
 Phần parse account không thay đổi:
 
@@ -73,23 +71,6 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 
 > Hãy đảm bảo `amount` và `min` đều lớn hơn 0, và từ chối các lệnh đã hết hạn bằng sysvar `Clock`.
 
-<ArticleSection name="Vì Sao Batch Quan Trọng" id="why-batch-matters" level="h2" />
-
-Mỗi CPI có chi phí cơ bản là 1.000 compute units. Một swap bình thường thực hiện hai token transfer:
-
-1. token account của người dùng -> vault
-2. vault -> token account của người dùng
-
-Nếu không batching, đó là hai CPI tách biệt tới token program. Với `p-token`, cả hai transfer này có thể được bọc trong một token CPI duy nhất bằng batch instruction với discriminator `u8::MAX` (`255`).
-
-Mỗi inner instruction trong batch được mã hóa như sau:
-
-- `account_count: u8`
-- `data_len: u8`
-- `instruction_data: [u8; data_len]`
-
-Token program sau đó sẽ duyệt payload và thực thi từng inner instruction theo thứ tự. Batch instruction không được chứa một batch instruction khác.
-
 <ArticleSection name="Logic Instruction" id="instruction-logic" level="h2" />
 
 Ta bắt đầu bằng cách deserialize cả `instruction_data` lẫn `accounts`.
@@ -130,62 +111,7 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Thay đổi quan trọng nằm ở bước transfer. Chúng ta vẫn muốn dùng các token helper từ `pinocchio_token`, nhưng thay vì gọi `Transfer::invoke()` hai lần, ta sẽ đưa cả hai transfer vào một `Batch` rồi gọi token program đúng một lần.
-
-Phần import có thể trông như thế này:
-
-```rust
-use pinocchio_token::{
-    instructions::{Batch, Transfer},
-    state::TokenAccount,
-};
-```
-
-Và bước transfer sẽ trông như sau:
-
-```rust
-let mut batch = Batch::default();
-
-if self.instruction_data.is_x {
-    Transfer::new(
-        self.accounts.user_x_ata,
-        self.accounts.vault_x,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_y,
-        self.accounts.user_y_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-} else {
-    Transfer::new(
-        self.accounts.user_y_ata,
-        self.accounts.vault_y,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_x,
-        self.accounts.user_x_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-}
-
-batch.invoke_signed(&[signer])?;
-```
-
-Điểm quan trọng là: ta vẫn đang dùng `Transfer`, chỉ là ở dạng batched. `Transfer` triển khai `IntoBatch`, nên ta không cần tự serialize các inner instruction nữa. Nếu flow của bạn không cần PDA signer seeds, đoạn này có thể kết thúc bằng `batch.invoke()?;` đúng như các ví dụ `p-token`. Với swap AMM này, ta cần PDA `config` ký cho transfer đi ra khỏi vault, nên ta dùng `batch.invoke_signed(&[signer])?;`.
-
-> Nói ngắn gọn: nhiều token instruction, một CPI. Đó chính là lý do batch rất phù hợp cho swap, LP deposit và các luồng DeFi tương tự.
+Thay đổi quan trọng nằm ở bước transfer. Bạn đã thấy pattern batch ở `deposit`, nên hãy đưa cả hai transfer vào `Batch` và chỉ invoke token program một lần. Trong swap này, vì `config` PDA cần ký cho transfer từ vault, hãy dùng `batch.invoke_signed(&[signer])?;`.
 
 Bây giờ bạn nên cập nhật logic cuối cùng của `process()` để:
 
