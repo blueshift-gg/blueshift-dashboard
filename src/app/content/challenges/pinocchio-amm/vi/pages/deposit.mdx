@@ -6,6 +6,8 @@ Instruction `deposit` thực hiện ba nhiệm vụ chính:
 - Tính toán số lượng token `mint_x` và `mint_y` cần deposit và kiểm tra rằng số lượng không vượt quá `max_x` và `max_y` được chỉ định bởi người dùng.
 - Đúc đúng số lượng token `mint_lp` vào tài khoản liên kết của người dùng.
 
+Vì `p-token` đã live trên mainnet, chúng ta sẽ batch các CPI token trong instruction này. Ở đây bạn sẽ đưa hai transfer và một mint vào cùng `Batch` rồi kết thúc bằng `batch.invoke_signed(&[signer])?;` vì LP mint cần `config` PDA ký.
+
 > Như đã nhắc đến ở phần `initialize`, chúng ta sẽ khởi tạo tất cả các tài khoản liên kết (`Associated Token Accounts`) bên ngoài instruction để tối ưu hóa.
 
 <ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
@@ -19,7 +21,7 @@ Bên dưới là các tài khoản cần thiết cho ngữ cảnh này:
 - `user_x_ata`: Tài khoản token liên kết của người dùng cho token X. Đây là tài khoản nguồn từ đó số lượng token X của người dùng sẽ được chuyển vào pool. Phải là `mutable`.
 - `user_y_ata`: Tài khoản token liên kết của người dùng cho token Y. Đây là tài khoản nguồn từ đó số lượng token Y của người dùng sẽ được chuyển vào pool. Phải là `mutable`.
 - `config`: Tài khoản cấu hình cho pool AMM. Lưu trữ tất cả các tham số và trạng thái liên quan đến pool.
-- `token program`: Tài khoản chương trình SPL Token. Đây là tài khoản cần thiết để thực hiện các hoạt động liên quan đến token như chuyển và đúc. Phải là `executable`.
+- `token program`: Tài khoản chương trình SPL Token. `p-token` đã live trên mainnet và giữ nguyên program ID, nên tài khoản này cũng hỗ trợ batching. Phải là `executable`.
 
 Ở đây, tôi sẽ để việc triển khai cho bạn:
 
@@ -134,7 +136,41 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > Nếu đó là lần đầu thực hiện deposit, chúng ta có thể bỏ qua việc tính toán số lượng LP token và số lượng deposit và chỉ sử dụng giá trị mà người dùng đề xuất
 
-- Chuyển số lượng token từ các tài khoản token của người dùng vào các vault và đúc số lượng LP token thích hợp vào tài khoản token của người dùng
+- Chuyển số lượng token từ các tài khoản token của người dùng vào các vault và đúc số lượng LP token thích hợp vào tài khoản token của người dùng. Dùng một `Batch` để gộp hai transfer và một mint vào một CPI.
+
+Đây là phần bạn nối batch. Chúng ta vẫn dùng token helpers, chỉ là ở dạng batched. `Transfer` và `MintTo` đều triển khai `IntoBatch`, nên không cần tự serialize. Vì authority của LP mint là `config` PDA, ta kết thúc bằng `batch.invoke_signed(&[signer])?;`:
+
+```rust
+use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+
+let mut batch = Batch::default();
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
 
 Bạn đủ khả năng triển khai logic này, vì vậy tôi sẽ để việc triển khai cho bạn:
 

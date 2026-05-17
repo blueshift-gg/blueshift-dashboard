@@ -6,6 +6,8 @@
 - Розрахунок суми для депозиту та перевірка, що сума не перевищує `max_x` та `max_y`, визначені користувачем.
 - Емісія правильної кількості `mint_lp` в користувацькому ata.
 
+Оскільки `p-token` вже на mainnet, ми batch-имо token CPI для цієї інструкції. Тут ти кладеш два transfer і один mint в один `Batch` та завершуєш `batch.invoke_signed(&[signer])?;`, бо LP mint потребує підпису PDA `config`.
+
 > Як зазначено в розділі інструкції `initialize`; ми ініціалізуємо всі `Associated Token Accounts` поза нашою інструкцією з метою оптимізації.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@
 - `user_y_ata`: Асоційований токен-рахунок користувача для токена Y. Це вихідний рахунок, з якого токени Y користувача будуть переведені в пул. Має бути переданий як `mutable`.
 - `user_lp_ata`: Асоційований токен-рахунок користувача для LP токенів. Це цільовий рахунок, куди будуть емітовані LP токени. Має бути переданий як `mutable`.
 - `config`: Конфігураційний рахунок для пулу AMM. Зберігає всі відповідні параметри та стан пулу.
-- `token program`: Рахунок програми SPL Token. Це необхідно для виконання операцій з токенами, таких як перекази та емісія. Має бути `executable`.
+- `token program`: Рахунок програми SPL Token. `p-token` вже на mainnet і зберігає той самий program ID, тож цей рахунок також підтримує batching. Має бути `executable`.
 
 Тут, знову ж таки, я залишу реалізацію вам:
 
@@ -135,7 +137,41 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > Якщо це перший депозит, ми можемо пропустити розрахунок LP токенів і депозитів і просто використати значення, яке пропонує користувач
 
-- Переказати суми з токен-рахунків користувача до сховищ і емітувати відповідну кількість LP токенів на токен-рахунок користувача
+- Переказати суми з токен-рахунків користувача до сховищ і емітувати відповідну кількість LP токенів на токен-рахунок користувача. Використай один `Batch`, щоб обидва transfer і mint виконалися в одному CPI.
+
+Саме тут ти збираєш batch. Ми все ще використовуємо token helpers, просто в batched-формі. `Transfer` і `MintTo` реалізують `IntoBatch`, тому нічого вручну серіалізувати не треба. Оскільки authority для LP mint — це PDA `config`, завершуємо `batch.invoke_signed(&[signer])?;`:
+
+```rust
+use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+
+let mut batch = Batch::default();
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
 
 Ви повинні бути достатньо кваліфікованими, щоб зробити це самостійно, тому я залишаю реалізацію вам:
 

@@ -6,6 +6,8 @@
 - 计算提取金额，并检查金额是否不低于用户指定的 `mint_x` 和 `mint_y`。
 - 从用户的 ata 中销毁相应数量的 `mint_lp`。
 
+由于 `p-token` 已经在主网上线，我们会把这些 token CPI 批量处理。你在 `deposit` 已经看过 batch 的做法；这里会把两次转账和一次 burn 放入同一个 `Batch`，并以 `batch.invoke_signed(&[signer])?;` 结束，因为 vault 转账需要 `config` PDA 签名。
+
 > 如 `initialize` 指令部分所述；为了优化目的，我们将所有 `Associated Token Accounts` 初始化在指令之外。
 
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@
 - `user_y_ata`：用户的 Y 代币关联账户。这是用户的 Y 代币将从池中转移到的目标账户。必须作为 `mutable` 传递。
 - `user_lp_ata`：用户的 LP 代币关联账户。这是 LP 代币将被销毁的来源账户。必须作为 `mutable` 传递。
 - `config`：AMM 池的配置账户。存储所有相关的池参数和状态。
-- `token program`：SPL 代币程序账户。这是执行代币操作（如转账和铸造）所需的。必须是 `executable`。
+- `token program`：SPL 代币程序账户。`p-token` 已在主网上线并保留相同的程序 ID，该账户也支持 batching。必须是 `executable`。
 
 这里，我将再次把实现留给你：
 
@@ -114,7 +116,7 @@ if !(x >= self.instruction_data.min_x && y >= self.instruction_data.min_y) {
 }
 ```
 
-- 将金额从金库转移到用户的代币账户，并从用户的代币账户中销毁相应数量的 LP 代币
+- 将金额从金库转移到用户的代币账户，并从用户的代币账户中销毁相应数量的 LP 代币。使用单一 `Batch`，让两次转账和一次 burn 在单一 CPI 中完成。
 
 > `authority` 的 `vault_x` 和 `vault_y` 是 `config` 账户
 

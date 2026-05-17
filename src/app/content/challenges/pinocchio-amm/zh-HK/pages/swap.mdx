@@ -5,9 +5,7 @@
 - 計算用戶在扣除手續費後應該收到多少另一側的代幣。
 - 將代幣轉入池中並從池中轉出。
 
-改變的是我們與代幣程式互動的方式。一般的 AMM swap 通常會對代幣程式執行兩次 CPI，也就是要支付兩次 CPI 基礎成本。使用 `p-token` 時，我們仍然保留相同的程式 ID 與客戶端流程，但可以把多條代幣指令封裝進單一 `batch` 指令。
-
-> `p-token` 最值得關注的能力之一就是 batching。透過 discriminator `255`，你可以在一次 CPI 中執行多個代幣操作，這對 AMM swap 非常合適。
+改變的是我們與代幣程式互動的方式。`p-token` 已經在主網上線並保留相同的程式 ID 與客戶端流程，因此我們可以把多個 token 操作打包成單一 CPI。
 
 <ArticleSection name="所需帳戶" id="required-accounts" level="h2" />
 
@@ -19,7 +17,7 @@
 - `vault_x`：池子持有 token X 的代幣帳戶。必須作為 `mutable` 傳入。
 - `vault_y`：池子持有 token Y 的代幣帳戶。必須作為 `mutable` 傳入。
 - `config`：AMM 配置帳戶。儲存池子的狀態與參數。
-- `token_program`：代幣程式帳戶。`p-token` 已經在主網上線，保留相同的 SPL Token 程式 ID 與客戶端介面，並提供我們要在這次 swap 中使用的 batch 指令。必須是 `executable`。
+- `token_program`：代幣程式帳戶。`p-token` 已經在主網上線並保留相同的 SPL Token 程式 ID 與客戶端介面，也支援 batching。必須是 `executable`。
 
 帳戶解析邏輯保持不變：
 
@@ -73,23 +71,6 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 
 > 請確保 `amount` 和 `min` 都大於零，並使用 `Clock` sysvar 拒絕已經過期的訂單。
 
-<ArticleSection name="為什麼 Batch 很重要" id="why-batch-matters" level="h2" />
-
-每次 CPI 都有 1,000 compute units 的基礎成本。一次普通 swap 會執行兩次代幣轉帳：
-
-1. 用戶代幣帳戶 -> vault
-2. vault -> 用戶代幣帳戶
-
-如果不使用 batching，這就是兩次獨立的代幣 CPI。使用 `p-token` 時，可以透過 discriminator 為 `u8::MAX`（`255`）的 batch 指令，把這兩次轉帳包進一次外層代幣 CPI。
-
-batch 內每條內部指令的編碼格式如下：
-
-- `account_count: u8`
-- `data_len: u8`
-- `instruction_data: [u8; data_len]`
-
-代幣程式之後會遍歷整個 payload，並依序執行每條內部指令。batch 指令本身不能再巢狀另一條 batch 指令。
-
 <ArticleSection name="指令邏輯" id="instruction-logic" level="h2" />
 
 我們首先要反序列化 `instruction_data` 和 `accounts`。
@@ -130,62 +111,7 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-真正重要的改變發生在轉帳步驟。我們仍然想繼續使用 `pinocchio_token` 的代幣 helper，但不是再呼叫兩次 `Transfer::invoke()`，而是把兩筆轉帳都加入同一個 `Batch`，然後只呼叫一次代幣程式。
-
-匯入可以寫成這樣：
-
-```rust
-use pinocchio_token::{
-    instructions::{Batch, Transfer},
-    state::TokenAccount,
-};
-```
-
-轉帳步驟應該像這樣：
-
-```rust
-let mut batch = Batch::default();
-
-if self.instruction_data.is_x {
-    Transfer::new(
-        self.accounts.user_x_ata,
-        self.accounts.vault_x,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_y,
-        self.accounts.user_y_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-} else {
-    Transfer::new(
-        self.accounts.user_y_ata,
-        self.accounts.vault_y,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_x,
-        self.accounts.user_x_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-}
-
-batch.invoke_signed(&[signer])?;
-```
-
-這裡最重要的是：我們仍然在使用 `Transfer`，只是改成 batched 的用法。`Transfer` 已經實作了 `IntoBatch`，所以不需要再手動序列化內部指令。如果你的流程不需要 PDA signer seeds，這裡可以像 `p-token` 範例一樣直接 `batch.invoke()?;`。而在這個 AMM swap 中，我們需要 `config` 這個 PDA 為 vault 向外轉帳簽名，所以這裡應該使用 `batch.invoke_signed(&[signer])?;`。
-
-> 換句話說：多條代幣指令，一次 CPI。這正是 batch 特別適合 swap、LP 存款以及類似 DeFi 流程的原因。
+真正重要的改變發生在轉帳步驟。你在 `deposit` 已經看過 batch 的做法，所以把兩筆轉帳加入 `Batch` 後只呼叫一次 token program。在這個 swap 中，因為 `config` PDA 需要為 vault 轉出簽名，所以要使用 `batch.invoke_signed(&[signer])?;`。
 
 現在你應該把最終的 `process()` 邏輯更新為：
 

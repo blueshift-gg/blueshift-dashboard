@@ -5,9 +5,7 @@
 - Обчислює, скільки токена з протилежного боку користувач має отримати з урахуванням комісії.
 - Переміщує токени в пул і з пулу.
 
-Змінюється те, як ми взаємодіємо з token program. Звичайний AMM swap зазвичай робить два CPI до token program, тобто двічі платить базову ціну CPI. З `p-token` ми зберігаємо той самий program ID і той самий клієнтський потік, але можемо загорнути кілька token instructions в одну instruction `batch`.
-
-> Один із найкраще прихованих секретів `p-token` це batching. Кілька операцій із токенами можна виконати в одному CPI за допомогою discriminator `255`, і це дуже добре підходить для AMM swap.
+Змінюється те, як ми взаємодіємо з token program. `p-token` вже на mainnet і зберігає той самий program ID та клієнтський потік, тож ми можемо пакетувати кілька token операцій в один CPI.
 
 <ArticleSection name="Потрібні Акаунти" id="required-accounts" level="h2" />
 
@@ -19,7 +17,7 @@
 - `vault_x`: token account, що зберігає токен X пулу. Має передаватися як `mutable`.
 - `vault_y`: token account, що зберігає токен Y пулу. Має передаватися як `mutable`.
 - `config`: акаунт конфігурації AMM. Зберігає стан пулу та параметри.
-- `token_program`: акаунт token program. `p-token` уже працює в mainnet, зберігає той самий program ID SPL Token і той самий клієнтський інтерфейс та надає batch instruction, яку ми хочемо використати для цього swap. Має бути `executable`.
+- `token_program`: акаунт token program. `p-token` вже на mainnet, зберігає той самий program ID SPL Token і клієнтський інтерфейс та підтримує batching. Має бути `executable`.
 
 Парсер акаунтів не змінюється:
 
@@ -73,23 +71,6 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 
 > Переконайся, що `amount` і `min` більші за нуль, і відхиляй прострочені ордери через sysvar `Clock`.
 
-<ArticleSection name="Чому Batch Важливий" id="why-batch-matters" level="h2" />
-
-Кожен CPI має базову вартість 1 000 compute units. Звичайний swap виконує два token transfers:
-
-1. token account користувача -> vault
-2. vault -> token account користувача
-
-Без batching це означає два окремі token CPI. З `p-token` обидва трансфери можна загорнути в один зовнішній token CPI за допомогою batch instruction з discriminator `u8::MAX` (`255`).
-
-Кожна внутрішня instruction всередині batch кодується так:
-
-- `account_count: u8`
-- `data_len: u8`
-- `instruction_data: [u8; data_len]`
-
-Потім token program проходить по payload і послідовно виконує кожну внутрішню instruction. Batch instruction не може містити іншу batch instruction.
-
 <ArticleSection name="Логіка Інструкції" id="instruction-logic" level="h2" />
 
 Ми починаємо з десеріалізації `instruction_data` та `accounts`.
@@ -130,62 +111,7 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Важлива зміна стосується етапу transfer. Ми все ще хочемо використовувати token helpers із `pinocchio_token`, але замість того, щоб двічі викликати `Transfer::invoke()`, ми покладемо обидва transfer в одну `Batch` і викличемо token program лише один раз.
-
-Імпорт може виглядати так:
-
-```rust
-use pinocchio_token::{
-    instructions::{Batch, Transfer},
-    state::TokenAccount,
-};
-```
-
-А сам крок transfer має виглядати так:
-
-```rust
-let mut batch = Batch::default();
-
-if self.instruction_data.is_x {
-    Transfer::new(
-        self.accounts.user_x_ata,
-        self.accounts.vault_x,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_y,
-        self.accounts.user_y_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-} else {
-    Transfer::new(
-        self.accounts.user_y_ata,
-        self.accounts.vault_y,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_x,
-        self.accounts.user_x_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-}
-
-batch.invoke_signed(&[signer])?;
-```
-
-Ключовий момент у тому, що ми все ще використовуємо `Transfer`, просто в batch-формі. `Transfer` реалізує `IntoBatch`, тож нам не потрібно вручну серіалізувати внутрішні instruction. Якщо у твоєму flow не потрібні PDA signer seeds, це може завершуватися простим `batch.invoke()?;` точно як у прикладах `p-token`. У цьому AMM swap нам потрібна PDA `config`, щоб підписати transfer із vault, тому ми використовуємо `batch.invoke_signed(&[signer])?;`.
-
-> Тобто: кілька token instructions, один CPI. Саме тому batch настільки добре підходить для swap, LP deposit та подібних DeFi-потоків.
+Важлива зміна стосується етапу transfer. Ти вже бачив batch-патерн у `deposit`, тож додай обидва transfer у `Batch` і виклич token program один раз. Для цього swap через підпис PDA `config` з vault потрібно використати `batch.invoke_signed(&[signer])?;`.
 
 Тепер тобі потрібно оновити фінальну логіку `process()` так, щоб:
 

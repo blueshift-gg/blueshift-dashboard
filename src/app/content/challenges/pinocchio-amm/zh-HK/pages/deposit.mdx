@@ -6,6 +6,8 @@
 - 計算存款數量，並檢查該數量是否超過用戶指定的 `max_x` 和 `max_y`。
 - 在用戶的 ata 中鑄造正確數量的 `mint_lp`。
 
+由於 `p-token` 已經在主網上線，我們會把這些 token CPI 批次化處理。這裡會把兩次轉帳與一次 mint 加進同一個 `Batch`，並用 `batch.invoke_signed(&[signer])?;` 結束，因為 LP mint 需要 `config` PDA 簽名。
+
 > 如 `initialize` 指令部分所述；為了優化，我們將在指令之外初始化所有 `Associated Token Accounts`。
 
 <ArticleSection name="所需帳戶" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@
 - `user_y_ata`：用戶的 Y 代幣關聯代幣帳戶。這是用戶的 Y 代幣將從中轉移到池中的來源帳戶。必須作為 `mutable` 傳遞。
 - `user_lp_ata`：用戶的 LP 代幣關聯代幣帳戶。這是將鑄造 LP 代幣的目標帳戶。必須作為 `mutable` 傳遞。
 - `config`：AMM 池的配置帳戶。存儲所有相關的池參數和狀態。
-- `token program`：SPL 代幣程式帳戶。這是執行代幣操作（如轉移和鑄造）所需的。必須是 `executable`。
+- `token program`：SPL 代幣程式帳戶。`p-token` 已在主網上線並保留相同的程式 ID，這個帳戶也支援 batching。必須是 `executable`。
 
 在這裡，我會再次將實現部分留給你：
 
@@ -135,7 +137,41 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > 如果這是第一次存款，我們可以跳過 LP 代幣和存款的計算，直接使用用戶建議的數值。
 
-- 將用戶的代幣帳戶中的金額轉移到保管庫，並鑄造相應數量的 LP 代幣到用戶的代幣帳戶。
+- 將用戶的代幣帳戶中的金額轉移到保管庫，並鑄造相應數量的 LP 代幣到用戶的代幣帳戶。使用單一 `Batch`，讓兩次轉帳與一次 mint 在單一 CPI 中完成。
+
+這就是你把 batch 接起來的部分。我們仍然使用 token helpers，只是改成 batched 形式。`Transfer` 和 `MintTo` 都實作了 `IntoBatch`，所以不需要手動序列化。因為 LP mint 的 authority 是 `config` PDA，所以最後使用 `batch.invoke_signed(&[signer])?;`：
+
+```rust
+use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+
+let mut batch = Batch::default();
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
 
 你應該已經足夠熟練可以自行完成這部分，所以我將實現的工作留給你：
 

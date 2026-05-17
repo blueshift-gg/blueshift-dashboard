@@ -5,9 +5,7 @@ L'instruction `swap` effectue toujours les deux mêmes tâches de haut niveau :
 - Calculer combien de jetons opposés l'utilisateur doit recevoir, frais inclus.
 - Déplacer les jetons vers la pool et hors de la pool.
 
-Ce qui change, c'est la manière de parler au token program. Un swap d'AMM classique effectue généralement deux CPIs vers le token program, donc paie deux fois le coût de base du CPI. Avec `p-token`, on conserve le même program ID et le même flux côté client, mais on peut encapsuler plusieurs instructions de jetons dans une seule instruction `batch`.
-
-> L'un des meilleurs secrets de `p-token` est le batching. Plusieurs opérations de jetons peuvent être exécutées dans un seul CPI en utilisant le discriminateur `255`, ce qui convient parfaitement à un swap d'AMM.
+Ce qui change, c'est la manière de parler au token program. `p-token` est déjà en ligne sur mainnet et conserve le même program ID et flux client, donc nous pouvons regrouper plusieurs opérations token dans un seul CPI.
 
 <ArticleSection name="Comptes Nécessaires" id="required-accounts" level="h2" />
 
@@ -19,7 +17,7 @@ Voici les comptes nécessaires pour ce contexte :
 - `vault_x` : le compte de jetons qui détient le jeton X pour la pool. Doit être passé comme `mutable`.
 - `vault_y` : le compte de jetons qui détient le jeton Y pour la pool. Doit être passé comme `mutable`.
 - `config` : le compte de configuration de l'AMM. Il stocke l'état et les paramètres de la pool.
-- `token_program` : le compte du token program. `p-token` est déjà en ligne sur mainnet, conserve le même program ID et la même surface client que SPL Token, et expose l'instruction batch que nous voulons utiliser pour ce swap. Doit être `executable`.
+- `token_program` : le compte du token program. `p-token` est déjà sur mainnet, conserve le même program ID et la même surface client que SPL Token, et supporte le batching. Doit être `executable`.
 
 Le parseur de comptes reste inchangé :
 
@@ -73,23 +71,6 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 
 > Vérifiez que `amount` et `min` sont strictement positifs, et rejetez les ordres expirés avec la sysvar `Clock`.
 
-<ArticleSection name="Pourquoi Le Batch Est Important" id="why-batch-matters" level="h2" />
-
-Chaque CPI a un coût de base de 1 000 compute units. Un swap normal effectue deux transferts de jetons :
-
-1. compte de l'utilisateur -> vault
-2. vault -> compte de l'utilisateur
-
-Sans batching, cela signifie deux CPIs distincts vers le token program. Avec `p-token`, on peut encapsuler ces deux transferts dans un seul CPI externe grâce à l'instruction batch avec le discriminateur `u8::MAX` (`255`).
-
-Chaque instruction interne de la batch est encodée ainsi :
-
-- `account_count: u8`
-- `data_len: u8`
-- `instruction_data: [u8; data_len]`
-
-Le token program parcourt ensuite la payload et exécute chaque instruction interne séquentiellement. Une batch ne peut pas contenir une autre batch.
-
 <ArticleSection name="Logique d'Instruction" id="instruction-logic" level="h2" />
 
 Nous commençons par désérialiser `instruction_data` et `accounts`.
@@ -130,62 +111,7 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Le changement important concerne l'étape de transfert. Nous voulons continuer à utiliser les helpers de `pinocchio_token`, mais au lieu d'appeler `Transfer::invoke()` deux fois, nous allons placer les deux transferts dans une `Batch` et invoquer le token program une seule fois.
-
-L'import peut alors ressembler à ceci :
-
-```rust
-use pinocchio_token::{
-    instructions::{Batch, Transfer},
-    state::TokenAccount,
-};
-```
-
-Et l'étape de transfert devrait ressembler à ceci :
-
-```rust
-let mut batch = Batch::default();
-
-if self.instruction_data.is_x {
-    Transfer::new(
-        self.accounts.user_x_ata,
-        self.accounts.vault_x,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_y,
-        self.accounts.user_y_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-} else {
-    Transfer::new(
-        self.accounts.user_y_ata,
-        self.accounts.vault_y,
-        self.accounts.user,
-        self.instruction_data.amount,
-    )
-    .into_batch(&mut batch)?;
-
-    Transfer::new(
-        self.accounts.vault_x,
-        self.accounts.user_x_ata,
-        self.accounts.config,
-        swap_result.withdraw,
-    )
-    .into_batch(&mut batch)?;
-}
-
-batch.invoke_signed(&[signer])?;
-```
-
-Le point important est le suivant : nous utilisons toujours `Transfer`, simplement sous forme batchée. `Transfer` implémente `IntoBatch`, donc nous n'avons pas à sérialiser manuellement les instructions internes. Si votre flow n'a pas besoin de seeds PDA signers, cela peut se terminer par un simple `batch.invoke()?;` exactement comme dans les exemples `p-token`. Dans ce swap d'AMM, nous avons toutefois besoin que la PDA `config` signe le transfert sortant du vault, donc nous utilisons `batch.invoke_signed(&[signer])?;`.
-
-> En pratique : plusieurs instructions de jetons, un seul CPI. C'est précisément pour cela que batch est particulièrement adapté aux swaps, aux dépôts LP et aux autres flux DeFi du même genre.
+Le changement important concerne l'etape de transfert. Tu as deja vu le pattern batch dans `deposit`, donc ajoute les deux transfers dans une `Batch` et invoque le token program une seule fois. Pour ce swap, la PDA `config` doit signer le transfert depuis le vault, donc utilise `batch.invoke_signed(&[signer])?;`.
 
 Vous devez maintenant mettre à jour la logique finale de `process()` afin que :
 

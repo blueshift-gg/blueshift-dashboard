@@ -6,6 +6,8 @@ Die `deposit` Anweisung führt drei Hauptaufgaben aus:
 - Berechnung des einzuzahlenden Betrags und Überprüfung, dass der Betrag nicht größer ist als `max_x` und `max_y`, die vom Benutzer festgelegt wurden.
 - Prägung der richtigen Menge an `mint_lp` im Benutzer-ATA.
 
+Da `p-token` bereits auf Mainnet live ist, batchen wir die Token-CPIs für diese Instruction. Hier packst du beide Transfers und das Mint in einen `Batch` und schließt mit `batch.invoke_signed(&[signer])?;` ab, weil die `config` PDA den LP-Mint signieren muss.
+
 > Wie im Abschnitt zur `initialize` Anweisung erwähnt, werden wir alle `Associated Token Accounts` außerhalb unserer Anweisung aus Optimierungsgründen initialisieren.
 
 <ArticleSection name="Erforderliche Konten" id="required-accounts" level="h2" />
@@ -20,7 +22,7 @@ Nachfolgend sind die für diesen Kontext erforderlichen Konten aufgeführt:
 - `user_y_ata`: Das zugehörige Token-Konto des Benutzers für Token Y. Dies ist das Quellkonto, von dem die Token Y des Benutzers in den Pool übertragen werden. Muss als `mutable` übergeben werden.
 - `user_lp_ata`: Das zugehörige Token-Konto des Benutzers für LP-Token. Dies ist das Zielkonto, auf das LP-Token geprägt werden. Muss als `mutable` übergeben werden.
 - `config`: Das Konfigurationskonto für den AMM-Pool. Speichert alle relevanten Pool-Parameter und -zustände.
-- `token program`: Das SPL-Token-Programmkonto. Dies ist erforderlich, um Token-Operationen wie Überweisungen und Prägungen durchzuführen. Muss `executable` sein.
+- `token program`: Das SPL-Token-Programmkonto. `p-token` ist auf Mainnet live und behält dieselbe Program-ID, daher unterstützt dieses Konto auch Batching. Muss `executable` sein.
 
 Hier überlasse ich dir wieder die Implementierung:
 
@@ -135,7 +137,41 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > Wenn es sich um die erste Einzahlung handelt, können wir die Berechnung der LP-Token und Einzahlungen überspringen und einfach den vom Benutzer vorgeschlagenen Wert verwenden
 
-- Übertrage die Beträge von den Token-Konten des Benutzers zu den Tresoren und präge die entsprechende Menge an LP-Token auf das Token-Konto des Benutzers
+- Übertrage die Beträge von den Token-Konten des Benutzers zu den Tresoren und präge die entsprechende Menge an LP-Token auf das Token-Konto des Benutzers. Verwende einen `Batch`, damit beide Transfers und das Mint in einem CPI laufen.
+
+Hier verdrahtest du den Batch. Wir verwenden weiterhin die Token-Helper, nur eben in batched Form. `Transfer` und `MintTo` implementieren `IntoBatch`, daher brauchst du nichts manuell zu serialisieren. Da die LP-Mint-Authority die `config` PDA ist, endet der Batch mit `batch.invoke_signed(&[signer])?;`:
+
+```rust
+use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+
+let mut batch = Batch::default();
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
 
 Du solltest kompetent genug sein, um dies selbstständig zu tun, daher überlasse ich dir die Implementierung:
 
