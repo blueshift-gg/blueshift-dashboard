@@ -5,6 +5,10 @@ The `swap` instruction performs two main tasks:
 - Calculate the amount of `mint_x` that we're going to receive by sending a certain amount of `mint_y` into the amm (and vice versa) including the fee.
 - Transfer the `from` token to the vault and the `to` token to the user token account
 
+The big difference now is that we want to take advantage of `p-token` batching. Since `p-token` is already live on mainnet and keeps the same SPL Token program ID and client surface, we can keep using the usual token instruction helpers while collapsing multiple token operations into a single CPI.
+
+> One of the best kept secrets of `p-token` is batch instructions. Most AMMs pay the base CPI cost multiple times during a swap. With batching, multiple token instructions can be executed in one CPI.
+
 > As mentioned in the `initialize` instruction section; we're going to initialize all the `Associated Token Accounts` outside of our instruction for optimization purposes.
 
 <ArticleSection name="Required Accounts" id="required-accounts" level="h2" />
@@ -17,7 +21,7 @@ Below are the accounts required for this context:
 - `vault_x`: The token account that holds all of token X deposited into the pool. Must be passed as `mutable`.
 - `vault_y`: The token account that holds all of token Y deposited into the pool. Must be passed as `mutable`.
 - `config`: The configuration account for the AMM pool. Stores all relevant pool parameters and state.
-- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. Must be `executable`.
+- `token program`: The SPL Token program account. This is required to perform token operations such as transfers and minting. With `p-token` live on mainnet, this same token program account also supports the batch flow we want to use here. Must be `executable`.
 
 Here, again, I’ll leave the implementation to you:
 
@@ -112,32 +116,62 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-- Create the transfer logic checking the `is_x` value and transfer the `from` amounts to the vaults and the `to` amounts to the user token accounts like this:
+- Create the transfer logic checking the `is_x` value. We still want to use the token helpers from `pinocchio_token`, but instead of calling `Transfer::invoke()` twice, we should queue both transfers into a `Batch` and invoke the token program once.
+
+That means the import can look like this:
 
 ```rust
-if self.instruction_data.is_x {
-    Transfer {
-        //...
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-} else {
-    Transfer {
-        //...
-
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-}
+use pinocchio_token::{
+    instructions::{Batch, Transfer},
+    state::TokenAccount,
+};
 ```
+
+And the transfer step should look like this:
+
+```rust
+let mut batch = Batch::default();
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        self.accounts.user_x_ata,
+        self.accounts.vault_x,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_y,
+        self.accounts.user_y_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        self.accounts.user_y_ata,
+        self.accounts.vault_y,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_x,
+        self.accounts.user_x_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+This is the important part: we are still using `Transfer`, just in batched form. `Transfer` implements `IntoBatch`, so we don't have to manually serialize inner instructions ourselves. If your flow does not need PDA signer seeds, this ends with a plain `batch.invoke()?;` exactly like the `p-token` examples. In this AMM swap we do need the config PDA to sign the transfer out of the vault, so the final call should be `batch.invoke_signed(&[signer])?;`. The user signature is still provided by the outer transaction, and the PDA signer seeds are supplied once when the batch is invoked.
+
+> Multiple token instructions, one CPI. This is exactly the kind of optimization that makes sense for an AMM swap.
 
 You should be proficient enough to do this on your own, so I’ll leave the implementation to you:
 

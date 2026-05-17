@@ -1,25 +1,27 @@
 # Swap
 
-Die `swap` Anweisung führt zwei Hauptaufgaben aus:
+Die Instruction `swap` erfüllt weiterhin dieselben zwei Aufgaben auf hohem Niveau:
 
-- Berechnung der Menge an `mint_x`, die wir erhalten, wenn wir eine bestimmte Menge an `mint_y` in die AMM senden (und umgekehrt), einschließlich der Gebühr.
-- Übertragung des `from` Tokens in den Vault und des `to` Tokens auf das Benutzer-Token-Konto
+- Berechnen, wie viele Token der Gegenseite der Nutzer inklusive Gebühren erhalten soll.
+- Token in den Pool hinein und aus dem Pool heraus bewegen.
 
-> Wie im Abschnitt zur `initialize` Anweisung erwähnt, werden wir aus Optimierungsgründen alle `Associated Token Accounts` außerhalb unserer Anweisung initialisieren.
+Was sich ändert, ist die Art, wie wir mit dem Token-Programm sprechen. Ein klassischer AMM-Swap führt normalerweise zwei Token-CPIs aus und bezahlt damit die Basis-CPI-Kosten zweimal. Mit `p-token` behalten wir dieselbe Program-ID und denselben Client-Flow, können aber mehrere Token-Instruktionen in einer einzigen `batch`-Instruction bündeln.
 
-<ArticleSection name="Erforderliche Konten" id="required-accounts" level="h2" />
+> Eines der bestgehüteten Geheimnisse von `p-token` ist Batching. Mehrere Token-Operationen können mit Discriminator `255` in einem einzigen CPI ausgeführt werden, was perfekt zu einem AMM-Swap passt.
 
-Nachfolgend sind die für diesen Kontext erforderlichen Konten aufgeführt:
+<ArticleSection name="Benötigte Accounts" id="required-accounts" level="h2" />
 
-- `user`: Der Benutzer, der den Token in die Liquidität der AMM tauscht. Muss ein `signer` sein.
-- `user_x_ata`: Das zugehörige Token-Konto des Benutzers für Token X. Dies ist das Konto, das Token X in den Pool empfängt oder sendet. Muss als `mutable` übergeben werden.
-- `user_y_ata`: Das zugehörige Token-Konto des Benutzers für Token Y. Dies ist das Konto, das Token Y in den Pool empfängt oder sendet. Muss als `mutable` übergeben werden.
-- `vault_x`: Das Token-Konto, das alle in den Pool eingezahlten Token X enthält. Muss als `mutable` übergeben werden.
-- `vault_y`: Das Token-Konto, das alle in den Pool eingezahlten Token Y enthält. Muss als `mutable` übergeben werden.
-- `config`: Das Konfigurationskonto für den AMM-Pool. Speichert alle relevanten Pool-Parameter und -zustände.
-- `token program`: Das SPL-Token-Programmkonto. Dies ist erforderlich, um Token-Operationen wie Überweisungen und Prägungen durchzuführen. Muss `executable` sein.
+Folgende Accounts werden in diesem Kontext benötigt:
 
-Auch hier überlasse ich dir die Implementierung:
+- `user`: Der Nutzer, der im AMM swapt. Muss ein `signer` sein.
+- `user_x_ata`: Das Associated Token Account des Nutzers für Token X. Muss als `mutable` übergeben werden.
+- `user_y_ata`: Das Associated Token Account des Nutzers für Token Y. Muss als `mutable` übergeben werden.
+- `vault_x`: Das Token Account, das Token X für den Pool hält. Muss als `mutable` übergeben werden.
+- `vault_y`: Das Token Account, das Token Y für den Pool hält. Muss als `mutable` übergeben werden.
+- `config`: Das Konfigurationskonto des AMM. Es speichert Pool-Zustand und Parameter.
+- `token_program`: Das Token-Programm-Konto. `p-token` ist bereits auf Mainnet live, behält dieselbe SPL-Token-Program-ID und dieselbe Client-Oberfläche bei und stellt die Batch-Instruction bereit, die wir für diesen Swap verwenden wollen. Muss `executable` sein.
+
+Der Account-Parser bleibt unverändert:
 
 ```rust
 pub struct SwapAccounts<'a> {
@@ -41,16 +43,16 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 }
 ```
 
-<ArticleSection name="Instruction Data" id="instruction-data" level="h2" />
+<ArticleSection name="Instruction-Daten" id="instruction-data" level="h2" />
 
-Hier sind die Instruktionsdaten, die wir übergeben müssen:
+Auch die Instruction-Daten bleiben unverändert:
 
-- `is_x`: Ob dieser Tausch von Token X zu Token Y oder umgekehrt durchgeführt wird; wird benötigt, um die Konten korrekt auszurichten. Muss ein `[u8]` sein
-- `amount`: Die Menge an Token, die der Benutzer bereit ist, im Austausch für den anderen Token des Paares zu senden. Muss ein `[u64]` sein
-- `min`: Die Mindestmenge an Token, die der Benutzer bereit ist, im Austausch für den `amount` zu erhalten. Muss ein `[u64]` sein
-- `expiration`: Das Ablaufdatum dieser Order. Wichtig, um sicherzustellen, dass die Transaktion innerhalb einer bestimmten Zeit ausgeführt werden muss. Muss ein `[i64]` sein
+- `is_x`: Gibt an, ob der Nutzer X gegen Y oder Y gegen X tauscht. Muss ein `[u8]` sein.
+- `amount`: Der Betrag, den der Nutzer senden will. Muss ein `[u64]` sein.
+- `min`: Der Mindestbetrag, den der Nutzer erhalten will. Muss ein `[u64]` sein.
+- `expiration`: Der Zeitstempel, nach dem die Order ungültig ist. Muss ein `[i64]` sein.
 
-Wir werden die Implementierung für den `SwapInstructionData` genauso wie bei der Initialisierung handhaben. Daher überlasse ich dir die Implementierung:
+Wir können dieselbe Struktur beibehalten:
 
 ```rust
 pub struct SwapInstructionData {
@@ -69,25 +71,42 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> Stelle sicher, dass alle Beträge wie `amount` und `min` größer als null sind und dass die Order noch nicht abgelaufen ist, indem du das `Clock` Sysvar verwendest.
+> Stelle sicher, dass `amount` und `min` beide größer als null sind, und lehne abgelaufene Orders über die `Clock`-Sysvar ab.
 
-<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+<ArticleSection name="Warum Batch Wichtig Ist" id="why-batch-matters" level="h2" />
 
-Wir beginnen mit der Deserialisierung sowohl des `instruction_data` als auch des `accounts`.
+Jeder CPI hat Basiskosten von 1.000 Compute Units. Ein normaler Swap führt zwei Token-Transfers aus:
 
-Dann müssen wir:
+1. Token-Konto des Nutzers -> Vault
+2. Vault -> Token-Konto des Nutzers
 
-- Das `Config`Konto laden, um alle darin enthaltenen Daten zu erfassen. Wir können dies mit dem `Config::load()` Helfer tun.
-- Überprüfen, ob der `AmmState` gültig ist (also ob er gleich `AmmState::Initialized` ist).
-- Die Ableitung von `vault_x` und `vault_y` prüfen, um sicherzustellen, dass es sich um Associated Token Accounts handelt.
-- Alle beteiligten Token-Konten deserialisieren und die darin enthaltenen Daten verwenden, um den zu tauschenden Betrag mit dem `constant-product-curve` Crate zu berechnen und den Slippage wie folgt zu überprüfen:
+Ohne Batching sind das zwei separate Token-CPIs. Mit `p-token` lassen sich beide Transfers über die Batch-Instruction mit Discriminator `u8::MAX` (`255`) in einem einzigen äußeren Token-CPI bündeln.
+
+Jede innere Instruction innerhalb der Batch wird wie folgt codiert:
+
+- `account_count: u8`
+- `data_len: u8`
+- `instruction_data: [u8; data_len]`
+
+Das Token-Programm läuft dann die Payload durch und führt jede innere Instruction der Reihe nach aus. Eine Batch-Instruction darf keine weitere Batch-Instruction enthalten.
+
+<ArticleSection name="Instruction-Logik" id="instruction-logic" level="h2" />
+
+Wir beginnen damit, sowohl `instruction_data` als auch `accounts` zu deserialisieren.
+
+Danach müssen wir:
+
+- den `Config`-Account mit `Config::load()` laden,
+- prüfen, dass der Pool-Zustand `AmmState::Initialized` ist,
+- prüfen, dass `vault_x` und `vault_y` die erwarteten Associated Token Accounts sind,
+- die Vault-Token-Accounts deserialisieren und das Swap-Ergebnis mit `constant-product-curve` berechnen.
+
+Diese Berechnung bleibt gleich:
 
 ```rust
-// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
-// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -106,40 +125,75 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
-// Check for correct values
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
 ```
 
-- Erstelle die Transfer-Logik, die den `is_x` Wert überprüft und die `from` Beträge an die Tresore und die `to` Beträge an die Token-Konten des Benutzers überweist, wie folgt:
+Die wichtige Änderung liegt im Transfer-Schritt. Wir wollen weiterhin die Token-Helper aus `pinocchio_token` verwenden, aber statt `Transfer::invoke()` zweimal aufzurufen, legen wir beide Transfers in eine `Batch` und rufen das Token-Programm nur einmal auf.
+
+Der Import kann dann so aussehen:
 
 ```rust
-if self.instruction_data.is_x {
-    Transfer {
-        //...
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-} else {
-    Transfer {
-        //...
-
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-}
+use pinocchio_token::{
+    instructions::{Batch, Transfer},
+    state::TokenAccount,
+};
 ```
 
-Du solltest kompetent genug sein, um dies selbständig zu tun, daher überlasse ich dir die Implementierung:
+Und der Transfer-Schritt sollte so aussehen:
+
+```rust
+let mut batch = Batch::default();
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        self.accounts.user_x_ata,
+        self.accounts.vault_x,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_y,
+        self.accounts.user_y_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        self.accounts.user_y_ata,
+        self.accounts.vault_y,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_x,
+        self.accounts.user_x_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+Der entscheidende Punkt ist: Wir verwenden immer noch `Transfer`, nur eben in gebündelter Form. `Transfer` implementiert `IntoBatch`, daher müssen wir die inneren Instruktionen nicht selbst manuell serialisieren. Wenn dein Flow keine PDA-Signer-Seeds braucht, endet das einfach mit `batch.invoke()?;` genau wie in den `p-token`-Beispielen. In diesem AMM-Swap brauchen wir aber die `config`-PDA als Signer für den Transfer aus dem Vault, deshalb verwenden wir `batch.invoke_signed(&[signer])?;`.
+
+> Praktisch heißt das: mehrere Token-Instruktionen, ein CPI. Genau deshalb passt Batch so gut zu Swaps, LP-Deposits und ähnlichen DeFi-Abläufen.
+
+Du solltest nun die finale `process()`-Logik so anpassen, dass:
+
+- zuerst Validierung und Berechnung ausgeführt werden,
+- anschließend die beiden `Transfer`-Instruktionen in die Batch geschrieben werden,
+- und die Batch am Ende einmal an das Token-Programm invoked wird.
+
+Die äußere Form der Instruction bleibt unverändert:
 
 ```rust
 pub struct Swap<'a> {
@@ -154,13 +208,13 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
-        // Return the initialized struct
         Ok(Self {
             accounts,
             instruction_data,
         })
     }
 }
+
 impl<'a> Swap<'a> {
     pub const DISCRIMINATOR: &'a u8 = &3;
 

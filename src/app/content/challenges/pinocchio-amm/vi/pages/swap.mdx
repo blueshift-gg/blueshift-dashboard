@@ -1,31 +1,33 @@
 # Swap
 
-Instruction `swap` thực hiện hai nhiệm vụ chính:
+Lệnh `swap` vẫn thực hiện cùng hai nhiệm vụ chính:
 
-- Tính toán số lượng `mint_x` mà chúng ta sẽ nhận được bằng cách gửi một số lượng nhất định `mint_y` vào AMM (và ngược lại) bao gồm phí.
-- Chuyển token `from` đến vault và token `to` đến tài khoản token của người dùng
+- Tính xem người dùng nên nhận được bao nhiêu token ở phía đối diện, đã bao gồm phí.
+- Di chuyển token vào pool và ra khỏi pool.
 
-> Như đã đề cập trong phần instruction `initialize`; chúng ta sẽ khởi tạo tất cả `Associated Token Accounts` bên ngoài instruction của chúng ta vì mục đích tối ưu hóa.
+Điểm thay đổi là cách chúng ta gọi token program. Một AMM swap thông thường thường thực hiện hai CPI tới token program, nghĩa là phải trả chi phí CPI cơ bản hai lần. Với `p-token`, ta vẫn giữ nguyên program ID và luồng client hiện tại, nhưng có thể gói nhiều token instruction vào một instruction `batch`.
 
-<ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
+> Một trong những bí mật hay nhất của `p-token` là batching. Nhiều thao tác token có thể được thực hiện trong một CPI với discriminator `255`, và điều này cực kỳ phù hợp với AMM swap.
 
-Dưới đây là các tài khoản cần thiết cho context này:
+<ArticleSection name="Tài Khoản Cần Thiết" id="required-accounts" level="h2" />
 
-- `user`: Người dùng đang hoán đổi token trong thanh khoản của AMM. Phải là `signer`.
-- `vault_x`: Tài khoản token chứa tất cả token X được gửi vào pool. Phải được truyền vào như `mutable`.
-- `vault_y`: Tài khoản token chứa tất cả token Y được gửi vào pool. Phải được truyền vào như `mutable`.
-- `user_x_ata`: Tài khoản token liên kết của người dùng cho token X. Đây là tài khoản sẽ nhận hoặc gửi token X vào pool. Phải được truyền vào như `mutable`.
-- `user_y_ata`: Tài khoản token liên kết của người dùng cho token Y. Đây là tài khoản sẽ nhận hoặc gửi token Y vào pool. Phải được truyền vào như `mutable`.
-- `config`: Tài khoản cấu hình cho AMM pool. Lưu trữ tất cả các tham số và trạng thái pool liên quan.
-- `token program`: Tài khoản chương trình SPL Token. Điều này cần thiết để thực hiện các hoạt động token như chuyển khoản và minting. Phải là `executable`.
+Các tài khoản cần cho ngữ cảnh này là:
 
-Ở đây, một lần nữa, tôi sẽ để việc triển khai cho bạn:
+- `user`: người dùng đang swap vào AMM. Phải là `signer`.
+- `user_x_ata`: associated token account của người dùng cho token X. Phải được truyền dưới dạng `mutable`.
+- `user_y_ata`: associated token account của người dùng cho token Y. Phải được truyền dưới dạng `mutable`.
+- `vault_x`: token account giữ token X của pool. Phải được truyền dưới dạng `mutable`.
+- `vault_y`: token account giữ token Y của pool. Phải được truyền dưới dạng `mutable`.
+- `config`: tài khoản cấu hình của AMM. Lưu trạng thái và các tham số của pool.
+- `token_program`: tài khoản token program. `p-token` đã live trên mainnet, vẫn giữ nguyên program ID SPL Token và bề mặt client, đồng thời cung cấp batch instruction mà chúng ta muốn dùng cho swap này. Phải là `executable`.
+
+Phần parse account không thay đổi:
 
 ```rust
 pub struct SwapAccounts<'a> {
     pub user: &'a AccountInfo,
-    pub user_x: &'a AccountInfo,
-    pub user_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
     pub vault_x: &'a AccountInfo,
     pub vault_y: &'a AccountInfo,
     pub config: &'a AccountInfo,
@@ -41,16 +43,16 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 }
 ```
 
-<ArticleSection name="Dữ liệu cho Instruction" id="instruction-data" level="h2" />
+<ArticleSection name="Dữ Liệu Instruction" id="instruction-data" level="h2" />
 
-Đây là dữ liệu cho instruction mà chúng ta cần truyền vào:
+Dữ liệu instruction cũng giữ nguyên:
 
-- `is_x`: Liệu swap này có được thực hiện từ token X sang token Y hay ngược lại; cần thiết để sắp xếp các tài khoản một cách chính xác. Phải là `[u8]`
-- `amount`: Số lượng token mà người dùng sẵn sàng gửi để đổi lấy token khác trong cặp. Phải là `[u64]`
-- `min`: Số lượng tối thiểu token mà người dùng sẵn sàng nhận để đổi lấy `amount`. Phải là `[u64]`
-- `expiration`: Thời gian hết hạn của lệnh này. Quan trọng để đảm bảo rằng giao dịch phải được thực hiện trong một khoảng thời gian nhất định. Phải là `[i64]`
+- `is_x`: cho biết người dùng đang swap X sang Y hay Y sang X. Phải là `[u8]`.
+- `amount`: lượng token người dùng muốn gửi. Phải là `[u64]`.
+- `min`: lượng tối thiểu người dùng chấp nhận nhận được. Phải là `[u64]`.
+- `expiration`: timestamp mà sau đó lệnh không còn hợp lệ. Phải là `[i64]`.
 
-Chúng ta sẽ xử lý việc triển khai cho `SwapInstructionData` như khởi tạo. Vì vậy tôi sẽ để việc triển khai cho bạn:
+Ta có thể giữ nguyên layout:
 
 ```rust
 pub struct SwapInstructionData {
@@ -69,25 +71,42 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> Đảm bảo rằng bất kỳ số lượng nào, như `amount` và `mint` đều lớn hơn zero và lệnh chưa hết hạn bằng cách sử dụng sysvar `Clock`.
+> Hãy đảm bảo `amount` và `min` đều lớn hơn 0, và từ chối các lệnh đã hết hạn bằng sysvar `Clock`.
 
-<ArticleSection name="Instruction Logic" id="instruction-logic" level="h2" />
+<ArticleSection name="Vì Sao Batch Quan Trọng" id="why-batch-matters" level="h2" />
 
-Chúng ta bắt đầu bằng cách deserialize cả `instruction_data` và `accounts`.
+Mỗi CPI có chi phí cơ bản là 1.000 compute units. Một swap bình thường thực hiện hai token transfer:
 
-Sau đó chúng ta cần:
+1. token account của người dùng -> vault
+2. vault -> token account của người dùng
 
-- Tải tài khoản `Config` để lấy tất cả dữ liệu bên trong nó. Chúng ta có thể làm điều này bằng cách sử dụng helper `Config::load()`.
-- Xác minh rằng `AmmState` hợp lệ (vì vậy nếu nó bằng `AmmState::Initialized`).
-- Kiểm tra việc tạo `vault_x` và `vault_y` để trở thành Associated Token Accounts.
-- Deserialize tất cả các tài khoản token liên quan và sử dụng dữ liệu bên trong chúng để tính toán số lượng cần swap bằng cách sử dụng crate `constant-product-curve` và kiểm tra slippage như thế này:
+Nếu không batching, đó là hai CPI tách biệt tới token program. Với `p-token`, cả hai transfer này có thể được bọc trong một token CPI duy nhất bằng batch instruction với discriminator `u8::MAX` (`255`).
+
+Mỗi inner instruction trong batch được mã hóa như sau:
+
+- `account_count: u8`
+- `data_len: u8`
+- `instruction_data: [u8; data_len]`
+
+Token program sau đó sẽ duyệt payload và thực thi từng inner instruction theo thứ tự. Batch instruction không được chứa một batch instruction khác.
+
+<ArticleSection name="Logic Instruction" id="instruction-logic" level="h2" />
+
+Ta bắt đầu bằng cách deserialize cả `instruction_data` lẫn `accounts`.
+
+Sau đó cần:
+
+- load account `Config` bằng `Config::load()`,
+- xác minh trạng thái của pool là `AmmState::Initialized`,
+- xác minh `vault_x` và `vault_y` là các associated token account mong đợi,
+- deserialize các vault token account và tính kết quả swap bằng `constant-product-curve`.
+
+Phần tính toán đó vẫn giữ nguyên:
 
 ```rust
-// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
-// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -106,40 +125,75 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
-// Kiểm tra các giá trị chính xác
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
 ```
 
-- Tạo logic chuyển khoản kiểm tra giá trị `is_x` và chuyển số lượng `from` đến các vault và số lượng `to` đến tài khoản token của người dùng như thế này:
+Thay đổi quan trọng nằm ở bước transfer. Chúng ta vẫn muốn dùng các token helper từ `pinocchio_token`, nhưng thay vì gọi `Transfer::invoke()` hai lần, ta sẽ đưa cả hai transfer vào một `Batch` rồi gọi token program đúng một lần.
+
+Phần import có thể trông như thế này:
 
 ```rust
-if self.instruction_data.is_x {
-    Transfer {
-        //...
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-} else {
-    Transfer {
-        //...
-
-    }
-    .invoke()?;
-
-    Transfer {
-        //...
-    }
-    .invoke_signed(&signer_seeds)?;
-}
+use pinocchio_token::{
+    instructions::{Batch, Transfer},
+    state::TokenAccount,
+};
 ```
 
-Bạn đủ khả năng triển khai logic này, vì vậy tôi sẽ để việc triển khai cho bạn:
+Và bước transfer sẽ trông như sau:
+
+```rust
+let mut batch = Batch::default();
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        self.accounts.user_x_ata,
+        self.accounts.vault_x,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_y,
+        self.accounts.user_y_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        self.accounts.user_y_ata,
+        self.accounts.vault_y,
+        self.accounts.user,
+        self.instruction_data.amount,
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        self.accounts.vault_x,
+        self.accounts.user_x_ata,
+        self.accounts.config,
+        swap_result.withdraw,
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+Điểm quan trọng là: ta vẫn đang dùng `Transfer`, chỉ là ở dạng batched. `Transfer` triển khai `IntoBatch`, nên ta không cần tự serialize các inner instruction nữa. Nếu flow của bạn không cần PDA signer seeds, đoạn này có thể kết thúc bằng `batch.invoke()?;` đúng như các ví dụ `p-token`. Với swap AMM này, ta cần PDA `config` ký cho transfer đi ra khỏi vault, nên ta dùng `batch.invoke_signed(&[signer])?;`.
+
+> Nói ngắn gọn: nhiều token instruction, một CPI. Đó chính là lý do batch rất phù hợp cho swap, LP deposit và các luồng DeFi tương tự.
+
+Bây giờ bạn nên cập nhật logic cuối cùng của `process()` để:
+
+- phần kiểm tra và tính toán diễn ra trước,
+- hai instruction `Transfer` được đưa vào batch,
+- rồi batch được invoke một lần tới token program ở cuối.
+
+Hình dạng bên ngoài của instruction không thay đổi:
 
 ```rust
 pub struct Swap<'a> {
@@ -154,13 +208,13 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
-        // Trả về struct đã khởi tạo
         Ok(Self {
             accounts,
             instruction_data,
         })
     }
 }
+
 impl<'a> Swap<'a> {
     pub const DISCRIMINATOR: &'a u8 = &3;
 
