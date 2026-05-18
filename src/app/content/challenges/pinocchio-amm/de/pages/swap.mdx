@@ -5,8 +5,6 @@ Die Instruction `swap` erfüllt weiterhin dieselben zwei Aufgaben auf hohem Nive
 - Berechnen, wie viele Token der Gegenseite der Nutzer inklusive Gebühren erhalten soll.
 - Token in den Pool hinein und aus dem Pool heraus bewegen.
 
-Was sich ändert, ist die Art, wie wir mit dem Token-Programm sprechen. `p-token` ist auf Mainnet live und behält denselben Program-ID- und Client-Flow, daher können wir mehrere Token-Operationen in einem CPI bündeln.
-
 <ArticleSection name="Benötigte Accounts" id="required-accounts" level="h2" />
 
 Folgende Accounts werden in diesem Kontext benötigt:
@@ -17,7 +15,7 @@ Folgende Accounts werden in diesem Kontext benötigt:
 - `vault_x`: Das Token Account, das Token X für den Pool hält. Muss als `mutable` übergeben werden.
 - `vault_y`: Das Token Account, das Token Y für den Pool hält. Muss als `mutable` übergeben werden.
 - `config`: Das Konfigurationskonto des AMM. Es speichert Pool-Zustand und Parameter.
-- `token_program`: Das Token-Programm-Konto. `p-token` ist auf Mainnet live, behält dieselbe SPL-Token-Program-ID und Client-Oberfläche bei und unterstützt Batching. Muss `executable` sein.
+- `token_program`: Das Token-Programm-Konto. Es wird für Token-Operationen wie Transfers und Minting benötigt. Muss `executable` sein.
 
 Der Account-Parser bleibt unverändert:
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Die wichtige Änderung liegt im Transfer-Schritt. Du kennst das Batch-Pattern aus `deposit`, also packe beide Transfers in eine `Batch` und invokiere das Token-Programm einmal. Für diesen Swap brauchst du wegen der `config` PDA `batch.invoke_signed(&[signer])?;`.
+- Batch die Token-Transfers in einen einzigen CPI. Du hast das Batch-Pattern bereits in `deposit` gesehen, also machen wir hier dasselbe mit den beiden `Transfer`-Instruktionen und rufen das Token-Programm nur einmal auf. Da der Transfer aus dem Vault weiterhin die Signatur der `config` PDA benötigt, sollte der Batch mit `batch.invoke_signed(&[signer])?;` enden.
 
-Du solltest nun die finale `process()`-Logik so anpassen, dass:
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- zuerst Validierung und Berechnung ausgeführt werden,
-- anschließend die beiden `Transfer`-Instruktionen in die Batch geschrieben werden,
-- und die Batch am Ende einmal an das Token-Programm invoked wird.
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Stelle sicher, dass `pinocchio-token` mindestens Version `0.6.0` hat, um [p-token](https://solana.com/upgrades/p-token) Batch-Operationen zu unterstützen.
 
 Die äußere Form der Instruction bleibt unverändert:
 

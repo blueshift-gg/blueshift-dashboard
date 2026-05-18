@@ -5,8 +5,6 @@ Lệnh `swap` vẫn thực hiện cùng hai nhiệm vụ chính:
 - Tính xem người dùng nên nhận được bao nhiêu token ở phía đối diện, đã bao gồm phí.
 - Di chuyển token vào pool và ra khỏi pool.
 
-Điểm thay đổi là cách chúng ta gọi token program. `p-token` đã live trên mainnet và giữ nguyên program ID cùng luồng client hiện tại, nên chúng ta có thể gói nhiều thao tác token vào một CPI.
-
 <ArticleSection name="Tài Khoản Cần Thiết" id="required-accounts" level="h2" />
 
 Các tài khoản cần cho ngữ cảnh này là:
@@ -17,7 +15,7 @@ Các tài khoản cần cho ngữ cảnh này là:
 - `vault_x`: token account giữ token X của pool. Phải được truyền dưới dạng `mutable`.
 - `vault_y`: token account giữ token Y của pool. Phải được truyền dưới dạng `mutable`.
 - `config`: tài khoản cấu hình của AMM. Lưu trạng thái và các tham số của pool.
-- `token_program`: tài khoản token program. `p-token` đã live trên mainnet và giữ nguyên program ID SPL Token cùng bề mặt client, đồng thời hỗ trợ batching. Phải là `executable`.
+- `token_program`: tài khoản token program. Tài khoản này cần thiết cho các thao tác token như transfer và minting. Phải là `executable`.
 
 Phần parse account không thay đổi:
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Thay đổi quan trọng nằm ở bước transfer. Bạn đã thấy pattern batch ở `deposit`, nên hãy đưa cả hai transfer vào `Batch` và chỉ invoke token program một lần. Trong swap này, vì `config` PDA cần ký cho transfer từ vault, hãy dùng `batch.invoke_signed(&[signer])?;`.
+- Batch các lần transfer token vào một CPI duy nhất. Bạn đã thấy pattern batch ở `deposit`, nên ở đây chúng ta làm điều tương tự với hai instruction `Transfer` và chỉ gọi token program một lần. Vì transfer từ vault vẫn cần chữ ký của PDA `config`, batch nên kết thúc bằng `batch.invoke_signed(&[signer])?;`.
 
-Bây giờ bạn nên cập nhật logic cuối cùng của `process()` để:
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- phần kiểm tra và tính toán diễn ra trước,
-- hai instruction `Transfer` được đưa vào batch,
-- rồi batch được invoke một lần tới token program ở cuối.
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Hãy đảm bảo `pinocchio-token` có phiên bản ít nhất là `0.6.0` để hỗ trợ các thao tác batch của [p-token](https://solana.com/upgrades/p-token).
 
 Hình dạng bên ngoài của instruction không thay đổi:
 

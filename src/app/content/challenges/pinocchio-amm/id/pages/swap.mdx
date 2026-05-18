@@ -5,8 +5,6 @@ Instruksi `swap` masih menjalankan dua tugas utama yang sama:
 - Menghitung berapa banyak token lawan yang harus diterima pengguna, termasuk fee.
 - Memindahkan token masuk ke pool dan keluar dari pool.
 
-Yang berubah adalah cara kita berbicara dengan token program. `p-token` sudah live di mainnet dan mempertahankan program ID serta alur client yang sama, sehingga kita bisa membungkus beberapa operasi token ke dalam satu CPI.
-
 <ArticleSection name="Akun yang Diperlukan" id="required-accounts" level="h2" />
 
 Berikut akun-akun yang diperlukan untuk konteks ini:
@@ -17,7 +15,7 @@ Berikut akun-akun yang diperlukan untuk konteks ini:
 - `vault_x`: Token account yang menyimpan token X milik pool. Harus dikirim sebagai `mutable`.
 - `vault_y`: Token account yang menyimpan token Y milik pool. Harus dikirim sebagai `mutable`.
 - `config`: Account konfigurasi AMM. Menyimpan state dan parameter pool.
-- `token_program`: Account token program. `p-token` sudah live di mainnet, mempertahankan program ID SPL Token dan permukaan client yang sama, serta mendukung batching. Harus `executable`.
+- `token_program`: Account token program. Ini diperlukan untuk operasi token seperti transfer dan minting. Harus `executable`.
 
 Parser account-nya tetap sama:
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Perubahan penting ada pada langkah transfer. Kamu sudah melihat pattern batch di `deposit`, jadi masukkan kedua transfer ke dalam `Batch` dan invoke token program satu kali. Untuk swap ini, karena PDA `config` harus menandatangani transfer dari vault, gunakan `batch.invoke_signed(&[signer])?;`.
+- Batch transfer token ke dalam satu CPI. Anda sudah melihat pattern batch di `deposit`, jadi di sini kita melakukan hal yang sama dengan dua instruksi `Transfer` dan hanya memanggil token program sekali. Karena transfer dari vault tetap memerlukan tanda tangan PDA `config`, batch harus diakhiri dengan `batch.invoke_signed(&[signer])?;`.
 
-Sekarang Anda harus memperbarui logika akhir `process()` sehingga:
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- validasi dan perhitungan dilakukan lebih dulu,
-- kedua instruksi `Transfer` dimasukkan ke dalam batch,
-- lalu batch dipanggil sekali ke token program di bagian akhir.
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Pastikan `pinocchio-token` setidaknya versi `0.6.0` untuk mendukung operasi batch [p-token](https://solana.com/upgrades/p-token).
 
 Bentuk instruksi luarnya tetap sama:
 

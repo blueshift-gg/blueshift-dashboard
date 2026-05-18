@@ -5,8 +5,6 @@
 - Обчислює, скільки токена з протилежного боку користувач має отримати з урахуванням комісії.
 - Переміщує токени в пул і з пулу.
 
-Змінюється те, як ми взаємодіємо з token program. `p-token` вже на mainnet і зберігає той самий program ID та клієнтський потік, тож ми можемо пакетувати кілька token операцій в один CPI.
-
 <ArticleSection name="Потрібні Акаунти" id="required-accounts" level="h2" />
 
 Ось акаунти, які потрібні в цьому контексті:
@@ -17,7 +15,7 @@
 - `vault_x`: token account, що зберігає токен X пулу. Має передаватися як `mutable`.
 - `vault_y`: token account, що зберігає токен Y пулу. Має передаватися як `mutable`.
 - `config`: акаунт конфігурації AMM. Зберігає стан пулу та параметри.
-- `token_program`: акаунт token program. `p-token` вже на mainnet, зберігає той самий program ID SPL Token і клієнтський інтерфейс та підтримує batching. Має бути `executable`.
+- `token_program`: акаунт token program. Він потрібен для токен-операцій, таких як transfer і minting. Має бути `executable`.
 
 Парсер акаунтів не змінюється:
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Важлива зміна стосується етапу transfer. Ти вже бачив batch-патерн у `deposit`, тож додай обидва transfer у `Batch` і виклич token program один раз. Для цього swap через підпис PDA `config` з vault потрібно використати `batch.invoke_signed(&[signer])?;`.
+- Batch-іть token transfers в один CPI. Ти вже бачив batch-патерн у `deposit`, тож тут ми робимо те саме з двома інструкціями `Transfer` і викликаємо token program лише один раз. Оскільки transfer з vault, як і раніше, вимагає підпису PDA `config`, batch має завершуватися викликом `batch.invoke_signed(&[signer])?;`.
 
-Тепер тобі потрібно оновити фінальну логіку `process()` так, щоб:
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- спочатку виконувалися перевірки та обчислення,
-- обидві інструкції `Transfer` додавалися в batch,
-- а в кінці batch один раз викликалася до token program.
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Переконайтеся, що `pinocchio-token` має щонайменше версію `0.6.0`, щоб підтримувати batch-операції [p-token](https://solana.com/upgrades/p-token).
 
 Зовнішня форма instruction не змінюється:
 
