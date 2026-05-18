@@ -7,8 +7,6 @@ Instruction `take` hoàn thiện việc hoán đổi:
 - Chuyển số lượng Token B đã thỏa thuận từ taker đến maker.
 - Đóng tài khoản chương trình escrow.
 
-Với `p-token` đã live trên mainnet, đây là nơi phù hợp để dùng luồng batch hiện tại. Chúng ta có thể đưa cả hai lần chuyển token và việc đóng vault vào cùng một `Batch`.
-
 <ArticleSection name="Các tài khoản cần thiết" id="required-accounts" level="h2" />
 
 Dưới đây là các tài khoản mà context cần:
@@ -23,7 +21,7 @@ Dưới đây là các tài khoản mà context cần:
 - taker_ata_b: tài khoản token liên kết thuộc sở hữu của taker cho mint_b. Phải là mutable
 - maker_ata_b: tài khoản token liên kết thuộc sở hữu của maker cho mint_b. Phải là mutable
 - system_program: chương trình hệ thống. Phải là executable
-- token_program: chương trình token. Với `p-token` đã live trên mainnet, cùng tài khoản này cũng hỗ trợ batching các lần chuyển token trong instruction này. Phải là executable
+- token_program: chương trình token. Phải là executable
 
 Và chúng ta thực hiện các kiểm tra này trên nó:
 
@@ -130,11 +128,14 @@ Bây giờ chúng ta có thể tập trung vào logic chính sẽ:
 - Chuyển token từ `taker_ata_b` đến `maker_ata_b`.
 - Đóng tài khoản chương trình `escrow` sau khi việc hoán đổi hoàn tất.
 
-Thay đổi chính là chúng ta có thể batch cả hai lần chuyển token và việc đóng vault, rồi chỉ invoke chương trình token một lần. PDA của escrow vẫn cần ký vì nó cấp quyền cho cả chuyển token ra khỏi vault và `CloseAccount` trên tài khoản token đó. Vì vậy batch kết thúc bằng `batch.invoke_signed(&[signer.clone()])?;`. Sau đó chúng ta vẫn đóng `escrow` bằng `ProgramAccount::close`, vì đó là tài khoản do chương trình sở hữu:
+Thay vì thực hiện ba lệnh gọi CPI token riêng biệt để hoàn tất việc hoán đổi, chúng ta có thể tận dụng batch instruction trong [`p-token`](https://solana.com/upgrades/p-token) để thực hiện hiệu quả tất cả các thao tác token chỉ trong một lần gọi CPI.
 
 ```rust
 impl<'a> Take<'a> {
   pub const DISCRIMINATOR: &'a u8 = &1;
+
+  const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2 + CloseAccount::MAX_ACCOUNTS_LEN;
+  const MAX_DATA_LEN: usize = Batch::header_data_len(3) + Transfer::DATA_LEN * 2 + CloseAccount::DATA_LEN;
 
   pub fn process(&mut self) -> ProgramResult {
     let data = self.accounts.escrow.try_borrow_data()?;
@@ -158,7 +159,8 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    let mut batch = Batch::default();
+    let batch_state = BatchState::new(Self::MAX_ACCOUNTS_LEN, Self::MAX_DATA_LEN);
+    let mut batch = batch_state.as_batch()?;
 
     Transfer::new(
       self.accounts.vault,
@@ -183,7 +185,7 @@ impl<'a> Take<'a> {
     )
     .into_batch(&mut batch)?;
 
-    batch.invoke_signed(&[signer.clone()])?;
+    batch.invoke_signed(&[signer])?;
 
     // Close the Escrow program account
     drop(data);
@@ -193,3 +195,5 @@ impl<'a> Take<'a> {
   }
 }
 ```
+
+> Hãy đảm bảo `pinocchio-token` có phiên bản ít nhất là `0.6.0` để hỗ trợ các thao tác batch của [p-token](https://solana.com/upgrades/p-token).

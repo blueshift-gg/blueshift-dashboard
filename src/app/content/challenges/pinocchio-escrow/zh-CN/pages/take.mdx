@@ -7,8 +7,6 @@
 - 将约定数量的 Token B 从接受者转移到创建者。
 - 关闭 `escrow` 程序账户。
 
-由于 `p-token` 已经在主网上线，这里正适合使用当前的 batch 流程。我们可以把两次代币转移和 vault 的关闭放进同一个 `Batch`。
-
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
 
 以下是上下文所需的账户：
@@ -23,7 +21,7 @@
 - taker_ata_b：由接受者拥有的 mint_b 的关联代币账户。必须可变。
 - maker_ata_b：由创建者拥有的 mint_b 的关联代币账户。必须可变。
 - system_program：系统程序。必须可执行。
-- token_program：代币程序。由于 `p-token` 已经在主网上线，这个账户也支持在此指令中对代币转移进行 batching。必须可执行。
+- token_program：代币程序。必须可执行。
 
 我们对其执行以下检查：
 
@@ -130,11 +128,14 @@ impl<'a> TryFrom<&'a [AccountInfo]> for Take<'a> {
 - 将代币从 `taker_ata_b` 转移到 `maker_ata_b`。
 - 在交换完成后关闭 `escrow` 程序账户。
 
-这里最重要的变化是，我们可以把两次代币转移和 vault 的关闭放进 batch，然后只调用一次代币程序。Escrow PDA 仍然需要签名，因为它既要授权从 vault 转出，也要授权该代币账户上的 `CloseAccount`。因此 batch 会以 `batch.invoke_signed(&[signer.clone()])?;` 结束。之后我们仍然使用 `ProgramAccount::close` 来关闭 `escrow`，因为它是一个由程序拥有的账户：
+与其用三个独立的代币 CPI 调用来完成这次交换，我们可以利用 [`p-token`](https://solana.com/upgrades/p-token) 中的 batch instruction，把所有代币操作高效地合并到一次 CPI 调用中。
 
 ```rust
 impl<'a> Take<'a> {
   pub const DISCRIMINATOR: &'a u8 = &1;
+
+  const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2 + CloseAccount::MAX_ACCOUNTS_LEN;
+  const MAX_DATA_LEN: usize = Batch::header_data_len(3) + Transfer::DATA_LEN * 2 + CloseAccount::DATA_LEN;
 
   pub fn process(&mut self) -> ProgramResult {
     let data = self.accounts.escrow.try_borrow_data()?;
@@ -158,7 +159,8 @@ impl<'a> Take<'a> {
 
     let amount = TokenAccount::from_account_info(self.accounts.vault)?.amount();
 
-    let mut batch = Batch::default();
+    let batch_state = BatchState::new(Self::MAX_ACCOUNTS_LEN, Self::MAX_DATA_LEN);
+    let mut batch = batch_state.as_batch()?;
 
     Transfer::new(
       self.accounts.vault,
@@ -183,7 +185,7 @@ impl<'a> Take<'a> {
     )
     .into_batch(&mut batch)?;
 
-    batch.invoke_signed(&[signer.clone()])?;
+    batch.invoke_signed(&[signer])?;
 
     // Close the Escrow program account
     drop(data);
@@ -193,3 +195,5 @@ impl<'a> Take<'a> {
   }
 }
 ```
+
+> 请确保 `pinocchio-token` 至少为 `0.6.0` 版本，以支持 [p-token](https://solana.com/upgrades/p-token) 的批量操作。
