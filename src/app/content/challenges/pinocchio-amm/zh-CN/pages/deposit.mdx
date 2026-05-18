@@ -6,8 +6,6 @@
 - 计算存款金额，并检查金额是否超过用户指定的 `max_x` 和 `max_y`。
 - 在用户的 ata 中铸造正确数量的 `mint_lp`。
 
-由于 `p-token` 已经在主网上线，我们会把这些 token CPI 批量处理。这里会把两次转账和一次 mint 放入同一个 `Batch`，并以 `batch.invoke_signed(&[signer])?;` 结束，因为 LP mint 需要 `config` PDA 签名。
-
 > 如 `initialize` 指令部分所述；为了优化，我们将所有 `Associated Token Accounts` 初始化在指令之外。
 
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
@@ -22,7 +20,7 @@
 - `user_y_ata`：用户的 Y 代币关联账户。这是用户的 Y 代币将从中转移到池中的源账户。必须作为 `mutable` 传递。
 - `user_lp_ata`：用户的 LP 代币关联账户。这是铸造 LP 代币的目标账户。必须作为 `mutable` 传递。
 - `config`：AMM 池的配置账户。存储所有相关的池参数和状态。
-- `token program`：SPL 代币程序账户。`p-token` 已在主网上线并保留相同的程序 ID，该账户也支持 batching。必须是 `executable`。
+- `token program`：SPL 代币程序账户。它用于执行转账和铸造等代币操作。必须是 `executable`。
 
 这里，我将再次把实现留给你：
 
@@ -137,14 +135,28 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > 如果是首次存款，我们可以跳过 LP 代币和存款的计算，直接采用用户建议的数值
 
-- 将用户的代币账户中的金额转移到金库，并向用户的代币账户铸造相应数量的 LP 代币。使用单一 `Batch`，让两次转账和一次 mint 在单一 CPI 中完成。
+- 将用户的代币账户中的金额转移到金库，并向用户的代币账户铸造相应数量的 LP 代币。
 
-这就是你把 batch 组装起来的部分。我们仍然使用 token helpers，只是改成 batched 形式。`Transfer` 和 `MintTo` 都实现了 `IntoBatch`，所以不需要手动序列化。由于 LP mint 的 authority 是 `config` PDA，所以最后使用 `batch.invoke_signed(&[signer])?;`：
+借助 [`p-token`](https://solana.com/upgrades/p-token) 升级，我们可以把代币转账和铸造合并到单一 CPI 中，而不是执行三个独立的 CPI 调用。
 
 ```rust
-use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+use pinocchio_token::instructions::{Batch, BatchState, MintTo, Transfer};
 
-let mut batch = Batch::default();
+/// Batch 指令所需的账户数量。
+const MAX_ACCOUNTS_LEN: usize =
+    Transfer::MAX_ACCOUNTS_LEN * 2
+    + MintTo::MAX_ACCOUNTS_LEN;
+
+/// Batch 指令所需的指令数据长度。
+const MAX_DATA_LEN: usize = Batch::header_data_len(3)
+    + Transfer::DATA_LEN * 2
+    + MintTo::DATA_LEN;
+
+
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
 
 Transfer::new(
     self.accounts.user_x_ata,
@@ -173,7 +185,9 @@ MintTo::new(
 batch.invoke_signed(&[signer])?;
 ```
 
-你应该已经足够熟练可以独立完成这部分内容，所以我将实现部分留给你：
+> 请确保 `pinocchio-token` 至少为 `0.6.0` 版本，以支持 [p-token](https://solana.com/upgrades/p-token) 的批量操作。
+
+你应该已经足够熟练可以独立完成剩余部分，所以我将实现部分留给你：
 
 ```rust
 pub struct Deposit<'a> {

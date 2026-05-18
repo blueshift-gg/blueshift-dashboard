@@ -6,8 +6,6 @@ L'instruction `deposit` effectue trois tâches principales :
 - Calcule le montant à déposer et vérifie qu'il n'est pas supérieur aux valeurs `max_x` et `max_y` définies par l'utilisateur.
 - Mint la quantité appropriée de `mint_lp` dans l'ATA de l'utilisateur.
 
-Comme `p-token` est déjà en ligne sur mainnet, nous batchons les CPI token pour cette instruction. Ici, vous ajoutez deux transfers et un mint dans un seul `Batch`, puis vous terminez par `batch.invoke_signed(&[signer])?;` car le mint de LP nécessite la signature de la PDA `config`.
-
 > Comme mentionné dans la section relative à l'instruction `initialize`, nous allons initialiser tous les `Associated Token Accounts` en dehors de notre instruction à des fins d'optimisation.
 
 <ArticleSection name="Comptes Nécessaires" id="required-accounts" level="h2" />
@@ -22,7 +20,7 @@ Voici les comptes nécessaires pour ce contexte :
 - `user_y_ata`: Le compte de jeton associé de l'utilisateur pour le jeton Y. Il s'agit du compte source à partir duquel le jeton Y de l'utilisateur sera transféré dans la _pool_. Doit être `mutable`.
 - `user_lp_ata`: Le compte de jetons associé de l'utilisateur pour les jetons LP. Il s'agit du compte de destination dans lequel les jetons LP seront créés. Doit être `mutable`.
 - `config`: Le compte de configuration de la _pool_ de l'AMM. Stocke tous les paramètres pertinents et l'état de la _pool_.
-- `token program`: Le compte du program SPL-Token. `p-token` est déjà sur mainnet et conserve le même program ID, ce compte supporte donc aussi le batching. Doit être `executable`.
+- `token program`: Le compte du program SPL-Token. Il est nécessaire pour effectuer des opérations sur les jetons comme les transfers et le mint. Doit être `executable`.
 
 Ici encore, je vous laisse le soin de l'implémenter :
 
@@ -137,14 +135,28 @@ if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
 
 > S'il s'agit du premier dépôt, nous pouvons ignorer le calcul des jetons LP et des dépôts et simplement utiliser la valeur suggérée par l'utilisateur
 
-- Transférer les montants des comptes de jetons de l'utilisateur vers les _vaults_ et mintez le montant approprié de jetons LP sur le compte de jetons de l'utilisateur. Utilisez un seul `Batch` pour regrouper les deux transfers et le mint en un seul CPI.
+- Transférer les montants des comptes de jetons de l'utilisateur vers les _vaults_ et minter le montant approprié de jetons LP sur le compte de jetons de l'utilisateur.
 
-C'est ici que tu branches le batch. On utilise toujours les helpers token, simplement en mode batched. `Transfer` et `MintTo` implémentent `IntoBatch`, donc pas besoin de sérialiser à la main. Comme l'authority du LP mint est la PDA `config`, on termine par `batch.invoke_signed(&[signer])?;` :
+Grâce à la mise à niveau [`p-token`](https://solana.com/upgrades/p-token), nous pouvons batcher les transferts de jetons et le mint en un seul CPI, au lieu d'effectuer trois appels CPI séparés.
 
 ```rust
-use pinocchio_token::instructions::{Batch, MintTo, Transfer};
+use pinocchio_token::instructions::{Batch, BatchState, MintTo, Transfer};
 
-let mut batch = Batch::default();
+/// Le nombre de comptes pour l'instruction batch.
+const MAX_ACCOUNTS_LEN: usize =
+    Transfer::MAX_ACCOUNTS_LEN * 2
+    + MintTo::MAX_ACCOUNTS_LEN;
+
+/// La longueur des données d'instruction pour l'instruction batch.
+const MAX_DATA_LEN: usize = Batch::header_data_len(3)
+    + Transfer::DATA_LEN * 2
+    + MintTo::DATA_LEN;
+
+
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
 
 Transfer::new(
     self.accounts.user_x_ata,
@@ -173,7 +185,9 @@ MintTo::new(
 batch.invoke_signed(&[signer])?;
 ```
 
-Vous devriez être suffisamment compétent pour le faire vous-même, je vous laisse donc le soin de l'implémenter :
+> Assurez-vous que `pinocchio-token` est au moins en version `0.6.0` pour prendre en charge les opérations batch de [p-token](https://solana.com/upgrades/p-token).
+
+Vous devriez être suffisamment compétent pour faire le reste vous-même, je vous laisse donc le soin de l'implémenter :
 
 ```rust
 pub struct Deposit<'a> {

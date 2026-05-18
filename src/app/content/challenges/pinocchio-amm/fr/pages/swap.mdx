@@ -5,8 +5,6 @@ L'instruction `swap` effectue toujours les deux mêmes tâches de haut niveau :
 - Calculer combien de jetons opposés l'utilisateur doit recevoir, frais inclus.
 - Déplacer les jetons vers la pool et hors de la pool.
 
-Ce qui change, c'est la manière de parler au token program. `p-token` est déjà en ligne sur mainnet et conserve le même program ID et flux client, donc nous pouvons regrouper plusieurs opérations token dans un seul CPI.
-
 <ArticleSection name="Comptes Nécessaires" id="required-accounts" level="h2" />
 
 Voici les comptes nécessaires pour ce contexte :
@@ -17,7 +15,7 @@ Voici les comptes nécessaires pour ce contexte :
 - `vault_x` : le compte de jetons qui détient le jeton X pour la pool. Doit être passé comme `mutable`.
 - `vault_y` : le compte de jetons qui détient le jeton Y pour la pool. Doit être passé comme `mutable`.
 - `config` : le compte de configuration de l'AMM. Il stocke l'état et les paramètres de la pool.
-- `token_program` : le compte du token program. `p-token` est déjà sur mainnet, conserve le même program ID et la même surface client que SPL Token, et supporte le batching. Doit être `executable`.
+- `token_program` : le compte du token program. Il est nécessaire pour effectuer des opérations sur les jetons comme les transfers et le mint. Doit être `executable`.
 
 Le parseur de comptes reste inchangé :
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-Le changement important concerne l'etape de transfert. Tu as deja vu le pattern batch dans `deposit`, donc ajoute les deux transfers dans une `Batch` et invoque le token program une seule fois. Pour ce swap, la PDA `config` doit signer le transfert depuis le vault, donc utilise `batch.invoke_signed(&[signer])?;`.
+- Regroupez les transfers de jetons dans un seul CPI. Vous avez déjà vu le pattern batch dans `deposit`, donc ici nous faisons la même chose avec les deux instructions `Transfer` et nous n'invoquons le token program qu'une seule fois. Comme le transfer depuis le vault nécessite toujours la signature de la PDA `config`, la batch doit se terminer par `batch.invoke_signed(&[signer])?;`.
 
-Vous devez maintenant mettre à jour la logique finale de `process()` afin que :
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- les validations et le calcul soient effectués d'abord,
-- les deux instructions `Transfer` soient ajoutées à la batch,
-- la batch soit invoquée une seule fois vers le token program à la fin.
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Assurez-vous que `pinocchio-token` est au moins en version `0.6.0` pour prendre en charge les opérations batch de [p-token](https://solana.com/upgrades/p-token).
 
 La forme extérieure de l'instruction ne change pas :
 

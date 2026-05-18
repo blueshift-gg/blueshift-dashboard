@@ -5,8 +5,6 @@
 - 计算用户在扣除手续费后应当收到多少另一侧的代币。
 - 将代币转入池子并从池子中转出。
 
-变化点在于我们如何与代币程序交互。`p-token` 已经在主网上线并保留相同的程序 ID 和客户端调用方式，因此我们可以把多个 token 操作打包成单一 CPI。
-
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
 
 此上下文需要以下账户：
@@ -17,7 +15,7 @@
 - `vault_x`：池子持有 token X 的代币账户。必须作为 `mutable` 传入。
 - `vault_y`：池子持有 token Y 的代币账户。必须作为 `mutable` 传入。
 - `config`：AMM 配置账户。保存池子的状态和参数。
-- `token_program`：代币程序账户。`p-token` 已经在主网上线并保留相同的 SPL Token 程序 ID 和客户端接口，也支持 batching。必须是 `executable`。
+- `token_program`：代币程序账户。它用于执行转账和铸造等代币操作。必须是 `executable`。
 
 账户解析逻辑保持不变：
 
@@ -111,13 +109,43 @@ if swap_result.deposit == 0 || swap_result.withdraw == 0 {
 }
 ```
 
-真正重要的变化在转账步骤。你在 `deposit` 已经看过 batch 的做法，所以把两笔转账加入 `Batch` 后只调用一次代币程序。在这个 swap 中，因为 `config` PDA 需要为 vault 转出签名，所以要使用 `batch.invoke_signed(&[signer])?;`。
+- 将代币转账批量合并到单一 CPI 中。你已经在 `deposit` 里见过 batch 的模式，所以这里我们对两条 `Transfer` 指令做同样的事情，只调用一次代币程序。由于从 vault 转出的那笔转账仍然需要 `config` PDA 签名，batch 应该以 `batch.invoke_signed(&[signer])?;` 结束。
 
-现在你应该把最终的 `process()` 逻辑更新为：
+```rust
+const MAX_ACCOUNTS_LEN: usize = Transfer::MAX_ACCOUNTS_LEN * 2;
+const MAX_DATA_LEN: usize = Batch::header_data_len(2) + Transfer::DATA_LEN * 2;
 
-- 先完成校验和计算，
-- 再把两条 `Transfer` 指令加入 batch，
-- 最后只调用一次 batch，把它发送给代币程序执行。
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+if self.instruction_data.is_x {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+} else {
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+
+    Transfer::new(
+        // ...
+    )
+    .into_batch(&mut batch)?;
+}
+
+batch.invoke_signed(&[signer])?;
+```
+
+> 请确保 `pinocchio-token` 至少为 `0.6.0` 版本，以支持 [p-token](https://solana.com/upgrades/p-token) 的批量操作。
 
 外层指令的结构保持不变：
 
