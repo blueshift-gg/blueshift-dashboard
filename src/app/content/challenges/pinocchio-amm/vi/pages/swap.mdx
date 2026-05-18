@@ -1,9 +1,11 @@
 # Swap
 
-Lệnh `swap` vẫn thực hiện cùng hai nhiệm vụ chính:
+Instruction `swap` thực hiện hai nhiệm vụ chính:
 
-- Tính xem người dùng nên nhận được bao nhiêu token ở phía đối diện, đã bao gồm phí.
-- Di chuyển token vào pool và ra khỏi pool.
+- Tính toán số lượng `mint_x` mà chúng ta sẽ nhận được khi gửi một lượng `mint_y` nhất định vào amm (và ngược lại), bao gồm cả phí.
+- Chuyển token `from` vào vault và chuyển token `to` đến tài khoản token của người dùng.
+
+> Như đã đề cập trong phần instruction `initialize`; chúng ta sẽ khởi tạo tất cả `Associated Token Accounts` bên ngoài instruction của mình vì mục đích tối ưu hóa.
 
 <ArticleSection name="Tài Khoản Cần Thiết" id="required-accounts" level="h2" />
 
@@ -17,7 +19,7 @@ Các tài khoản cần cho ngữ cảnh này là:
 - `config`: tài khoản cấu hình của AMM. Lưu trạng thái và các tham số của pool.
 - `token_program`: tài khoản token program. Tài khoản này cần thiết cho các thao tác token như transfer và minting. Phải là `executable`.
 
-Phần parse account không thay đổi:
+Ở đây, một lần nữa, tôi sẽ để phần triển khai cho bạn:
 
 ```rust
 pub struct SwapAccounts<'a> {
@@ -41,14 +43,14 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 
 <ArticleSection name="Dữ Liệu Instruction" id="instruction-data" level="h2" />
 
-Dữ liệu instruction cũng giữ nguyên:
+Đây là dữ liệu instruction mà chúng ta cần truyền vào:
 
-- `is_x`: cho biết người dùng đang swap X sang Y hay Y sang X. Phải là `[u8]`.
-- `amount`: lượng token người dùng muốn gửi. Phải là `[u64]`.
-- `min`: lượng tối thiểu người dùng chấp nhận nhận được. Phải là `[u64]`.
-- `expiration`: timestamp mà sau đó lệnh không còn hợp lệ. Phải là `[i64]`.
+- `is_x`: Swap này được thực hiện từ token X sang token Y hay ngược lại; cần thiết để sắp xếp đúng các account. Phải là `[u8]`
+- `amount`: Số lượng token mà người dùng sẵn sàng gửi để đổi lấy token còn lại trong cặp. Phải là `[u64]`
+- `min`: Số lượng token tối thiểu mà người dùng sẵn sàng nhận được khi đổi `amount`. Phải là `[u64]`
+- `expiration`: Thời điểm hết hạn của lệnh này. Điều này quan trọng để đảm bảo giao dịch phải được thực hiện trong một khoảng thời gian nhất định. Phải là `[i64]`
 
-Ta có thể giữ nguyên layout:
+Chúng ta sẽ xử lý phần triển khai `SwapInstructionData` giống như phần khởi tạo. Vì vậy tôi sẽ để phần triển khai cho bạn:
 
 ```rust
 pub struct SwapInstructionData {
@@ -67,25 +69,25 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> Hãy đảm bảo `amount` và `min` đều lớn hơn 0, và từ chối các lệnh đã hết hạn bằng sysvar `Clock`.
+> Hãy đảm bảo mọi số lượng như `amount` và `min` đều lớn hơn 0, đồng thời lệnh chưa hết hạn bằng cách sử dụng sysvar `Clock`.
 
 <ArticleSection name="Logic Instruction" id="instruction-logic" level="h2" />
 
-Ta bắt đầu bằng cách deserialize cả `instruction_data` lẫn `accounts`.
+Chúng ta bắt đầu bằng cách deserialize cả `instruction_data` và `accounts`.
 
-Sau đó cần:
+Sau đó chúng ta cần:
 
-- load account `Config` bằng `Config::load()`,
-- xác minh trạng thái của pool là `AmmState::Initialized`,
-- xác minh `vault_x` và `vault_y` là các associated token account mong đợi,
-- deserialize các vault token account và tính kết quả swap bằng `constant-product-curve`.
-
-Phần tính toán đó vẫn giữ nguyên:
+- Load account `Config` để lấy toàn bộ dữ liệu bên trong. Chúng ta có thể thực hiện việc đó bằng helper `Config::load()`.
+- Xác minh `AmmState` là hợp lệ (tức là bằng `AmmState::Initialized`).
+- Kiểm tra derivation của `vault_x` và `vault_y` là Associated Token Accounts.
+- Deserialize tất cả các token account liên quan và sử dụng dữ liệu bên trong để tính toán số lượng swap bằng crate `constant-product-curve`, đồng thời kiểm tra slippage như sau:
 
 ```rust
+// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
+// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -104,6 +106,7 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
+// Check for correct values
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
@@ -147,7 +150,7 @@ batch.invoke_signed(&[signer])?;
 
 > Hãy đảm bảo `pinocchio-token` có phiên bản ít nhất là `0.6.0` để hỗ trợ các thao tác batch của [p-token](https://solana.com/upgrades/p-token).
 
-Hình dạng bên ngoài của instruction không thay đổi:
+Bạn nên đã đủ thành thạo để tự hoàn thành phần này, vì vậy tôi sẽ để việc triển khai lại cho bạn:
 
 ```rust
 pub struct Swap<'a> {
@@ -162,6 +165,7 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
+        // Return the initialized struct
         Ok(Self {
             accounts,
             instruction_data,

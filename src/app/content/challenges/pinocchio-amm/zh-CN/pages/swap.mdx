@@ -1,9 +1,11 @@
 # 交换
 
-`swap` 指令仍然执行同样的两个高层任务：
+`swap` 指令执行两个主要任务：
 
-- 计算用户在扣除手续费后应当收到多少另一侧的代币。
-- 将代币转入池子并从池子中转出。
+- 计算当我们向 amm 发送一定数量的 `mint_y` 时将收到多少 `mint_x`（反之亦然），并包含手续费。
+- 将 `from` 代币转移到 vault，并将 `to` 代币转移到用户的代币账户。
+
+> 如 `initialize` 指令部分所述；为了优化，我们将所有 `Associated Token Accounts` 初始化在指令之外。
 
 <ArticleSection name="所需账户" id="required-accounts" level="h2" />
 
@@ -17,7 +19,7 @@
 - `config`：AMM 配置账户。保存池子的状态和参数。
 - `token_program`：代币程序账户。它用于执行转账和铸造等代币操作。必须是 `executable`。
 
-账户解析逻辑保持不变：
+这里，我再次把实现留给你：
 
 ```rust
 pub struct SwapAccounts<'a> {
@@ -41,14 +43,14 @@ impl<'a> TryFrom<&'a [AccountInfo]> for SwapAccounts<'a> {
 
 <ArticleSection name="指令数据" id="instruction-data" level="h2" />
 
-指令数据同样保持不变：
+以下是我们需要传入的指令数据：
 
-- `is_x`：表示用户是从 X 换到 Y，还是从 Y 换到 X。必须是 `[u8]`。
-- `amount`：用户愿意发送的数量。必须是 `[u64]`。
-- `min`：用户愿意接收的最小数量。必须是 `[u64]`。
-- `expiration`：订单失效的时间戳。必须是 `[i64]`。
+- `is_x`：该 swap 是从 token X 到 token Y，还是反过来；需要它来正确对齐账户。必须是 `[u8]`
+- `amount`：用户愿意发送的 token 数量，以换取该交易对中的另一种 token。必须是 `[u64]`
+- `min`：用户愿意为 `amount` 接受的最小 token 数量。必须是 `[u64]`
+- `expiration`：该订单的过期时间。确保交易必须在一定时间内完成非常重要。必须是 `[i64]`
 
-我们可以保留相同的数据结构：
+我们将像初始化一样处理 `SwapInstructionData` 的实现。所以我将实现留给你：
 
 ```rust
 pub struct SwapInstructionData {
@@ -67,25 +69,25 @@ impl<'a> TryFrom<&'a [u8]> for SwapInstructionData {
 }
 ```
 
-> 请确保 `amount` 和 `min` 都大于零，并使用 `Clock` sysvar 拒绝已经过期的订单。
+> 请确保像 `amount` 和 `min` 这样的数量都大于零，并且使用 `Clock` sysvar 确保订单尚未过期。
 
 <ArticleSection name="指令逻辑" id="instruction-logic" level="h2" />
 
-我们首先要反序列化 `instruction_data` 和 `accounts`。
+我们首先反序列化 `instruction_data` 和 `accounts`。
 
-然后需要：
+然后我们需要：
 
-- 使用 `Config::load()` 加载 `Config` 账户，
-- 验证池子的状态为 `AmmState::Initialized`，
-- 验证 `vault_x` 和 `vault_y` 是预期的关联代币账户，
-- 反序列化 vault 的代币账户，并使用 `constant-product-curve` 计算交换结果。
-
-这部分计算仍然如下：
+- 加载 `Config` 账户以获取其中的所有数据。我们可以使用 `Config::load()` 辅助工具来完成。
+- 验证 `AmmState` 是否有效（也就是它是否等于 `AmmState::Initialized`）。
+- 检查 `vault_x` 和 `vault_y` 的派生是否为关联代币账户（Associated Token Accounts）。
+- 反序列化所有涉及的代币账户，并使用其中的数据通过 `constant-product-curve` crate 计算交换数量，并像这样检查滑点：
 
 ```rust
+// Deserialize the token accounts
 let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
 let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
 
+// Swap Calculations
 let mut curve = ConstantProduct::init(
     vault_x.amount(),
     vault_y.amount(),
@@ -104,6 +106,7 @@ let swap_result = curve
     .swap(p, self.instruction_data.amount, self.instruction_data.min)
     .map_err(|_| ProgramError::Custom(1))?;
 
+// Check for correct values
 if swap_result.deposit == 0 || swap_result.withdraw == 0 {
     return Err(ProgramError::InvalidArgument);
 }
@@ -147,7 +150,7 @@ batch.invoke_signed(&[signer])?;
 
 > 请确保 `pinocchio-token` 至少为 `0.6.0` 版本，以支持 [p-token](https://solana.com/upgrades/p-token) 的批量操作。
 
-外层指令的结构保持不变：
+你应该已经足够熟练可以独立完成这部分内容，所以我将实现部分留给你：
 
 ```rust
 pub struct Swap<'a> {
@@ -162,6 +165,7 @@ impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Swap<'a> {
         let accounts = SwapAccounts::try_from(accounts)?;
         let instruction_data = SwapInstructionData::try_from(data)?;
 
+        // Return the initialized struct
         Ok(Self {
             accounts,
             instruction_data,
