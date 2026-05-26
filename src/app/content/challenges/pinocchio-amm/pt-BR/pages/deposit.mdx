@@ -1,0 +1,222 @@
+# Deposit
+
+A instrução `deposit` realiza três tarefas principais:
+
+- Deposita os tokens `mint_x` e `mint_y` com base na quantidade de LP que o usuário deseja `mint`.
+- Calcula a quantidade a ser depositada e verifica se a quantidade não é maior que `max_x` e `max_y` designados pelo usuário.
+- Realiza o mint da quantidade correta de `mint_lp` na ATA do usuário.
+
+> Como mencionado na seção da instrução `initialize`; vamos inicializar todas as `Associated Token Accounts` fora da nossa instrução para fins de otimização.
+
+<ArticleSection name="Contas Necessárias" id="required-accounts" level="h2" />
+
+Abaixo estão as contas necessárias para este contexto:
+
+- `user`: O usuário que está depositando os tokens na liquidez do AMM. Deve ser um `signer`.
+- `mint_lp`: A conta Mint que representará a liquidez do pool. Deve ser passada como `mutable`.
+- `vault_x`: A conta de token que contém todo o token X depositado no pool. Deve ser passada como `mutable`.
+- `vault_y`: A conta de token que contém todo o token Y depositado no pool. Deve ser passada como `mutable`.
+- `user_x_ata`: A conta de token associada do usuário para o token X. Esta é a conta de origem da qual o token X do usuário será transferido para o pool. Deve ser passada como `mutable`.
+- `user_y_ata`: A conta de token associada do usuário para o token Y. Esta é a conta de origem da qual o token Y do usuário será transferido para o pool. Deve ser passada como `mutable`.
+- `user_lp_ata`: A conta de token associada do usuário para tokens LP. Esta é a conta de destino onde os tokens LP serão cunhados. Deve ser passada como `mutable`.
+- `config`: A conta de configuração do pool AMM. Armazena todos os parâmetros e estado relevantes do pool.
+- `token program`: A conta do programa SPL Token. Isso é necessário para realizar operações de token como transferências e mint. Deve ser `executable`.
+
+Aqui, novamente, vou deixar a implementação para você:
+
+```rust
+pub struct DepositAccounts<'a> {
+    pub user: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub vault_x: &'a AccountInfo,
+    pub vault_y: &'a AccountInfo,
+    pub user_x_ata: &'a AccountInfo,
+    pub user_y_ata: &'a AccountInfo,
+    pub user_lp_ata: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+    pub token_program: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for DepositAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //..
+  }
+}
+```
+
+<ArticleSection name="Dados da Instrução" id="instruction-data" level="h2" />
+
+Aqui estão os dados da instrução que precisamos passar:
+
+- `amount`: A quantidade de tokens LP que o usuário deseja receber. Deve ser um `[u64]`
+- `max_x`: A quantidade máxima de token X que o usuário está disposto a depositar. Deve ser um `[u64]`
+- `max_y`: A quantidade máxima de token Y que o usuário está disposto a depositar. Deve ser um `[u64]`
+- `expiration`: A expiração desta ordem. Importante para garantir que a transação seja executada em um determinado período de tempo. Deve ser um `[i64]`
+
+Vamos lidar com a implementação do `DepositInstructionData` da mesma forma que a inicialização. Então vou deixar a implementação para você:
+
+```rust
+pub struct DepositInstructionData {
+    pub amount: u64,
+    pub max_x: u64,
+    pub max_y: u64,
+    pub expiration: i64,
+}
+
+impl<'a> TryFrom<&'a [u8]> for DepositInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+        //..
+    }
+}
+```
+
+> Certifique-se de que qualquer quantidade, como `amount`, `max_y` e `max_x`, seja maior que zero e que a ordem ainda não tenha expirado usando o sysvar `Clock`.
+
+<ArticleSection name="Lógica da Instrução" id="instruction-logic" level="h2" />
+
+Começamos desserializando tanto o `instruction_data` quanto o `accounts`.
+
+Em seguida, precisamos:
+
+- Carregar a conta `Config` para obter todos os dados dentro dela. Podemos fazer isso usando o helper `Config::load()`.
+- Verificar se o `AmmState` é válido (ou seja, se é igual a `AmmState::Initialized`)
+- Verificar a derivação de `vault_x` e `vault_y` para serem Associated Token Accounts assim:
+
+```rust
+// Verifica se o vault_x é válido
+let (vault_x, _) = find_program_address(
+    &[
+        self.accounts.config.key(),
+        self.accounts.token_program.key(),
+        config.mint_x(),
+    ],
+    &pinocchio_associated_token_account::ID,
+);
+
+if vault_x.ne(self.accounts.vault_x.key()) {
+    return Err(ProgramError::InvalidAccountData);
+}
+```
+
+- Desserializar todas as contas de token envolvidas e usar os dados dentro delas para calcular a quantidade a depositar usando o crate `constant-product-curve` e verificando o slippage assim:
+
+```rust
+// Desserializar as contas de token
+let mint_lp = unsafe { Mint::from_account_info_unchecked(self.accounts.mint_lp)? };
+let vault_x = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_x)? };
+let vault_y = unsafe { TokenAccount::from_account_info_unchecked(self.accounts.vault_y)? };
+
+// Obter as quantidades para depositar
+let (x, y) = match mint_lp.supply() == 0 && vault_x.amount() == 0 && vault_y.amount() == 0 {
+    true => (self.instruction_data.max_x, self.instruction_data.max_y),
+    false => {
+        let amounts = ConstantProduct::xy_deposit_amounts_from_l(
+            vault_x.amount(),
+            vault_y.amount(),
+            mint_lp.supply(),
+            self.instruction_data.amount,
+            6,
+        )
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+        (amounts.x, amounts.y)
+    }
+};
+
+// Verificar slippage
+if !(x <= self.instruction_data.max_x && y <= self.instruction_data.max_y) {
+    return Err(ProgramError::InvalidArgument);
+}
+```
+
+> Se for o primeiro depósito, podemos pular o cálculo dos tokens LP e dos depósitos e simplesmente usar o valor que o usuário sugeriu
+
+- Transferir as quantidades das contas de token do usuário para as vaults e realizar o mint da quantidade apropriada de tokens LP para a conta de token do usuário.
+
+Graças ao upgrade [`p-token`](https://solana.com/upgrades/p-token), podemos agrupar as transferências de token e o mint de tokens LP em uma única CPI, em vez de fazer três chamadas CPI separadas.
+
+```rust
+use pinocchio_token::instructions::{Batch, BatchState, MintTo, Transfer};
+
+/// O número de contas para a instrução de batch.
+const MAX_ACCOUNTS_LEN: usize =
+    Transfer::MAX_ACCOUNTS_LEN * 2
+    + MintTo::MAX_ACCOUNTS_LEN;
+
+/// O comprimento dos dados da instrução para a instrução de batch.
+const MAX_DATA_LEN: usize = Batch::header_data_len(3)
+    + Transfer::DATA_LEN * 2
+    + MintTo::DATA_LEN;
+
+// ...
+
+let mut batch_state = BatchState::new(MAX_ACCOUNTS_LEN, MAX_DATA_LEN);
+let mut batch = batch_state.as_batch()?;
+
+Transfer::new(
+    self.accounts.user_x_ata,
+    self.accounts.vault_x,
+    self.accounts.user,
+    x,
+)
+.into_batch(&mut batch)?;
+
+Transfer::new(
+    self.accounts.user_y_ata,
+    self.accounts.vault_y,
+    self.accounts.user,
+    y,
+)
+.into_batch(&mut batch)?;
+
+MintTo::new(
+    self.accounts.mint_lp,
+    self.accounts.user_lp_ata,
+    self.accounts.config,
+    self.instruction_data.amount,
+)
+.into_batch(&mut batch)?;
+
+batch.invoke_signed(&[signer])?;
+```
+
+> Certifique-se de que `pinocchio-token` esteja pelo menos na versão `0.6.0` para suportar operações de batch do [p-token](https://solana.com/upgrades/p-token).
+
+Você deve ser proficiente o suficiente para fazer o resto por conta própria, então vou deixar a implementação para você:
+
+```rust
+pub struct Deposit<'a> {
+    pub accounts: DepositAccounts<'a>,
+    pub instruction_data: DepositInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Deposit<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = DepositAccounts::try_from(accounts)?;
+        let instruction_data = DepositInstructionData::try_from(data)?;
+
+        // Retorna a struct inicializada
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Deposit<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &1;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+
+      Ok(())
+    }
+}
+```
+
