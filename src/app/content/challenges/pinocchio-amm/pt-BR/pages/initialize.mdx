@@ -1,0 +1,180 @@
+# Initialize
+
+A instrução `initialize` realiza duas tarefas principais:
+
+- Inicializa a conta `Config` e armazena todas as informações necessárias para o AMM funcionar corretamente.
+- Cria a conta Mint `mint_lp` e atribui a `mint_authority` à conta `config`.
+
+> Não vamos inicializar nenhuma Associated Token Account (ATA) aqui, pois isso é frequentemente desnecessário e pode ser um desperdício. Nas instruções subsequentes `deposit`, `withdraw` e `swap`, verificaremos se os tokens estão sendo depositados nas ATAs corretas. No entanto, você deve criar um helper "initializeAccount" no frontend para gerar essas contas sob demanda.
+
+<ArticleSection name="Contas Necessárias" id="required-accounts" level="h2" />
+
+Abaixo estão as contas necessárias para este contexto:
+
+- `initializer`: O criador da conta `config`. Isso não precisa necessariamente ser também a autoridade sobre ela. Deve ser um `signer` e `mutable`, pois esta conta pagará pela inicialização tanto do `config` quanto do `mint_lp`.
+- `mint_lp`: A conta Mint que representará a liquidez do pool. A `mint_authority` deve ser definida como a conta `config`. Deve ser passada como `mutable`.
+- `config`: A conta de configuração sendo inicializada. Deve ser `mutable`.
+- Programas `system` e `token`: Contas de programa necessárias para inicializar as contas acima. Devem ser `executable`.
+
+> À medida que você ganha mais experiência, notará que muitas dessas verificações podem ser omitidas, contando com as restrições impostas pelas próprias CPIs. Por exemplo, para este struct de contas, nenhuma verificação explícita é necessária; se as restrições não forem atendidas, o programa falhará por padrão. Apontarei essas nuances conforme avançamos pela lógica.
+
+Como não há muitas mudanças em relação ao struct usual que criamos, vou deixar a implementação para você:
+
+```rust
+pub struct InitializeAccounts<'a> {
+    pub initializer: &'a AccountInfo,
+    pub mint_lp: &'a AccountInfo,
+    pub config: &'a AccountInfo,
+}
+
+impl<'a> TryFrom<&'a [AccountInfo]> for InitializeAccounts<'a> {
+  type Error = ProgramError;
+
+  fn try_from(accounts: &'a [AccountInfo]) -> Result<Self, Self::Error> {
+    //..
+  }
+}
+```
+
+> Você precisará passar todas as contas discutidas acima, mas nem todas precisam ser incluídas no struct `InitializeAccounts`, já que você pode não precisar referenciar diretamente todas as contas na implementação.
+
+<ArticleSection name="Dados da Instrução" id="instruction-data" level="h2" />
+
+Aqui estão os dados da instrução que precisamos passar:
+
+- `seed`: Um número aleatório usado para derivação de seeds PDA (Program Derived Address). Isso permite instâncias únicas de pool. Deve ser um `[u64]`
+- `fee`: A taxa de swap, expressa em basis points (1 basis point = 0,01%). Esta taxa é coletada em cada negociação e distribuída aos provedores de liquidez. Deve ser um `[u16]`
+- `mint_x`: O endereço da mint SPL token para o token X no pool. Deve ser um `[u8; 32]`
+- `mint_y`: O endereço da mint SPL token para o token Y no pool. Deve ser um `[u8; 32]`
+- `config_bump`: A seed de bump usada para derivar o PDA da conta `config`. Deve ser um `u8`
+- `lp_bump`: A seed de bump usada para derivar o PDA da conta `lp_mint`. Deve ser um `u8`
+- `authority`: A chave pública que terá autoridade administrativa sobre o AMM. Se não fornecida, o pool pode ser definido como imutável. Deve ser um `[u8; 32]`
+
+> Como você pode ver, vários desses campos poderiam ser derivados de forma diferente. Por exemplo, poderíamos obter `mint_x` passando a conta `Mint` e lendo-a diretamente de lá, ou gerar o valor `bump` dentro do próprio programa. No entanto, ao passá-los explicitamente, estamos visando criar o programa mais otimizado e eficiente possível.
+
+Nesta implementação, estamos lidando com o parsing dos dados da instrução de uma forma mais flexível e de baixo nível do que o usual. Por esta razão, explicaremos por que estamos tomando as seguintes decisões:
+
+```rust
+#[repr(C, packed)]
+pub struct InitializeInstructionData {
+    pub seed: u64,
+    pub fee: u16,
+    pub mint_x: [u8; 32],
+    pub mint_y: [u8; 32],
+    pub config_bump: [u8; 1],
+    pub lp_bump: [u8; 1],
+    pub authority: [u8; 32],
+}
+
+impl TryFrom<&[u8]> for InitializeInstructionData {
+    type Error = ProgramError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        const INITIALIZE_DATA_LEN_WITH_AUTHORITY: usize = size_of::<InitializeInstructionData>();
+        const INITIALIZE_DATA_LEN: usize =
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY - size_of::<[u8; 32]>();
+
+        match data.len() {
+            INITIALIZE_DATA_LEN_WITH_AUTHORITY => {
+                Ok(unsafe { (data.as_ptr() as *const Self).read_unaligned() })
+            }
+            INITIALIZE_DATA_LEN => {
+                // Se a authority não estiver presente, precisamos construir o buffer e adicioná-la no final antes de transmutar para o struct
+                let mut raw: MaybeUninit<[u8; INITIALIZE_DATA_LEN_WITH_AUTHORITY]> = MaybeUninit::uninit();
+                let raw_ptr = raw.as_mut_ptr() as *mut u8;
+                unsafe {
+                    // Copiar os dados fornecidos
+                    core::ptr::copy_nonoverlapping(data.as_ptr(), raw_ptr, INITIALIZE_DATA_LEN);
+                    // Adicionar a authority ao final do buffer
+                    core::ptr::write_bytes(raw_ptr.add(INITIALIZE_DATA_LEN), 0, 32);
+                    // Agora transmutar para o struct
+                    Ok((raw.as_ptr() as *const Self).read_unaligned())
+                }
+            }
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+}
+```
+
+O campo authority em `InitializeInstructionData` é opcional e pode ser omitido para criar um pool imutável.
+
+Para facilitar isso e economizar 32 bytes de dados de transação ao criar pools imutáveis, verificamos o comprimento dos dados da instrução e fazemos o parsing de acordo; se os dados forem mais curtos, definimos o campo authority como `None` escrevendo 32 bytes zero no final do buffer; se incluir o campo `authority` completo, fazemos o cast do slice de bytes diretamente para o struct.
+
+<ArticleSection name="Lógica da Instrução" id="instruction-logic" level="h2" />
+
+Começamos desserializando tanto o `instruction_data` quanto o `accounts`.
+
+Em seguida, precisamos:
+
+- Criar a conta `Config` usando a instrução `CreateAccount` do programa de sistema e as seguintes seeds:
+
+```rust
+let seed_binding = self.instruction_data.seed.to_le_bytes();
+let config_seeds = [
+    Seed::from(b"config"),
+    Seed::from(&seed_binding),
+    Seed::from(&self.instruction_data.mint_x),
+    Seed::from(&self.instruction_data.mint_y),
+    Seed::from(&self.instruction_data.config_bump),
+];
+```
+
+- Popular a conta `Config` carregando-a usando o helper `Config::load_mut_unchecked()` e então preenchendo-a com todos os dados necessários usando o helper `config.set_inner()`.
+- Criar a conta `Mint` para o LP usando as instruções `CreateAccount` e `InitializeMint2` e as seguintes seeds:
+
+```rust
+let mint_lp_seeds = [
+    Seed::from(b"mint_lp"),
+    Seed::from(self.accounts.config.key()),
+    Seed::from(&self.instruction_data.lp_bump),
+];
+```
+
+> A `mint_authority` do `mint_lp` é a conta `config`
+
+Você deve ser proficiente o suficiente para fazer isso por conta própria, então vou deixar a implementação para você:
+
+```rust
+pub struct Initialize<'a> {
+    pub accounts: InitializeAccounts<'a>,
+    pub instruction_data: InitializeInstructionData,
+}
+
+impl<'a> TryFrom<(&'a [u8], &'a [AccountInfo])> for Initialize<'a> {
+    type Error = ProgramError;
+
+    fn try_from((data, accounts): (&'a [u8], &'a [AccountInfo])) -> Result<Self, Self::Error> {
+        let accounts = InitializeAccounts::try_from(accounts)?;
+        let instruction_data: InitializeInstructionData = InitializeInstructionData::try_from(data)?;
+
+        Ok(Self {
+            accounts,
+            instruction_data,
+        })
+    }
+}
+
+impl<'a> Initialize<'a> {
+    pub const DISCRIMINATOR: &'a u8 = &0;
+
+    pub fn process(&mut self) -> ProgramResult {
+      //..
+
+      Ok(())
+    }
+}
+```
+
+<ArticleSection name="Segurança" id="security" level="h2" />
+
+Como mencionado anteriormente, pode parecer incomum, mas não precisamos realizar verificações explícitas nas contas que estão sendo passadas.
+
+Isso ocorre porque, na prática, a instrução falhará se algo estiver errado; seja durante uma CPI (Cross-Program Invocation) ou antecipadamente através de verificações que colocamos no programa.
+
+Por exemplo, considere a conta `initializer`. Esperamos que ela seja tanto `signer` quanto `mutable`, mas se não for, a instrução `CreateAccount` falhará automaticamente, pois requer essas propriedades para o `payer`.
+
+Da mesma forma, se a conta `config` for passada com um `mint_x` ou `mint_y` inválido, qualquer tentativa de depósito no protocolo falhará durante a transferência de token.
+
+À medida que você ganha mais experiência, descobrirá que muitas verificações podem ser omitidas para manter as instruções leves e otimizadas, contando com o sistema e as instruções downstream para impor restrições.
+
