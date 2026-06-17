@@ -1,0 +1,370 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Multisig Operations & Mechanics
+
+This lesson covers the operational details of running a multisig — how transactions move through the system, how configuration changes propagate, how vaults are managed, and the edge cases you'll encounter in production.
+
+<ArticleSection name="Transaction Lifecycle" id="transaction-lifecycle" level="h2" />
+
+A complete vault transaction flows through these stages:
+
+### Step 1: Create the Transaction
+
+The proposer builds the instructions they want the vault to execute and stores them on-chain:
+
+```
+vault_transaction_create:
+  Input:
+    - multisig PDA
+    - vault index (which vault to use)
+    - instructions (serialized message)
+    - ephemeral signers count (for complex DeFi)
+
+  Result:
+    - VaultTransaction account created
+    - Transaction index incremented
+```
+
+The instructions are serialized into a `VaultTransactionMessage` that captures:
+- Program IDs for each instruction
+- Account keys (with signer/writable flags)
+- Instruction data
+
+### Step 2: Create the Proposal
+
+A proposal is created to track the approval state:
+
+```
+proposal_create:
+  Input:
+    - multisig PDA
+    - transaction index
+    - draft (optional: start as draft for review)
+
+  Result:
+    - Proposal account created with status Active (or Draft)
+    - No approvals yet
+```
+
+In some workflows, the proposer creates both the transaction and proposal in the same Solana transaction, reducing the number of on-chain interactions.
+
+### Step 3: Collect Approvals
+
+Members review the proposal and approve:
+
+```
+proposal_approve:
+  Input:
+    - multisig PDA
+    - transaction index
+    - member (signer)
+    - memo (optional)
+
+  Checks:
+    - Member exists in multisig
+    - Member has Vote permission
+    - Member hasn't already approved
+    - Proposal is Active (not Stale/Rejected/Executed)
+
+  Result:
+    - Member's pubkey added to approved list
+```
+
+Each approval is a separate on-chain transaction. Members can approve in any order, and the system tracks which members have approved.
+
+### Step 4: Execute
+
+Once M approvals are collected:
+
+```
+vault_transaction_execute:
+  Input:
+    - multisig PDA
+    - transaction index
+    - remaining accounts (for CPI)
+
+  Checks:
+    - Proposal status is Active
+    - Approval count >= threshold
+    - Timelock period has elapsed (if configured)
+    - Transaction accounts match stored message
+
+  Execution:
+    1. Deserialize stored instructions
+    2. For each instruction:
+       a. Build account infos
+       b. invoke_signed with vault PDA seeds
+    3. Mark proposal as Executed
+
+  Result:
+    - Instructions executed through vault
+    - Proposal status → Executed
+```
+
+### Complete Flow Diagram
+
+```
+Proposer          Member 1         Member 2         Executor
+   │                 │                │                │
+   │ create_tx       │                │                │
+   ├────────►        │                │                │
+   │                 │                │                │
+   │ create_proposal │                │                │
+   ├────────►        │                │                │
+   │                 │                │                │
+   │                 │  approve       │                │
+   │                 ├────────►       │                │
+   │                 │                │                │
+   │                 │                │  approve       │
+   │                 │                ├────────►       │
+   │                 │                │                │
+   │                 │                │   (threshold   │
+   │                 │                │    reached)    │
+   │                 │                │                │
+   │                 │                │                │  execute
+   │                 │                │                ├────────►
+   │                 │                │                │
+```
+
+<ArticleSection name="Config Operations" id="config-operations" level="h2" />
+
+Configuration changes modify the multisig's governance structure. They follow the same propose-approve-execute lifecycle but have additional implications.
+
+### Adding a Member
+
+```
+config_transaction_create:
+  action: AddMember {
+    new_member: Pubkey,
+    permissions: Permissions { initiate: true, vote: true, execute: false }
+  }
+```
+
+When executed, the new member is appended to the members list. The N in "M-of-N" increases by one, but the threshold (M) stays the same unless explicitly changed.
+
+### Removing a Member
+
+```
+config_transaction_create:
+  action: RemoveMember {
+    old_member: Pubkey
+  }
+```
+
+The member is removed from the list. If removing the member would make the threshold impossible to reach (M > new N), the transaction fails.
+
+### Changing the Threshold
+
+```
+config_transaction_create:
+  action: ChangeThreshold {
+    new_threshold: u16
+  }
+```
+
+The new threshold must be between 1 and N (current member count). Changing threshold and members simultaneously requires careful ordering.
+
+### Staleness After Config Changes
+
+When any config transaction executes, the multisig's `stale_transaction_index` updates:
+
+```
+Before config change:
+  transaction_index: 10
+  stale_transaction_index: 5
+
+After config change:
+  stale_transaction_index: 10
+
+Proposals 6-10 that were pending → now Stale
+New proposals start from index 11
+```
+
+This ensures proposals approved by the previous member set cannot execute under the new configuration. If a proposal was approved by members who have since been removed, it shouldn't execute.
+
+**Important**: Stale proposals must be re-created and re-approved under the new configuration. This is intentional — it ensures that every executed action reflects the current governance state.
+
+<ArticleSection name="Vault Management" id="vault-management" level="h2" />
+
+### Multiple Vaults
+
+A single multisig can control multiple vaults, each at a different PDA index:
+
+```
+Multisig: 9xKt...
+  ├── Vault 0: Treasury (long-term reserves)
+  ├── Vault 1: Operations (day-to-day expenses)
+  └── Vault 2: Grants (earmarked for grants program)
+```
+
+Each vault transaction specifies which vault index to use. Different vaults can have different spending limits configured.
+
+### Vault Token Accounts
+
+Vaults hold tokens through associated token accounts:
+
+```
+Vault 0 PDA: 7yRk...
+  ├── SOL balance: 500 SOL
+  ├── ATA (USDC): 50,000 USDC
+  ├── ATA (BONK): 1,000,000 BONK
+  └── ATA (wSOL): 100 wSOL
+```
+
+Creating ATAs for a vault is permissionless — anyone can create an ATA for any owner address. Sending tokens to a vault ATA is also permissionless. Only transferring tokens out requires multisig approval.
+
+### Funding a Vault
+
+Depositing into a vault is straightforward:
+
+```
+// Transfer SOL to vault
+SystemProgram.transfer({
+  from: depositor,
+  to: vaultPda,
+  lamports: amount,
+})
+
+// Transfer tokens to vault's ATA
+TokenProgram.transfer({
+  from: depositorTokenAccount,
+  to: vaultAta,
+  amount: tokenAmount,
+  authority: depositor,
+})
+```
+
+No multisig approval is needed for deposits — they're standard transfers to the vault address.
+
+### Withdrawing from a Vault
+
+Withdrawals require the full proposal lifecycle:
+
+1. Create a vault transaction with a transfer instruction
+2. The transfer instruction lists the vault PDA as the authority/signer
+3. Create and approve a proposal
+4. Execute — the program signs for the vault PDA via `invoke_signed`
+
+<ArticleSection name="Spending Limits" id="spending-limits" level="h2" />
+
+Spending limits enable members to make transfers without full multisig approval, up to a configurable cap:
+
+### Configuration
+
+```
+SpendingLimit:
+  mint: USDC
+  amount: 1,000 USDC
+  period: Day
+  vault_index: 1  (operations vault)
+  members: [Alice, Bob]
+```
+
+Alice and Bob can each transfer up to 1,000 USDC per day from Vault 1 without creating proposals. The spending limit resets daily.
+
+### How It Works
+
+```
+spending_limit_use:
+  Input:
+    - multisig PDA
+    - spending limit PDA
+    - vault index
+    - mint
+    - amount
+    - destination
+    - member (signer)
+
+  Checks:
+    - Member is in spending limit's member list
+    - Amount <= remaining_amount for current period
+    - Vault and mint match spending limit config
+
+  Result:
+    - Transfer executed from vault
+    - remaining_amount reduced by amount
+    - Period resets if past the deadline
+```
+
+### Use Cases
+
+- **Payroll**: Authorize specific members to distribute salary payments up to monthly caps
+- **Operating expenses**: Allow team leads to cover costs without full board approval
+- **Grant distributions**: Let program managers disburse approved grants within limits
+
+<ArticleSection name="Edge Cases and Failure Modes" id="edge-cases" level="h2" />
+
+### Member Becomes Unavailable
+
+If a member loses their key or becomes unreachable, the remaining members can still operate as long as M members are available. If too many members are unavailable:
+
+1. The remaining members can propose removing unavailable members
+2. If they still have M approvals among them, they can execute the removal
+3. They can also lower the threshold if needed
+
+**Worst case**: If fewer than M members are available, the multisig is locked. No operations can be approved. This is why threshold selection is critical — it must balance security against the risk of member unavailability.
+
+### Racing Proposals
+
+Multiple proposals can be active simultaneously. If two proposals attempt conflicting actions (e.g., both transfer the entire vault balance), the first one to execute succeeds and the second fails at execution time due to insufficient funds.
+
+The multisig program doesn't prevent conflicting proposals — it's the responsibility of the members to coordinate and avoid conflicts.
+
+### Transaction Simulation Failure
+
+Sometimes a proposal is approved but execution fails because:
+
+- **Account state changed**: The target account no longer exists or has different state
+- **Insufficient funds**: The vault doesn't have enough balance
+- **Program error**: The target program returns an error
+
+In these cases, the proposal remains approved but unexecuted. Members can close the proposal and create a new one with corrected instructions.
+
+### Config Change During Approval
+
+If a config change is proposed and approved while other proposals are pending:
+
+```
+Timeline:
+  t1: Proposal A created (transfer 100 SOL)
+  t2: Proposal B created (add new member)
+  t3: Proposal B approved and executed
+  t4: Proposal A becomes Stale (cannot execute)
+```
+
+Proposal A must be re-created after the config change. This is a safety feature, not a bug.
+
+<ArticleSection name="Operational Best Practices" id="best-practices" level="h2" />
+
+### Proposal Review Process
+
+1. **Simulate before approving**: Use transaction simulation to preview the effects of a proposal
+2. **Verify instruction details**: Check program IDs, accounts, and instruction data
+3. **Communicate context**: Use memos and off-chain channels to explain why an action is needed
+4. **Time-bound proposals**: Close stale proposals promptly to keep the queue clean
+
+### Key Management
+
+1. **Hardware wallets**: All multisig members should use hardware wallets
+2. **Backup procedures**: Document how to replace a member's key if lost
+3. **Regular rotation**: Periodically rotate member keys and review the member list
+4. **Separation of concerns**: Different team functions should have different key sets
+
+### Monitoring
+
+1. **Track proposal activity**: Monitor for unexpected proposals
+2. **Alert on execution**: Notify all members when a proposal executes
+3. **Audit trail**: Maintain records of who proposed, approved, and executed each action
+4. **Balance monitoring**: Track vault balances and alert on unusual changes
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Multisig operations in practice:
+
+1. **Transaction lifecycle**: Create → Propose → Approve (×M) → Execute
+2. **Config changes** invalidate pending proposals through staleness
+3. **Multiple vaults** enable organizational separation of assets
+4. **Spending limits** reduce friction for routine operations
+5. **Edge cases** require careful threshold selection and operational procedures
+
+In the next lesson, we'll explore the SPL Token Program's built-in multisig feature — a simpler but more limited approach to multi-party authorization.

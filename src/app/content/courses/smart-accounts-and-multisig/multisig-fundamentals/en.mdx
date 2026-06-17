@@ -1,0 +1,255 @@
+import { ArticleSection } from "../../../../components/ArticleSection/ArticleSection";
+
+# Multisig Fundamentals
+
+A multisig (multi-signature) account requires multiple parties to authorize an action before it can execute. Instead of a single private key controlling an account, an M-of-N threshold determines how many signatures are needed out of a total set of authorized signers.
+
+This lesson covers the foundational concepts of multisig systems, the proposal lifecycle, and the roles participants play.
+
+<ArticleSection name="The M-of-N Threshold Model" id="threshold-model" level="h2" />
+
+The M-of-N model defines two parameters:
+
+- **N** — The total number of authorized signers (members)
+- **M** — The minimum number of approvals required to execute an action (threshold)
+
+```
+Example: 2-of-3 Multisig
+
+Members: [Alice, Bob, Carol]
+Threshold: 2
+
+Valid approval sets:
+  ✓ Alice + Bob
+  ✓ Alice + Carol
+  ✓ Bob + Carol
+  ✓ Alice + Bob + Carol
+
+Invalid:
+  ✗ Alice alone
+  ✗ Bob alone
+  ✗ Carol alone
+```
+
+### Choosing the Right Threshold
+
+The threshold represents a balance between security and operational efficiency:
+
+| Configuration | Use Case | Trade-off |
+|--------------|----------|-----------|
+| 1-of-N | Hot wallet with backup keys | Convenient but any single compromise is fatal |
+| 2-of-3 | Small team operations | Good balance for small groups |
+| 3-of-5 | Protocol treasury | Strong security with operational resilience |
+| 4-of-7 | DAO governance council | High security, tolerates multiple unavailable members |
+| N-of-N | Unanimous consent required | Maximum security but any single member can block |
+
+**Key principle**: The threshold should be high enough that no single compromise is fatal, but low enough that the organization can still operate if some members are unavailable.
+
+### Threshold Mathematics
+
+For a given M-of-N configuration:
+
+- **Security**: An attacker must compromise M keys (not just one)
+- **Liveness**: The system can tolerate N-M unavailable members
+- **Collusion resistance**: M members must collude to act maliciously
+
+```
+3-of-5 Multisig:
+  - Attacker must compromise 3 keys → harder than 1
+  - System works if 2 members are offline → resilient
+  - 3 members must collude to steal → group accountability
+```
+
+A common rule of thumb: set M to be a simple majority (more than N/2) to prevent a minority from acting unilaterally, while allowing for some members to be unavailable.
+
+<ArticleSection name="Proposal, Approval, Execution" id="proposal-lifecycle" level="h2" />
+
+Multisig operations follow a three-phase lifecycle:
+
+### Phase 1: Proposal
+
+A member creates a proposal that describes the action to be taken. The proposal includes:
+
+- **The action**: What instructions to execute (e.g., transfer 100 SOL to address X)
+- **The target vault**: Which vault's assets are involved
+- **Metadata**: Optional description, context, or memo
+
+```
+Proposal #42
+  Action: Transfer 100 SOL from Vault 0 to 7xKXt...
+  Proposed by: Alice
+  Status: Active
+  Approvals: 0 / 3
+```
+
+At this stage, the action is recorded on-chain but nothing has been executed. The proposal simply exists as a pending item for other members to review.
+
+### Phase 2: Approval
+
+Members review the proposal and cast their votes. Each member can:
+
+- **Approve**: Signal agreement with the proposed action
+- **Reject**: Signal disagreement
+
+```
+Proposal #42
+  Action: Transfer 100 SOL from Vault 0 to 7xKXt...
+  Proposed by: Alice
+  Status: Active
+  Approved: [Alice, Bob]       (2 of 3)
+  Rejected: []
+```
+
+Each approval is recorded on-chain. Once the approval count reaches the threshold (M), the proposal becomes executable.
+
+> In some implementations, the proposer's creation of the proposal counts as an implicit approval. In others, the proposer must explicitly approve separately.
+
+### Phase 3: Execution
+
+Once the threshold is met, an authorized member triggers execution. The multisig program:
+
+1. Verifies the proposal has reached the threshold
+2. Reads the stored instructions from the transaction
+3. Executes each instruction via CPI, signing with the vault PDA
+4. Marks the proposal as executed
+
+```
+Proposal #42
+  Action: Transfer 100 SOL from Vault 0 to 7xKXt...
+  Proposed by: Alice
+  Status: Executed ✓
+  Approved: [Alice, Bob, Carol] (3 of 3)
+  Executed by: Bob
+```
+
+Execution is a separate step from approval. This means a member can approve a proposal but let someone else handle the execution transaction (which pays the transaction fee).
+
+### Rejection and Cancellation
+
+Not all proposals succeed:
+
+**Rejection**: If enough members reject a proposal, it may be closed. The threshold for rejection varies by implementation — some require M rejections, others allow the proposer to cancel.
+
+**Cancellation**: The proposer or a sufficient number of members can cancel a proposal before it's executed.
+
+**Staleness**: If the multisig configuration changes (members added/removed, threshold changed), pending proposals may become stale and unexecutable. This prevents proposals approved under old rules from executing under new ones.
+
+<ArticleSection name="Participant Roles" id="participant-roles" level="h2" />
+
+Production multisig systems define distinct roles for participants:
+
+### Proposer (Initiator)
+
+Can create new proposals but may not be able to approve or execute them. This role is often assigned to operational team members who identify actions that need to be taken but shouldn't have unilateral authority.
+
+**Use case**: A developer identifies a bug and proposes a program upgrade. Security council members review and approve.
+
+### Voter (Approver)
+
+Can approve or reject proposals. Voters are the core decision-makers of the multisig. The threshold applies to voters — M voters must approve before execution is possible.
+
+**Use case**: Board members or council members who review proposals and provide authorization.
+
+### Executor
+
+Can trigger the execution of approved proposals. This role handles the mechanical step of submitting the execution transaction. Separating execution from approval allows automated systems (bots, keepers) to handle execution without having voting authority.
+
+**Use case**: An automated keeper bot that monitors for approved proposals and executes them immediately, reducing latency.
+
+### Role Combinations
+
+Members can hold multiple roles:
+
+```
+Alice: Proposer + Voter + Executor  (full access)
+Bob:   Voter + Executor             (can approve and execute, can't propose)
+Carol: Voter                        (can only approve/reject)
+Dave:  Proposer                     (can only create proposals)
+Keeper: Executor                    (automated execution only)
+```
+
+This separation of duties enables organizational structures that mirror real-world governance.
+
+<ArticleSection name="Transaction Types" id="transaction-types" level="h2" />
+
+Multisig systems typically handle two categories of transactions:
+
+### Vault Transactions
+
+Actions that interact with external programs through the vault PDA:
+
+- Transfer SOL or tokens
+- Interact with DeFi protocols
+- Mint or burn tokens
+- Execute program upgrades
+- Any arbitrary CPI
+
+Vault transactions are the primary use case — they enable the multisig to control assets and interact with the broader Solana ecosystem.
+
+### Config Transactions
+
+Actions that modify the multisig's own configuration:
+
+- Add or remove members
+- Change the threshold
+- Modify permissions
+- Update spending limits
+- Set or change timelocks
+
+Config transactions go through the same approval process, ensuring that changes to the multisig's governance structure require the same consensus as any other action.
+
+**Self-governance**: The ability of a multisig to modify its own configuration through its own approval process is a key property. It means the initial configuration doesn't need to be perfect — it can evolve as the organization's needs change.
+
+<ArticleSection name="Security Properties" id="security-properties" level="h2" />
+
+### Fault Tolerance
+
+A well-configured multisig can tolerate:
+- **Key loss**: N-M members can lose their keys without losing access to the multisig
+- **Unavailability**: N-M members can be temporarily unreachable
+- **Compromise**: An attacker must compromise M keys to act maliciously
+
+### Attack Vectors
+
+**Social engineering**: Convincing M members to approve a malicious proposal. Mitigated by clear communication channels and proposal review processes.
+
+**Key compromise**: Stealing M private keys. Mitigated by hardware wallets, geographic distribution, and operational security practices.
+
+**Phishing**: Tricking members into signing malicious transactions. Mitigated by transaction simulation, clear labeling, and dedicated signing environments.
+
+**Proposal spoofing**: Creating proposals that look legitimate but contain malicious instructions. Mitigated by instruction-level review tools and transaction simulation before approval.
+
+### Operational Security Best Practices
+
+1. **Distribute keys geographically**: Members should be in different locations to prevent physical attacks
+2. **Use hardware wallets**: Member keys should be on hardware wallets, not hot wallets
+3. **Review before signing**: Every proposal should be reviewed in detail before approval
+4. **Simulate transactions**: Use transaction simulation to preview the effects before approving
+5. **Communicate out-of-band**: Verify proposals through separate communication channels
+
+<ArticleSection name="Multisig vs. Single-Key Comparison" id="comparison" level="h2" />
+
+| Aspect | Single Key | Multisig |
+|--------|-----------|----------|
+| Setup complexity | Simple | Moderate |
+| Key compromise impact | Total loss | Partial (need M keys) |
+| Key loss impact | Total loss | Recoverable (need M keys) |
+| Transaction speed | Instant | Requires coordination |
+| Operational overhead | None | Proposal review process |
+| Organizational fit | Individual | Teams, DAOs, protocols |
+| Accountability | Single person | Shared, auditable |
+| Cost per transaction | 1 signature fee | Multiple approval fees |
+
+Multisig adds operational overhead in exchange for dramatically improved security and organizational control. For any account holding significant value or controlling important program authority, the trade-off is almost always worth it.
+
+<ArticleSection name="Summary" id="summary" level="h2" />
+
+Multisig fundamentals:
+
+1. **M-of-N threshold** — M approvals needed from N total members
+2. **Three-phase lifecycle** — Propose → Approve → Execute
+3. **Role separation** — Proposers, voters, and executors serve different functions
+4. **Two transaction types** — Vault transactions (external actions) and config transactions (self-governance)
+5. **Security through distribution** — No single point of failure for keys or authority
+
+In the next lesson, we'll dive into the operational mechanics of multisig — how transactions flow through the system, how configuration changes work, and how to handle edge cases.

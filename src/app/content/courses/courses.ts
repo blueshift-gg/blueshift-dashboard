@@ -400,6 +400,23 @@ export const courses: CourseMetadata[] = withCourseNumber([
     ],
   },
   {
+    slug: "smart-accounts-and-multisig",
+    language: "General",
+    color: BRAND_COLOURS.general,
+    difficulty: 2,
+    isFeatured: true,
+    lessons: [
+      { slug: "introduction" },
+      { slug: "smart-account-fundamentals" },
+      { slug: "smart-account-architecture" },
+      { slug: "squads-smart-account-program" },
+      { slug: "multisig-fundamentals" },
+      { slug: "multisig-operations" },
+      { slug: "multisig-with-spl-token" },
+      { slug: "conclusion" },
+    ],
+  },
+  {
     slug: "dapp-store-publishing",
     language: "Mobile",
     color: BRAND_COLOURS.mobile,
