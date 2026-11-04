@@ -3,6 +3,14 @@ import redirects from "./redirects.mjs";
 
 const nextConfig = {
   poweredByHeader: false,
+  // esbuild-wasm ships a Node entry (lib/main.js) that spawns a child process.
+  // Turbopack's SSR pass resolves it instead of the browser build, so pin the
+  // browser entry for every bundle.
+  turbopack: {
+    resolveAlias: {
+      "esbuild-wasm": "esbuild-wasm/lib/browser.js",
+    },
+  },
   async redirects() {
     return redirects;
   },
