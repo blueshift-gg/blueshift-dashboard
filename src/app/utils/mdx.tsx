@@ -11,6 +11,7 @@ import { Requirement } from "@/app/components/Challenges/Requirement";
 import { RequirementList } from "@/app/components/Challenges/RequirementList";
 import CodeblockWrapper from "@/app/components/CodeblockWrapper/CodeblockWrapper";
 import { FurtherReading } from "@/app/components/FurtherReading";
+import { PlgrndFlow } from "@/app/components/PlgrndFlow/PlgrndFlow";
 import IDE from "@/app/components/TSChallengeEnv/IDE";
 import { SKIP_HIGHLIGHT_LANGS, THEME_NAME } from "@/lib/shiki/config";
 import { getSingletonHighlighter } from "@/lib/shiki/highlighter";
@@ -47,6 +48,7 @@ export async function renderSafeMdx(compiled: CompiledMDX) {
         RequirementList,
         Requirement,
         AnchorDiscriminatorCalculator,
+        PlgrndFlow,
         FurtherReading,
         blockquote: ({ children }: { children: React.ReactNode }) => (
           <blockquote className="flex items-start gap-x-2 bg-brand-primary/5 px-6 py-4">
