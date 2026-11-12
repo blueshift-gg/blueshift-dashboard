@@ -11,6 +11,40 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Deployment
+
+Production deployment is handled by Cloudflare Workers Builds through its
+GitHub App. There are no GitHub Actions workflows. Content ships in the Worker's
+static assets.
+
+Workers Builds build command:
+
+```bash
+pnpm run build:cf
+```
+
+Workers Builds installs dependencies automatically; do not set
+`SKIP_DEPENDENCY_INSTALL`.
+
+Deploy command:
+
+```bash
+bash scripts/ci/deploy.sh
+```
+
+Set the production branch to `master`. **Enable Preview Builds** is Worker-wide;
+enable it only if every branch writer is trusted. Previews publish to
+`previews.learn.blueshift.gg`; protect them with Cloudflare Access.
+
+Set the required `NEXT_PUBLIC_*` build variables. Attach `learn.blueshift.gg` as
+a Custom Domain. Workers Builds' default token can edit Workers, KV, R2, and
+routes account-wide; use a custom minimal token (Workers Scripts and Routes) and
+an isolated account or broker for isolation.
+
+Create a Preview with `pnpm build:cf && pnpm exec wrangler preview`; a production
+deploy applies the preview domain. If preview builds are disabled, run
+`pnpm build:cf` before merging.
+
 ## Contributing
 
 Courses and challenges are located in the `src/app/content` directory.
@@ -20,10 +54,8 @@ Courses and challenges are located in the `src/app/content` directory.
 
 ## Content Translation
 
-Blueshift supports multiple languages to make Solana education accessible worldwide. Our automated translation
-workflow ensures that content updates are consistently translated across all supported languages.
-
-### Supported Languages
+Blueshift supports multiple languages to make Solana education accessible
+worldwide:
 
 - **French** (`fr`)
 - **Vietnamese** (`vi`)
@@ -31,27 +63,6 @@ workflow ensures that content updates are consistently translated across all sup
 - **Traditional Chinese** (`zh-HK`)
 - **Indonesian** (`id`)
 
-### How Translation Works
-
-When English content is updated and merged to `master`, our GitHub Actions
-[translation workflow](.github/workflows/translation.yaml) automatically creates translation issues for each
-supported language. The workflow monitors changes to:
-
-- **UI Messages**: `messages/en/*.json` - Interface text and labels
-- **Challenge Content**: `src/app/content/challenges/*/en/*.mdx` - Challenge descriptions and instructions
-- **Challenge Pages**: `src/app/content/challenges/*/en/pages/*.mdx` - Individual challenge pages
-- **Course Content**: `src/app/content/courses/*/*/en.mdx` - Course lessons and materials
-
-### Contributing to Translations
-
-Translation issues are automatically labeled with `translation` and `help wanted` to make them easy to find. Each issue
-includes:
-
-- Step-by-step instructions for setting up the translation branch
-- Commands for running AI-assisted translation using [lingo.dev](https://lingo.dev)
-- Guidelines for reviewing and improving AI translations
-- Instructions for creating a pull request
-
-Help us make Solana education accessible in your native language!
-
-For details about the automated workflow implementation, see `.github/workflows/translation.yaml`.
+Translations live alongside the English source under `src/app/content/` and
+`messages/`; updates are submitted as normal pull requests and reviewed like any
+other content change.

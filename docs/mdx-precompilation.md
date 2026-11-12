@@ -1,6 +1,6 @@
 # MDX Precompilation
 
-This project uses MDX precompilation to improve performance by moving compilation and syntax highlighting to build time.
+MDX is compiled and syntax-highlighted at build time.
 
 ## Overview
 
@@ -9,12 +9,17 @@ This project uses MDX precompilation to improve performance by moving compilatio
 1. Parse MDX files with `safe-mdx` to generate MDAST (Markdown AST)
 2. Pre-highlight code blocks with Shiki
 3. Store compiled JSON in `.compiled-mdx/` directory
-4. Upload to Cloudflare R2
+4. Build the Worker with `opennextjs-cloudflare build`
+5. Validate the output with `scripts/ci/validate-content.mjs`
+6. Copy the compiled JSON into `.open-next/assets/compiled-mdx/` with
+   `scripts/ci/bundle-content.mjs`
+
+Content ships with the Worker as static assets.
 
 **Runtime:**
 
 - **Development:** Compile on-the-fly for hot reloading
-- **Production:** Fetch pre-compiled JSON from R2
+- **Production:** Fetch pre-compiled JSON from the Worker's `ASSETS` binding
 
 ## Compilation Output
 
@@ -34,40 +39,35 @@ Each MDX file becomes a JSON file with:
 pnpm precompile-mdx
 ```
 
+`pnpm build:cf` runs this plus the full deployment build; see
+[CI/CD Integration](#cicd-integration).
+
 **Features:**
 
 - Processes all `.mdx` files from `src/app/content/`
-- Parallel batch processing (100 files at a time)
-- Incremental compilation with content hash caching
+- Clears `.compiled-mdx/` before compiling
 
-## Incremental Compilation
-
-The script caches compilation results in `.compiled-mdx/.cache.json`:
-
-**Cache validation:**
-
-- Content hash (SHA-256) detects text changes
-- File modification time catches filesystem updates
-- Missing outputs trigger recompilation
-
-**Performance:**
-
-- **Initial build:** 9s for all 1,430 files
-- **No changes:** 0.7s (skips all files)
-- **1 file changed:** 0.7s (recompiles only that file)
+**Performance:** filesystem-bound locally; expect several minutes for 1,649
+files.
 
 ## CI/CD Integration
 
-GitHub Actions caches `.compiled-mdx/` between runs.
+Cloudflare Workers Builds runs `pnpm run build:cf`; deploy with
+`bash scripts/ci/deploy.sh`. Required build variables are checked by
+`scripts/ci/verify-build-env.mjs`; `.env.local` is loaded for local builds.
+
+All MDX under `src/app/content` is public, including in preview branches. Do not
+add gated or draft content without excluding it before precompile.
 
 ## API
 
 ### `fetchCompiledContent(relativePath: string): Promise<CompiledMDX>`
 
 - **Development:** Returns `{ mdast: null, raw }` (compile on-the-fly)
-- **Production:** Returns pre-compiled `{ mdast, raw, highlightedCode }` from R2
+- **Production:** Fetches pre-compiled `{ mdast, raw, highlightedCode }` from the
+  `ASSETS` binding
 
-### `renderSafeMdx(mdast, highlightedCode)`
+### `renderSafeMdx(compiled: CompiledMDX)`
 
 - Checks for pre-highlighted code via `node.data.highlightId`
 - Falls back to runtime highlighting in development

@@ -6,8 +6,6 @@ declare namespace Cloudflare {
 		mainModule: typeof import("./.open-next/worker");
 	}
 	interface Env {
-		NEXTJS_ENV: string;
-		CONTENT: R2Bucket;
 		ASSETS: Fetcher;
 	}
 }

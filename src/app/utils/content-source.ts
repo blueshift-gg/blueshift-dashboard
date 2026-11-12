@@ -1,27 +1,13 @@
 import "server-only";
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { contentAssetUrl, CONTENT_PREFIX, normalizeContentPath } from "./content-path";
 import type { Nodes } from "hast";
 import type { Root } from "mdast";
 
 const CONTENT_ROOT = "src/app/content";
-const DEFAULT_BUCKET_PREFIX = "compiled-mdx";
-
-const resolveBucketPrefix = (prefixFromEnv?: string) => {
-  const normalizedPrefix = prefixFromEnv?.trim();
-
-  if (normalizedPrefix) {
-    return normalizedPrefix;
-  }
-
-  const fallbackPrefix = process.env.CONTENT_PREFIX?.trim();
-
-  if (fallbackPrefix) {
-    return fallbackPrefix;
-  }
-
-  return DEFAULT_BUCKET_PREFIX;
-};
+// ASSETS.fetch requires an absolute URL; the host is ignored.
+const ASSETS_ORIGIN = "https://assets.invalid";
 
 export interface CompiledMDX {
   mdast: Root | null;
@@ -29,57 +15,50 @@ export interface CompiledMDX {
   highlightedCode?: Record<string, { lang: string; hast: Nodes }>;
 }
 
-/**
- * Loads a compiled content file. Reads directly from the filesystem while
- * developing locally (compiling on-the-fly) and falls back to pre-compiled
- * content from the CONTENT R2 bucket once deployed to Cloudflare.
- */
+/** Loads precompiled MDX from ASSETS in production; returns raw MDX in development. */
 export async function fetchCompiledContent(relativePath: string): Promise<CompiledMDX> {
   if (!relativePath) {
     throw new Error("A relative content path is required");
   }
 
-  const normalizedPath = relativePath.replace(/^\/+/, "");
+  const normalizedPath = normalizeContentPath(relativePath);
 
   const isDevelopment = process.env.NODE_ENV === "development";
 
   if (isDevelopment) {
-    // In development, read the raw MDX file and return it for on-the-fly compilation
-    const [{ readFile }, { join }] = await Promise.all([
+    const [{ readFile }, { join, sep }] = await Promise.all([
       import("node:fs/promises"),
       import("node:path"),
     ]);
-    const absolutePath = join(process.cwd(), CONTENT_ROOT, normalizedPath);
+    const contentRoot = join(process.cwd(), CONTENT_ROOT);
+    const absolutePath = join(contentRoot, normalizedPath);
+
+    if (!absolutePath.startsWith(`${contentRoot}${sep}`)) {
+      throw new Error("Invalid content path");
+    }
+
     const raw = await readFile(absolutePath, "utf-8");
 
-    // We'll compile it on-the-fly in mdx.tsx, so return a minimal structure
+    // mdx.tsx parses this raw MDX into mdast.
     return { mdast: null, raw };
   }
 
-  // In production, fetch from R2
   const { env } = getCloudflareContext();
-  const bucket = env?.CONTENT;
-  const bucketPrefix = resolveBucketPrefix(
-    (env as { CONTENT_PREFIX?: string } | undefined)?.CONTENT_PREFIX,
-  );
+  const assets = env.ASSETS;
 
-  if (!bucket) {
-    throw new Error("CONTENT bucket binding is not available in production environment");
+  if (!assets) {
+    throw new Error("ASSETS binding is not available in production environment");
   }
 
-  // Convert .mdx path to .json path for compiled content
   const compiledPath = normalizedPath.replace(/\.mdx$/, ".json");
-  const key = [bucketPrefix, compiledPath].join("/");
-  const object = await bucket.get(key);
+  const key = [CONTENT_PREFIX, compiledPath].join("/");
+  const response = await assets.fetch(contentAssetUrl(key, ASSETS_ORIGIN));
 
-  if (!object) {
+  if (!response.ok) {
     throw new Error(
-      `Compiled content file not found in R2: ${key}\n` +
-        `This may indicate the content was not uploaded during deployment. ` +
-        `Verify that the precompilation and R2 upload steps completed successfully.`,
+      `Compiled content not found in Worker assets: ${key} (HTTP ${response.status})`,
     );
   }
 
-  const json = await object.text();
-  return JSON.parse(json) as CompiledMDX;
+  return (await response.json()) as CompiledMDX;
 }
